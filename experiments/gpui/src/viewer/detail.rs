@@ -674,7 +674,12 @@ impl Render for DetailWindow {
         }
         let media = self.surface.read(cx).player().is_some();
         let surface = self.surface.downgrade();
-        let window_root = div().key_context(super::video::key_context("DetailWindow", media));
+        let mut context = super::video::key_context("DetailWindow", media);
+        // A document's pages take the scrolling keys.
+        if self.surface.read(cx).shows_pages() {
+            context.add(super::document::PAGES_CONTEXT);
+        }
+        let window_root = div().key_context(context);
         super::video::on_actions(window_root, move |cx| {
             surface
                 .upgrade()

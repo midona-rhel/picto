@@ -19,10 +19,27 @@ const NAVIGATOR: f32 = 120.;
 /// The navigator's inset from the pane's bottom-right corner.
 const NAVIGATOR_INSET: f32 = 12.;
 
-/// What the surface tells the viewer toolbar.
+/// What the surface tells the viewer toolbar and the collection reader.
 pub enum Event {
     /// The zoom, or whether the shown item zooms at all, changed.
     Zoom,
+    /// The item opening got further: it can be shown, or it has drawn its
+    /// first picture or page ([`MediaSurface::settled`]).
+    Progressed,
+}
+
+/// What was on screen before the item now opening, kept over it until the
+/// new item has something of its own to show, so a video's first frame or
+/// a document's first page is the first thing drawn in its place.
+enum Held {
+    /// A picture at its place in the pane: left, top, width, height.
+    Image {
+        image: Arc<RenderImage>,
+        rect: (f32, f32, f32, f32),
+    },
+    Document(Document),
+    /// A video, paused, its last picture still drawn.
+    Player(Entity<super::video::VideoPlayer>),
 }
 
 /// How a host shows media: what the media view, Quick Look and the detail
@@ -102,6 +119,15 @@ pub struct MediaSurface {
     flash_reveal: u64,
     document: Option<Document>,
     _document_zoom: Option<Subscription>,
+    _document_progress: Option<Subscription>,
+    _player_progress: Option<Subscription>,
+    /// The previous item's picture, over the opening one until it is ready.
+    held: Option<Held>,
+    held_since: Option<Instant>,
+    /// Whether an opened item is on screen, rather than the surface resting
+    /// while its host is closed or shows a collection; only then is the
+    /// item held over the next.
+    live: bool,
     /// Whether the open document takes the toolbar's zoom, and its zoom in
     /// percent, as it last reported them.
     document_zoom: (bool, f32),
@@ -135,7 +161,121 @@ impl MediaSurface {
         self.flash_task = None;
         self.document = None;
         self._document_zoom = None;
+        self._document_progress = None;
+        self._player_progress = None;
         self.player = None;
+        self.held = None;
+        self.held_since = None;
+    }
+
+    /// Stops what plays while the host shows no item (it closed, or shows a
+    /// collection's reader). The item stays loaded, so the same one opens
+    /// again at once, but nothing of it is held over the next item.
+    pub fn rest(&mut self) {
+        self.stop();
+        self.live = false;
+    }
+
+    /// Whether the item asked for has something of its own to show: an
+    /// image or Flash movie its thumbnail, a video its first frame, a paged
+    /// document its measured pages with the first one's thumbnail.
+    fn ready(&self, cx: &App) -> bool {
+        match self.mode {
+            Mode::Image | Mode::Flash | Mode::Other => self.shown == self.key,
+            Mode::Document => self
+                .document
+                .as_ref()
+                .is_none_or(|document| document.presentable(cx)),
+            Mode::Media => self
+                .player
+                .as_ref()
+                .is_none_or(|player| player.read(cx).presentable()),
+        }
+    }
+
+    /// Whether the item has drawn what it opened to: a video its first
+    /// frame, a document its first page, a Flash movie its first frame. The
+    /// collection reader shows a member's thumbnail until then.
+    pub fn settled(&self, cx: &App) -> bool {
+        if self.error.is_some() {
+            return true;
+        }
+        match self.mode {
+            Mode::Image => self.full_key == self.key,
+            Mode::Flash => self.full.is_some() && self.full_key == self.key,
+            Mode::Other => true,
+            Mode::Document => self
+                .document
+                .as_ref()
+                .is_none_or(|document| document.settled(cx)),
+            Mode::Media => self.player.as_ref().is_none_or(|player| {
+                let player = player.read(cx);
+                player.has_picture() || player.presentable()
+            }),
+        }
+    }
+
+    /// What is on screen now, to keep over the item about to open. Nothing
+    /// while the surface rests (its host closed or showed a collection), so
+    /// an item from before, or the grid's selection, never flashes up.
+    fn capture(&mut self, cx: &mut Context<Self>) -> Option<Held> {
+        if self.held.is_some() {
+            // Still waiting on the last item: what is on screen is still
+            // the one before it.
+            return self.held.take();
+        }
+        if !self.live {
+            return None;
+        }
+        let pane = self.pane();
+        match self.mode {
+            Mode::Image => {
+                let image = self
+                    .image_size()
+                    .filter(|_| pane.0 > 0. && !self.needs_fit)?;
+                let picture = self
+                    .full
+                    .clone()
+                    .filter(|_| self.full_key == self.shown)
+                    .or_else(|| self.thumbnail.clone())?;
+                Some(Held::Image {
+                    image: picture,
+                    rect: self.camera.image_rect(image, pane),
+                })
+            }
+            Mode::Flash | Mode::Other => {
+                let picture = self.full.clone().or_else(|| self.thumbnail.clone())?;
+                let size = picture.size(0);
+                let natural = (size.width.0 as f32, size.height.0 as f32);
+                let fitted = document::geometry::fit_page(pane, natural)?;
+                Some(Held::Image {
+                    image: picture,
+                    rect: (
+                        (pane.0 - fitted.0) / 2.,
+                        (pane.1 - fitted.1) / 2.,
+                        fitted.0,
+                        fitted.1,
+                    ),
+                })
+            }
+            Mode::Document => self.document.take().map(Held::Document),
+            Mode::Media => self.player.take().map(|player| {
+                player.update(cx, |player, _| player.pause());
+                Held::Player(player)
+            }),
+        }
+    }
+
+    /// Lets the held picture go once the opening item is ready, or the wait
+    /// has run out.
+    fn release_hold(&mut self, cx: &mut Context<Self>) {
+        let expired = self
+            .held_since
+            .is_some_and(|since| since.elapsed() >= motion::MEDIA_HOLD);
+        if self.held.is_some() && (expired || self.ready(cx)) {
+            self.held = None;
+            self.held_since = None;
+        }
     }
 
     /// The media player, while a video or audio item is shown.
@@ -269,6 +409,18 @@ impl MediaSurface {
         if let Some(document) = self.document() {
             document.next_page(cx);
         }
+    }
+
+    /// Home, End, Page Up, Page Down and Space on a document's pages.
+    pub fn scroll_pages(&mut self, scroll: document::Scroll, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.scroll(scroll, cx);
+        }
+    }
+
+    /// Whether a document's pages are shown, whose keys scroll them.
+    pub fn shows_pages(&self) -> bool {
+        self.document().is_some_and(Document::paged)
     }
 
     /// Cmd+= and Cmd+−: the font preview's size.
@@ -503,17 +655,16 @@ impl MediaSurface {
         cx: &mut Context<Self>,
     ) {
         let media = super::video::kind_of(mime);
+        let kind = document::kind::renderer_kind(mime);
+        // The same item again keeps playing or showing, unless what showed
+        // it was stopped in the meantime.
         if self.opened == key
             && (mime != "application/x-shockwave-flash" || self.flash.is_some())
             && (media.is_none() || self.player.is_some())
+            && (!kind.is_document() || self.document.is_some())
         {
             return;
         }
-        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
-        self.opened = key.clone();
-        self.error = None;
-        self.stop();
-        let kind = document::kind::renderer_kind(mime);
         let mode = match kind {
             RendererKind::Flash => Mode::Flash,
             RendererKind::Image | RendererKind::JpegXl => Mode::Image,
@@ -521,6 +672,14 @@ impl MediaSurface {
             kind if kind.is_document() => Mode::Document,
             _ => Mode::Other,
         };
+        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
+        self.opened = key.clone();
+        self.error = None;
+        // What `show` kept of the previous item stays over this one.
+        let held = (self.held.take(), self.held_since.take());
+        self.stop();
+        (self.held, self.held_since) = held;
+        self.live = true;
         if mode != self.mode {
             self.mode = mode;
             cx.emit(Event::Zoom);
@@ -553,7 +712,10 @@ impl MediaSurface {
                                             Some(Arc::new(RenderImage::new(smallvec::smallvec![
                                                 image::Frame::new(rgba)
                                             ])));
-                                        this.full_key = this.key.clone();
+                                        if this.full_key != this.key {
+                                            this.full_key = this.key.clone();
+                                            cx.emit(Event::Progressed);
+                                        }
                                     }
                                     Err(error) => this.error = Some(error),
                                 }
@@ -570,9 +732,25 @@ impl MediaSurface {
             Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
             Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
             Mode::Document => {
-                let document = Document::open(kind, path, mime, self.display_name.clone(), cx);
+                let document = Document::open(
+                    kind,
+                    path,
+                    mime,
+                    self.display_name.clone(),
+                    self.options.member,
+                    cx,
+                );
                 self._document_zoom =
                     document.observe_zoom(cx, |this, cx| this.document_zoom_changed(cx));
+                self._document_progress = document.observe_progress(cx, |_, cx| {
+                    cx.emit(Event::Progressed);
+                    cx.notify();
+                });
+                // A thumbnail already decoded for this item goes to the
+                // document at once.
+                if self.shown == self.key {
+                    document.set_thumbnail(self.thumbnail.clone(), cx);
+                }
                 self.document = Some(document);
                 self.document_zoom_changed(cx);
                 cx.notify();
@@ -594,9 +772,17 @@ impl MediaSurface {
                 // while nobody is at the machine.
                 options.muted |= std::env::var_os("PICTO_GPUI_SILENT").is_some();
                 let mime = mime.to_owned();
-                self.player = Some(cx.new(|cx| {
+                let player = cx.new(|cx| {
                     super::video::VideoPlayer::new(kind, path, &mime, options, Some(thumbnail), cx)
-                }));
+                });
+                self._player_progress = Some(cx.subscribe(
+                    &player,
+                    |_, _, _: &super::video::FirstPicture, cx| {
+                        cx.emit(Event::Progressed);
+                        cx.notify();
+                    },
+                ));
+                self.player = Some(player);
             }
             Mode::Other => {
                 self.error = Some(format!("Native preview is not implemented for {mime}"));
@@ -615,10 +801,21 @@ impl MediaSurface {
         cx: &mut Context<Self>,
     ) {
         if self.key != key {
+            let held = self.capture(cx);
             self.key = key.clone();
             self.natural = natural;
             self.full_task = None;
             self.stop();
+            if held.is_some() {
+                self.held = held;
+                self.held_since = Some(Instant::now());
+                // Wakes the surface when the wait runs out.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(motion::MEDIA_HOLD).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
             self.error = None;
             let load = ImageAssetLoader::load(Resource::Path(thumbnail.into()), cx);
             let load = cx.background_executor().spawn(load);
@@ -634,6 +831,10 @@ impl MediaSurface {
                             this.full = None;
                         }
                         this.present_key();
+                        if let Some(document) = &this.document {
+                            document.set_thumbnail(this.thumbnail.clone(), cx);
+                        }
+                        cx.emit(Event::Progressed);
                         cx.notify();
                     }
                 });
@@ -649,6 +850,7 @@ impl MediaSurface {
                         this.full = result.ok();
                         this.full_key = key.clone();
                         this.present_key();
+                        cx.emit(Event::Progressed);
                         cx.notify();
                     }
                 });
@@ -1054,9 +1256,8 @@ impl Render for MediaSurface {
         } else if let Some(document) = self.document() {
             surface = surface.child(document.element(self.thumbnail.clone(), cx));
         } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
-            // The player shows the thumbnail until its first picture.
-            let poster = self.thumbnail.clone();
-            player.update(cx, |player, cx| player.set_poster(poster, cx));
+            // The player draws nothing until its first frame; the held
+            // picture, or the pane's background, shows until then.
             surface = surface.child(div().absolute().inset_0().child(player));
         } else {
             if let Some(thumbnail) = &self.thumbnail {
@@ -1079,6 +1280,23 @@ impl Render for MediaSurface {
             }
         }
         surface = surface.children(navigator);
+        self.release_hold(cx);
+        if let Some(held) = &self.held {
+            let layer = div().absolute().inset_0();
+            surface = surface.child(match held {
+                Held::Image { image, rect } => layer.child(
+                    img(image.clone())
+                        .absolute()
+                        .left(px(rect.0))
+                        .top(px(rect.1))
+                        .w(px(rect.2))
+                        .h(px(rect.3))
+                        .object_fit(ObjectFit::Fill),
+                ),
+                Held::Document(document) => layer.child(document.element(None, cx)),
+                Held::Player(player) => layer.child(player.clone()),
+            });
+        }
         if let Some(error) = &self.error {
             surface = surface.child(
                 div()

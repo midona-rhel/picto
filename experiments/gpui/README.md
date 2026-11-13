@@ -514,7 +514,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the pane; a press or drag in it moves the view there. A step past either
   end shows "First item" or "Last item" for 800 ms. The previous image stays
   until the next thumbnail has decoded; the original replaces the thumbnail
-  once decoded, as `ImageCrossfadeFrame` swaps them.
+  once decoded, as `ImageCrossfadeFrame` swaps them. Opening a video or a
+  paged document keeps the previous item's picture the same way until the
+  new one has something of its own (a video its first frame, a document its
+  measured pages with the thumbnail on the first), for at most 1.5 s;
+  nothing is held from before the viewer opened.
 - A collection opens in `GroupSurface`'s reader (`viewer/group.rs`), in the
   media view, Quick Look and the detail window alike: its members one under
   another, each in a glass frame of its own shape the column's full width
@@ -522,7 +526,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   scrollbar gutter. A member shows its thumbnail; after 200 ms in view its
   full media loads (an image's original fades in over 130 ms; a PDF, video
   or other member opens in a media surface of its own, video not playing
-  by itself), the last 100 kept. The viewer toolbar then has no zoom and
+  by itself, under its thumbnail, which fades out over 130 ms once the
+  surface has drawn its first frame or page), the last 100 kept. A PDF,
+  DjVu or comic member shows all its pages inline at the column's width,
+  8px apart, without its own footer or scrolling; each is measured as the
+  collection opens, so its frame has its final height before it is in view
+  (production shows one page fitted in the member's frame with a page
+  footer). The viewer toolbar then has no zoom and
   shows "Edit group". A right-click on a member opens the viewer's menu for
   it, with the search field.
 - Enter or a double-click opens the media view on the one selected item;
@@ -809,23 +819,34 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - One renderer per media type, chosen as `detailRendererKind.ts` chooses
   (`viewer/document/kind.rs`), in all three hosts (media view, Quick Look,
   detail window):
-  - PDF pages rasterized by hayro (pure Rust) on a thread of the
-    document's own, at the size they take on screen times the display's
-    scale (`documentCanvasGeometry`), one page at a time as `PdfViewer.tsx`
-    shows them: fitted to the page on opening, white with its
-    `0 8px 28px` shadow. The viewer toolbar's zoom drives it as production's
-    renderer zoom does: the percentage and its menu, the slider, Fit
-    (`` ` ``), Actual size (⌘0, 100% = one point per pixel), and `+`/`-` in
-    1.2× steps between 25% and 800%. A page drawn for an older zoom
-    stretches until its redraw arrives; a newer request supersedes one still
-    waiting.
-  - DjVu pages by djvu-rs (the crate production runs as WebAssembly) at
-    `max(96, dpi)`, and CBZ pages (the archive's images in natural order),
-    both shown at their size, shrunk to fit, never enlarged.
-  - The document shell (`DocumentViewerShell`): the scrolling viewport on
-    `rgb(42, 42, 46)` with 24px around the page, and the titlebar-high footer
-    with Previous page, "Page n of m" and Next page, whose J and L come
-    from the shortcut registry.
+  - PDF pages rasterized by hayro (pure Rust), DjVu pages by djvu-rs (the
+    crate production runs as WebAssembly) at `max(96, dpi)`, and CBZ pages
+    (the archive's images in natural order), on a thread of the document's
+    own, at the size they take on screen times the display's scale. Unlike
+    production, which shows one page at a time, the pages are one
+    continuous column (`viewer/document/paged.rs`): every page is measured
+    when the document opens, each is as wide as the viewport's content box
+    up to its natural size, 16px apart, 24px from the edges, on
+    `rgb(42, 42, 46)`, white with its shadow. Only the pages in view and
+    one each way are drawn, two more each way are kept; a page not drawn
+    yet is a blank sheet of its final size, and the first page shows the
+    item's thumbnail until drawn, so nothing moves. A drawing for an older
+    zoom arriving late never replaces a newer one. The titlebar-high footer
+    shows "Page n of m" for the page in the middle of the view (no
+    Previous/Next buttons); J and L (the registry's page keys) scroll to the
+    previous and next page's top, and Home, End, Page Up, Page Down and
+    Space / Shift+Space scroll the pages in the media view and the detail
+    window (Space there no longer closes the media view). The viewer
+    toolbar's zoom drives PDF pages as production's renderer zoom does: the
+    percentage and its menu, the slider, Fit (`` ` ``, fitted to the
+    width), Actual size (⌘0, 100% = one point per pixel), and `+`/`-` in
+    1.2× steps between 25% and 800%, keeping the place at the top of the
+    view. A decoder that panics on a page fails that page only.
+  - The document shell (`DocumentViewerShell`), for EPUB and the other
+    reflowed documents: the scrolling viewport on `rgb(42, 42, 46)` with
+    24px around the page, and the titlebar-high footer with Previous page,
+    "Page n of m" and Next page, whose J and L come from the shortcut
+    registry.
   - Text, Markdown (GitHub flavoured: tables, strikethrough), JSON (pretty
     printed) and RTF on the 816px text page, and EPUB chapters (the spine of
     the package document, one chapter to a page, its pictures decoded) on
@@ -864,7 +885,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Preview settings' autoplay and loop and muted, audio plays at once, loops
   and has sound; volume starts at 90% and speed at 1× for every item.
   Playback failures are written to standard error in production's
-  `media.playback` diagnostic shape.
+  `media.playback` diagnostic shape. A video draws nothing (not even its
+  black) until its own first frame, which is the first thing seen in its
+  place: production shows the item's thumbnail first, a frame from inside
+  the video, and then jumps to the start. A paused AVFoundation item is
+  primed with a seek to the start, so its first frame arrives too.
 - Decoding never runs on the drawing thread, behind one small trait
   (`video/backend.rs`). On macOS, QuickTime and MPEG-4 play through
   AVFoundation: an `AVPlayer` decodes in hardware, plays the sound, keeps
@@ -1019,8 +1044,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   element). WOFF2 fonts are not unpacked (Picto does not import them). The
   font is registered with the text system on the drawing thread. A PDF
   page is drawn at most 8192 pixels on its longest side. Encrypted PDFs show
-  a message. The thumbnail preview production shows until a document has
-  drawn is not ported: the viewer shows its shell until the page arrives.
+  a message. Quick Look scrolls a document's pages with the pointer only
+  (its Space closes it). A comic archive is measured from each page's
+  header, which reads every page once on opening.
 - Flash: the media keys (K, the arrows and M) do not reach Flash's
   controls; the registry's Video shortcuts drive the media player only. The
   stage is 960×720, not fitted to the movie's own size (`fitFlashStage`).

@@ -4,20 +4,19 @@
 //! describes what was right-clicked, as the Electron screens do, and performs
 //! the chosen row through the session and the library.
 use super::{Shell, view_menu};
-use crate::grid::format::grouped;
 use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
     Surface,
 };
-use crate::session::Reread;
 use crate::ui::{self, menu::Menu};
 use crate::viewer::{MenuRequested, surface::MediaSurface};
 use gpui::*;
 use picto_library::query::{ItemScope, RootSummary};
 use picto_library::selection::SelectionTarget;
-use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
-use std::path::PathBuf;
+use picto_library::{FolderId, Lifecycle, RootId, RootKind};
 use std::rc::Rc;
+
+mod actions;
 
 /// The item menus' state in the shell.
 #[derive(Default)]
@@ -37,7 +36,7 @@ pub(super) struct ItemMenus {
 
 /// The items a menu acts on.
 #[derive(Clone, Default)]
-struct Target {
+pub(super) struct Target {
     /// In the order the grid shows them.
     items: Vec<RootSummary>,
     /// The one file the single-item rows act on: the cover of a grid tile,
@@ -65,20 +64,9 @@ impl Target {
     }
     /// What an edit of these items addresses: the destination's query when
     /// they are the whole destination selected, else the items themselves.
-    fn selection(&self, session: &crate::session::Session) -> SelectionTarget {
+    pub(super) fn selection(&self, session: &crate::session::Session) -> SelectionTarget {
         session.target_for(self.ids())
     }
-}
-
-/// A permanent delete that was confirmed, and what to ask if it must be
-/// confirmed again.
-#[derive(Clone)]
-struct Deletion {
-    selection: SelectionTarget,
-    /// Rejected from the Inbox rather than deleted from the Trash.
-    reject: bool,
-    title: String,
-    label: &'static str,
 }
 
 /// A question asked before an edit (`ConfirmModal`).
@@ -89,8 +77,6 @@ struct Confirmation {
     danger: bool,
     run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
 }
-
-type Work<T> = Box<dyn FnOnce(&Library) -> picto_library::Result<T> + Send>;
 
 /// `mediaLinkFor`: the link the Electron app serves a file at.
 pub(crate) fn media_link(hash: &str, mime: &str) -> String {
@@ -104,23 +90,6 @@ pub(crate) fn media_link(hash: &str, mime: &str) -> String {
         _ => "bin",
     };
     format!("media://localhost/file/{hash}.{extension}")
-}
-
-/// `permanentDeleteMessage`.
-fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
-    let limit = grouped(undo_limit.max(0) as u64);
-    match media {
-        _ if undo_limit == 0 => "Delete undo is disabled. This cannot be undone.".to_owned(),
-        Some(count) if count <= undo_limit as u128 => {
-            "You can undo this until Picto closes. After that the files are removed.".to_owned()
-        }
-        None => format!(
-            "Deleting up to {limit} media items, including collection members, can be undone until Picto closes. Larger deletes cannot be undone."
-        ),
-        Some(_) => format!(
-            "This exceeds the undo limit of {limit} media items, including collection members, so it cannot be undone."
-        ),
-    }
 }
 
 impl Shell {
@@ -564,633 +533,10 @@ impl Shell {
             .map(|entry| entry.label.clone())
     }
 
-    // ── Performing ──────────────────────────────────────────────
-
-    fn run_item_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.items.target.clone() else {
-            return;
-        };
-        let file = target.file.clone();
-        let ids = target.ids();
-        match action {
-            // ── Opening ──
-            Action::OpenDefault => {
-                if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.open_with_system(&path), window, cx);
-                }
-            }
-            Action::Reveal => {
-                if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.reveal_path(&path), window, cx);
-                }
-            }
-            Action::OpenInNewWindow => {
-                // The item alone, as production's detail window opens it
-                // from a single selection, the viewer and the preview.
-                let index = target.items.first().and_then(|item| {
-                    self.session
-                        .read(cx)
-                        .items
-                        .iter()
-                        .position(|each| each.root_id == item.root_id)
-                });
-                if let Some(index) = index {
-                    self.open_in_window(vec![index], index, cx);
-                }
-            }
-            Action::OpenWithOther => {
-                // TODO: list the applications that open this type (macOS
-                // shows them as a submenu, Windows opens its chooser) and
-                // open the file with the one chosen.
-            }
-            Action::OpenFolder | Action::LoadingApplications => {
-                // TODO: open the folder tile's folder once the grid shows
-                // subfolder tiles.
-            }
-            // ── Copying ──
-            Action::CopyPath => {
-                if let Some(file) = file {
-                    self.with_path(
-                        file,
-                        |path, cx| write_text(path.to_string_lossy().into_owned(), cx),
-                        window,
-                        cx,
-                    );
-                }
-            }
-            Action::CopyName => {
-                if let Some(file) = file {
-                    write_text(file.name, cx);
-                }
-            }
-            Action::CopyLink => {
-                if let Some(file) = file {
-                    write_text(media_link(&file.hash, &file.mime), cx);
-                }
-            }
-            Action::CopySelectionNames => {
-                let names = target
-                    .items
-                    .iter()
-                    .map(|item| {
-                        if item.name.is_empty() {
-                            "Untitled".to_owned()
-                        } else {
-                            item.name.clone()
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                write_text(names.join("\n"), cx);
-            }
-            Action::CopySelectionPaths | Action::CopySelectionLinks => {
-                // `resolveTargetFilePaths`: every file of the selection,
-                // collection members included, in order.
-                let links = action == Action::CopySelectionLinks;
-                self.library(
-                    Box::new(move |library| {
-                        let mut lines = Vec::new();
-                        for id in ids {
-                            for media in library.details(id)?.media {
-                                lines.push(if links {
-                                    let extension = std::path::Path::new(&media.file_path)
-                                        .extension()
-                                        .map_or("bin".into(), |extension| {
-                                            extension.to_string_lossy().into_owned()
-                                        });
-                                    format!(
-                                        "media://localhost/file/{}.{extension}",
-                                        media.facts.content_hash
-                                    )
-                                } else {
-                                    media.file_path
-                                });
-                            }
-                        }
-                        Ok(lines)
-                    }),
-                    |_, lines, _, cx| {
-                        if !lines.is_empty() {
-                            write_text(lines.join("\n"), cx);
-                        }
-                    },
-                    window,
-                    cx,
-                );
-            }
-            Action::CopyFile | Action::CopySelection => {
-                // TODO: put the files themselves on the clipboard. GPUI's
-                // macOS pasteboard writes text and images only; a file list
-                // (`ClipboardEntry::ExternalPaths`) is dropped.
-            }
-            // ── Lifecycle ──
-            Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
-            Action::MoveToTrash if target.member => {
-                // TODO: move the member out of its collection into the
-                // Trash (`detachItems` with `target_lifecycle: 'trash'`).
-            }
-            Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
-            Action::Reject => {
-                if crate::settings::current(cx).reject_action == "delete" {
-                    self.request_permanent_delete(target, true, window, cx);
-                } else {
-                    self.set_lifecycle(Lifecycle::Trash, cx);
-                }
-            }
-            Action::DeletePermanently => {
-                self.request_permanent_delete(target, false, window, cx);
-            }
-            // ── Folders ──
-            Action::AddToFolder => {
-                self.dispatch(Box::new(crate::keymap::AddToFolder), window, cx);
-                return;
-            }
-            Action::AddToLastFolder => {
-                let last = self.session.read(cx).recent_folders.first().copied();
-                if let Some(folder) = last {
-                    self.session
-                        .update(cx, |session, _| session.record_folder_use(folder));
-                    let selection = target.selection(self.session.read(cx));
-                    self.edit(
-                        Box::new(move |library| library.add_to_folder(&selection, folder)),
-                        Reread::SELECTION,
-                        cx,
-                    );
-                }
-            }
-            Action::NewFolderWithSelection => {
-                let selection = target.selection(self.session.read(cx));
-                self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.new_folder_in(None, Some(selection), window, cx)
-                });
-                return;
-            }
-            Action::NewFolder => {
-                let parent = target.folder;
-                self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.new_folder_in(parent, None, window, cx)
-                });
-                return;
-            }
-            Action::RemoveFromFolder => {
-                if let Some(folder) = target.folder {
-                    let selection = target.selection(self.session.read(cx));
-                    self.edit(
-                        Box::new(move |library| library.remove_from_folder(&selection, folder)),
-                        Reread::RESULTS,
-                        cx,
-                    );
-                }
-            }
-            Action::SetFolderCover => {
-                if let (Some(folder), Some(id)) = (target.folder, ids.first().copied()) {
-                    self.edit(
-                        Box::new(move |library| library.set_folder_cover(folder, id)),
-                        Reread::SELECTION,
-                        cx,
-                    );
-                }
-            }
-            Action::SortContents(field) => {
-                if let Some(folder) = target.folder {
-                    self.sort_folder(folder, field, cx);
-                }
-            }
-            // ── Groups ──
-            Action::Group => self.group(target, window, cx),
-            Action::Ungroup => self.confirm_ungroup(target, cx),
-            Action::EditGroup => {
-                // TODO: open the collection editor on this group.
-            }
-            // ── Names and tags ──
-            Action::Rename => {
-                if self.inspector_collapsed {
-                    self.toggle_rails(false, true, cx);
-                }
-                self.inspector
-                    .update(cx, |inspector, cx| inspector.edit_name(window, cx));
-                return;
-            }
-            Action::BatchRename => {
-                // TODO: open the batch rename dialog for these items.
-            }
-            Action::AddTags => {
-                self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
-                return;
-            }
-            Action::AutoTag => {
-                // TODO: open the AI tagger on the selection, beside the
-                // inspector.
-            }
-            Action::CopyTags => self.copy_tags(target, window, cx),
-            Action::PasteTags => {
-                let tags = self.items.tag_clipboard.clone();
-                if !tags.is_empty() && !ids.is_empty() {
-                    let selection = target.selection(self.session.read(cx));
-                    self.edit(
-                        Box::new(move |library| library.apply_tags(&selection, &tags, true)),
-                        Reread::SELECTION,
-                        cx,
-                    );
-                }
-            }
-            Action::Rate(stars) => {
-                let rating = picto_library::Rating::ALL[usize::from(stars).min(5)];
-                let selection = target.selection(self.session.read(cx));
-                self.edit(
-                    Box::new(move |library| library.set_rating(&selection, rating)),
-                    Reread::SELECTION,
-                    cx,
-                );
-            }
-            // ── Waiting on other parts of the app ──
-            Action::ExportOriginals | Action::ExportAs | Action::ExportPictoPack => {
-                // TODO: export through the application backend (originals to
-                // a chosen folder, the export dialog, a Picto Pack).
-            }
-            Action::SearchByImage(_) => {
-                // TODO: production uploads the original to the engine from a
-                // hidden browser window (`runReverseImageSearch`) and shows
-                // the results page; this needs that upload.
-            }
-            Action::SetLibraryCover => {
-                // TODO: open the library cover dialog (`MediaCoverDialog`)
-                // with this item chosen, where the square is framed before
-                // the cover is written beside the library's database.
-            }
-            Action::FindMediaMatches => {
-                // TODO: open the media-matches destination
-                // (`ItemScope::MediaMatches`) for this item.
-            }
-            Action::RegenerateThumbnails => {
-                // TODO: regenerate the thumbnails of these files.
-            }
-            Action::Grayscale => {
-                // TODO: draw the grid's thumbnails in grayscale and check
-                // the row while it is on.
-            }
-            Action::NewSmartFolder => {
-                self.dispatch(Box::new(crate::keymap::NewSmartFolder), window, cx);
-                return;
-            }
-            Action::ImportFiles => self.import(super::import::Import::Files, window, cx),
-            Action::ImportFolder => self.import(super::import::Import::Folder, window, cx),
-            Action::PasteImport => self.import(super::import::Import::Paste, window, cx),
-            Action::FlashPlay | Action::FlashStop | Action::FlashMute => {
-                use crate::viewer::flash::Flash;
-                let control: Box<dyn Fn(&mut Flash)> = match action {
-                    Action::FlashPlay => Box::new(Flash::toggle_play),
-                    Action::FlashStop => Box::new(Flash::stop),
-                    _ => Box::new(Flash::toggle_mute),
-                };
-                if let Some(surface) = self.items.surface.as_ref().and_then(|s| s.upgrade()) {
-                    surface.update(cx, |surface, cx| surface.control_flash(control, cx));
-                }
-            }
-            Action::SetAsThumbnail => {
-                // TODO: capture the shown frame and make it the thumbnail.
-            }
-        }
-        if self.items.surface.is_none() {
-            window.focus(&self.focus, cx);
-        }
-    }
-
-    /// Sends an action for another part of the app from the shell, which
-    /// has the keyboard once the menu has closed.
-    fn dispatch(&mut self, action: Box<dyn gpui::Action>, window: &mut Window, cx: &mut App) {
-        window.focus(&self.focus, cx);
-        window.dispatch_action(action, cx);
-    }
-
-    /// `resolveFilePath`: where the library keeps the file, from the item's
-    /// details, then `then` with it.
-    fn with_path(
-        &mut self,
-        file: File,
-        then: impl FnOnce(PathBuf, &mut App) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let File { root, hash, .. } = file;
-        self.library(
-            Box::new(move |library| {
-                Ok(library
-                    .details(root)?
-                    .media
-                    .into_iter()
-                    .find(|media| media.facts.content_hash == hash)
-                    .map(|media| PathBuf::from(media.file_path)))
-            }),
-            |_, path, _, cx| {
-                if let Some(path) = path {
-                    then(path, cx);
-                }
-            },
-            window,
-            cx,
-        );
-    }
-
-    /// Runs `work` on the library's thread and hands its answer to `then`.
-    /// A failure is reported as the session's edits report one.
-    fn library<T: Send + 'static>(
-        &mut self,
-        work: Work<T>,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let answer = self
-            .session
-            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(value)) = answer.await {
-                let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
-            }
-        })
-        .detach();
-    }
-
-    /// An edit of the selected items, and what to read again afterwards.
-    fn edit<T: Send + 'static>(&mut self, work: Work<T>, reread: Reread, cx: &mut Context<Self>) {
-        self.session.update(cx, |session, cx| {
-            let _ = session.edit(work, reread, cx);
-        });
-    }
-
-    /// Moves the selected items into or out of the Trash or the Inbox
-    /// through the session, which reads the grid again in place.
-    fn set_lifecycle(&mut self, lifecycle: Lifecycle, cx: &mut Context<Self>) {
-        self.session
-            .update(cx, |session, cx| session.move_selection_to(lifecycle, cx));
-    }
-
-    fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
-        self.edit(
-            Box::new(move |library| library.sort_folder_items(folder, field)),
-            Reread::RESULTS,
-            cx,
-        );
-    }
-
-    /// `onCopyTags`: one item's tags, or the tags every selected item
-    /// shares, as JSON on the clipboard and kept for "Paste Tags".
-    fn copy_tags(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
-        let single = target.items.len() == 1;
-        let ids = target.ids();
-        let selection = target.selection(self.session.read(cx));
-        self.library(
-            Box::new(move |library| {
-                let tag_ids = if single {
-                    library.details(ids[0])?.tag_ids
-                } else {
-                    library.selection_summary(&selection)?.shared_tags
-                };
-                Ok(library
-                    .tags_by_id(&tag_ids)?
-                    .iter()
-                    .map(crate::tags::record_name)
-                    .collect::<Vec<_>>())
-            }),
-            |this, tags, _, cx| {
-                write_text(serde_json::to_string(&tags).unwrap_or_default(), cx);
-                this.items.tag_clipboard = tags;
-            },
-            window,
-            cx,
-        );
-    }
-
-    /// `organizeSelection`: one selected group and no notes to merge groups
-    /// at once; anything else needs the group organizer.
-    fn group(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(cover) = target.items.first().map(|item| item.root_id) else {
-            return;
-        };
-        let selection = target.selection(self.session.read(cx));
-        self.library(
-            Box::new(move |library| {
-                let summary = library.selection_summary(&selection)?;
-                let notes = library.collection_note_draft(&selection)?;
-                if let ([group], 0) = (summary.collection_candidates.as_slice(), notes.source_count)
-                {
-                    library.organize_into_collection(&picto_library::GroupRequest {
-                        target: selection,
-                        cover_root_id: cover,
-                        winning_collection_id: Some(group.collection_id),
-                        name: None,
-                        notes: None,
-                        modified_at_ms: crate::now_ms(),
-                    })?;
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            }),
-            |this, grouped, _, cx| {
-                if grouped {
-                    this.session
-                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
-                }
-                // TODO: otherwise open the group organizer
-                // (`GroupOrganizerModal`) with the selection's groups and
-                // notes.
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn confirm_ungroup(&mut self, target: Target, cx: &mut Context<Self>) {
-        let collections = target
-            .items
-            .iter()
-            .filter(|item| item.kind == RootKind::Collection)
-            .count();
-        let title = if collections == 1 {
-            "Ungroup?".to_owned()
-        } else {
-            format!("Ungroup {} collections?", grouped(collections as u64))
-        };
-        let message = if collections == 1 && target.items.len() == 1 {
-            "Every member will return to the library as a separate item. Files and metadata will not be deleted."
-        } else {
-            "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."
-        };
-        let selection = target.selection(self.session.read(cx));
-        self.ask(
-            title,
-            message,
-            "Ungroup",
-            false,
-            Rc::new(move |this, _, cx| {
-                let selection = selection.clone();
-                this.session
-                    .update(cx, |session, cx| session.clear_selection(cx));
-                this.edit(
-                    Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
-                    Reread::RESULTS,
-                    cx,
-                );
-            }),
-            cx,
-        );
-    }
-
-    /// `requestPermanentDelete`: asks first, saying whether the delete can
-    /// be undone, and deletes through the library. A rejection (the
-    /// setting that skips the Trash) asks only when it cannot be undone.
-    ///
-    /// Only a marked disposable copy of a library is changed this way. The
-    /// library keeps the files of an undoable delete until it leaves the
-    /// history; the application removes the files a larger delete frees.
-    fn request_permanent_delete(
-        &mut self,
-        target: Target,
-        reject: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.request_deletion(
-            target.selection(self.session.read(cx)),
-            reject,
-            false,
-            window,
-            cx,
-        );
-    }
-
-    /// The sidebar's Empty Trash: everything in the Trash, after the same
-    /// confirmation, titled "Empty Trash" with "Delete All".
-    pub(super) fn empty_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selection = SelectionTarget::Query {
-            query: picto_library::query::RootQuery {
-                scope: ItemScope::Trash,
-                view: Default::default(),
-            },
-            excluded_root_ids: Vec::new(),
-        };
-        self.request_deletion(selection, false, true, window, cx);
-    }
-
-    fn request_deletion(
-        &mut self,
-        selection: SelectionTarget,
-        reject: bool,
-        empty_trash: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let undo_limit = crate::settings::current(cx).undo_delete_limit;
-        let read = selection.clone();
-        self.library(
-            Box::new(move |library| library.selection_summary(&read)),
-            move |this, summary, window, cx| {
-                let count = summary.selected_count;
-                if count == 0 {
-                    return;
-                }
-                let undoable = undo_limit > 0 && summary.media_count <= undo_limit as u128;
-                let (title, label) = if empty_trash {
-                    ("Empty Trash".to_owned(), "Delete All")
-                } else if count == 1 {
-                    ("Delete permanently?".to_owned(), "Delete Permanently")
-                } else {
-                    (
-                        format!("Delete {} items permanently?", grouped(count)),
-                        "Delete Permanently",
-                    )
-                };
-                let delete = Deletion {
-                    selection: selection.clone(),
-                    reject,
-                    title,
-                    label,
-                };
-                if reject && undoable {
-                    this.delete_permanently(delete, undoable, window, cx);
-                    return;
-                }
-                let message = permanent_delete_message(Some(summary.media_count), undo_limit);
-                this.ask(
-                    delete.title.clone(),
-                    message,
-                    label,
-                    true,
-                    Rc::new(move |this, window, cx| {
-                        this.delete_permanently(delete.clone(), undoable, window, cx)
-                    }),
-                    cx,
-                );
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn delete_permanently(
-        &mut self,
-        delete: Deletion,
-        require_undoable: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.session.read(cx).disposable() {
-            eprintln!("picto: refusing to delete from a library that is not a disposable copy");
-            return;
-        }
-        let undo_limit = crate::settings::current(cx).undo_delete_limit.max(0) as usize;
-        let (selection, reject) = (delete.selection.clone(), delete.reject);
-        self.session
-            .update(cx, |session, cx| session.close_viewer(cx));
-        let answer = self.session.read(cx).run(move |library| {
-            let deleted = if reject {
-                library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
-            } else {
-                library.permanently_delete(
-                    &selection,
-                    crate::now_ms(),
-                    undo_limit,
-                    require_undoable,
-                )
-            };
-            // The files a delete that cannot be undone frees are removed from
-            // the copy's blobs by the application's media worker
-            // (`drain_blob_cleanup`), as in production.
-            deleted.map(|_| ())
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(result) = answer.await else {
-                return;
-            };
-            let _ = this.update_in(cx, move |this, _, cx| match result {
-                Ok(()) => this
-                    .session
-                    .update(cx, |session, cx| session.reread(Reread::RESULTS, cx)),
-                // The library resolved a different selection or limit: never
-                // drop the promise of undo silently; ask again.
-                Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
-                    this.ask(
-                        delete.title.clone(),
-                        "This delete can no longer be undone. Delete permanently anyway?",
-                        delete.label,
-                        true,
-                        Rc::new(move |this, window, cx| {
-                            this.delete_permanently(delete.clone(), false, window, cx)
-                        }),
-                        cx,
-                    );
-                }
-                Err(error) => eprintln!("picto: {error}"),
-            });
-        })
-        .detach();
-    }
-
     // ── Confirmation ────────────────────────────────────────────
 
     #[allow(clippy::too_many_arguments)]
-    fn ask(
+    pub(super) fn ask(
         &mut self,
         title: impl Into<SharedString>,
         message: impl Into<SharedString>,
@@ -1248,10 +594,6 @@ impl Shell {
     }
 }
 
-fn write_text(text: String, cx: &mut App) {
-    cx.write_to_clipboard(ClipboardItem::new_string(text));
-}
-
 fn kind(kind: RootKind) -> Kind {
     match kind {
         RootKind::Media => Kind::Media,
@@ -1261,24 +603,7 @@ fn kind(kind: RootKind) -> Kind {
 
 #[cfg(test)]
 mod tests {
-    use super::{media_link, permanent_delete_message};
-
-    #[test]
-    fn delete_messages_say_whether_undo_is_possible() {
-        assert_eq!(
-            permanent_delete_message(Some(3), 0),
-            "Delete undo is disabled. This cannot be undone."
-        );
-        assert_eq!(
-            permanent_delete_message(Some(500), 500),
-            "You can undo this until Picto closes. After that the files are removed."
-        );
-        assert_eq!(
-            permanent_delete_message(Some(1500), 1000),
-            "This exceeds the undo limit of 1,000 media items, including collection members, so it cannot be undone."
-        );
-        assert!(permanent_delete_message(None, 500).starts_with("Deleting up to 500 media"));
-    }
+    use super::media_link;
 
     #[test]
     fn links_name_the_known_types_and_bin_otherwise() {

@@ -145,6 +145,11 @@ enum Drag {
     Seek,
 }
 
+/// A video's first picture has arrived.
+pub struct FirstPicture;
+
+impl EventEmitter<FirstPicture> for VideoPlayer {}
+
 pub struct VideoPlayer {
     kind: Kind,
     path: PathBuf,
@@ -155,8 +160,11 @@ pub struct VideoPlayer {
     status: Status,
     reported: bool,
     frame: Option<Frame>,
-    /// The thumbnail, shown until the first picture.
-    poster: Option<Arc<RenderImage>>,
+    /// Since when the player has waited for its first picture. A video
+    /// shows nothing until then (its host keeps what it showed before), so
+    /// the first thing drawn is the video's own first frame rather than a
+    /// thumbnail taken from further in.
+    opened: Instant,
     controls: ControlsVisibility,
     controls_fade: motion::Fade,
     hide_task: Option<Task<()>>,
@@ -245,7 +253,7 @@ impl VideoPlayer {
             status,
             reported: false,
             frame: None,
-            poster: None,
+            opened: now,
             controls: ControlsVisibility::new(now),
             controls_fade: motion::Fade::at(true),
             hide_task: None,
@@ -270,17 +278,27 @@ impl VideoPlayer {
         player
     }
 
-    /// The thumbnail to show until the first picture.
-    pub fn set_poster(&mut self, poster: Option<Arc<RenderImage>>, cx: &mut Context<Self>) {
-        let same = match (&self.poster, &poster) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        if !same {
-            self.poster = poster;
-            cx.notify();
+    /// Whether the player has something to show: a video its first picture
+    /// (or a failure, or the wait has run out); audio at once.
+    pub fn presentable(&self) -> bool {
+        self.kind == Kind::Audio
+            || self.frame.is_some()
+            || self.backend.is_none()
+            || self.status.error.is_some()
+            || self.opened.elapsed() >= motion::MEDIA_HOLD
+    }
+
+    /// Stops at once, keeping the picture on screen.
+    pub fn pause(&mut self) {
+        if let Some(backend) = &mut self.backend {
+            backend.pause();
         }
+        self.playback.playing = false;
+    }
+
+    /// Whether a video's first picture is on screen.
+    pub fn has_picture(&self) -> bool {
+        self.frame.is_some()
     }
 
     /// Keeps taking pictures for a moment after a seek or a change of
@@ -472,10 +490,14 @@ impl VideoPlayer {
             self.playback.playing = false;
         }
         self.status = status;
-        if let Some(frame) = backend.take_frame()
-            && let Some(Frame::Image(old)) = self.frame.replace(frame)
-        {
-            cx.drop_image(old, Some(window));
+        if let Some(frame) = backend.take_frame() {
+            let first = self.frame.is_none();
+            if let Some(Frame::Image(old)) = self.frame.replace(frame) {
+                cx.drop_image(old, Some(window));
+            }
+            if first {
+                cx.emit(FirstPicture);
+            }
         }
     }
 
@@ -500,14 +522,7 @@ impl VideoPlayer {
                     .object_fit(ObjectFit::Contain)
                     .into_any_element(),
             ),
-            None => self.poster.clone().map(|poster| {
-                img(poster)
-                    .absolute()
-                    .inset_0()
-                    .size_full()
-                    .object_fit(ObjectFit::Contain)
-                    .into_any_element()
-            }),
+            None => None,
         }
     }
 
@@ -985,8 +1000,16 @@ impl Render for VideoPlayer {
         {
             window.request_animation_frame();
         }
-        let visible = self.controls.visible();
         let video = self.kind == Kind::Video;
+        if !self.presentable() {
+            // Until the first picture: nothing, not even the black, so the
+            // host's previous picture (or its background) stays.
+            if self.opened.elapsed() < motion::MEDIA_HOLD {
+                window.request_animation_frame();
+            }
+            return div().id("media-player").size_full();
+        }
+        let visible = self.controls.visible();
         let mut root = div()
             .id("media-player")
             .relative()
