@@ -234,8 +234,10 @@ impl SettingsModel {
                 if saved {
                     this.saved = draft;
                     this.reset_views = false;
-                    // The grid reads its saved view again.
-                    this.session.update(cx, |session, cx| session.reload(cx));
+                    // The grid reads its saved view again, in place: the
+                    // selection and the scroll stay.
+                    this.session
+                        .update(cx, |session, cx| session.refresh_results(cx));
                     cx.emit(Applied);
                 }
                 cx.notify();
