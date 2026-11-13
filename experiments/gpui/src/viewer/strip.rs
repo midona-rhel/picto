@@ -1,6 +1,6 @@
 //! The previous / count / next strip along the bottom of the media
-//! (`QuickLookNavigation.tsx`), used here to step through the members of a
-//! collection.
+//! (`QuickLookNavigation.tsx`): Quick Look's way through the results, and
+//! the media view's and detail window's through a collection's members.
 use crate::ui::tooltip::{self, Tip};
 use crate::{motion, theme, ui};
 use gpui::*;
@@ -14,6 +14,8 @@ type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 pub struct StripButton {
     id: ElementId,
     icon: &'static str,
+    width: f32,
+    glyph: Option<Rgba>,
     disabled: bool,
     tip: Tip,
     on_click: Option<ClickHandler>,
@@ -23,6 +25,8 @@ pub fn strip_button(id: impl Into<ElementId>, icon: &'static str, tip: Tip) -> S
     StripButton {
         id: id.into(),
         icon,
+        width: 48.,
+        glyph: None,
         disabled: false,
         tip,
         on_click: None,
@@ -30,6 +34,19 @@ pub fn strip_button(id: impl Into<ElementId>, icon: &'static str, tip: Tip) -> S
 }
 
 impl StripButton {
+    /// A button of another width with the same look: Quick Look's 32px
+    /// close button (`.closeButton`).
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
+    /// The glyph's colour, when it is not the primary text colour.
+    pub fn glyph(mut self, color: Rgba) -> Self {
+        self.glyph = Some(color);
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -64,7 +81,7 @@ impl RenderOnce for StripButton {
         let button = div()
             .id(self.id)
             .relative()
-            .w(px(48.))
+            .w(px(self.width))
             .h(px(32.))
             .flex_none()
             .flex()
@@ -79,7 +96,7 @@ impl RenderOnce for StripButton {
                 theme.surface_hover(),
                 strength,
             ))
-            .child(ui::icon(self.icon, 16., theme.text()));
+            .child(ui::icon(self.icon, 16., self.glyph.unwrap_or(theme.text())));
         if self.disabled {
             return button.opacity(0.3);
         }

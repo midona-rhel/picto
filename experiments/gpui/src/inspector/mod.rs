@@ -58,6 +58,11 @@ fn wanted(screen: bool, viewer: bool, selected: usize) -> Mode {
     }
 }
 
+/// The preview was right-clicked at this window position.
+pub struct PreviewMenuRequested(pub Point<Pixels>);
+
+impl EventEmitter<PreviewMenuRequested> for Inspector {}
+
 /// Where a click on a star applies its rating.
 #[derive(Clone, Copy)]
 enum Rate {
@@ -614,7 +619,7 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tip = ui::tip("Add to Folder").keys(&["F"]);
+        let tip = ui::tip("Add to Folder").shortcut("organize.addFolder", cx);
         if empty {
             self.add_row(
                 "add-to-folder",
@@ -640,7 +645,7 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tip = ui::tip("Add Tags").keys(&["T"]);
+        let tip = ui::tip("Add Tags").shortcut("organize.addTag", cx);
         if empty {
             self.add_row(
                 "add-tags",
@@ -718,9 +723,16 @@ impl Inspector {
         thumbnail: std::path::PathBuf,
         dimensions: Option<(u32, u32)>,
         label: AnyElement,
+        cx: &mut Context<Self>,
     ) -> Div {
         let (width, height) = fitted(dimensions);
         div()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|_, event: &MouseDownEvent, _, cx| {
+                    cx.emit(PreviewMenuRequested(event.position))
+                }),
+            )
             .h(px(PREVIEW))
             .mb(px(8.))
             .flex()
@@ -983,6 +995,7 @@ impl Inspector {
                 thumbnail,
                 media.facts.width.zip(media.facts.height),
                 label,
+                cx,
             ));
         }
         let palette = cover.map_or(&[][..], |media| &media.facts.palette[..]);

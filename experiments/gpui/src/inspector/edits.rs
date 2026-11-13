@@ -6,13 +6,10 @@ use super::membership::{self, Touches};
 use super::tag_picker::{self, name};
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
-use crate::theme;
-use crate::theme::Text as _;
 use crate::ui::{
     self,
-    action_button::Look as ButtonLook,
     menu::{self, Menu},
-    modal::{Presence, Size},
+    modal::Presence,
 };
 use gpui::*;
 use picto_library::predicate::{FilterClause, SetMatchMode};
@@ -552,7 +549,6 @@ impl Inspector {
         if !confirm.focus.contains_focused(window, cx) && !confirm.presence.closing() {
             window.focus(&confirm.focus, cx);
         }
-        let theme = theme::theme(cx);
         let (title, label, what) = match confirm.overwrite {
             Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),
             Overwrite::Sources(_) => ("Overwrite sources?", "Overwrite Sources", "source URLs"),
@@ -561,42 +557,33 @@ impl Inspector {
             "This will replace existing {what} on all {} selected items. Are you sure?",
             crate::grid::format::grouped(confirm.count)
         );
-        let dismiss = cx.listener(|this, _: &(), _, cx| {
-            if let Some(confirm) = &mut this.confirm {
-                confirm.presence.close();
-                cx.notify();
-            }
-        });
+        let this = cx.entity().downgrade();
+        let (dismiss, accept) = (this.clone(), this);
         Some(
-            ui::modal("inspector-confirm", title, confirm.presence)
-                .size(Size::Small)
+            ui::confirm::confirm("inspector-confirm", title, message, label, confirm.presence)
+                .danger(true)
                 .focus(&confirm.focus)
-                .on_close(move |window, cx| dismiss(&(), window, cx))
-                .child(
-                    div()
-                        .text(theme::TEXT_MD)
-                        .line_height(px(19.5))
-                        .text_color(theme.text_secondary())
-                        .child(message),
-                )
-                .footer(
-                    ui::action_button("inspector-confirm-cancel", ButtonLook::Standard)
-                        .label("Cancel")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.confirm = None;
+                .on_close(move |_, cx| {
+                    let _ = dismiss.update(cx, |this, cx| {
+                        if let Some(confirm) = &mut this.confirm {
+                            confirm.presence.close();
                             cx.notify();
-                        })),
-                )
-                .footer(
-                    ui::action_button("inspector-confirm-ok", ButtonLook::Danger)
-                        .label(label)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if let Some(confirm) = this.confirm.take() {
-                                this.overwrite(confirm.overwrite, cx);
-                            }
-                            cx.notify();
-                        })),
-                )
+                        }
+                    });
+                })
+                .on_confirm(move |_, cx| {
+                    let _ = accept.update(cx, |this, cx| {
+                        if let Some(confirm) = this.confirm.as_mut() {
+                            confirm.presence.close();
+                            let overwrite = std::mem::replace(
+                                &mut confirm.overwrite,
+                                Overwrite::Notes(String::new()),
+                            );
+                            this.overwrite(overwrite, cx);
+                        }
+                        cx.notify();
+                    });
+                })
                 .into_any_element(),
         )
     }

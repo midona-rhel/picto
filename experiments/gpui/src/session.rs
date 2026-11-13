@@ -139,10 +139,17 @@ pub struct Session {
     search_text: String,
     pub filter: Option<FilterExpr>,
     blobs: PathBuf,
+    /// The disposable database the library opened.
+    database: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
+    /// Folders items were added to, newest first, for the folder picker's
+    /// Recent view and the grid menu's "Add to “…”" (`useRecentFolders`).
+    /// Production keeps them in the renderer's localStorage; here they last
+    /// for the session.
+    pub recent_folders: Vec<picto_library::FolderId>,
     /// The selected items and the one shown, to select again by id once a
     /// [`Session::refresh_results`] page is in.
     reselect: Option<(Vec<RootId>, Option<RootId>)>,
@@ -152,7 +159,7 @@ impl EventEmitter<Change> for Session {}
 
 impl Session {
     pub fn new(database: PathBuf, blobs: PathBuf, cx: &mut Context<Self>) -> Self {
-        let (sender, receiver) = backend::start(database);
+        let (sender, receiver) = backend::start(database.clone());
         cx.spawn(async move |session, cx| {
             loop {
                 cx.background_executor()
@@ -211,11 +218,19 @@ impl Session {
             search_text: String::new(),
             filter: None,
             blobs,
+            database,
             library_cover,
             fixtures,
             place_label: None,
             reselect: None,
+            recent_folders: Vec::new(),
         }
+    }
+
+    /// Whether the open database is still a marked disposable copy, which
+    /// edits that cannot be undone require.
+    pub fn disposable(&self) -> bool {
+        crate::marked_disposable(&self.database)
     }
 
     /// The library's blob store.
@@ -314,6 +329,12 @@ impl Session {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.saved.clear();
         self.query(false, cx);
+    }
+
+    /// `recordRecentFolderUse`: the folder moves to the front of the recent
+    /// folders, each kept once, at most 30.
+    pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
+        record_recent(&mut self.recent_folders, folder);
     }
 
     /// Fetches the current destination again after an edit that may change
@@ -991,14 +1012,6 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.close_viewer(cx)
-        } else {
-            self.open_viewer(cx)
-        }
-    }
-
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self
             .details
@@ -1072,6 +1085,13 @@ impl Session {
     }
 }
 
+/// `recordRecentFolderUse`: `folder` first, each folder once, at most 30.
+fn record_recent(recent: &mut Vec<picto_library::FolderId>, folder: picto_library::FolderId) {
+    recent.retain(|id| *id != folder);
+    recent.insert(0, folder);
+    recent.truncate(30);
+}
+
 /// Back and Forward without the places that no longer exist, each moved to
 /// its destination's new position, and where the current place now is.
 fn remap_history(
@@ -1097,7 +1117,22 @@ fn remap_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{Visit, remap_history};
+    use super::{Visit, record_recent, remap_history};
+    use picto_library::FolderId;
+
+    #[test]
+    fn recent_folders_are_newest_first_each_once_and_at_most_thirty() {
+        let mut recent = vec![FolderId(1), FolderId(2), FolderId(3)];
+        record_recent(&mut recent, FolderId(3));
+        assert_eq!(recent, [FolderId(3), FolderId(1), FolderId(2)]);
+        record_recent(&mut recent, FolderId(9));
+        assert_eq!(recent[0], FolderId(9));
+        for id in 100..140 {
+            record_recent(&mut recent, FolderId(id));
+        }
+        assert_eq!(recent.len(), 30);
+        assert_eq!(recent[0], FolderId(139));
+    }
 
     #[test]
     fn history_drops_deleted_places_and_follows_moved_ones() {

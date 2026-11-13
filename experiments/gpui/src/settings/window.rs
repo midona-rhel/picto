@@ -73,63 +73,12 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
         )
         .ok()?;
     let _ = handle.update(cx, |_, window, _| {
-        hide_window_buttons(window);
+        // Settings draws its own close button (`setWindowButtonVisibility(false)`).
+        ui::window_chrome::hide_window_buttons(window);
         window.activate_window();
     });
     Some(handle)
 }
-
-/// Settings draws its own close button, so the traffic lights are hidden
-/// (`setWindowButtonVisibility(false)`). GPUI has no option for this, so it
-/// asks AppKit directly.
-#[cfg(target_os = "macos")]
-fn hide_window_buttons(window: &Window) {
-    use std::ffi::{c_char, c_void};
-    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-    #[link(name = "objc", kind = "dylib")]
-    unsafe extern "C" {
-        fn sel_registerName(name: *const c_char) -> *const c_void;
-        fn objc_msgSend();
-    }
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return;
-    };
-    // SAFETY: `ns_view` is the live content view of this window; `window`,
-    // `standardWindowButton:` and `setHidden:` are AppKit methods with these
-    // signatures, called on the main thread.
-    unsafe {
-        let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let send_button: extern "C" fn(*mut c_void, *const c_void, usize) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let send_bool: extern "C" fn(*mut c_void, *const c_void, bool) =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let ns_window = send_id(
-            appkit.ns_view.as_ptr(),
-            sel_registerName(c"window".as_ptr()),
-        );
-        if ns_window.is_null() {
-            return;
-        }
-        // Close, miniaturize and zoom.
-        for kind in 0..3 {
-            let button = send_button(
-                ns_window,
-                sel_registerName(c"standardWindowButton:".as_ptr()),
-                kind,
-            );
-            if !button.is_null() {
-                send_bool(button, sel_registerName(c"setHidden:".as_ptr()), true);
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn hide_window_buttons(_: &Window) {}
 
 impl SettingsWindow {
     fn new(model: Entity<SettingsModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {

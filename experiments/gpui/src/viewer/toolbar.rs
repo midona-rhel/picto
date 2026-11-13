@@ -95,12 +95,12 @@ impl ViewerToolbar {
         entries.push(menu::Entry::Separator);
         entries.push(
             menu::item("actual-size", "Actual size")
-                .shortcut("⌘0")
+                .shortcut_for("view.actualSize", cx)
                 .into(),
         );
         entries.push(
             menu::item("fit-window", "Fit to window")
-                .shortcut("`")
+                .shortcut_for("view.fitWindow", cx)
                 .into(),
         );
         // `showSearch: false`, as `GridToolbar.tsx` opens it.
@@ -193,7 +193,7 @@ impl Render for ViewerToolbar {
 
         let mut left = div().flex().items_center().gap(px(4.)).flex_none().child(
             ui::icon_button("viewer-back", "history-back")
-                .tip(ui::tip("Back to grid").keys(&["Esc"]))
+                .tip(ui::tip("Back to grid").shortcut("view.closeDetail", cx))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.session
                         .update(cx, |session, cx| session.close_viewer(cx));
@@ -263,14 +263,14 @@ impl Render for ViewerToolbar {
             right = right
                 .child(
                     ui::icon_button("viewer-fit", "toolbar-fit")
-                        .tip(ui::tip("Fit to window").keys(&["`"]))
+                        .tip(ui::tip("Fit to window").shortcut("view.fitWindow", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface.update(cx, |surface, cx| surface.fit(cx));
                         })),
                 )
                 .child(
                     ui::icon_button("viewer-actual-size", "toolbar-actual-size")
-                        .tip(ui::tip("Actual size").keys(&["⌘", "0"]))
+                        .tip(ui::tip("Actual size").shortcut("view.actualSize", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface
                                 .update(cx, |surface, cx| surface.actual_size(cx));
@@ -288,7 +288,7 @@ impl Render for ViewerToolbar {
                 .child(
                     ui::icon_button("viewer-previous", "toolbar-chevron-left")
                         .disabled(!can_previous)
-                        .tip(ui::tip("Previous").keys(&["←"]))
+                        .tip(ui::tip("Previous").shortcut("view.prevImage", cx))
                         .on_click(cx.listener(|this, _, window, cx| {
                             let _ = this
                                 .viewer
@@ -298,7 +298,7 @@ impl Render for ViewerToolbar {
                 .child(
                     ui::icon_button("viewer-next", "toolbar-chevron-right")
                         .disabled(!can_next)
-                        .tip(ui::tip("Next").keys(&["→"]))
+                        .tip(ui::tip("Next").shortcut("view.nextImage", cx))
                         .on_click(cx.listener(|this, _, window, cx| {
                             let _ = this
                                 .viewer

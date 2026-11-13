@@ -27,7 +27,6 @@ const HEIGHT: f32 = 480.;
 const ROW: f32 = 26.;
 /// `useRecentFolders(20)`, of the 30 remembered.
 const RECENT_SHOWN: usize = 20;
-const RECENT_KEPT: usize = 30;
 
 /// `FolderView`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,13 +186,6 @@ pub fn listed(all: &[Folder], ids: &[FolderId]) -> Vec<Folder> {
         .collect()
 }
 
-/// `recordRecentFolderUse`: newest first, each once, at most `keep`.
-pub fn record_recent(recent: &mut Vec<FolderId>, folder: FolderId, keep: usize) {
-    recent.retain(|id| *id != folder);
-    recent.insert(0, folder);
-    recent.truncate(keep);
-}
-
 /// The New Subfolder and New Sibling Folder dialog.
 struct Create {
     title: &'static str,
@@ -218,9 +210,6 @@ pub struct FolderPicker {
     dirty: bool,
     folded: HashSet<FolderId>,
     focus_index: Option<usize>,
-    /// Folders the items were last added to, newest first, for this session
-    /// (production keeps them in the renderer's localStorage).
-    recent: Vec<FolderId>,
     scroll: ScrollHandle,
     menu: Option<Entity<Menu>>,
     menu_folder: Option<Folder>,
@@ -258,7 +247,6 @@ impl FolderPicker {
             dirty: false,
             folded: HashSet::new(),
             focus_index: None,
-            recent: Vec::new(),
             scroll: ScrollHandle::new(),
             menu: None,
             menu_folder: None,
@@ -334,7 +322,9 @@ impl FolderPicker {
             View::All => rows(&all, &self.folded, &self.query),
             View::Recent => {
                 let shown = self
-                    .recent
+                    .session
+                    .read(cx)
+                    .recent_folders
                     .iter()
                     .copied()
                     .take(RECENT_SHOWN)
@@ -353,7 +343,8 @@ impl FolderPicker {
         self.dirty = true;
         let add = membership::toggle(&mut self.selected, folder);
         if add {
-            record_recent(&mut self.recent, folder, RECENT_KEPT);
+            self.session
+                .update(cx, |session, _| session.record_folder_use(folder));
         }
         cx.emit(Event::Toggle { folder, add });
         cx.notify();
@@ -497,7 +488,8 @@ impl FolderPicker {
                 Ok((folder, _)) => {
                     this.create = None;
                     if let Some(parent) = parent {
-                        record_recent(&mut this.recent, parent, RECENT_KEPT);
+                        this.session
+                            .update(cx, |session, _| session.record_folder_use(parent));
                     }
                     this.toggle(folder, cx);
                     this.refocus = true;
@@ -993,7 +985,7 @@ impl Render for FolderPicker {
 
 #[cfg(test)]
 mod tests {
-    use super::{Folder, View, listed, record_recent, rows};
+    use super::{Folder, View, listed, rows};
     use picto_library::FolderId;
     use std::collections::HashSet;
 
@@ -1064,12 +1056,8 @@ mod tests {
     }
 
     #[test]
-    fn recent_folders_are_newest_first_each_once() {
-        let mut recent = vec![FolderId(1), FolderId(2), FolderId(3)];
-        record_recent(&mut recent, FolderId(3), 3);
-        assert_eq!(recent, [FolderId(3), FolderId(1), FolderId(2)]);
-        record_recent(&mut recent, FolderId(9), 3);
-        assert_eq!(recent, [FolderId(9), FolderId(3), FolderId(1)]);
+    fn tab_cycles_the_views() {
+        assert_eq!(View::All.next(), View::Recent);
         assert_eq!(View::Selected.next(), View::All);
     }
 }

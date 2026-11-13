@@ -20,6 +20,12 @@ use picto_library::{
 };
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
+// The review's actions. Their keys come from the shortcut registry
+// (`crate::keymap`) and win over the grid's while the screen has the
+// keyboard, as its `useShortcutScope` does.
+// TODO: Z keeps the left file, X the right one and S smart-merges
+// (`dup.keepLeft`, `dup.keepRight`, `dup.smartMerge`), once those decisions
+// can be made (see the buttons).
 actions!(
     duplicates,
     [
@@ -42,22 +48,6 @@ const CARD_METADATA: f32 = 222.;
 /// The container widths at which the layout tightens (`@container`).
 const COMPACT_WIDTH: f32 = 900.;
 const NARROW_WIDTH: f32 = 620.;
-
-/// The keys of `useShortcutScope` in the Electron screen, which win over
-/// the grid's while the screen has the keyboard.
-fn bind(cx: &mut App) {
-    let context = Some(CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new("left", PreviousPair, context),
-        KeyBinding::new("right", NextPair, context),
-        KeyBinding::new("f", FitPair, context),
-        KeyBinding::new("cmd-0", ActualPixels, context),
-        KeyBinding::new("b", KeepBoth, context),
-        KeyBinding::new("n", NotDuplicate, context),
-        // TODO: Z keeps the left file, X the right one and S smart-merges,
-        // once those decisions can be made (see the buttons).
-    ]);
-}
 
 /// One side of the pair on screen.
 struct Side {
@@ -219,7 +209,6 @@ impl DuplicatesScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        bind(cx);
         let screen = cx.weak_entity();
         let controls = cx.new(|_| DuplicatesToolbar { screen });
         let subscription =
@@ -907,7 +896,14 @@ impl DuplicatesScreen {
             .icon("check", 15.)
             .height(theme::CONTROL_MD)
             .text_size(theme::TEXT_SM)
-            .tip(ui::tip(keep).keys(&[if index == 0 { "Z" } else { "X" }]))
+            .tip(ui::tip(keep).shortcut(
+                if index == 0 {
+                    "dup.keepLeft"
+                } else {
+                    "dup.keepRight"
+                },
+                cx,
+            ))
             .disabled(true);
         keep_button = if compact {
             keep_button.width(theme::CONTROL_MD).padding(0.)
@@ -1161,12 +1157,12 @@ impl DuplicatesScreen {
         let not_duplicates = button("duplicates-not", Look::Standard)
             .icon("action-x", 15.)
             .label("Not duplicates")
-            .tip(ui::tip("These are different media").keys(&["N"]))
+            .tip(ui::tip("These are different media").shortcut("dup.notDuplicate", cx))
             .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
         let keep_both = button("duplicates-keep-both", Look::Standard)
             .icon("action-copy", 15.)
             .label("Keep both")
-            .tip(ui::tip("Keep both files").keys(&["B"]))
+            .tip(ui::tip("Keep both files").shortcut("dup.keepBoth", cx))
             .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
         // TODO: keep the better file of the two and merge the other into it,
         // previewing the survivor with a green ring while hovered. The
@@ -1175,7 +1171,10 @@ impl DuplicatesScreen {
         let smart_merge = button("duplicates-smart-merge", Look::Primary)
             .icon("action-arrows-join", 16.)
             .label("Smart merge")
-            .tip(ui::tip("Keep the stronger file and preserve item metadata").keys(&["S"]))
+            .tip(
+                ui::tip("Keep the stronger file and preserve item metadata")
+                    .shortcut("dup.smartMerge", cx),
+            )
             .disabled(true);
         let entity = cx.weak_entity();
         let difference = button("duplicates-difference", Look::Standard)
@@ -1451,13 +1450,13 @@ impl Render for DuplicatesToolbar {
                 .child(
                     ui::icon_button("duplicates-fit", "toolbar-fit")
                         .toggled(model.fit)
-                        .tip(ui::tip("Zoom to fit").keys(&["`"]))
+                        .tip(ui::tip("Zoom to fit").shortcut("view.fitWindow", cx))
                         .on_click(act(DuplicatesScreen::fit)),
                 )
                 .child(
                     ui::icon_button("duplicates-actual", "toolbar-actual-size")
                         .toggled(model.actual)
-                        .tip(ui::tip("Actual pixels").keys(&["⌘", "0"]))
+                        .tip(ui::tip("Actual pixels").shortcut("view.actualSize", cx))
                         .on_click(act(DuplicatesScreen::actual)),
                 )
                 .child(
@@ -1468,13 +1467,13 @@ impl Render for DuplicatesToolbar {
                         .child(
                             ui::icon_button("duplicates-previous", "toolbar-chevron-left")
                                 .disabled(!model.can_previous || model.disabled)
-                                .tip(ui::tip("Previous pair").keys(&["←"]))
+                                .tip(ui::tip("Previous pair").shortcut("dup.prevPair", cx))
                                 .on_click(act(|screen, cx| screen.step(-1, cx))),
                         )
                         .child(
                             ui::icon_button("duplicates-next", "toolbar-chevron-right")
                                 .disabled(!model.can_next || model.disabled)
-                                .tip(ui::tip("Next pair").keys(&["→"]))
+                                .tip(ui::tip("Next pair").shortcut("dup.nextPair", cx))
                                 .on_click(act(|screen, cx| screen.step(1, cx))),
                         ),
                 ),
