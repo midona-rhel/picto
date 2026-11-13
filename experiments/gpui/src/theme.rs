@@ -543,6 +543,9 @@ pub const TEXT_MD: f32 = 13.;
 pub const TEXT_LG: f32 = 14.;
 /// `--line-height-md`
 pub const LINE_HEIGHT_MD: f32 = 20.;
+/// Mantine's `--mantine-line-height`, which text inherits from the body
+/// where no rule sets a line height (the Subscriptions screen's cards).
+pub const LINE_HEIGHT_BODY: f32 = 1.55;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
 /// `--font-size-title`
