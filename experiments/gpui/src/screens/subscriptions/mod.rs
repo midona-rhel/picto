@@ -56,9 +56,6 @@ pub struct SubscriptionsScreen {
     rename: Entity<TextInput>,
     /// The subscription whose name is being edited.
     renaming: Option<i64>,
-    /// The subscription the field last edited, which its commit applies to
-    /// even after the field has closed.
-    rename_target: Option<i64>,
     /// The open context menu, which stays while it fades out.
     menu: Option<Entity<Menu>>,
     _menu: Option<Subscription>,
@@ -98,10 +95,10 @@ impl SubscriptionsScreen {
                     this.navigated(cx);
                 }
             }),
-            cx.subscribe(&rename, |this, _, Committed(_, name), cx| {
-                if let Some(id) = this.rename_target {
-                    this.commit_rename(id, name.clone(), cx);
-                }
+            // The field is keyed by the subscription it renames, so a commit
+            // that arrives after the field closed still knows its target.
+            cx.subscribe(&rename, |this, _, Committed(id, name), cx| {
+                this.commit_rename(*id as i64, name.clone(), cx);
             }),
             cx.on_blur(&rename_focus, window, |this, window, cx| {
                 this.renaming = None;
@@ -124,7 +121,6 @@ impl SubscriptionsScreen {
             tab: SOURCES,
             rename,
             renaming: None,
-            rename_target: None,
             menu: None,
             _menu: None,
             menu_targets: Vec::new(),
@@ -310,11 +306,9 @@ impl SubscriptionsScreen {
             return;
         };
         self.renaming = Some(id);
-        self.rename_target = Some(id);
-        // The field's key is not used: the screen knows what it renames.
         self.rename.update(cx, |input, cx| {
             input.set_rename_size(size, cx);
-            input.set_field(picto_library::RootId(0), name, cx);
+            input.set_field(id as u64, name, cx);
             input.select_everything(cx);
         });
         window.focus(&self.rename.focus_handle(cx), cx);

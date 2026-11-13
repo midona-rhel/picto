@@ -144,18 +144,32 @@ impl Theme {
     pub fn footer_surface(&self) -> Rgba {
         translucent(self.contrast, 3.)
     }
-    /// `--color-on-primary`: text on the primary colour.
-    pub fn on_primary(&self) -> Rgba {
-        rgb(0xffffff)
-    }
-    /// `--color-primary-60`
-    pub fn primary_60(&self) -> Rgba {
-        translucent(self.primary, 60.)
-    }
     /// `color-mix(in srgb, var(--color-bg-app) 90%, var(--color-text-primary) 10%)`:
     /// the select button's fill.
     pub fn select_surface(&self) -> Rgba {
         mixed(self.text, 10., self.background)
+    }
+    /// `--color-primary-NN`
+    pub fn primary_at(&self, percent: f32) -> Rgba {
+        translucent(self.primary, percent)
+    }
+    /// `--color-on-primary`: text on a primary surface.
+    pub fn on_primary(&self) -> Rgba {
+        rgb(0xffffff)
+    }
+    /// `--glass-border-bottom`
+    pub fn glass_border_bottom(&self) -> Rgba {
+        rgba(0xffffff1a)
+    }
+    /// Chromium's `::placeholder` colour (`darkGray`), for inputs the app
+    /// does not give a placeholder colour of its own.
+    pub fn placeholder(&self) -> Rgba {
+        rgb(0xa9a9a9)
+    }
+    /// `color-mix(in srgb, var(--color-control-surface) 50%, transparent)`:
+    /// the footer of the library switcher.
+    pub fn control_surface_half(&self) -> Rgba {
+        rgba(0x0000001a)
     }
 }
 
@@ -246,6 +260,38 @@ pub const BADGE_BACKGROUND: u32 = 0x00000080;
 pub const BADGE_BORDER: u32 = 0x00000033;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 
+// The viewer's overlays are fixed, not themed (`MediaView.module.css`).
+/// `.boundaryLeft` / `.boundaryRight`: `rgba(0, 0, 0, 0.6)`.
+pub const VIEWER_NOTICE_BACKGROUND: u32 = 0x00000099;
+/// `.navigator`: `rgba(0, 0, 0, 0.4)`, bordered `rgba(255, 255, 255, 0.15)`.
+pub const NAVIGATOR_BACKGROUND: u32 = 0x00000066;
+pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
+/// `.navigatorViewport`: border `rgba(248, 249, 251, 0.9)`, fill
+/// `rgba(248, 249, 251, 0.06)`, and the `rgba(0, 0, 0, 0.58)` shade around it.
+pub const NAVIGATOR_VIEWPORT_BORDER: u32 = 0xf8f9fbe6;
+pub const NAVIGATOR_VIEWPORT_FILL: u32 = 0xf8f9fb0f;
+pub const NAVIGATOR_SHADE: u32 = 0x00000094;
+/// `.marquee` in `CanvasGrid.module.css`: the rubber band's fill,
+/// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
+pub const MARQUEE_FILL: u32 = 0x339af01f;
+pub const MARQUEE_BORDER: u32 = 0x339af080;
+/// `HoverPreviewPortal.tsx`: the backdrop, rgba(0, 0, 0, 0.6), and the
+/// image's shadow colour, rgba(0, 0, 0, 0.7).
+pub const PREVIEW_BACKDROP: u32 = 0x00000099;
+pub const PREVIEW_SHADOW: u32 = 0x000000b3;
+/// `drawBase.ts`: an audio tile's tint in the dark theme,
+/// rgba(247, 248, 248, 0.05). The radial gradient laid over it runs from
+/// 0.05 at the top centre to 0.03 at a full tile's distance; a linear
+/// gradient from 0.05 to 0.04 stands in for it.
+pub const AUDIO_TINT: u32 = 0xf7f8f80d;
+pub const AUDIO_TINT_FAR: u32 = 0xf7f8f80a;
+/// `--color-black-20`
+pub const BLACK_20: u32 = 0x00000033;
+/// `--color-black-30`
+pub const BLACK_30: u32 = 0x0000004d;
+/// rgba(0, 0, 0, 0.1), the bottom edge of `EmptyState`'s inner frame.
+pub const BLACK_10: u32 = 0x0000001a;
+
 // ── Typography ──────────────────────────────────────────────────
 /// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
 /// family, so Chromium draws the system font; this is the same face.
@@ -253,8 +299,8 @@ pub const FONT_UI: &str = ".SystemUIFont";
 /// `Picto Inspector Roboto`
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
-/// `--font-family-mono`. Its first name, SF Mono, is not available to apps
-/// by name, so Chromium draws the bundled Fira Mono.
+/// `--font-family-mono`: SF Mono is not an installed family, so Chromium
+/// falls through to Fira Mono, which the app bundles.
 pub const FONT_MONO: &str = "Fira Mono";
 /// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
 /// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a

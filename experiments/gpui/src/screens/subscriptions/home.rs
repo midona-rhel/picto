@@ -4,7 +4,7 @@
 use super::data::{self, Cover};
 use super::{SubscriptionsScreen, format, measure};
 use crate::theme::Text as _;
-use crate::ui::{self, action_button::Variant};
+use crate::ui::{self, action_button::Look};
 use crate::{motion, theme};
 use gpui::*;
 
@@ -294,28 +294,27 @@ impl SubscriptionsScreen {
                     .gap(px(clamp_cqi(width, 4., 0.8, 8.)))
                     // TODO: the new-subscription dialog.
                     .child(
-                        ui::action_button("subscription-add", Variant::Primary, "Add")
-                            .icon("plus")
+                        ui::action_button("subscription-add", Look::Primary)
+                            .label("Add")
+                            .icon("plus", 14.)
                             .padding(padding)
                             .gap(gap),
                     )
                     // TODO: the add-gallery dialog. One gallery downloads at a
                     // time, so the button waits while one runs.
                     .child(
-                        ui::action_button(
-                            "subscription-add-gallery",
-                            Variant::Secondary,
-                            "Add Gallery",
-                        )
-                        .icon("library-plus")
-                        .padding(padding)
-                        .gap(gap)
-                        .disabled(gallery_running),
+                        ui::action_button("subscription-add-gallery", Look::Standard)
+                            .label("Add Gallery")
+                            .icon("library-plus", 14.)
+                            .padding(padding)
+                            .gap(gap)
+                            .disabled(gallery_running),
                     )
                     // TODO: the accounts window, for site logins.
                     .child(
-                        ui::action_button("subscription-accounts", Variant::Secondary, "Accounts")
-                            .icon("shield-lock")
+                        ui::action_button("subscription-accounts", Look::Standard)
+                            .label("Accounts")
+                            .icon("shield-lock", 14.)
                             .padding(padding)
                             .gap(gap),
                     ),

@@ -45,6 +45,12 @@ pub fn square(width: f32, height: f32, crop: Crop) -> (f32, f32, f32) {
 /// Writes the cropped cover into `scratch` and returns its path, or the
 /// uncropped cover's when it has no frame or cannot be read.
 pub fn prepare(library: &Path, scratch: &Path) -> Option<PathBuf> {
+    prepare_into(library, &scratch.join("library-cover.png"))
+}
+
+/// The same, writing the cropped cover to `target`. Only `target` is
+/// written; the library's folder is only read.
+pub fn prepare_into(library: &Path, target: &Path) -> Option<PathBuf> {
     let source = ["jpg", "png"]
         .into_iter()
         .map(|extension| library.join(format!(".picto-library-cover.{extension}")))
@@ -71,9 +77,8 @@ pub fn prepare(library: &Path, scratch: &Path) -> Option<PathBuf> {
         let (x, y, side) = square(image.width() as f32, image.height() as f32, crop);
         let side = (side.round() as u32).max(1);
         let framed = image.crop_imm(x.round() as u32, y.round() as u32, side, side);
-        let target = scratch.join("library-cover.png");
-        framed.save(&target).ok()?;
-        Some(target)
+        framed.save(target).ok()?;
+        Some(target.to_path_buf())
     };
     cropped().or(Some(source))
 }

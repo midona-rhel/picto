@@ -1,5 +1,11 @@
-//! The inspector rail's scrolling body. Layout follows InspectorSkeleton,
-//! InspectorField, TagChip and PropertyRow.
+//! The inspector rail's scrolling body (`Inspector.tsx`): the destination
+//! showing when nothing is selected, the selected item, or a summary of
+//! several. Layout follows InspectorSkeleton, InspectorField, TagChip and
+//! PropertyRow.
+mod scope;
+mod selection;
+mod stack;
+
 use crate::grid::{format, thumbnails::Thumbnails};
 use crate::session::{Change, Session};
 use crate::theme;
@@ -12,7 +18,41 @@ use crate::ui::{
 use gpui::*;
 use picto_library::predicate::FilterClause;
 use picto_library::query::ItemScope;
+use picto_library::{RootDetails, RootId};
 use std::collections::HashSet;
+
+/// What the rail describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// A destination that is a screen of its own: nothing.
+    Empty,
+    /// Nothing selected: the destination showing.
+    Scope,
+    Item,
+    /// Several items selected.
+    Selection,
+}
+
+/// What the rail should describe (`liveInspectorTargetAtom`): an item open in
+/// the viewer, else what the grid has selected, else the grid's destination.
+fn wanted(screen: bool, viewer: bool, selected: usize) -> Mode {
+    if screen {
+        Mode::Empty
+    } else if viewer || selected == 1 {
+        Mode::Item
+    } else if selected > 1 {
+        Mode::Selection
+    } else {
+        Mode::Scope
+    }
+}
+
+/// Where a click on a star applies its rating.
+#[derive(Clone, Copy)]
+enum Rate {
+    Item(RootId),
+    Selection,
+}
 
 /// A chip's colour and sort order for a tag namespace (`NS_COLORS` in
 /// `TagChip.tsx`, `tagGroupOrder`). General tags come last.
@@ -38,6 +78,54 @@ const SHOW_TAG_PREFIXES: bool = false;
 pub const FOLDER_COLOR: u32 = 0x868e96;
 /// The preview fits this square.
 const PREVIEW: f32 = 200.;
+
+/// The name a folder chip shows: the folder's sidebar label, or its number
+/// when the sidebar does not list it.
+fn folder_label(entries: &[crate::backend::Navigation], folder: picto_library::FolderId) -> String {
+    entries
+        .iter()
+        .find(|entry| {
+            matches!(entry.scope, ItemScope::FolderTree { folder_id } if folder_id == folder)
+        })
+        .map_or_else(|| format!("Folder {}", folder.0), |entry| entry.label.clone())
+}
+
+fn is_general(tag: &picto_library::TagRecord) -> bool {
+    matches!(tag.namespace.as_str(), "" | "general" | "default")
+}
+
+/// A tag's full name (`namespace:subtag`, or the subtag alone for a general
+/// tag), as the library adds and removes it by.
+fn tag_raw(tag: &picto_library::TagRecord) -> String {
+    if is_general(tag) {
+        tag.subname.clone()
+    } else {
+        format!("{}:{}", tag.namespace, tag.subname)
+    }
+}
+
+/// A tag's chip in its namespace's colour (`TagChip`).
+fn tag_chip(tag: &picto_library::TagRecord) -> ui::Chip {
+    ui::chip(
+        ("inspector-tag", tag.tag_id.0 as usize),
+        tag.subname.clone(),
+        tag_style(&tag.namespace).0,
+    )
+    .namespace((SHOW_TAG_PREFIXES && !is_general(tag)).then(|| tag.namespace.clone().into()))
+}
+
+/// A preview's size: the media scaled down to fit the square, never up.
+fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
+    match dimensions {
+        Some((width, height)) if width > 0 && height > 0 => {
+            let scale = (PREVIEW / width as f32)
+                .min(PREVIEW / height as f32)
+                .min(1.);
+            (width as f32 * scale, height as f32 * scale)
+        }
+        _ => (PREVIEW, PREVIEW),
+    }
+}
 
 fn format_size(bytes: u64) -> String {
     let bytes = bytes as f64;
@@ -81,6 +169,13 @@ pub struct Inspector {
     /// The star under the pointer, which previews that rating.
     hovered_star: Option<usize>,
     scroll: ScrollHandle,
+    /// The item the rail describes, or last described.
+    item: Option<RootDetails>,
+    /// What the rail shows. A new state takes its place only once that
+    /// state's data is there, so the rail never goes blank in between.
+    shown: Mode,
+    scope: scope::ScopeState,
+    selection: selection::SelectionState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -93,42 +188,59 @@ impl Inspector {
     ) -> Self {
         let name = cx.new(|cx| TextInput::field("Name", window, cx));
         let notes = cx.new(|cx| TextInput::field("Notes", window, cx));
+        let scope = scope::ScopeState::new(window, cx);
+        let selection = selection::SelectionState::new(window, cx);
         let subscriptions = vec![
             cx.subscribe(&name, |this, _, event: &text_input::Committed, cx| {
-                this.session.read(cx).rename(event.0, event.1.clone());
+                this.session
+                    .read(cx)
+                    .rename(RootId(event.0 as u32), event.1.clone());
             }),
             cx.subscribe(&notes, |this, _, event: &text_input::Committed, cx| {
-                this.session.read(cx).set_notes(event.0, event.1.clone());
+                this.session
+                    .read(cx)
+                    .set_notes(RootId(event.0 as u32), event.1.clone());
+            }),
+            cx.subscribe(&scope.name, |this, _, event: &text_input::Committed, cx| {
+                this.commit_scope(event.0, Some(event.1.clone()), None, cx);
             }),
             cx.subscribe(
-                &session,
-                |this, session, change: &Change, cx| match change {
-                    Change::Selection => {
-                        // A pending edit belongs to the item it was typed for.
-                        this.name.update(cx, |field, cx| field.commit(cx));
-                        this.notes.update(cx, |field, cx| field.commit(cx));
-                        cx.notify();
-                    }
-                    Change::Details => {
-                        if let Some(details) = session.read(cx).details.clone() {
-                            let id = details.root.root_id;
-                            this.name.update(cx, |field, cx| {
-                                field.set_field(id, details.root.name.clone(), cx)
-                            });
-                            this.notes.update(cx, |field, cx| {
-                                field.set_field(
-                                    id,
-                                    details.root.notes.clone().unwrap_or_default(),
-                                    cx,
-                                )
-                            });
-                        }
-                        cx.notify();
-                    }
-                    Change::Navigation => cx.notify(),
-                    _ => {}
+                &scope.notes,
+                |this, _, event: &text_input::Committed, cx| {
+                    this.commit_scope(event.0, None, Some(event.1.clone()), cx);
                 },
             ),
+            cx.subscribe(
+                &selection.notes,
+                |this, _, event: &text_input::Committed, cx| {
+                    this.commit_selection_notes(event.0, event.1.clone(), cx);
+                },
+            ),
+            cx.subscribe(&session, |this, _, change: &Change, cx| match change {
+                Change::Selection => {
+                    // A pending edit belongs to what it was typed for.
+                    for field in [&this.name, &this.notes, &this.selection.notes] {
+                        field.update(cx, |field, cx| field.commit(cx));
+                    }
+                    this.sync_item(false, cx);
+                    this.selection_changed(cx);
+                    cx.notify();
+                }
+                Change::Details => {
+                    this.sync_item(true, cx);
+                    cx.notify();
+                }
+                Change::Viewer => {
+                    this.sync_item(false, cx);
+                    this.ensure_summary(cx);
+                    cx.notify();
+                }
+                Change::Navigation => {
+                    this.refresh_scope(cx);
+                    cx.notify();
+                }
+                Change::Results => this.refresh_scope(cx),
+            }),
         ];
         Self {
             session,
@@ -138,7 +250,86 @@ impl Inspector {
             collapsed: HashSet::new(),
             hovered_star: None,
             scroll: ScrollHandle::new(),
+            item: None,
+            shown: Mode::Empty,
+            scope,
+            selection,
             _subscriptions: subscriptions,
+        }
+    }
+
+    fn wanted(&self, cx: &App) -> Mode {
+        let session = self.session.read(cx);
+        if session.demo.is_some() {
+            return Mode::Item;
+        }
+        wanted(
+            session.screen().is_some(),
+            session.viewer,
+            session.selection.len(),
+        )
+    }
+
+    /// Takes the selected item's details once they are there and the rail
+    /// is to describe it. `edited` takes them even when they are for the
+    /// item already shown, after an edit.
+    fn sync_item(&mut self, edited: bool, cx: &mut Context<Self>) {
+        if self.wanted(cx) != Mode::Item {
+            return;
+        }
+        let Some(details) = self.session.read(cx).selected_details() else {
+            return;
+        };
+        let id = details.root.root_id;
+        if !edited
+            && self
+                .item
+                .as_ref()
+                .is_some_and(|item| item.root.root_id == id && item.revision == details.revision)
+        {
+            return;
+        }
+        let details = details.clone();
+        let key = id.0 as u64;
+        self.name.update(cx, |field, cx| {
+            field.set_field(key, details.root.name.clone(), cx)
+        });
+        self.notes.update(cx, |field, cx| {
+            field.set_field(key, details.root.notes.clone().unwrap_or_default(), cx)
+        });
+        self.item = Some(details);
+    }
+
+    /// What to draw: the state wanted once its data is there, else the one
+    /// shown so far, else (`None`) the wanted state's skeleton.
+    fn decide(&mut self, cx: &mut Context<Self>) -> (Mode, bool) {
+        let wanted = self.wanted(cx);
+        let ready = {
+            let session = self.session.read(cx);
+            match wanted {
+                Mode::Empty => true,
+                Mode::Scope => self.scope.ready(session),
+                Mode::Item => session.demo.is_some() || session.selected_details().is_some(),
+                Mode::Selection => self.selection.ready(),
+            }
+        };
+        if ready {
+            if wanted == Mode::Item {
+                self.sync_item(false, cx);
+            }
+            self.shown = wanted;
+            return (wanted, true);
+        }
+        let held = match self.shown {
+            Mode::Empty => false,
+            Mode::Scope => self.scope.view.is_some(),
+            Mode::Item => self.item.is_some(),
+            Mode::Selection => self.selection.shown.is_some(),
+        };
+        if held {
+            (self.shown, true)
+        } else {
+            (wanted, false)
         }
     }
 
@@ -149,26 +340,8 @@ impl Inspector {
         self.name.update(cx, |name, cx| name.select_everything(cx));
     }
 
-    fn property(label: &'static str, value: String, cx: &App) -> Div {
-        div()
-            .h(px(20.))
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .whitespace_nowrap()
-            .text(theme::TEXT_CAPTION)
-            .child(div().w(px(88.)).flex_none().child(label))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_right()
-                    .truncate()
-                    .font_family(theme::FONT_INSPECTOR_MONO)
-                    .font_features(theme::tabular_figures())
-                    .text_color(theme::theme(cx).contrast(80.))
-                    .child(value),
-            )
+    fn property(label: &'static str, value: String, _: &App) -> ui::property_row::PropertyRow {
+        ui::property_row(label, value)
     }
 
     fn section(
@@ -215,6 +388,95 @@ impl Inspector {
         ui::tooltip::attach(button, (id, 1usize), tip, theme::CONTROL_SM, window, cx)
     }
 
+    /// The Folders section's content: the chips and a "+" after them, or one
+    /// wide "Add to Folder" button when there are none.
+    fn folders_row(chips: Div, empty: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+        if empty {
+            // TODO: open the folder picker.
+            ui::tooltip::attach(
+                div().id("add-to-folder").child(ui::action_row(
+                    "add-to-folder-action",
+                    "inspector-add",
+                    "Add to Folder",
+                )),
+                "add-to-folder-tip",
+                ui::tip("Add to Folder").keys(&["F"]),
+                theme::CONTROL_SM,
+                window,
+                cx,
+            )
+            .into_any_element()
+        } else {
+            chips
+                .child(Self::add_button(
+                    "add-folder",
+                    ui::tip("Add to Folder").keys(&["F"]),
+                    window,
+                    cx,
+                ))
+                .into_any_element()
+        }
+    }
+
+    /// The Tags section's content: the chips and a "+" after them, or one
+    /// wide "Add Tags" button when there are none.
+    fn tags_row(chips: Div, empty: bool, window: &mut Window, cx: &mut App) -> AnyElement {
+        if empty {
+            // TODO: open the tag picker.
+            ui::tooltip::attach(
+                div().id("add-tags").child(ui::action_row(
+                    "add-tags-action",
+                    "inspector-add",
+                    "Add Tags",
+                )),
+                "add-tags-tip",
+                ui::tip("Add Tags").keys(&["T"]),
+                theme::CONTROL_SM,
+                window,
+                cx,
+            )
+            .into_any_element()
+        } else {
+            chips
+                .child(Self::add_button(
+                    "add-tag",
+                    ui::tip("Add Tags").keys(&["T"]),
+                    window,
+                    cx,
+                ))
+                .into_any_element()
+        }
+    }
+
+    /// The status line under the sections (`.status`): a quiet note, or an
+    /// error with its icon.
+    fn status(message: impl Into<SharedString>, error: bool, cx: &App) -> Div {
+        let theme = theme::theme(cx);
+        let status = div()
+            .mt(px(10.))
+            .min_h(px(20.))
+            .flex()
+            .items_center()
+            .gap(px(6.));
+        if error {
+            status
+                .child(ui::icon("alert-circle", 16., theme.negative()))
+                .child(
+                    div()
+                        .text(theme::TEXT_XS)
+                        .text_color(theme.negative())
+                        .child(message.into()),
+                )
+        } else {
+            status.child(
+                div()
+                    .text(theme::TEXT_SM)
+                    .text_color(theme.text_tertiary())
+                    .child(message.into()),
+            )
+        }
+    }
+
     /// The cover in its fitted frame, with the format badge
     /// (`InspectorPreview`).
     fn preview(
@@ -223,16 +485,7 @@ impl Inspector {
         dimensions: Option<(u32, u32)>,
         label: AnyElement,
     ) -> Div {
-        // Scaled down to fit the square, never up.
-        let (width, height) = match dimensions {
-            Some((width, height)) if width > 0 && height > 0 => {
-                let scale = (PREVIEW / width as f32)
-                    .min(PREVIEW / height as f32)
-                    .min(1.);
-                (width as f32 * scale, height as f32 * scale)
-            }
-            _ => (PREVIEW, PREVIEW),
-        };
+        let (width, height) = fitted(dimensions);
         div()
             .h(px(PREVIEW))
             .mb(px(8.))
@@ -342,10 +595,14 @@ impl Inspector {
 
     /// The source field (`InspectorField` in its URL form): the host, the
     /// rest of the address dimmed, and the button that manages the list.
-    fn source(urls: &[String], cx: &App) -> Stateful<Div> {
+    /// Without addresses to show (`unavailable`) it holds a dash and no button.
+    fn source(urls: Option<&[String]>, cx: &App) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        let unavailable = urls.is_none();
+        let urls = urls.unwrap_or_default();
         let first = urls.first().cloned();
         let value = match first.as_deref().map(url::Url::parse) {
+            _ if unavailable => div().child("—"),
             Some(Ok(address)) => {
                 let host = address.host_str().unwrap_or_default();
                 let host = host.strip_prefix("www.").unwrap_or(host).to_owned();
@@ -388,7 +645,11 @@ impl Inspector {
                     .px(px(10.))
                     .flex()
                     .items_center()
-                    .cursor_pointer()
+                    .cursor(if unavailable {
+                        CursorStyle::Arrow
+                    } else {
+                        CursorStyle::PointingHand
+                    })
                     .child(value)
                     .on_click(move |_, _, cx| {
                         if let Some(address) = &first {
@@ -406,6 +667,9 @@ impl Inspector {
                     .opacity(0.5)
                     .child(format!("+{}", urls.len() - 1)),
             );
+        }
+        if unavailable {
+            return field;
         }
         // TODO: this opens the list of source URLs for editing.
         field.child(
@@ -432,7 +696,7 @@ impl Inspector {
 
     /// The rating row (`StarRating`): the stars up to the one under the
     /// pointer preview that rating, and a click on the current rating clears it.
-    fn rating(&self, id: picto_library::RootId, current: usize, cx: &mut Context<Self>) -> Div {
+    fn rating(&self, target: Rate, current: usize, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let shown = self.hovered_star.unwrap_or(current);
         let mut row = div()
@@ -466,10 +730,12 @@ impl Inspector {
                         cx.notify();
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let next = if value == current { 0 } else { value };
-                        this.session
-                            .read(cx)
-                            .rate(id, picto_library::Rating::ALL[next]);
+                        let next =
+                            picto_library::Rating::ALL[if value == current { 0 } else { value }];
+                        match target {
+                            Rate::Item(id) => this.session.read(cx).rate(id, next),
+                            Rate::Selection => this.rate_selection(next, cx),
+                        }
                     })),
             );
         }
@@ -478,11 +744,10 @@ impl Inspector {
 }
 
 impl Inspector {
-    /// The scrolling column of fields and sections for the selected item.
-    fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        // `.scrollContent`: 16px all round, 48 below, with the scrollbar's
-        // gutter reserved on the right.
-        let scroller = div()
+    /// `.scrollContent`: 16px all round, 48 below, with the scrollbar's
+    /// gutter reserved on the right.
+    fn scroller(&self) -> Stateful<Div> {
+        div()
             .id("inspector")
             .size_full()
             .overflow_y_scroll()
@@ -491,13 +756,22 @@ impl Inspector {
             .pr(px(16. + ui::scrollbar::GUTTER))
             .pt(px(16.))
             .pb(px(48.))
-            .font_family(theme::FONT_INSPECTOR);
-        // `.contentStack`: a flex column as tall as its content, so the
-        // fields' and sections' margins add up instead of collapsing.
-        let mut panel = div().w_full().flex().flex_col();
+            .font_family(theme::FONT_INSPECTOR)
+    }
+
+    /// `.contentStack`: a flex column as tall as its content, so the fields'
+    /// and sections' margins add up instead of collapsing.
+    fn panel() -> Div {
+        div().w_full().flex().flex_col()
+    }
+
+    /// The scrolling column of fields and sections for the selected item.
+    fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let scroller = self.scroller();
+        let mut panel = Self::panel();
         let (demo, details, entries, tags, cover_thumbnail) = {
             let session = self.session.read(cx);
-            let details = session.details.clone();
+            let details = self.item.clone();
             let cover_thumbnail = details.as_ref().and_then(|details| {
                 details
                     .media
@@ -584,18 +858,13 @@ impl Inspector {
                 &self.notes,
                 Look::Inspector,
             )))
-            .child(Self::source(&root.source_urls, cx));
+            .child(Self::source(Some(&root.source_urls), cx));
 
         // Folders: a chip each, then "+"; or one wide button when there are none.
         let mut folders = div().flex().flex_wrap().gap(px(4.));
         for folder in &details.folder_ids {
             let folder = *folder;
-            let label = entries
-                .iter()
-                .find(|entry| {
-                    matches!(entry.scope, ItemScope::FolderTree { folder_id } if folder_id == folder)
-                })
-                .map_or_else(|| format!("Folder {}", folder.0), |entry| entry.label.clone());
+            let label = folder_label(&entries, folder);
             folders = folders.child(
                 ui::chip(("inspector-folder", folder.0 as usize), label, FOLDER_COLOR).on_remove(
                     cx.listener(move |this, _, _, cx| {
@@ -604,31 +873,7 @@ impl Inspector {
                 ),
             );
         }
-        let folders = if details.folder_ids.is_empty() {
-            // TODO: open the folder picker.
-            ui::tooltip::attach(
-                div().id("add-to-folder").child(ui::action_row(
-                    "add-to-folder-action",
-                    "inspector-add",
-                    "Add to Folder",
-                )),
-                "add-to-folder-tip",
-                ui::tip("Add to Folder").keys(&["F"]),
-                theme::CONTROL_SM,
-                window,
-                cx,
-            )
-            .into_any_element()
-        } else {
-            folders
-                .child(Self::add_button(
-                    "add-folder",
-                    ui::tip("Add to Folder").keys(&["F"]),
-                    window,
-                    cx,
-                ))
-                .into_any_element()
-        };
+        let folders = Self::folders_row(folders, details.folder_ids.is_empty(), window, cx);
         panel = panel.child(self.section("Folders", Some(folders), cx));
 
         let mut chips = div().flex().flex_wrap().gap(px(4.));
@@ -636,55 +881,17 @@ impl Inspector {
         tags.sort_by_key(|tag| (tag_style(&tag.namespace).1, tag.subname.to_lowercase()));
         let tagged = !tags.is_empty();
         for tag in tags {
-            let (color, _) = tag_style(&tag.namespace);
-            let general = matches!(tag.namespace.as_str(), "" | "general" | "default");
-            let raw = if general {
-                tag.subname.clone()
-            } else {
-                format!("{}:{}", tag.namespace, tag.subname)
-            };
-            chips = chips.child(
-                ui::chip(
-                    ("inspector-tag", tag.tag_id.0 as usize),
-                    tag.subname.clone(),
-                    color,
-                )
-                .namespace((SHOW_TAG_PREFIXES && !general).then(|| tag.namespace.clone().into()))
-                .on_remove(cx.listener(move |this, _, _, cx| {
-                    this.session.read(cx).remove_tag(id, raw.clone());
-                })),
-            );
+            let raw = tag_raw(&tag);
+            chips = chips.child(tag_chip(&tag).on_remove(cx.listener(move |this, _, _, cx| {
+                this.session.read(cx).remove_tag(id, raw.clone());
+            })));
         }
-        let tags = if tagged {
-            chips
-                .child(Self::add_button(
-                    "add-tag",
-                    ui::tip("Add Tags").keys(&["T"]),
-                    window,
-                    cx,
-                ))
-                .into_any_element()
-        } else {
-            // TODO: open the tag picker.
-            ui::tooltip::attach(
-                div().id("add-tags").child(ui::action_row(
-                    "add-tags-action",
-                    "inspector-add",
-                    "Add Tags",
-                )),
-                "add-tags-tip",
-                ui::tip("Add Tags").keys(&["T"]),
-                theme::CONTROL_SM,
-                window,
-                cx,
-            )
-            .into_any_element()
-        };
+        let tags = Self::tags_row(chips, !tagged, window, cx);
         panel = panel.child(self.section("Tags", Some(tags), cx));
 
         // `normalizedCoreProperties`: a row with nothing to say is left out.
         let mut properties = div()
-            .child(self.rating(id, details.rating.bitmap_key() as usize, cx))
+            .child(self.rating(Rate::Item(id), details.rating.bitmap_key() as usize, cx))
             .child(Self::property(
                 "Items",
                 format::grouped(root.media_count as u64),
@@ -753,10 +960,58 @@ impl Inspector {
     }
 }
 
+impl Inspector {
+    /// `UnavailableInspectorSkeleton`: the rows a state will have, with
+    /// dashes for values, while there is nothing to show yet.
+    fn skeleton(&mut self, mode: Mode, cx: &mut Context<Self>) -> Stateful<Div> {
+        let error = self.session.read(cx).error.clone();
+        let mut panel = Self::panel()
+            .child(div().h(px(PREVIEW)).mb(px(8.)))
+            .child(self.palette(&[], cx))
+            .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)))
+            .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)));
+        if mode != Mode::Scope {
+            panel = panel.child(Self::source(None, cx));
+        }
+        panel = panel.child(self.section("Properties", Some(div().into_any_element()), cx));
+        // An item's or a selection's details are on their way; a
+        // destination's skeleton says nothing unless something failed.
+        let status = match error {
+            Some(error) => Some(Self::status(error, true, cx)),
+            None if mode != Mode::Scope => Some(Self::status("Loading...", false, cx)),
+            None => None,
+        };
+        self.scroller().child(panel.children(status))
+    }
+}
+
 impl Render for Inspector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Inspector);
-        let body = self.body(window, cx);
+        let (mode, ready) = self.decide(cx);
+        // A state that is not drawn gives back the thumbnails it kept.
+        if (mode, ready) != (Mode::Item, true) {
+            self.thumbnails.update(cx, |thumbnails, _| {
+                thumbnails.pin("inspector-preview", None)
+            });
+        }
+        if (mode, ready) != (Mode::Scope, true) {
+            self.release_collage(cx);
+        }
+        if (mode, ready) != (Mode::Selection, true) {
+            self.release_stack(cx);
+        }
+        // Before the first destination has loaded there is nothing to
+        // describe, and the Electron rail is empty too.
+        let launching = self.session.read(cx).results_epoch == 0;
+        let body = match (mode, ready) {
+            (Mode::Empty, _) => self.scroller(),
+            (Mode::Scope, false) if launching => self.scroller(),
+            (Mode::Item, true) => self.body(window, cx),
+            (Mode::Scope, true) => self.scope_body(cx),
+            (Mode::Selection, true) => self.selection_body(window, cx),
+            (mode, false) => self.skeleton(mode, cx),
+        };
         div()
             .relative()
             .size_full()
@@ -772,7 +1027,23 @@ impl Render for Inspector {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_size, format_type, tag_style};
+    use super::{Mode, fitted, format_size, format_type, tag_style, wanted};
+
+    #[test]
+    fn the_rail_describes_the_viewer_then_the_selection_then_the_destination() {
+        assert_eq!(wanted(true, false, 0), Mode::Empty);
+        assert_eq!(wanted(false, true, 3), Mode::Item);
+        assert_eq!(wanted(false, false, 1), Mode::Item);
+        assert_eq!(wanted(false, false, 2), Mode::Selection);
+        assert_eq!(wanted(false, false, 0), Mode::Scope);
+    }
+
+    #[test]
+    fn previews_shrink_to_the_square_but_never_grow() {
+        assert_eq!(fitted(Some((400, 200))), (200., 100.));
+        assert_eq!(fitted(Some((100, 50))), (100., 50.));
+        assert_eq!(fitted(None), (200., 200.));
+    }
 
     #[test]
     fn sizes_roll_over_to_the_next_unit() {

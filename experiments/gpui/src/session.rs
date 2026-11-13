@@ -72,6 +72,7 @@ struct Visit {
 struct SavedGrid {
     items: Vec<RootSummary>,
     total: u64,
+    total_size_bytes: u128,
     cursor: Option<String>,
     prefs: ViewPrefs,
     tile: f32,
@@ -113,6 +114,8 @@ pub struct Session {
     /// Counts each time the items are replaced rather than extended.
     pub results_epoch: u64,
     pub total: u64,
+    /// The size of every item in the results, not only the loaded ones.
+    pub total_size_bytes: u128,
     cursor: Option<String>,
     pub loading: bool,
     pub error: Option<String>,
@@ -187,6 +190,7 @@ impl Session {
             items: Vec::new(),
             results_epoch: 0,
             total: 0,
+            total_size_bytes: 0,
             cursor: None,
             loading: true,
             error: None,
@@ -243,6 +247,19 @@ impl Session {
             self.place_label = label;
             cx.emit(Change::Navigation);
         }
+    }
+
+    /// Where the library keeps an original: beside its thumbnail's folder,
+    /// under its content hash and its type's extension.
+    pub fn original(&self, hash: &str, mime: &str) -> PathBuf {
+        if hash.len() < 4 {
+            return PathBuf::new();
+        }
+        self.blobs
+            .join("f")
+            .join(&hash[..2])
+            .join(&hash[2..4])
+            .join(format!("{hash}.{}", crate::grid::format::extension(mime)))
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
@@ -359,6 +376,16 @@ impl Session {
         self.set_filter(Some(filter), cx);
     }
 
+    /// The open library's folder, the one that holds its blobs.
+    pub fn library_root(&self) -> Option<&std::path::Path> {
+        self.blobs.parent()
+    }
+
+    /// What the search field holds, which the results are filtered by.
+    pub fn search_text(&self) -> &str {
+        &self.search_text
+    }
+
     /// The library folder's name without its `.library` suffix.
     pub fn library_name(&self) -> Option<String> {
         let name = self.blobs.parent()?.file_name()?.to_string_lossy();
@@ -399,11 +426,17 @@ impl Session {
                 }
                 // What other destinations held may no longer be true.
                 Reply::Changed => self.reload(cx),
-                Reply::Error(error) => {
+                // A query that failed is the grid's error, shown in place of
+                // the destination. A failed edit leaves the grid as it is.
+                Reply::Error(error) if self.loading => {
                     self.error = Some(error);
                     self.loading = false;
+                    if matches!(self.transition, Transition::Waiting) {
+                        self.show_error(cx);
+                    }
                     cx.emit(Change::Results);
                 }
+                Reply::Error(error) => eprintln!("picto: {error}"),
                 _ => {}
             }
         }
@@ -424,6 +457,7 @@ impl Session {
         }
         self.prefs = prefs;
         self.total = page.total;
+        self.total_size_bytes = page.total_size_bytes;
         self.cursor = page.next_cursor;
         self.loading = false;
         if append {
@@ -522,6 +556,7 @@ impl Session {
             SavedGrid {
                 items: self.items.clone(),
                 total: self.total,
+                total_size_bytes: self.total_size_bytes,
                 cursor: self.cursor.clone(),
                 prefs: self.prefs.clone(),
                 tile: self.tile,
@@ -538,6 +573,7 @@ impl Session {
     fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
         self.items = saved.items;
         self.total = saved.total;
+        self.total_size_bytes = saved.total_size_bytes;
         self.cursor = saved.cursor;
         self.prefs = saved.prefs;
         self.prefs_scope = Some(self.scope);
@@ -614,9 +650,24 @@ impl Session {
         self.results_epoch += 1;
         self.forget_selection();
         self.total = 0;
+        self.total_size_bytes = 0;
         self.cursor = None;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
+    }
+
+    /// Fades the destination in on its error, which takes the grid's place.
+    /// The previous destination's items go, so a retry never shows them.
+    fn show_error(&mut self, cx: &mut Context<Self>) {
+        self.items.clear();
+        self.results_epoch += 1;
+        self.forget_selection();
+        self.total = 0;
+        self.cursor = None;
+        self.displayed = self.scope;
+        self.transition = Transition::FadingIn(Instant::now());
+        cx.emit(Change::Navigation);
+        cx.emit(Change::Selection);
     }
 
     /// Moves a scope change along once its current stage has run its time.
@@ -637,6 +688,8 @@ impl Session {
                     self.restore_grid(saved, cx);
                 } else if let Some((page, prefs)) = self.pending_page.take() {
                     self.apply_page(false, page, prefs, cx);
+                } else if self.error.is_some() && !self.loading {
+                    self.show_error(cx);
                 }
                 cx.emit(Change::Navigation);
             }
@@ -727,6 +780,31 @@ impl Session {
         let focus = self.focus.unwrap_or(0);
         self.anchor.get_or_insert(focus);
         self.focus_on(Some(focus), cx);
+    }
+
+    /// Replaces the selection, as a finished rubber band does. The item shown
+    /// stays if it is still selected; otherwise the last one is shown. No
+    /// range anchor remains.
+    pub fn set_selection(
+        &mut self,
+        selection: std::collections::BTreeSet<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection = selection
+            .into_iter()
+            .filter(|index| *index < self.items.len())
+            .collect();
+        self.anchor = None;
+        let focus = self
+            .focus
+            .filter(|focus| self.selection.contains(focus))
+            .or_else(|| self.selection.iter().next_back().copied());
+        self.focus_on(focus, cx);
+    }
+
+    /// Whether the search field narrows the results (three characters or more).
+    pub fn searching(&self) -> bool {
+        backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -861,6 +939,14 @@ impl Session {
         if !ids.is_empty() {
             self.close_viewer(cx);
             let _ = self.sender.send(Request::Lifecycle(ids, lifecycle));
+        }
+    }
+
+    /// Fetches the selected item's details again, after an edit made
+    /// elsewhere changed them.
+    pub fn refresh_details(&self) {
+        if let Some(item) = self.selected_item() {
+            let _ = self.sender.send(Request::Details(item.root_id));
         }
     }
 

@@ -6,7 +6,7 @@ use super::format::{self, Track};
 use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure};
 use crate::theme::Text as _;
 use crate::ui::status_badge::Tone;
-use crate::ui::{self, action_button::Variant};
+use crate::ui::{self, action_button::Look};
 use crate::{motion, theme};
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -293,20 +293,23 @@ impl SubscriptionsScreen {
         // runner.
         let primary = if active {
             let (variant, icon, label) = if running {
-                (Variant::Secondary, "player-pause", "Pause")
+                (Look::Standard, "player-pause", "Pause")
             } else if run_failed {
-                (Variant::Primary, "refresh", "Retry")
+                (Look::Primary, "refresh", "Retry")
             } else {
                 (
-                    Variant::Primary,
+                    Look::Primary,
                     "player-play",
                     if paused_run { "Resume" } else { "Retry" },
                 )
             };
-            ui::action_button("subscription-run", variant, label).icon(icon)
+            ui::action_button("subscription-run", variant)
+                .label(label)
+                .icon(icon, 14.)
         } else {
-            ui::action_button("subscription-run", Variant::Primary, "Run now")
-                .icon("player-play")
+            ui::action_button("subscription-run", Look::Primary)
+                .label("Run now")
+                .icon("player-play", 14.)
                 .disabled(subscription.paused || subscription.queries.is_empty())
         };
         // TODO: stop the run, or hold and release future runs.
@@ -337,8 +340,9 @@ impl SubscriptionsScreen {
                     .child(primary.padding(10.).full_width()),
             )
             .child(
-                ui::action_button("subscription-hold", Variant::Secondary, hold_label)
-                    .icon(hold_icon)
+                ui::action_button("subscription-hold", Look::Standard)
+                    .label(hold_label)
+                    .icon(hold_icon, 14.)
                     .padding(10.)
                     .tip(ui::tip(hold_tip)),
             )
@@ -1127,7 +1131,8 @@ impl SubscriptionsScreen {
                 .border_t_1()
                 .border_color(theme.border_secondary())
                 .child(
-                    ui::action_button("issues-more", Variant::Secondary, "Load more")
+                    ui::action_button("issues-more", Look::Standard)
+                        .label("Load more")
                         .compact()
                         .disabled(self.loading_more)
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_issues(cx))),
@@ -1168,7 +1173,8 @@ impl SubscriptionsScreen {
                     .child(format!("e.g. {example}")),
             )
             .child(
-                ui::action_button("add-query", Variant::Secondary, "Add")
+                ui::action_button("add-query", Look::Standard)
+                    .label("Add")
                     .compact()
                     .disabled(true),
             )

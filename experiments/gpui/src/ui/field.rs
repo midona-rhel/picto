@@ -1,4 +1,5 @@
 use super::text_input::TextInput;
+use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 use std::time::Duration;
@@ -85,6 +86,32 @@ impl Look {
             },
         }
     }
+}
+
+/// An inspector field that cannot be edited (`.fieldControl.fieldDisabled`):
+/// the field's frame at rest with its value in the tertiary colour, ending in
+/// an ellipsis when it does not fit. It takes no pointer input.
+pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
+    let theme = theme::theme(cx);
+    let frame = Look::Inspector.frame(theme);
+    div()
+        .w_full()
+        .h(px(frame.height))
+        .flex_none()
+        .rounded(px(frame.radius))
+        .border_1()
+        .border_color(frame.border.0)
+        .bg(frame.fill.0)
+        .overflow_hidden()
+        // `padding: 6px 10px` inside the border, around a 20px line.
+        .pl(px(frame.left))
+        .pr(px(frame.right))
+        .pt(px(6.))
+        .font_family(theme::FONT_INSPECTOR)
+        .text(theme::TEXT_MD)
+        .line_height(px(20.))
+        .text_color(theme.text_tertiary())
+        .child(div().h(px(20.)).truncate().child(value.into()))
 }
 
 /// The frame around a text input: its fill and border, how they change on
