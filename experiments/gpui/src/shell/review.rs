@@ -167,9 +167,9 @@ impl Shell {
             self.move_review_on(ticket, view, destination, window, cx);
             self.save_review(ticket, id, decision, window, cx);
         } else {
-            // The next item is in the page that follows, not behind: load
+            // The next item is in the window that follows, not held: load
             // it before saving, so the item is still listed to find its
-            // successor from.
+            // successor from (the next window starts a page before it).
             self.pending_review = Some(Pending {
                 ticket,
                 id,
@@ -183,7 +183,8 @@ impl Shell {
 
     /// The page a review waited for has arrived (or failed to).
     pub(super) fn continue_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session.read(cx).loading {
+        let session = self.session.read(cx);
+        if session.loading || session.window_loading() {
             return;
         }
         let Some(Pending {
@@ -244,21 +245,15 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let index = item.and_then(|id| {
-            self.session
-                .read(cx)
-                .items
-                .iter()
-                .position(|item| item.root_id == id)
-        });
-        match (index, view) {
-            (Some(index), View::Detail) => self.session.update(cx, |session, cx| {
-                session.select(index, cx);
+        let ordinal = item.and_then(|id| self.session.read(cx).position_of(id));
+        match (ordinal, view) {
+            (Some(ordinal), View::Detail) => self.session.update(cx, |session, cx| {
+                session.select(ordinal, cx);
                 session.open_viewer(cx);
             }),
-            (Some(index), View::QuickLook) => {
+            (Some(ordinal), View::QuickLook) => {
                 self.session
-                    .update(cx, |session, cx| session.select(index, cx));
+                    .update(cx, |session, cx| session.select(ordinal, cx));
                 self.quick_look
                     .update(cx, |quick_look, cx| quick_look.open(window, cx));
             }

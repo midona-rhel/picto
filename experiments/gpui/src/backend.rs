@@ -1,5 +1,6 @@
+use picto_library::RootId;
 use picto_library::predicate::{FilterClause, FilterExpr, TextField};
-use picto_library::query::{ItemScope, PageRequest, RootPage, RootQuery};
+use picto_library::query::{ItemScope, RootQuery, RootWindow, WindowRequest};
 use picto_library::{Library, TagRecord};
 use std::sync::{
     Arc,
@@ -69,23 +70,46 @@ pub type Job = Box<dyn FnOnce(&Library) + Send>;
 
 pub enum Request {
     Job(Job),
-    /// Generation, scope, filter, cursor, and whether to shuffle.
-    /// A page of a destination: the query's generation, its scope and
-    /// filter, the cursor to continue from, whether to shuffle, and how many
-    /// items at most.
-    Query(u64, ItemScope, FilterExpr, Option<String>, bool, usize),
+    /// A destination's results, read afresh: the query's generation, its
+    /// scope and filter, whether to shuffle, and which window of them. The
+    /// sort comes from the scope's saved view.
+    Query(u64, ItemScope, FilterExpr, bool, WindowRequest),
+    /// Another window of results already shown, read with the query they
+    /// were read with: its generation, the query, the window, and why.
+    Window(u64, Box<RootQuery>, WindowRequest, Fetch),
 }
+
+/// Why a window of results is read.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fetch {
+    /// The first window of a destination read afresh.
+    Open,
+    /// The grid scrolled to items outside the window; the number orders
+    /// the requests, so only the latest one is shown.
+    Move(u64),
+    /// The window shown, read again in place after the library changed,
+    /// with where these items (the selection's) are now.
+    Refresh(Vec<RootId>),
+}
+
+/// A window of results that arrived.
+pub struct Arrived {
+    pub generation: u64,
+    pub fetch: Fetch,
+    pub window: RootWindow,
+    /// The view the results were read under, for a destination read
+    /// afresh.
+    pub prefs: Option<crate::grid::prefs::ViewPrefs>,
+    pub query: RootQuery,
+    /// For a refresh, where each of its items is now (`None`: gone).
+    pub places: Vec<Option<u64>>,
+}
+
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
-    /// A page of results, with the view it was read under and the query
-    /// that produced it.
-    Page(
-        u64,
-        bool,
-        RootPage,
-        crate::grid::prefs::ViewPrefs,
-        Box<RootQuery>,
-    ),
+    Arrived(Box<Arrived>),
+    /// A read of results failed: its generation and why it was read.
+    Failed(u64, Fetch, String),
     Error(String),
 }
 /// Whether a smart folder's filter has no rules, which makes it a group.
@@ -253,8 +277,7 @@ pub fn start(
                         job(library);
                         continue;
                     }
-                    Request::Query(generation, scope, filter, cursor, shuffle, limit) => {
-                        let append = cursor.is_some();
+                    Request::Query(generation, scope, filter, shuffle, window) => {
                         // The scope's saved view decides the sort, exactly as it
                         // does for the Electron grid reading the same rows.
                         let saved = |key: &str| {
@@ -310,21 +333,48 @@ pub fn start(
                                         sort: prefs.sort.clone(),
                                     },
                                 };
-                                library
-                                    .query(&query, &PageRequest { limit, cursor })
-                                    .map(|page| {
-                                        Reply::Page(
-                                            generation,
-                                            append,
-                                            page,
-                                            prefs,
-                                            Box::new(query),
-                                        )
-                                    })
+                                library.query_window(&query, &window).map(|window| {
+                                    Reply::Arrived(Box::new(Arrived {
+                                        generation,
+                                        fetch: Fetch::Open,
+                                        window,
+                                        prefs: Some(prefs),
+                                        query,
+                                        places: Vec::new(),
+                                    }))
+                                })
                             })
+                            .map_err(|error| (generation, Fetch::Open, error))
+                    }
+                    Request::Window(generation, query, window, fetch) => {
+                        let read = library.query_window(&query, &window).and_then(|window| {
+                            // A refresh learns where the selection's items
+                            // are now in the same visit, from the order the
+                            // window was just read from.
+                            let places = match &fetch {
+                                Fetch::Refresh(ids) if !ids.is_empty() => {
+                                    library.root_positions(&query, ids)?
+                                }
+                                _ => Vec::new(),
+                            };
+                            Ok((window, places))
+                        });
+                        match read {
+                            Ok((window, places)) => Ok(Reply::Arrived(Box::new(Arrived {
+                                generation,
+                                fetch,
+                                window,
+                                prefs: None,
+                                query: *query,
+                                places,
+                            }))),
+                            Err(error) => Err((generation, fetch, error)),
+                        }
                     }
                 };
-                replies.send(result.unwrap_or_else(|error| Reply::Error(error.to_string())))?;
+                replies.send(result.unwrap_or_else(|(generation, fetch, error)| {
+                    Reply::Failed(generation, fetch, error.to_string())
+                }))?;
             }
             Ok(())
         };
@@ -353,6 +403,7 @@ mod tests {
 #[cfg(test)]
 mod acceptance {
     use super::*;
+    use picto_library::query::PageRequest;
     #[test]
     fn hierarchy_keeps_children_with_parent() {
         let node = |name: &str| Navigation {

@@ -39,15 +39,12 @@ impl Shell {
             Action::OpenInNewWindow => {
                 // The item alone, as production's detail window opens it
                 // from a single selection, the viewer and the preview.
-                let index = target.items.first().and_then(|item| {
-                    self.session
-                        .read(cx)
-                        .items
-                        .iter()
-                        .position(|each| each.root_id == item.root_id)
-                });
-                if let Some(index) = index {
-                    self.open_in_window(vec![index], index, cx);
+                let ordinal = target
+                    .items
+                    .first()
+                    .and_then(|item| self.session.read(cx).position_of(item.root_id));
+                if let Some(ordinal) = ordinal {
+                    self.open_in_window(vec![ordinal], ordinal, cx);
                 }
             }
             Action::OpenWithOther => {

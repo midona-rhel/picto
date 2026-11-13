@@ -78,15 +78,16 @@ working: the library thread borrows the application's own `Library`
   Back would restore, and reads the shown grid again in place
   (`gridSettle.ts`, `requestReconcile`): coalesced, spaced by three times
   the last refresh's time between 40 ms and a second, held while the grid
-  has a press, rubber band or drag going, a page is on its way or the
-  destination changes, keeping the selection by item and the topmost
-  visible item where it was on screen; `tasks` reads the import tasks
+  has a press, rubber band or drag going, a destination is being read or
+  the destination changes, reading the same window again with where the
+  selection's items now are (`root_positions`), keeping the selection by
+  item and the topmost visible item where it was on screen; `tasks` reads the import tasks
   (`taskSettle.ts`); `subscriptions` and `tasks` read whether subscriptions
   run (`Change::Activity`), every 1.5 s while one does. The Duplicates screen
   reads its queue again on `duplicates`, and the Subscriptions screen its list
   on `subscriptions` (after 250 ms of quiet) and `tasks`.
 - Still straight to the library (`Session::run` or the backend's requests):
-  grid pages and saved views, item details, rating, rename, notes, tags and
+  grid windows and saved views, item details, rating, rename, notes, tags and
   folders of an item, lifecycle, undo and redo, the sidebar's folder edits,
   the settings model, the Tags screen, the Subscriptions screen's reads and
   rename, and the Duplicates screen's queue and decisions. These are the same
@@ -359,8 +360,27 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   never GIF or JPEG XL, after a quarter of a second in the viewport, decoded
   off the drawing thread to exactly the size the tile shows, two at a time,
   and let go when the tile leaves the viewport.
-- Real paginated results (500 per page, loaded near the end) and
-  viewport-only tiles. Thumbnails load six at a time in the order of
+- The Electron grid's windowed model (`gridWindow.ts`,
+  `gridController.requestWindowAt`): the grid holds one window of at most
+  1,500 items, read at an exact ordinal of the destination's order
+  (`Library::query_window`), first 500 at the top, then aligned to 500
+  with a page before the item asked for. The scrollbar stands for every
+  item from the first frame: the height is the item count times the height
+  per item measured on the first 500 laid out (capped at 8,000,000 px), and
+  the window is placed in it where its ordinals fall, or with the item a
+  scroll asked for at the viewport's middle; the first window starts at the
+  top and the last ends at the bottom. A scroll, wheel or thumb drag asks at
+  most every 40 ms for the window the viewport needs (within three
+  viewports of the window's end, or outside it); one read is on its way at
+  a time and only the latest is shown. Items outside the window are not laid
+  out and nothing is drawn for them until their window arrives, as in
+  production. A new window, a zoom or a refresh keeps the topmost visible
+  tile where it was. Selection is by item: items chosen one by one, Select
+  All, and shift ranges that reach unloaded items as spans of the order
+  (`SelectionTarget::Range`), which the library resolves. Keyboard moves,
+  Home and End, the viewer's and Quick Look's steps and its "n / total" go
+  across the whole destination, reading the item's window first; Back
+  restores the window where it lay. Viewport-only tiles. Thumbnails load six at a time in the order of
   `thumbnailPlan.ts`: the viewport before the margin around it, nearest its
   middle first. A load for a tile that scrolled away is abandoned. Decoded
   thumbnails beyond the visible band are kept for scrolling back, up to 192,
@@ -592,7 +612,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `inbox.reject` keys) and the focus ring a clicked button shows once a key
   is pressed. Z and X (the registry's keys) work in both views. A review
   moves the view to the next item at once (skipping items still saving,
-  loading the next page first when the item is the last loaded), saves
+  loading the next window first when the item is the last held), saves
   through `Session::set_lifecycle` or, when rejected items are deleted,
   through the item menu's permanent delete, which asks first only when it
   cannot be undone; the pill takes no input while that question is open,
@@ -1238,8 +1258,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   in.
 - Sidebar expansion, rail widths and hidden rails are not persisted. The
   sidebar cannot be resized.
-- The grid lays out every loaded item; the Electron grid's windowed model for
-  very large libraries is not ported.
+- Home, End, Page keys and shift-moves in the grid go to the destination's
+  first and last items; production's `useGridArrowNav` stops at the ends of
+  the loaded window. A search keeps no scroll position (production keeps
+  the old offset, clamped). The windowed grid has not been run on a library
+  of a million items; its per-frame work and memory are bounded by the
+  window, not measured at that size.
 - Accessibility exposes the native window but not the control tree.
 - The grid is still one element tree per tile.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not

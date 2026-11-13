@@ -57,6 +57,61 @@ pub fn grid_built(started: Instant, tiles: usize) {
     }
 }
 
+/// When the app began preparing, which the result timings count from.
+static LAUNCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+/// When the latest window of results was asked for, in microseconds since
+/// `LAUNCH`.
+static WINDOW_ASKED: AtomicU64 = AtomicU64::new(0);
+
+fn enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PICTO_GPUI_STATS").is_some())
+}
+
+fn since_launch() -> Duration {
+    LAUNCH.get_or_init(Instant::now).elapsed()
+}
+
+/// The window was read again in place after the library changed.
+pub fn window_refreshed(start: usize, count: usize) {
+    if enabled() {
+        eprintln!(
+            "stats window-refreshed start={start} items={count} at={:.0}ms",
+            since_launch().as_secs_f64() * 1000.
+        );
+    }
+}
+
+/// A destination's first window arrived: printed at once, with how long
+/// after launch.
+pub fn results_opened(total: u64) {
+    if enabled() {
+        eprintln!(
+            "stats results-opened total={total} at={:.0}ms",
+            since_launch().as_secs_f64() * 1000.
+        );
+    }
+}
+
+/// Another window of the results was asked for.
+pub fn window_asked() {
+    WINDOW_ASKED.store(since_launch().as_micros() as u64, Relaxed);
+}
+
+/// The window asked for arrived: printed at once, with how long it took.
+pub fn window_arrived(start: usize, count: usize) {
+    if enabled() {
+        let took = since_launch()
+            .as_micros()
+            .saturating_sub(u128::from(WINDOW_ASKED.load(Relaxed)));
+        eprintln!(
+            "stats window start={start} items={count} took={:.1}ms at={:.0}ms",
+            took as f64 / 1000.,
+            since_launch().as_secs_f64() * 1000.
+        );
+    }
+}
+
 pub fn thumbnail_read() {
     THUMBNAIL_READS.fetch_add(1, Relaxed);
 }
@@ -66,6 +121,7 @@ pub fn thumbnail_evicted() {
 }
 
 pub fn start_reporting(cx: &mut App) {
+    since_launch();
     if std::env::var_os("PICTO_GPUI_STATS").is_none() {
         return;
     }
