@@ -75,9 +75,6 @@ pub enum Request {
     Rate(RootId, picto_library::Rating),
     Name(RootId, String),
     Notes(RootId, String),
-    /// Takes the named tag (`namespace:subtag`) off the item.
-    Untag(RootId, String),
-    LeaveFolder(RootId, picto_library::FolderId),
     Lifecycle(Vec<RootId>, picto_library::Lifecycle),
     Undo(RootId),
     Redo(RootId),
@@ -334,25 +331,6 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                                 root_ids: vec![id],
                             },
                             rating,
-                        )
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::Untag(id, name) => library
-                        .apply_tags(
-                            &picto_library::selection::SelectionTarget::Explicit {
-                                root_ids: vec![id],
-                            },
-                            &[name],
-                            false,
-                        )
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::LeaveFolder(id, folder) => library
-                        .remove_from_folder(
-                            &picto_library::selection::SelectionTarget::Explicit {
-                                root_ids: vec![id],
-                            },
-                            folder,
                         )
                         .and_then(|_| library.details(id))
                         .map(|details| Reply::Details(id, details)),

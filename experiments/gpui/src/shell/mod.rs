@@ -579,8 +579,8 @@ impl Render for Shell {
                         .items_center()
                         .justify_end()
                         .child(
-                            // TODO: while pinned, the inspector keeps showing
-                            // the item it had instead of following the selection.
+                            // While pinned, the inspector keeps showing what
+                            // it had instead of following the selection.
                             ui::icon_button(
                                 "pin-inspector",
                                 if self.inspector_pinned {
@@ -598,6 +598,9 @@ impl Render for Shell {
                             }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.inspector_pinned = !this.inspector_pinned;
+                                let pinned = this.inspector_pinned;
+                                this.inspector
+                                    .update(cx, |inspector, cx| inspector.set_pinned(pinned, cx));
                                 cx.notify();
                             })),
                         ),
@@ -775,6 +778,9 @@ impl Render for Shell {
         }
         root = root.children(self.menu.clone());
         root = root.children(self.confirmation(window, cx));
+        // The inspector's tag and folder pickers float over everything.
+        let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
+        root = root.child(tag_picker).child(folder_picker);
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.

@@ -1,6 +1,7 @@
 mod assets;
 mod backend;
 mod cover;
+mod covered;
 mod demo;
 mod grid;
 mod inspector;
@@ -103,6 +104,7 @@ fn main() {
             ui::modal::bind(cx);
             ui::tag_token_input::bind(cx);
             shell::sidebar::bind(cx);
+            ui::overlay_shell::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -129,8 +131,9 @@ fn main() {
             // system round the window a point larger.
             bounds.origin = bounds.origin.map(|at| at.floor());
             // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
-            // keyboard from whatever the user is working in.
-            let background = std::env::var_os("PICTO_GPUI_BACKGROUND").is_some();
+            // keyboard from whatever the user is working in, and keeps it
+            // drawing while it is covered.
+            let background = covered::enabled();
             let window = cx
                 .open_window(
                     WindowOptions {
@@ -148,7 +151,10 @@ fn main() {
                         focus: !background,
                         ..Default::default()
                     },
-                    move |window, cx| cx.new(|cx| Shell::new(database, blobs, window, cx)),
+                    move |window, cx| {
+                        covered::keep_painting(window);
+                        cx.new(|cx| Shell::new(database, blobs, window, cx))
+                    },
                 )
                 .unwrap();
             pointer::start(window.into(), cx);

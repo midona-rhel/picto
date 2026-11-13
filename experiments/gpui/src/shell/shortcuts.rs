@@ -296,21 +296,20 @@ impl Shell {
 
     /// `organize.addTag`, `organize.addFolder` and `file.addToFolder`: the
     /// pickers for the selection.
-    fn pick(&mut self, picker: Picker, cx: &mut Context<Self>) {
+    ///
+    /// Production opens its `TagSelectModal` and `FolderPickerModal` dialogs
+    /// here; this opens the inspector's pickers instead, docked 80px below
+    /// the inspector's top, or centred while it is hidden.
+    fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.read(cx).selection.is_empty() {
             cx.propagate();
             return;
         }
-        match picker {
-            // TODO: open the tag picker (`TagSelectModal`) for the selection.
-            Picker::Tags => {}
-            // TODO: open the folder picker (`FolderPickerModal`) for the
-            // selection.
-            Picker::Folders => {}
-            // TODO: open "Add to Folder..." (`addSelectionToFolder`) for the
-            // selection.
-            Picker::AddToFolder => {}
-        }
+        let visible = !self.inspector_collapsed;
+        self.inspector.update(cx, |inspector, cx| match picker {
+            Picker::Tags => inspector.add_tags(visible, window, cx),
+            Picker::Folders | Picker::AddToFolder => inspector.add_to_folder(visible, window, cx),
+        });
     }
 
     /// Wires the registry's actions on the window's root.
@@ -390,9 +389,15 @@ impl Shell {
                 cx.propagate();
             }
         }))
-        .on_action(cx.listener(|this, _: &AddTags, _, cx| this.pick(Picker::Tags, cx)))
-        .on_action(cx.listener(|this, _: &AddToFolders, _, cx| this.pick(Picker::Folders, cx)))
-        .on_action(cx.listener(|this, _: &AddToFolder, _, cx| this.pick(Picker::AddToFolder, cx)))
+        .on_action(cx.listener(|this, _: &AddTags, window, cx| this.pick(Picker::Tags, window, cx)))
+        .on_action(
+            cx.listener(|this, _: &AddToFolders, window, cx| {
+                this.pick(Picker::Folders, window, cx)
+            }),
+        )
+        .on_action(cx.listener(|this, _: &AddToFolder, window, cx| {
+            this.pick(Picker::AddToFolder, window, cx)
+        }))
     }
 }
 
