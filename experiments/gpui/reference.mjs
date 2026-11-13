@@ -5,7 +5,7 @@
 //
 //   move X Y | down X Y [clicks] | up X Y [clicks] | drag X Y | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
-//   shot <name> | size W H | js <expression> | reload | window <n>
+//   shot <name> | size W H | js <expression> | reload | window <n> | pace <ms>
 //
 // `size` sets the viewport in points (pictures are twice that), `js` prints
 // an expression's value, and `reload` loads the window again so that a
@@ -110,12 +110,15 @@ async function key(stroke) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 
+// `pace <ms>`: how long to wait after each input line (200 ms unless set).
+let pace = 200;
 for (const raw of readFileSync(script, 'utf8').split('\n')) {
   const line = raw.trim();
   if (!line || line.startsWith('#')) continue;
   const [kind, ...rest] = line.split(' ');
   const numbers = rest.map(Number);
   if (kind === 'wait') await sleep(numbers[0]);
+  else if (kind === 'pace') pace = numbers[0];
   else if (kind === 'shot') {
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(path.join(out, `${rest[0]}.png`), Buffer.from(data, 'base64'));
@@ -142,6 +145,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);
-  if (!['drag', 'wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
+  if (!['drag', 'wait', 'shot', 'js', 'size', 'reload', 'window', 'pace'].includes(kind)) await sleep(pace);
 }
 socket.close();

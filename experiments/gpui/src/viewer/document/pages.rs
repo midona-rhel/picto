@@ -1,8 +1,8 @@
 //! Paged documents rendered to pictures off the drawing thread: PDF through
 //! hayro, DjVu through djvu-rs, and comic archives (a zip of page images).
-//! Each open document lives on a thread of its own, which renders one page
-//! at a time at the size the viewer asks for; a newer request supersedes
-//! any still waiting.
+//! Each open document lives on a thread of its own, which measures every
+//! page when it opens and then draws the pages the viewer asks for, in the
+//! order asked, skipping any request the viewer has since given up.
 use super::geometry::PageSize;
 use super::kind::RendererKind;
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -246,8 +246,32 @@ impl PageSource for Comic {
         self.pages.len()
     }
 
+    /// Read from the picture's header, so measuring a whole archive does
+    /// not decode every page.
     fn page_size(&mut self, index: usize) -> Result<PageSize> {
-        let image = self.decode(index)?;
+        if let Some((decoded, image)) = &self.decoded
+            && *decoded == index
+        {
+            return Ok((image.width() as f32, image.height() as f32));
+        }
+        let name = self
+            .pages
+            .get(index)
+            .ok_or_else(|| anyhow!("No page {}", index + 1))?
+            .clone();
+        let mut bytes = Vec::new();
+        self.archive
+            .by_name(&name)
+            .map_err(|_| anyhow!("Could not read page {}", index + 1))?
+            .read_to_end(&mut bytes)?;
+        if let Ok((width, height)) = image::ImageReader::new(Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(anyhow::Error::from)
+            .and_then(|reader| Ok(reader.into_dimensions()?))
+        {
+            return Ok((width as f32, height as f32));
+        }
+        let image = decode_picture(&name, &bytes)?;
         Ok((image.width() as f32, image.height() as f32))
     }
 
@@ -280,20 +304,15 @@ pub fn decode_jpeg_xl(path: &Path) -> Result<RgbaImage> {
 
 // ── The document's thread ───────────────────────────────────────
 
-/// A drawn page: which, its natural size, and its pixels.
+/// A drawn page: its pixels, and the size it was asked for.
 pub struct RenderedPage {
-    pub index: usize,
-    pub natural: PageSize,
+    pub pixels: (u32, u32),
     pub image: RgbaImage,
 }
 
-/// Chooses the pixel size to draw a page at from its natural size, or
-/// `None` while the page cannot be shown (an unmeasured viewport).
-pub type Plan = Box<dyn FnOnce(PageSize) -> Option<(u32, u32)> + Send>;
-
 struct Request {
     index: usize,
-    plan: Plan,
+    pixels: (u32, u32),
     reply: oneshot::Sender<Result<RenderedPage>>,
 }
 
@@ -305,38 +324,78 @@ pub struct PageWorker {
 /// The largest side a page is drawn at, to bound memory at high zoom.
 pub const MAX_RENDER_SIDE: u32 = 8192;
 
+/// Every page's natural size. A page that cannot be measured takes the
+/// size of the one before it, so one bad page does not hide the rest.
+pub fn measure_pages(source: &mut dyn PageSource) -> Result<Vec<PageSize>> {
+    let mut sizes: Vec<PageSize> = Vec::with_capacity(source.page_count());
+    for index in 0..source.page_count() {
+        match source.page_size(index) {
+            Ok(size) if size.0 > 0. && size.1 > 0. => sizes.push(size),
+            other => match sizes.last() {
+                Some(previous) => sizes.push(*previous),
+                None => {
+                    other?;
+                    bail!("The first page has no size.");
+                }
+            },
+        }
+    }
+    if sizes.is_empty() {
+        bail!("This document has no pages.");
+    }
+    Ok(sizes)
+}
+
+/// Opens a paged document and measures its pages, for a view that lays
+/// the pages out before it shows them.
+pub fn measure(kind: RendererKind, path: &Path) -> Result<Vec<PageSize>> {
+    measure_pages(open(kind, path)?.as_mut())
+}
+
 impl PageWorker {
-    /// Opens the document on a new thread; the answer is the worker and the
-    /// page count, or why the document cannot be shown.
+    /// Opens the document on a new thread; the answer is the worker and every
+    /// page's natural size, or why the document cannot be shown.
     pub fn open(
         kind: RendererKind,
         path: PathBuf,
-    ) -> oneshot::Receiver<Result<(PageWorker, usize)>> {
+    ) -> oneshot::Receiver<Result<(PageWorker, Vec<PageSize>)>> {
         let (opened, answer) = oneshot::channel();
         let (requests, inbox) = mpsc::channel::<Request>();
         let spawned = std::thread::Builder::new()
             .name("picto-document".into())
             .spawn(move || {
-                let mut source = match open(kind, &path) {
-                    Ok(source) => source,
+                let measured = open(kind, &path).and_then(|mut source| {
+                    let sizes = measure_pages(source.as_mut())?;
+                    Ok((source, sizes))
+                });
+                let (mut source, sizes) = match measured {
+                    Ok(measured) => measured,
                     Err(error) => {
                         let _ = opened.send(Err(error));
                         return;
                     }
                 };
-                let count = source.page_count();
-                if opened.send(Ok((PageWorker { requests }, count))).is_err() {
+                if opened.send(Ok((PageWorker { requests }, sizes))).is_err() {
                     return;
                 }
-                while let Ok(mut request) = inbox.recv() {
-                    // Only the newest waiting request matters.
-                    while let Ok(newer) = inbox.try_recv() {
-                        request = newer;
+                let mut queue = std::collections::VecDeque::new();
+                loop {
+                    if queue.is_empty() {
+                        match inbox.recv() {
+                            Ok(request) => queue.push_back(request),
+                            Err(_) => return,
+                        }
                     }
+                    queue.extend(inbox.try_iter());
+                    let Some(request) = queue.pop_front() else {
+                        continue;
+                    };
+                    // The viewer gave this page up (scrolled away, zoomed,
+                    // closed): it is not drawn.
                     if request.reply.is_canceled() {
                         continue;
                     }
-                    let result = render_planned(source.as_mut(), request.index, request.plan);
+                    let result = render_guarded(source.as_mut(), request.index, request.pixels);
                     let _ = request.reply.send(result);
                 }
             });
@@ -346,10 +405,19 @@ impl PageWorker {
         answer
     }
 
-    /// Asks for a page; the answer comes when it is drawn.
-    pub fn render(&self, index: usize, plan: Plan) -> oneshot::Receiver<Result<RenderedPage>> {
+    /// Asks for a page at `pixels`; the answer comes when it is drawn, or is
+    /// dropped unanswered when the receiver is dropped first.
+    pub fn render(
+        &self,
+        index: usize,
+        pixels: (u32, u32),
+    ) -> oneshot::Receiver<Result<RenderedPage>> {
         let (reply, answer) = oneshot::channel();
-        let _ = self.requests.send(Request { index, plan, reply });
+        let _ = self.requests.send(Request {
+            index,
+            pixels,
+            reply,
+        });
         answer
     }
 }
@@ -358,15 +426,24 @@ fn log_spawn_failure(error: &std::io::Error) {
     eprintln!("picto: could not start a document thread: {error}");
 }
 
-fn render_planned(source: &mut dyn PageSource, index: usize, plan: Plan) -> Result<RenderedPage> {
-    let natural = source.page_size(index)?;
-    let (width, height) = plan(natural).ok_or_else(|| anyhow!("The page has no room."))?;
-    let (width, height) = bound_render_size(width, height);
-    Ok(RenderedPage {
-        index,
-        natural,
-        image: source.render(index, width, height)?,
-    })
+/// Draws a page, turning a decoder's panic into an error for that page, so
+/// the document's thread lives on and the other pages still draw.
+fn render_guarded(
+    source: &mut dyn PageSource,
+    index: usize,
+    pixels: (u32, u32),
+) -> Result<RenderedPage> {
+    let (width, height) = bound_render_size(pixels.0, pixels.1);
+    let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        source.render(index, width, height)
+    }));
+    match drawn {
+        Ok(image) => Ok(RenderedPage {
+            pixels,
+            image: image?,
+        }),
+        Err(_) => Err(anyhow!("Could not render page {}.", index + 1)),
+    }
 }
 
 /// Shrinks a render size, keeping its proportions, so neither side passes
@@ -385,7 +462,44 @@ pub fn bound_render_size(width: u32, height: u32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bound_render_size, comic_pages};
+    use super::{PageSource, bound_render_size, comic_pages, measure_pages, render_guarded};
+    use anyhow::{Result, bail};
+    use image::RgbaImage;
+
+    /// Three pages; the second cannot be measured and panics when drawn.
+    struct Flaky;
+
+    impl PageSource for Flaky {
+        fn page_count(&self) -> usize {
+            3
+        }
+
+        fn page_size(&mut self, index: usize) -> Result<(f32, f32)> {
+            match index {
+                1 => bail!("broken page"),
+                _ => Ok((100. + index as f32, 200.)),
+            }
+        }
+
+        fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage> {
+            assert_ne!(index, 1, "the decoder fails on this page");
+            Ok(RgbaImage::new(width, height))
+        }
+    }
+
+    #[test]
+    fn one_bad_page_neither_hides_nor_stops_the_others() {
+        let mut source = Flaky;
+        // The page that cannot be measured takes the size before it.
+        assert_eq!(
+            measure_pages(&mut source).unwrap(),
+            vec![(100., 200.), (100., 200.), (102., 200.)]
+        );
+        // A page whose decoder panics fails alone; the next still draws.
+        assert!(render_guarded(&mut source, 1, (10, 20)).is_err());
+        let next = render_guarded(&mut source, 2, (10, 20)).unwrap();
+        assert_eq!((next.image.width(), next.image.height()), (10, 20));
+    }
     use std::cmp::Ordering;
 
     #[test]

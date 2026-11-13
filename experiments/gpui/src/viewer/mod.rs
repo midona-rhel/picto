@@ -416,7 +416,7 @@ impl Viewer {
                 .cloned()
         };
         if let Some(details) = collection {
-            self.surface.update(cx, |surface, _| surface.stop());
+            self.surface.update(cx, |surface, _| surface.rest());
             self.group.update(cx, |group, cx| group.show(&details, cx));
             return;
         }
@@ -427,7 +427,7 @@ impl Viewer {
         });
         self.surface.update(cx, |surface, cx| match target {
             Some(media) => media.open(surface, cx),
-            None => surface.stop(),
+            None => surface.rest(),
         });
     }
 
@@ -500,10 +500,16 @@ impl Render for Viewer {
         let collection = collection_selected(self.session.read(cx));
         // "Media" while the player shows, for its keys.
         let media = self.surface.read(cx).player().is_some();
+        let mut context = video::key_context("Viewer", media);
+        // A document's pages take the scrolling keys; a collection's reader
+        // is not a document.
+        if !collection && self.surface.read(cx).shows_pages() {
+            context.add(document::PAGES_CONTEXT);
+        }
         let pane = div()
             .id("viewer")
             .track_focus(&self.focus)
-            .key_context(video::key_context("Viewer", media))
+            .key_context(context)
             .relative()
             .size_full()
             .overflow_hidden()

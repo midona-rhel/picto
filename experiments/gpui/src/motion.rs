@@ -132,6 +132,11 @@ pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
 /// quick load shows none.
 pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
+/// How long the viewer keeps the previous item on screen while a video
+/// opening waits for its first frame, or a document for its first page,
+/// before showing the new item without it.
+pub const MEDIA_HOLD: Duration = Duration::from_millis(1500);
+
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
 /// A settings row's or check row's highlight (`background 100ms ease`), and

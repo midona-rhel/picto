@@ -48,9 +48,40 @@ fn main() {
     let spin = |duration: Duration| unsafe {
         CFRunLoop::run_in_mode(kCFRunLoopDefaultMode, duration.as_secs_f64(), false);
     };
+    // Opened paused, as a collection member is, the item still hands over
+    // its first frame (the player primes it with a seek to the start), at
+    // the start, soon.
+    for _ in 0..2 {
+        let opened = Instant::now();
+        let mut paused = video::avf::AvPlayer::open(&path).unwrap();
+        paused.set_volume(0., true);
+        let deadline = opened + Duration::from_secs(10);
+        loop {
+            let status = paused.status();
+            assert!(
+                Instant::now() < deadline,
+                "no first frame while paused: {status:?}"
+            );
+            if paused.take_frame().is_some() {
+                assert!(
+                    status.position < 0.05,
+                    "the first frame is the start: {status:?}"
+                );
+                println!(
+                    "  paused: first frame at {:.3}s after {:?}",
+                    status.position,
+                    opened.elapsed()
+                );
+                break;
+            }
+            spin(Duration::from_millis(4));
+        }
+    }
+    let opened = Instant::now();
     let mut player = video::avf::AvPlayer::open(&path).unwrap();
     player.set_volume(0., true);
     player.play();
+    let mut first_reported = false;
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut frames = Vec::new();
     while frames.len() < 12 {
@@ -62,6 +93,15 @@ fn main() {
         );
         assert!(status.error.is_none(), "{:?}", status.error);
         if let Some(Frame::Surface(buffer)) = player.take_frame() {
+            if !first_reported {
+                first_reported = true;
+                println!(
+                    "  playing: first frame at {:.3}s after {:?}",
+                    status.position,
+                    opened.elapsed()
+                );
+                assert!(status.position < 0.1, "the first frame is the start");
+            }
             let format = CVPixelBufferGetPixelFormatType(&buffer);
             assert_eq!(format, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
             let size = (
