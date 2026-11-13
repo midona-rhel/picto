@@ -15,7 +15,7 @@ pub mod tooltip;
 pub mod zoom;
 
 pub use action_row::action_row;
-pub use chip::chip;
+pub use chip::{Chip, chip};
 pub use field::field;
 pub use icon_button::icon_button;
 pub use panel_section::panel_section;

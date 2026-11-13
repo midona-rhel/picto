@@ -70,6 +70,7 @@ struct Visit {
 struct SavedGrid {
     items: Vec<RootSummary>,
     total: u64,
+    total_size_bytes: u128,
     cursor: Option<String>,
     prefs: ViewPrefs,
     tile: f32,
@@ -111,6 +112,8 @@ pub struct Session {
     /// Counts each time the items are replaced rather than extended.
     pub results_epoch: u64,
     pub total: u64,
+    /// The size of every item in the results, not only the loaded ones.
+    pub total_size_bytes: u128,
     cursor: Option<String>,
     pub loading: bool,
     pub error: Option<String>,
@@ -182,6 +185,7 @@ impl Session {
             items: Vec::new(),
             results_epoch: 0,
             total: 0,
+            total_size_bytes: 0,
             cursor: None,
             loading: true,
             error: None,
@@ -318,6 +322,11 @@ impl Session {
         self.set_filter(Some(filter), cx);
     }
 
+    /// What the search field holds, which the results are filtered by.
+    pub fn search_text(&self) -> &str {
+        &self.search_text
+    }
+
     /// The library folder's name without its `.library` suffix.
     pub fn library_name(&self) -> Option<String> {
         let name = self.blobs.parent()?.file_name()?.to_string_lossy();
@@ -383,6 +392,7 @@ impl Session {
         }
         self.prefs = prefs;
         self.total = page.total;
+        self.total_size_bytes = page.total_size_bytes;
         self.cursor = page.next_cursor;
         self.loading = false;
         if append {
@@ -476,6 +486,7 @@ impl Session {
             SavedGrid {
                 items: self.items.clone(),
                 total: self.total,
+                total_size_bytes: self.total_size_bytes,
                 cursor: self.cursor.clone(),
                 prefs: self.prefs.clone(),
                 tile: self.tile,
@@ -492,6 +503,7 @@ impl Session {
     fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
         self.items = saved.items;
         self.total = saved.total;
+        self.total_size_bytes = saved.total_size_bytes;
         self.cursor = saved.cursor;
         self.prefs = saved.prefs;
         self.prefs_scope = Some(self.scope);
@@ -568,6 +580,7 @@ impl Session {
         self.results_epoch += 1;
         self.forget_selection();
         self.total = 0;
+        self.total_size_bytes = 0;
         self.cursor = None;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
@@ -813,6 +826,14 @@ impl Session {
         if !ids.is_empty() {
             self.close_viewer(cx);
             let _ = self.sender.send(Request::Lifecycle(ids, lifecycle));
+        }
+    }
+
+    /// Fetches the selected item's details again, after an edit made
+    /// elsewhere changed them.
+    pub fn refresh_details(&self) {
+        if let Some(item) = self.selected_item() {
+            let _ = self.sender.send(Request::Details(item.root_id));
         }
     }
 
