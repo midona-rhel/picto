@@ -15,6 +15,13 @@ pub const BADGE_TEXT: u32 = 0xffffffcc;
 /// `--glass-bg`: the background at 92%.
 pub const GLASS: u32 = 0x18191ceb;
 pub const TILE_RADIUS: f32 = 4.;
+/// `--sidebar-width`
+pub const SIDEBAR_WIDTH: f32 = 300.;
+pub const INSPECTOR_WIDTH: f32 = 280.;
+/// `--titlebar-height`
+pub const TITLEBAR_HEIGHT: f32 = 48.;
+/// `--color-border-secondary` over the rails.
+pub const RAIL_BORDER: u32 = 0x353638;
 pub struct Assets;
 /// Embeds `assets/<name>.svg` for each listed icon name.
 macro_rules! icons {

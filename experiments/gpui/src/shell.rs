@@ -312,27 +312,13 @@ impl Browser {
         }
         div()
             .id("sidebar")
-            .w(px(300.))
-            .flex_none()
+            .w(px(theme::SIDEBAR_WIDTH))
             .h_full()
             .bg(rgb(PANEL))
             .border_r_1()
-            .border_color(rgb(0x353638))
+            .border_color(rgb(theme::RAIL_BORDER))
             .flex()
             .flex_col()
-            .child(
-                // The titlebar strip: traffic lights on the left, these on the right.
-                self.drag_region(div().id("sidebar-titlebar"), cx)
-                    .h(px(48.))
-                    .flex_none()
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(2.))
-                    .child(self.icon_button("open-settings", "settings", true, cx))
-                    .child(self.icon_button("toggle-sidebar", "toolbar-panel", true, cx)),
-            )
             .child(
                 div()
                     .h(px(48.))
@@ -419,6 +405,60 @@ impl Browser {
             })
     }
 
+    /// Hides or shows the rails. The sidebar slides out over 50 ms and the
+    /// inspector over 100 ms; the grid takes the freed width at once.
+    pub(crate) fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
+        if sidebar {
+            self.sidebar_collapsed = !self.sidebar_collapsed;
+            self.rails.set(
+                ("sidebar", 0),
+                self.sidebar_collapsed,
+                motion::SIDEBAR_SLIDE,
+            );
+        }
+        if inspector {
+            self.inspector_collapsed = !self.inspector_collapsed;
+            self.rails.set(
+                ("inspector", 0),
+                self.inspector_collapsed,
+                motion::INSPECTOR_SLIDE,
+            );
+        }
+        cx.notify();
+    }
+
+    /// The titlebar's left block. It keeps the sidebar's width when the
+    /// sidebar is hidden, so the toolbar never shifts, and holds the shared
+    /// window actions clear of the traffic lights.
+    pub(crate) fn titlebar_left(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        self.drag_region(div().id("titlebar-left"), cx)
+            .w(px(theme::SIDEBAR_WIDTH))
+            .flex_none()
+            .h_full()
+            .pl(px(74.))
+            .pr(px(8.))
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(px(2.))
+            .bg(rgb(if self.sidebar_collapsed {
+                theme::BACKGROUND
+            } else {
+                PANEL
+            }))
+            .border_r_1()
+            .border_color(rgba(if self.sidebar_collapsed {
+                0x00000000
+            } else {
+                theme::RAIL_BORDER << 8 | 0xff
+            }))
+            .child(self.icon_button("open-settings", "settings", true, cx))
+            .child(
+                self.icon_button("toggle-panels", "toolbar-panel", true, cx)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
+            )
+    }
+
     /// The shared 24px icon button of `iconButton.module.css`: the glyph at
     /// 94%, lifting to full strength over a hover overlay that fades in.
     fn icon_button(
@@ -472,9 +512,10 @@ impl Browser {
             )
         };
         self.drag_region(div().id("toolbar"), cx)
-            .h(px(48.))
-            .flex_none()
-            .px(px(12.))
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .px(px(8.))
             .flex()
             .items_center()
             .gap(px(2.))

@@ -56,6 +56,10 @@ impl CubicBezier {
 pub const SIDEBAR_HOVER: Duration = Duration::from_millis(50);
 /// `iconButton.module.css`: an icon button's hover fade.
 pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
+/// `.sidebar { transition: transform var(--duration-fast) }`.
+pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
+/// `inspectorRailIn` / `inspectorRailOut`.
+pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
 /// Where a fade that set off from `from` toward 0 or 1 has got to.
 fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
@@ -70,14 +74,15 @@ struct HoverFade {
     duration: Duration,
 }
 
-/// Hover highlights that fade as CSS transitions do: toward the new state on
-/// the default curve, starting from wherever the previous fade had reached.
+/// Two-state values that move as CSS transitions do: toward the new state on
+/// the default curve, starting from wherever the previous move had reached.
+/// Used for hover highlights and for sliding the rails in and out.
 #[derive(Default)]
-pub struct HoverFades {
+pub struct Fades {
     fades: std::collections::HashMap<(&'static str, usize), HoverFade>,
 }
 
-impl HoverFades {
+impl Fades {
     pub fn set(&mut self, key: (&'static str, usize), hovered: bool, duration: Duration) {
         let from = self.value(key);
         self.fades

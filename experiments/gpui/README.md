@@ -46,12 +46,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Uncategorized, Untagged, Tags, Random, Subscriptions, Duplicates, Trash),
   Folders and Smart Folders sections with counts, hierarchy, collapse controls
   and a filter. Random shuffles the All scope with one seed per session.
+- The Electron shell's layout: a 48px titlebar row whose left block keeps the
+  sidebar's width, over a body whose rails slide away (sidebar 50 ms,
+  inspector 100 ms) while the grid takes the freed width at once. The panel
+  button and Tab toggle both rails; Cmd+Alt+1 and Cmd+Alt+2 toggle one.
+- The app owns titlebar dragging on macOS. The titlebar strips move the
+  window and controls inside them do not, as the Electron shell's drag
+  regions work.
 - Toolbar with Back and Forward over visited destinations, zoom, Picto's own
   16px glyphs, and native editable search (selection, clipboard, IME). Fewer
   than three trimmed characters leave filtering off. Query generations prevent
   an old result replacing a newer query.
 - Real paginated results (500 per page, loaded near the end), viewport-only
   tiles, bounded thumbnail cache (192 entries, four concurrent decodes).
+- Keyboard movement by the rules of `useGridArrowNav.ts`: arrows and WASD,
+  Home and End, Page Up and Page Down, and scrolling the target into view.
+- Sidebar rows fade their highlight over 50 ms and icon buttons over 150 ms.
+  A dismissed context menu fades out over 80 ms.
 - Motion with the Electron timings. Thumbnails follow the reveal contract of
   `thumbnailRevealTracker.ts`: 100 ms after entering the 500px margin, a 500 ms
   reveal in which the image fades in over its dominant colour and that colour
@@ -68,8 +79,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 ## Not yet equivalent to Picto
 
 - Tags, Subscriptions and Duplicates are sidebar rows without screens. The
-  toolbar's view-options and filter buttons, and the sidebar's settings and
-  panel buttons, are drawn but not wired.
+  toolbar's view-options and filter buttons and the settings button are drawn
+  but not wired.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
@@ -77,8 +88,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   scroll surface. Preview is embedded, not the three production shells.
 - No drag and drop, range or multi-selection, complete context menus,
   import/export, subscriptions, cloud, localization or site login.
-- Motion still to port: context menu and modal enter/exit, hover fades,
-  inspector rail slide and fade, sidebar collapse, toasts, the viewer's
+- Motion still to port: modal enter/exit, the inspector's fade when entering
+  the grid from the viewer, toasts, the viewer's
   thumbnail-to-original crossfade and its zoom and pan tween, smooth paging,
   progress and spinner loops. A scope change does not yet restore the previous
   scroll position as the Electron grid does.
@@ -86,7 +97,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   renderer patch; two open-source implementations exist to port. GPUI cannot
   scale or rotate arbitrary elements, so the menu and modal scale-in needs a
   substitute.
-- Sidebar expansion, sidebar width and view changes are not persisted.
+- Sidebar expansion, sidebar width, hidden rails and view changes are not
+  persisted. The rails cannot be resized.
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.

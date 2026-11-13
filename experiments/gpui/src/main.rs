@@ -36,6 +36,9 @@ actions!(
         PageUp,
         PageDown,
         Preview,
+        ToggleSidebar,
+        ToggleInspector,
+        TogglePanels,
         ClosePreview,
         Undo,
         Redo,
@@ -89,9 +92,13 @@ struct Browser {
     prefs: prefs::ViewPrefs,
     prefs_scope: Option<usize>,
     reveal: reveal::RevealTracker,
-    hover: motion::HoverFades,
+    hover: motion::Fades,
     /// A press on a titlebar drag region that has not yet moved.
     titlebar_press: bool,
+    sidebar_collapsed: bool,
+    inspector_collapsed: bool,
+    /// How far each rail has slid out of view.
+    rails: motion::Fades,
     /// The steady clock the reveal timings are measured on.
     clock: std::time::Instant,
     transition: shell::Transition,
@@ -205,8 +212,11 @@ impl Browser {
             prefs: prefs::ViewPrefs::default(),
             prefs_scope: None,
             reveal: reveal::RevealTracker::default(),
-            hover: motion::HoverFades::default(),
+            hover: motion::Fades::default(),
             titlebar_press: false,
+            sidebar_collapsed: false,
+            inspector_collapsed: false,
+            rails: motion::Fades::default(),
             clock: std::time::Instant::now(),
             transition: shell::Transition::Idle,
             displayed: 0,
@@ -655,8 +665,21 @@ impl Render for Browser {
         if !self.preview {
             self.surface.update(cx, |surface, _| surface.stop());
         }
-        let width = (f32::from(window.viewport_size().width) - 580.).max(100.);
+        // The rails give up their width at once; only their own slide is animated.
+        let left = if self.sidebar_collapsed {
+            0.
+        } else {
+            theme::SIDEBAR_WIDTH
+        };
+        let right = if self.inspector_collapsed {
+            0.
+        } else {
+            theme::INSPECTOR_WIDTH
+        };
+        let width = (f32::from(window.viewport_size().width) - left - right).max(100.);
         self.grid_size = (width, f32::from(window.viewport_size().height) - 80.);
+        self.surface
+            .update(cx, |surface, _| surface.chrome_width = left + right + 24.);
         let text_height = self.prefs.text_height();
         let key = Some((
             width as u32,
@@ -706,7 +729,16 @@ impl Render for Browser {
                 .text_color(rgb(theme::TEXT))
                 .into_any_element()
         };
-        let sidebar = self.sidebar(avatar, cx);
+        let sidebar_hidden = self.rails.value(("sidebar", 0));
+        let inspector_hidden = self.rails.value(("inspector", 0));
+        let sidebar = (sidebar_hidden < 1.).then(|| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-theme::SIDEBAR_WIDTH * sidebar_hidden))
+                .child(self.sidebar(avatar, cx))
+        });
         let mut toolbar = self.toolbar(cx);
         if self.extra_filter.is_some() {
             toolbar = toolbar.child(self.button("clear-filter", "Clear filter").on_click(
@@ -717,12 +749,13 @@ impl Render for Browser {
             ));
         }
         let mut center = div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(left))
+            .right(px(right))
             .flex()
-            .flex_col()
-            .child(toolbar);
+            .flex_col();
         if self.preview {
             let count = if self.demo.is_some() {
                 1
@@ -857,27 +890,53 @@ impl Render for Browser {
                         .unwrap_or_else(|| format!("{} items", format::grouped(self.total))),
                 ),
         );
-        // The inspector rail: its own titlebar strip, which drags the window,
-        // above the scrolling body.
-        let inspector = div()
-            .w(px(280.))
+        // The inspector rail spans the window's full height, titlebar strip
+        // included, and slides as one piece.
+        let inspector = (inspector_hidden < 1.).then(|| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(px(-theme::INSPECTOR_WIDTH * inspector_hidden))
+                .w(px(theme::INSPECTOR_WIDTH))
+                .flex()
+                .flex_col()
+                .bg(rgb(PANEL))
+                .border_l_1()
+                .border_color(rgb(0x303236))
+                .child(
+                    self.drag_region(div().id("inspector-titlebar"), cx)
+                        .h(px(theme::TITLEBAR_HEIGHT))
+                        .flex_none(),
+                )
+                .child(self.inspector(cx))
+        });
+        let titlebar = div()
+            .h(px(theme::TITLEBAR_HEIGHT))
             .flex_none()
-            .h_full()
             .flex()
-            .flex_col()
-            .bg(rgb(PANEL))
-            .border_l_1()
-            .border_color(rgb(0x303236))
+            .child(self.titlebar_left(cx))
+            .child(toolbar)
             .child(
-                self.drag_region(div().id("inspector-titlebar"), cx)
-                    .h(px(48.))
-                    .flex_none(),
-            )
-            .child(self.inspector(cx));
+                // The inspector's share of the titlebar stays reserved, and
+                // draggable, while the inspector is hidden.
+                self.drag_region(div().id("titlebar-right"), cx)
+                    .w(px(theme::INSPECTOR_WIDTH))
+                    .flex_none()
+                    .h_full(),
+            );
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .child(center)
+            .children(sidebar);
         let mut root = div()
             .relative()
             .size_full()
             .flex()
+            .flex_col()
             .bg(rgb(BG))
             .text_color(rgb(theme::TEXT))
             .font_family("SF Pro Text")
@@ -935,9 +994,18 @@ impl Render for Browser {
                 }
                 cx.notify();
             }))
-            .child(sidebar)
-            .child(center)
-            .child(inspector);
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_rails(true, false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ToggleInspector, _, cx| this.toggle_rails(false, true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &TogglePanels, _, cx| this.toggle_rails(true, true, cx)),
+            )
+            .child(titlebar)
+            .child(body)
+            .children(inspector);
         // `menuOut`: a dismissed menu fades over 80 ms and takes no more input.
         let closing = self.menu_closing.and_then(|(position, started)| {
             let progress = motion::progress(started.elapsed(), motion::MENU_OUT);
@@ -1034,6 +1102,7 @@ impl Render for Browser {
             || self.reveal.active(now)
             || self.menu_closing.is_some()
             || self.hover.animating()
+            || self.rails.animating()
         {
             window.request_animation_frame();
         }
@@ -1074,6 +1143,10 @@ fn main() {
                 KeyBinding::new("end", Last, Some("Browser && !TextInput")),
                 KeyBinding::new("pageup", PageUp, Some("Browser && !TextInput")),
                 KeyBinding::new("pagedown", PageDown, Some("Browser && !TextInput")),
+                // `shortcuts.ts` view.toggleSidebar / toggleInspector / toggleBothPanels.
+                KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Browser")),
+                KeyBinding::new("cmd-alt-2", ToggleInspector, Some("Browser")),
+                KeyBinding::new("tab", TogglePanels, Some("Browser && !TextInput")),
                 KeyBinding::new("space", Preview, Some("Browser && !TextInput")),
                 KeyBinding::new("enter", Preview, Some("Browser && !TextInput")),
                 KeyBinding::new("escape", ClosePreview, Some("Browser")),

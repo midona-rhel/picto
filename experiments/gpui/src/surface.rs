@@ -17,6 +17,8 @@ pub struct MediaSurface {
     error: Option<String>,
     bounds: Bounds<Pixels>,
     focus: Option<FocusHandle>,
+    /// Window width taken by the rails and padding around the preview.
+    pub chrome_width: f32,
 }
 impl MediaSurface {
     pub fn stop(&mut self) {
@@ -133,7 +135,7 @@ impl MediaSurface {
 impl Render for MediaSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-        let width = (f32::from(window.viewport_size().width) - 604.).max(1.);
+        let width = (f32::from(window.viewport_size().width) - self.chrome_width).max(1.);
         let height = (f32::from(window.viewport_size().height) - 210.).max(1.);
         let entity = cx.entity().downgrade();
         let mut surface = div()
