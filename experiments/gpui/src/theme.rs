@@ -140,6 +140,20 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--glass-border-bottom`
+    pub fn glass_border_bottom(&self) -> Rgba {
+        rgba(0xffffff1a)
+    }
+    /// Chromium's `::placeholder` colour (`darkGray`), for inputs the app
+    /// does not give a placeholder colour of its own.
+    pub fn placeholder(&self) -> Rgba {
+        rgb(0xa9a9a9)
+    }
+    /// `color-mix(in srgb, var(--color-control-surface) 50%, transparent)`:
+    /// the footer of the library switcher.
+    pub fn control_surface_half(&self) -> Rgba {
+        rgba(0x0000001a)
+    }
 }
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour

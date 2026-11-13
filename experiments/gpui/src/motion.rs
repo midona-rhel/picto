@@ -8,6 +8,10 @@ pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// `--ease-scale-in`: popovers and menus growing in.
+pub const EASE_SCALE_IN: CubicBezier = CubicBezier::new(0., 0.89, 0.44, 1.);
+/// `--duration-menu-in`: a popover's scale-in.
+pub const MENU_IN: Duration = Duration::from_millis(70);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.

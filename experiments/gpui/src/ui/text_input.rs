@@ -64,19 +64,21 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// The search at the top of a popover (`LibrarySwitcherPopover`).
+    Popover,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Popover => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Popover => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +86,15 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Popover => 48.,
+        }
+    }
+    /// The popover's input has no `::placeholder` rule, so it keeps
+    /// Chromium's; the others set the tertiary text colour.
+    fn placeholder(self, theme: crate::theme::Theme) -> gpui::Hsla {
+        match self {
+            Kind::Popover => theme.placeholder().into(),
+            _ => theme.text_tertiary().into(),
         }
     }
 }
@@ -489,6 +500,7 @@ impl Element for TextElement {
         let focused = input.focus_handle.is_focused(window);
         let marked_range = input.marked_range.clone();
         let placeholder = input.placeholder.clone();
+        let kind = input.kind;
         let previous_scroll = input.scroll;
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
@@ -533,7 +545,7 @@ impl Element for TextElement {
         };
 
         let (display_text, text_color) = if content.is_empty() {
-            (placeholder, theme.text_tertiary().into())
+            (placeholder, kind.placeholder(theme))
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -746,6 +758,13 @@ impl TextInput {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
         input.kind = Kind::Sidebar;
+        input
+    }
+    /// The search field of a popover.
+    pub fn popover(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Popover;
         input
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
