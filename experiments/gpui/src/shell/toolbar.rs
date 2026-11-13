@@ -35,6 +35,11 @@ pub struct Toolbar {
 }
 
 impl Toolbar {
+    /// The search field, which `nav.search` gives the keyboard to.
+    pub fn search_focus(&self, cx: &App) -> FocusHandle {
+        self.search.focus_handle(cx)
+    }
+
     pub fn new(session: Entity<Session>, viewer: &Entity<Viewer>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::new);
         let zoom = cx.new(|_| Zoom::new());
@@ -270,7 +275,7 @@ impl Render for Toolbar {
                 "history-back",
                 -1,
                 back,
-                ui::tip("Back").keys(&["⌥", "←"]),
+                ui::tip("Back").shortcut("nav.back", cx),
                 cx,
             ))
             .child(history(
@@ -278,7 +283,7 @@ impl Render for Toolbar {
                 "history-forward",
                 1,
                 forward,
-                ui::tip("Forward").keys(&["⌥", "→"]),
+                ui::tip("Forward").shortcut("nav.forward", cx),
                 cx,
             ));
         // A screen has no grid to zoom, filter or search: the Electron

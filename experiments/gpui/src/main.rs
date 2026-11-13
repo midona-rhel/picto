@@ -1,9 +1,11 @@
 mod assets;
 mod backend;
 mod cover;
+mod covered;
 mod demo;
 mod grid;
 mod inspector;
+mod keymap;
 mod motion;
 mod pointer;
 mod screens;
@@ -19,44 +21,27 @@ use gpui::*;
 use shell::*;
 use std::path::PathBuf;
 
-/// Movement and view shortcuts, from `shortcuts.ts`.
-fn key_bindings() -> Vec<KeyBinding> {
-    let grid = Some("Browser && !TextInput");
-    vec![
-        KeyBinding::new("cmd-z", Undo, grid),
-        KeyBinding::new("cmd-shift-z", Redo, grid),
-        // grid.moveLeft/Right/Up/Down, with WASD as the second binding.
-        KeyBinding::new("right", Next, grid),
-        KeyBinding::new("d", Next, grid),
-        KeyBinding::new("left", Previous, grid),
-        KeyBinding::new("a", Previous, grid),
-        KeyBinding::new("down", Down, grid),
-        KeyBinding::new("s", Down, grid),
-        KeyBinding::new("up", Up, grid),
-        KeyBinding::new("w", Up, grid),
-        // Shift with a move extends the selection.
-        KeyBinding::new("shift-right", Next, grid),
-        KeyBinding::new("shift-left", Previous, grid),
-        KeyBinding::new("shift-down", Down, grid),
-        KeyBinding::new("shift-up", Up, grid),
-        KeyBinding::new("cmd-a", SelectAll, grid),
-        KeyBinding::new("home", First, grid),
-        KeyBinding::new("end", Last, grid),
-        KeyBinding::new("pageup", PageUp, grid),
-        KeyBinding::new("pagedown", PageDown, grid),
-        // view.toggleSidebar / toggleInspector / toggleBothPanels.
-        KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Browser")),
-        KeyBinding::new("cmd-alt-2", ToggleInspector, Some("Browser")),
-        KeyBinding::new("tab", TogglePanels, grid),
-        KeyBinding::new("space", Preview, grid),
-        KeyBinding::new("enter", Preview, grid),
-        KeyBinding::new("escape", ClosePreview, Some("Browser")),
-        KeyBinding::new("cmd-q", Quit, None),
-        // file.settings, in every window.
-        KeyBinding::new("cmd-,", settings::OpenSettings, None),
-        KeyBinding::new("cmd-1", DemoSvg, Some("Browser")),
-        KeyBinding::new("cmd-2", DemoFlash, Some("Browser")),
-    ]
+/// The application menu. Its rows show the keys bound to their actions, so
+/// it is set again whenever the shortcuts are rebound.
+pub fn set_app_menus(cx: &mut App) {
+    cx.set_menus(vec![
+        Menu {
+            name: "Picto GPUI".into(),
+            items: vec![
+                MenuItem::action("Settings…", settings::OpenSettings),
+                MenuItem::action("Quit", Quit),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Media Examples".into(),
+            items: vec![
+                MenuItem::action("SVG", DemoSvg),
+                MenuItem::action("Flash (Ruffle)", DemoFlash),
+            ],
+            disabled: false,
+        },
+    ]);
 }
 
 /// Chromium draws Picto's text with `-webkit-font-smoothing: antialiased`,
@@ -80,6 +65,15 @@ fn match_chromium_text_weight() {
     }
 }
 
+/// Whether the database is a disposable copy the launcher made: its folder
+/// holds the snapshot marker. The app opens nothing else, and the edits that
+/// cannot be undone check it again before they run.
+pub fn marked_disposable(database: &std::path::Path) -> bool {
+    database
+        .parent()
+        .is_some_and(|folder| folder.join(".gpui-snapshot").is_file())
+}
+
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
@@ -87,7 +81,7 @@ fn main() {
     let database = PathBuf::from(args.next().expect("Pass a snapshot database from run.sh"));
     let blobs = PathBuf::from(args.next().expect("Pass the source blobs directory"));
     assert!(
-        database.parent().unwrap().join(".gpui-snapshot").is_file(),
+        marked_disposable(&database),
         "Only a marked disposable snapshot is accepted"
     );
     gpui_platform::application()
@@ -107,32 +101,20 @@ fn main() {
             stats::start_reporting(cx);
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
-            grid::filter_picker::bind(cx);
             ui::modal::bind(cx);
+            ui::overlay_shell::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
-            viewer::bind(cx);
-            cx.bind_keys(key_bindings());
+            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            // The registry's shortcuts, at their defaults until the
+            // settings are read and applied.
+            keymap::install(
+                settings::registry::KeyboardPreset::Us,
+                &settings::registry::Overrides::new(),
+                cx,
+            );
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
-            cx.set_menus(vec![
-                Menu {
-                    name: "Picto GPUI".into(),
-                    items: vec![
-                        MenuItem::action("Settings…", settings::OpenSettings),
-                        MenuItem::action("Quit", Quit),
-                    ],
-                    disabled: false,
-                },
-                Menu {
-                    name: "Media Examples".into(),
-                    items: vec![
-                        MenuItem::action("SVG", DemoSvg),
-                        MenuItem::action("Flash (Ruffle)", DemoFlash),
-                    ],
-                    disabled: false,
-                },
-            ]);
             // `PICTO_GPUI_WINDOW=1213x865` opens at an exact size, so a capture
             // can be compared pixel for pixel with the Electron window's.
             let (width, height) = std::env::var("PICTO_GPUI_WINDOW")
@@ -147,8 +129,9 @@ fn main() {
             // system round the window a point larger.
             bounds.origin = bounds.origin.map(|at| at.floor());
             // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
-            // keyboard from whatever the user is working in.
-            let background = std::env::var_os("PICTO_GPUI_BACKGROUND").is_some();
+            // keyboard from whatever the user is working in, and keeps it
+            // drawing while it is covered.
+            let background = covered::enabled();
             let window = cx
                 .open_window(
                     WindowOptions {
@@ -166,7 +149,10 @@ fn main() {
                         focus: !background,
                         ..Default::default()
                     },
-                    move |window, cx| cx.new(|cx| Shell::new(database, blobs, window, cx)),
+                    move |window, cx| {
+                        covered::keep_painting(window);
+                        cx.new(|cx| Shell::new(database, blobs, window, cx))
+                    },
                 )
                 .unwrap();
             pointer::start(window.into(), cx);

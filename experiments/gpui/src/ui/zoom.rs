@@ -247,14 +247,14 @@ impl Render for Zoom {
             .child(
                 ui::icon_button("zoom-out", "toolbar-minus")
                     .disabled(self.value <= MINIMUM)
-                    .tip(ui::tip("Zoom out").keys(&["-"]))
+                    .tip(ui::tip("Zoom out").shortcut("view.zoomOut", cx))
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value - BUTTON_STEP, cx))),
             )
             .child(slider)
             .child(
                 ui::icon_button("zoom-in", "toolbar-plus")
                     .disabled(self.value >= MAXIMUM)
-                    .tip(ui::tip("Zoom in").keys(&["+"]))
+                    .tip(ui::tip("Zoom in").shortcut("view.zoomIn", cx))
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value + BUTTON_STEP, cx))),
             )
             .into_any_element()

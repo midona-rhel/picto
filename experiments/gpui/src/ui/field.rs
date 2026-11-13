@@ -38,9 +38,6 @@ pub enum Look {
     Hex,
     /// `.saveFilterEditor input`: the saved filter's name.
     SavedFilter,
-    /// `OverlayShell` `.searchRow`: the pickers' search, a glyph and the text
-    /// with no frame of their own.
-    Picker,
 }
 
 struct Frame {
@@ -196,21 +193,6 @@ impl Look {
                 right: 8.,
                 drop: 0.,
             },
-            Look::Picker => {
-                let clear: Rgba = gpui::transparent_black().into();
-                Frame {
-                    height: 36.,
-                    radius: 0.,
-                    border: (clear, clear),
-                    fill: (clear, clear),
-                    focus: Duration::ZERO,
-                    curve: motion::EASE_DEFAULT,
-                    // 3px in, a 14px glyph and a 6px gap.
-                    left: 23.,
-                    right: 0.,
-                    drop: 0.,
-                }
-            }
             Look::Rename => Frame {
                 height: 20.,
                 radius: 3.,
@@ -304,6 +286,47 @@ impl RenderOnce for Field {
         }
         let has_text = !self.input.read(cx).is_empty();
         let clear = self.clearable && has_text;
+        // The field's width, measured each frame, for the expanded overlay
+        // that is drawn outside the field's own layout.
+        let width = window.use_keyed_state(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "width".into()),
+            cx,
+            |_, _| 0f32,
+        );
+        let expanded = self.input.read(cx).expanded(window);
+        let opening = window.use_keyed_state(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "expand".into()),
+            cx,
+            |_, _| motion::Fade::default(),
+        );
+        if opening.read(cx).on() != expanded {
+            opening.update(cx, |fade, _| {
+                // `fieldExpand`: 100 ms from 92% opacity on the way in; no
+                // fade on the way back.
+                if expanded {
+                    fade.set(true, motion::FIELD_EXPAND);
+                } else {
+                    *fade = motion::Fade::default();
+                }
+            });
+        }
+        if self.look == Look::Inspector && expanded {
+            return self.expanded(width, opening, window, cx).into_any_element();
+        }
+        let measure = {
+            let width = width.clone();
+            canvas(
+                move |bounds, _, cx| {
+                    let measured = f32::from(bounds.size.width);
+                    if *width.read(cx) != measured {
+                        width.update(cx, |width, _| *width = measured);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0()
+        };
 
         let mut field = div()
             .id(self.id)
@@ -320,7 +343,8 @@ impl RenderOnce for Field {
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.focus(&handle, cx);
-            });
+            })
+            .child(measure);
         if self.look == Look::Search {
             // `inset 0 1px 0` at 3% contrast: a lit top edge.
             field = field.child(
@@ -415,6 +439,67 @@ impl RenderOnce for Field {
                     .on_click(move |_, _, cx| input.update(cx, |input, cx| input.clear(cx))),
             );
         }
-        field
+        field.into_any_element()
     }
 }
+
+impl Field {
+    /// `.fieldControlExpanded`: focused text that overflows its line is
+    /// drawn over what follows, as tall as it wraps up to 240px (then it
+    /// scrolls), on the rail colour with a lifted shadow. The field keeps its
+    /// 32px place in the column.
+    fn expanded(
+        self,
+        width: Entity<f32>,
+        opening: Entity<motion::Fade>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Div {
+        let theme = theme::theme(cx);
+        let frame = self.look.frame(theme);
+        if opening.read(cx).animating() {
+            window.request_animation_frame();
+        }
+        let shown = 0.92 + 0.08 * opening.read(cx).value_with(motion::EASE_DEFAULT);
+        let area = self.input.read(cx).area().clone();
+        let handle = self.input.read(cx).focus_handle(cx);
+        let overlay = div()
+            .id(self.id)
+            .occlude()
+            .w(px(*width.read(cx)))
+            .min_h(px(frame.height))
+            .max_h(px(EXPANDED_MAX))
+            .overflow_y_scroll()
+            .track_scroll(&area)
+            .rounded(px(frame.radius))
+            .border_1()
+            .border_color(frame.border.1)
+            .bg(theme.rail())
+            .shadow(vec![
+                BoxShadow::new(px(0.), px(8.), rgba(0x00000038).into()).blur_radius(px(20.)),
+                BoxShadow::new(px(0.), px(1.), rgba(0x0000002e).into()).blur_radius(px(3.)),
+            ])
+            .opacity(shown)
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                window.focus(&handle, cx);
+            })
+            .child(
+                div()
+                    .w_full()
+                    .pl(px(frame.left))
+                    .pr(px(frame.right))
+                    .py(px(6.))
+                    .child(self.input.clone()),
+            );
+        div()
+            .relative()
+            .w_full()
+            .h(px(frame.height))
+            .flex_none()
+            .child(deferred(anchored().child(overlay)).with_priority(2))
+    }
+}
+
+/// `.fieldControlExpanded { max-height: 240px }`
+const EXPANDED_MAX: f32 = 240.;

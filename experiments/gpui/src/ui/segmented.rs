@@ -1,6 +1,6 @@
 //! Small segmented glyph controls on the control surface: the filter
-//! pickers' match rule (`FilterLogicTabs`), the view menu's sort direction
-//! (`.dirPill`) and the pickers' view tabs (`OverlayShell` `.viewTabs`).
+//! pickers' match rule (`FilterLogicTabs`) and the view menu's sort
+//! direction (`.dirPill`). The pickers' view tabs are `overlay_shell`'s.
 use super::tooltip::{self, Tip};
 use crate::theme;
 use gpui::*;
@@ -17,9 +17,6 @@ pub enum Look {
     /// `.dirPill`: 26×24 buttons 1px apart at 40% until chosen, the chosen
     /// one at full strength on `--color-contrast-12`.
     Direction,
-    /// `.viewTabs`: 28×24 buttons side by side, the chosen one on the
-    /// active surface.
-    View,
 }
 
 impl Look {
@@ -27,14 +24,12 @@ impl Look {
         match self {
             Look::Logic => (24., 24.),
             Look::Direction => (26., 24.),
-            Look::View => (28., 24.),
         }
     }
     fn gap(self) -> f32 {
         match self {
             Look::Logic => 2.,
             Look::Direction => 1.,
-            Look::View => 0.,
         }
     }
 }
@@ -74,8 +69,8 @@ pub fn segmented(
         look,
         segments,
         selected,
-        // `FilterLogicTabs` and the view tabs wrap each button in a
-        // `KbdTooltip`; the direction pill has only accessible labels.
+        // `FilterLogicTabs` wraps each button in a `KbdTooltip`; the
+        // direction pill has only accessible labels.
         tips: look != Look::Direction,
         on_select: None,
     }
@@ -133,14 +128,6 @@ impl RenderOnce for Segmented {
                         button
                     };
                     button.child(glyph.opacity(if chosen { 1. } else { 0.4 }))
-                }
-                Look::View => {
-                    let button = if chosen {
-                        button.bg(theme.surface_active())
-                    } else {
-                        button
-                    };
-                    button.child(glyph)
                 }
             };
             if let Some(handler) = self.on_select.clone() {

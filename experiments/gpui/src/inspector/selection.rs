@@ -27,9 +27,9 @@ const STACK_PINS: [&str; stack::CARDS + 1] = [
 
 /// The summary on display and the selection it describes.
 pub(super) struct Shown {
-    ids: Vec<RootId>,
+    pub(super) ids: Vec<RootId>,
     /// `None` when reading the summary failed.
-    summary: Option<SelectionSummary>,
+    pub(super) summary: Option<SelectionSummary>,
     /// The key the notes field was set with for this selection.
     key: u64,
 }
@@ -74,14 +74,10 @@ fn chosen_order(previous: &[RootId], selected: &[RootId], focus: Option<RootId>)
     order
 }
 
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
-
 impl SelectionState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Inspector>) -> Self {
         Self {
-            notes: cx.new(|cx| TextInput::field("Notes", window, cx)),
+            notes: cx.new(|cx| TextInput::expanding("Notes", window, cx)),
             order: Vec::new(),
             shown: None,
             asked: None,
@@ -122,10 +118,19 @@ impl Inspector {
     /// Asks for the summary of the current selection if the rail is to show
     /// it and it is neither shown nor on its way.
     pub(super) fn ensure_summary(&mut self, cx: &mut Context<Self>) {
-        if self.wanted(cx) == Mode::Selection
+        if !self.holds()
+            && self.wanted(cx) == Mode::Selection
             && !self.selection.ready()
             && self.selection.asked.as_ref() != Some(&self.selection.order)
         {
+            self.read_summary(cx);
+        }
+    }
+
+    /// Reads the selection's summary again after it was edited from outside
+    /// the rail, such as by a rating key.
+    pub fn selection_edited(&mut self, cx: &mut Context<Self>) {
+        if self.wanted(cx) == Mode::Selection {
             self.read_summary(cx);
         }
     }
@@ -135,6 +140,24 @@ impl Inspector {
     /// still the same when it arrives.
     fn read_summary(&mut self, cx: &mut Context<Self>) {
         let ids = self.selection.order.clone();
+        self.read_summary_of(ids, cx);
+    }
+
+    /// Reads the summary shown again after an edit, even when the rail is
+    /// pinned to it and the grid has another selection.
+    pub(super) fn reread_summary(&mut self, cx: &mut Context<Self>) {
+        if let Some(ids) = self.selection.shown.as_ref().map(|shown| shown.ids.clone()) {
+            self.read_summary_of(ids, cx);
+        }
+    }
+
+    /// The source addresses every selected item shares, or none.
+    pub(super) fn selection_sources(&self) -> Option<Vec<String>> {
+        let summary = self.selection.shown.as_ref()?.summary.as_ref()?;
+        Some(summary.shared_source_urls.clone().unwrap_or_default())
+    }
+
+    fn read_summary_of(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
         self.selection.asked = Some(ids.clone());
         let target = SelectionTarget::Explicit {
             root_ids: ids.clone(),
@@ -151,7 +174,12 @@ impl Inspector {
                 if this.selection.asked.as_ref() == Some(&ids) {
                     this.selection.asked = None;
                 }
-                if this.selection.order != ids {
+                let refreshing = this
+                    .selection
+                    .shown
+                    .as_ref()
+                    .is_some_and(|shown| shown.ids == ids);
+                if this.selection.order != ids && !refreshing {
                     return;
                 }
                 if let Err(error) = &result {
@@ -173,6 +201,7 @@ impl Inspector {
                     .notes
                     .update(cx, |field, cx| field.set_field(key, notes, cx));
                 this.selection.shown = Some(Shown { ids, summary, key });
+                this.sync_pickers(cx);
                 cx.notify();
             });
         })
@@ -206,7 +235,7 @@ impl Inspector {
                 }
                 // The focused item was edited with the rest.
                 this.session.read(cx).refresh_details();
-                this.read_summary(cx);
+                this.reread_summary(cx);
             });
         })
         .detach();
@@ -246,18 +275,19 @@ impl Inspector {
                     )
                 });
         if has_notes && notes != shared {
-            // TODO: ask whether to overwrite the notes of every selected item
-            // (`confirmSelectionOverwrite`), and apply them if so. Until then
-            // the field goes back to the notes the items share.
+            // The field shows the notes the items share until the change is
+            // confirmed (`confirmSelectionOverwrite`).
+            let count = shown
+                .summary
+                .as_ref()
+                .map_or(shown.ids.len() as u64, |summary| summary.selected_count);
             self.selection
                 .notes
                 .update(cx, |field, cx| field.set_field(key, shared, cx));
+            self.ask(super::Overwrite::Notes(notes), count, cx);
             return;
         }
-        self.edit_selection(
-            move |library, target| library.set_notes(target, Some(notes), now_ms()),
-            cx,
-        );
+        self.overwrite(super::Overwrite::Notes(notes), cx);
     }
 
     pub(super) fn release_stack(&mut self, cx: &mut Context<Self>) {
@@ -451,7 +481,7 @@ impl Inspector {
                 &self.selection.notes,
                 Look::Inspector,
             )))
-            .child(Self::source(Some(&sources), cx));
+            .child(self.source(Some(&sources), window, cx));
 
         let (entries, tags) = {
             let session = self.session.read(cx);
@@ -467,42 +497,10 @@ impl Inspector {
         let shared_folders = summary
             .as_ref()
             .map_or_else(Vec::new, |summary| summary.shared_folders.clone());
-        let mut folders = div().flex().flex_wrap().gap(px(4.));
-        for folder in &shared_folders {
-            let folder = *folder;
-            folders = folders.child(
-                ui::chip(
-                    ("inspector-folder", folder.0 as usize),
-                    super::folder_label(&entries, folder),
-                    super::FOLDER_COLOR,
-                )
-                .on_remove(cx.listener(move |this, _, _, cx| {
-                    this.edit_selection(
-                        move |library, target| library.remove_from_folder(target, folder),
-                        cx,
-                    );
-                })),
-            );
-        }
-        let folders = Self::folders_row(folders, shared_folders.is_empty(), window, cx);
-        panel = panel.child(self.section("Folders", Some(folders), cx));
-
-        let mut chips = div().flex().flex_wrap().gap(px(4.));
-        let tagged = !tags.is_empty();
-        for tag in &tags {
-            let raw = super::tag_raw(tag);
-            chips = chips.child(super::tag_chip(tag, cx).on_remove(cx.listener(
-                move |this, _, _, cx| {
-                    let raw = raw.clone();
-                    this.edit_selection(
-                        move |library, target| library.apply_tags(target, &[raw], false),
-                        cx,
-                    );
-                },
-            )));
-        }
-        let tags = Self::tags_row(chips, !tagged, window, cx);
-        panel = panel.child(self.section("Tags", Some(tags), cx));
+        let folders = self.folder_chips(&entries, &shared_folders, window, cx);
+        panel = panel.child(self.picker_section("Folders", folders, cx));
+        let tags = self.tag_chips(tags, false, window, cx);
+        panel = panel.child(self.picker_section("Tags", tags, cx));
 
         let rating = summary
             .as_ref()

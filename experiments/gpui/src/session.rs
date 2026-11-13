@@ -148,17 +148,27 @@ pub struct Session {
     /// that query or older bring the preferences from before it.
     view_patch: Option<(u64, serde_json::Value)>,
     blobs: PathBuf,
+    /// The disposable database the library opened.
+    database: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
+    /// Folders items were added to, newest first, for the folder picker's
+    /// Recent view and the grid menu's "Add to “…”" (`useRecentFolders`).
+    /// Production keeps them in the renderer's localStorage; here they last
+    /// for the session.
+    pub recent_folders: Vec<picto_library::FolderId>,
+    /// The selected items and the one shown, to select again by id once a
+    /// [`Session::refresh_results`] page is in.
+    reselect: Option<(Vec<RootId>, Option<RootId>)>,
 }
 
 impl EventEmitter<Change> for Session {}
 
 impl Session {
     pub fn new(database: PathBuf, blobs: PathBuf, cx: &mut Context<Self>) -> Self {
-        let (sender, receiver) = backend::start(database);
+        let (sender, receiver) = backend::start(database.clone());
         cx.spawn(async move |session, cx| {
             loop {
                 cx.background_executor()
@@ -221,10 +231,19 @@ impl Session {
             filters_locked: false,
             view_patch: None,
             blobs,
+            database,
             library_cover,
             fixtures,
             place_label: None,
+            reselect: None,
+            recent_folders: Vec::new(),
         }
+    }
+
+    /// Whether the open database is still a marked disposable copy, which
+    /// edits that cannot be undone require.
+    pub fn disposable(&self) -> bool {
+        crate::marked_disposable(&self.database)
     }
 
     /// The library's blob store.
@@ -321,6 +340,35 @@ impl Session {
 
     /// Fetches the current destination again, after an edit made elsewhere.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.saved.clear();
+        self.query(false, cx);
+    }
+
+    /// `recordRecentFolderUse`: the folder moves to the front of the recent
+    /// folders, each kept once, at most 30.
+    pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
+        record_recent(&mut self.recent_folders, folder);
+    }
+
+    /// Fetches the current destination again after an edit that may change
+    /// what it holds, keeping the selection (by item) and the scroll, as the
+    /// Electron grid refreshes in place.
+    pub fn refresh_results(&mut self, cx: &mut Context<Self>) {
+        if self
+            .nav
+            .get(self.scope)
+            .is_none_or(|entry| entry.screen.is_some())
+        {
+            return;
+        }
+        let ids = self
+            .selection
+            .iter()
+            .filter_map(|index| self.items.get(*index))
+            .map(|item| item.root_id)
+            .collect();
+        self.reselect = Some((ids, self.selected_item().map(|item| item.root_id)));
+        self.restore_scroll = Some(self.grid_scroll);
         self.saved.clear();
         self.query(false, cx);
     }
@@ -426,6 +474,7 @@ impl Session {
 
     pub fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
         if text != self.search_text {
+            self.reselect = None;
             self.search_text = text;
             self.query(false, cx);
         }
@@ -433,6 +482,7 @@ impl Session {
 
     /// Narrows the current destination, or clears the narrowing.
     pub fn set_filter(&mut self, filter: Option<FilterExpr>, cx: &mut Context<Self>) {
+        self.reselect = None;
         self.filter = filter;
         self.close_viewer(cx);
         self.query(false, cx);
@@ -646,6 +696,26 @@ impl Session {
         } else {
             self.items = page.items;
             self.results_epoch += 1;
+            if let Some((ids, focus)) = self.reselect.take() {
+                // A refresh in place: the same items stay selected.
+                let positions = self
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (item.root_id, index))
+                    .collect::<HashMap<_, _>>();
+                self.selection = ids
+                    .iter()
+                    .filter_map(|id| positions.get(id).copied())
+                    .collect();
+                self.anchor = None;
+                let focus = focus
+                    .and_then(|id| positions.get(&id).copied())
+                    .or_else(|| self.selection.iter().next_back().copied());
+                self.focus_on(focus, cx);
+                cx.emit(Change::Results);
+                return;
+            }
             // A new result set opens with nothing selected.
             self.forget_selection();
             self.displayed = self.scope;
@@ -797,6 +867,7 @@ impl Session {
         filters: Option<Filters>,
         cx: &mut Context<Self>,
     ) {
+        self.reselect = None;
         self.save_grid();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
@@ -1078,14 +1149,6 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.close_viewer(cx)
-        } else {
-            self.open_viewer(cx)
-        }
-    }
-
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self
             .details
@@ -1117,14 +1180,6 @@ impl Session {
 
     pub fn set_notes(&self, id: RootId, notes: String) {
         let _ = self.sender.send(Request::Notes(id, notes));
-    }
-
-    pub fn remove_tag(&self, id: RootId, name: String) {
-        let _ = self.sender.send(Request::Untag(id, name));
-    }
-
-    pub fn remove_from_folder(&self, id: RootId, folder: picto_library::FolderId) {
-        let _ = self.sender.send(Request::LeaveFolder(id, folder));
     }
 
     /// Moves the selected items to the trash, or back out of it, and
@@ -1167,6 +1222,13 @@ impl Session {
     }
 }
 
+/// `recordRecentFolderUse`: `folder` first, each folder once, at most 30.
+fn record_recent(recent: &mut Vec<picto_library::FolderId>, folder: picto_library::FolderId) {
+    recent.retain(|id| *id != folder);
+    recent.insert(0, folder);
+    recent.truncate(30);
+}
+
 /// Back and Forward without the places that no longer exist, each moved to
 /// its destination's new position, and where the current place now is.
 fn remap_history(
@@ -1192,7 +1254,22 @@ fn remap_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{Visit, remap_history};
+    use super::{Visit, record_recent, remap_history};
+    use picto_library::FolderId;
+
+    #[test]
+    fn recent_folders_are_newest_first_each_once_and_at_most_thirty() {
+        let mut recent = vec![FolderId(1), FolderId(2), FolderId(3)];
+        record_recent(&mut recent, FolderId(3));
+        assert_eq!(recent, [FolderId(3), FolderId(1), FolderId(2)]);
+        record_recent(&mut recent, FolderId(9));
+        assert_eq!(recent[0], FolderId(9));
+        for id in 100..140 {
+            record_recent(&mut recent, FolderId(id));
+        }
+        assert_eq!(recent.len(), 30);
+        assert_eq!(recent[0], FolderId(139));
+    }
 
     #[test]
     fn history_drops_deleted_places_and_follows_moved_ones() {

@@ -6,8 +6,12 @@ use super::filter_editors::{
     self, DateRangeEditor, DatesCommitted, RangeCommitted, RangeEditor, ResolutionEditor,
     SaveFilterEditor, SaveRequested,
 };
-use super::filter_picker::{FilterPicker, PickerKind};
-use super::filters::{self, Field, Filters};
+use super::filters::{self, Field, Filters, TagChoice};
+use crate::inspector::{
+    FolderPicker, TagPicker,
+    folder_picker::Event as FolderEvent,
+    tag_picker::{self, Event as TagEvent},
+};
 use crate::session::{Change, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -24,10 +28,9 @@ use picto_library::query::{ItemScope, RootQuery};
 /// `.toolbar`'s `min-height`.
 pub const HEIGHT: f32 = 38.;
 
-/// The bar asks the window to show a menu or a picker above everything.
+/// The bar asks the window to show a menu above everything.
 pub enum BarEvent {
     Menu(Entity<Menu>),
-    Picker(Entity<FilterPicker>),
 }
 
 impl EventEmitter<BarEvent> for FilterBar {}
@@ -85,6 +88,10 @@ pub struct FilterBar {
     facet_task: Option<Task<()>>,
     menu: Option<(MenuKind, Entity<Menu>)>,
     editors: Editors,
+    /// The tag and folder pickers in their filter mode, which the window
+    /// draws over everything.
+    tag_picker: Entity<TagPicker>,
+    folder_picker: Entity<FolderPicker>,
     /// What the bar last showed, so it repaints only when that changes.
     shown: Option<(bool, bool, Filters)>,
     scroll: ScrollHandle,
@@ -94,11 +101,56 @@ pub struct FilterBar {
 
 impl FilterBar {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![cx.subscribe(&session, |this, _, change: &Change, cx| {
-            if matches!(change, Change::Results | Change::Navigation) {
-                this.session_changed(cx);
-            }
-        })];
+        let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));
+        let folder_picker = cx.new(|cx| FolderPicker::new(session.clone(), cx));
+        let subscriptions = vec![
+            cx.subscribe(&session, |this, _, change: &Change, cx| {
+                if matches!(change, Change::Results | Change::Navigation) {
+                    this.session_changed(cx);
+                }
+            }),
+            cx.subscribe(&tag_picker, |this, _, event: &TagEvent, cx| {
+                if let TagEvent::FilterChanged {
+                    include,
+                    exclude,
+                    mode,
+                } = event
+                {
+                    let choices = |tags: &[(picto_library::TagId, String)]| {
+                        tags.iter()
+                            .map(|(id, name)| TagChoice {
+                                tag_id: id.0,
+                                name: name.clone(),
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let (include, exclude, mode) = (choices(include), choices(exclude), *mode);
+                    this.update(cx, |filters| {
+                        filters.include_tags = include;
+                        filters.exclude_tags = exclude;
+                        filters.tag_mode = mode;
+                    });
+                }
+            }),
+            cx.subscribe(&folder_picker, |this, _, event: &FolderEvent, cx| {
+                if let FolderEvent::FilterChanged {
+                    include,
+                    exclude,
+                    mode,
+                } = event
+                {
+                    let ids = |folders: &[picto_library::FolderId]| {
+                        folders.iter().map(|folder| folder.0).collect::<Vec<_>>()
+                    };
+                    let (include, exclude, mode) = (ids(include), ids(exclude), *mode);
+                    this.update(cx, |filters| {
+                        filters.include_folders = include;
+                        filters.exclude_folders = exclude;
+                        filters.folder_mode = mode;
+                    });
+                }
+            }),
+        ];
         Self {
             session,
             pinned: Field::DEFAULT_PINNED.to_vec(),
@@ -108,6 +160,8 @@ impl FilterBar {
             facet_task: None,
             menu: None,
             editors: Editors::default(),
+            tag_picker,
+            folder_picker,
             shown: None,
             scroll: ScrollHandle::new(),
             _menu: Vec::new(),
@@ -561,11 +615,60 @@ impl FilterBar {
         }
     }
 
-    fn open_picker(&mut self, kind: PickerKind, anchor: Bounds<Pixels>, cx: &mut Context<Self>) {
-        let session = self.session.clone();
-        let position = point(anchor.left(), anchor.bottom() + px(4.));
-        let picker = cx.new(|cx| FilterPicker::new(session, kind, position, cx));
-        cx.emit(BarEvent::Picker(picker));
+    /// The tag and folder pickers, which the window draws over everything.
+    pub fn pickers(&self) -> (Entity<TagPicker>, Entity<FolderPicker>) {
+        (self.tag_picker.clone(), self.folder_picker.clone())
+    }
+
+    /// Opens the tag or folder picker in its filter mode, 4px below the
+    /// control.
+    fn open_picker(
+        &mut self,
+        field: Field,
+        anchor: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((_, menu)) = self.menu.take() {
+            menu.update(cx, |menu, cx| menu.dismiss(cx));
+        }
+        let below = point(f32::from(anchor.left()), f32::from(anchor.bottom()) + 4.);
+        let filters = self.filters(cx);
+        if field == Field::Tags {
+            let records = {
+                let session = self.session.read(cx);
+                move |choices: &[TagChoice]| {
+                    choices
+                        .iter()
+                        .map(|choice| match session.tags.get(&choice.tag_id) {
+                            Some(record) => record.clone(),
+                            None => picto_library::TagRecord {
+                                tag_id: picto_library::TagId(choice.tag_id),
+                                ..tag_picker::record(&choice.name)
+                            },
+                        })
+                        .collect::<Vec<_>>()
+                }
+            };
+            let (include, exclude) = (
+                records(&filters.include_tags),
+                records(&filters.exclude_tags),
+            );
+            self.tag_picker.update(cx, |picker, cx| {
+                picker.open_filter(below, include, exclude, filters.tag_mode, window, cx)
+            });
+        } else {
+            let ids = |folders: &[u32]| {
+                folders
+                    .iter()
+                    .map(|id| picto_library::FolderId(*id))
+                    .collect::<Vec<_>>()
+            };
+            let (include, exclude) = (ids(&filters.include_folders), ids(&filters.exclude_folders));
+            self.folder_picker.update(cx, |picker, cx| {
+                picker.open_filter(below, include, exclude, filters.folder_mode, window, cx)
+            });
+        }
     }
 
     // ── Drawing ─────────────────────────────────────────────────
@@ -594,10 +697,9 @@ impl FilterBar {
         };
         let (open, clear) = (cx.entity().downgrade(), cx.entity().downgrade());
         filter_control(("filter-field", field as usize), glyph, label, active)
-            .on_open(move |bounds, _, cx| {
+            .on_open(move |bounds, window, cx| {
                 let _ = open.update(cx, |this, cx| match field {
-                    Field::Tags => this.open_picker(PickerKind::Tags, bounds, cx),
-                    Field::Folders => this.open_picker(PickerKind::Folders, bounds, cx),
+                    Field::Tags | Field::Folders => this.open_picker(field, bounds, window, cx),
                     field => this.open_menu(menu_kind(field), bounds, cx),
                 });
             })

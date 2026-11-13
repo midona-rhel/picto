@@ -23,6 +23,32 @@ pub enum Event {
     Zoom,
 }
 
+/// How a host shows media: what the media view, Quick Look and the detail
+/// window each draw, and the preview settings they all follow.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Options {
+    /// The navigator square while the image overflows. Quick Look has none.
+    pub navigator: bool,
+    /// `imageDefaultZoom` `actual`: a new image opens at 100%, not fitted.
+    pub opens_actual: bool,
+    /// `viewerTrackpadGestures` on macOS: scrolling pans and only a pinch
+    /// zooms.
+    pub scroll_pans: bool,
+    /// The detail window's: a resized pane keeps the image's framing.
+    pub follows_resize: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            navigator: true,
+            opens_actual: false,
+            scroll_pans: false,
+            follows_resize: false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 enum Mode {
     /// Zoomed and panned on the camera.
@@ -75,6 +101,7 @@ pub struct MediaSurface {
     /// Since when the image has overflowed the pane, for the navigator's
     /// short delay before it appears.
     overflowing_since: Option<Instant>,
+    options: Options,
 }
 
 impl EventEmitter<Event> for MediaSurface {}
@@ -88,6 +115,33 @@ impl MediaSurface {
     /// Whether the shown item has zoom controls: images do, Flash does not.
     pub fn zoomable(&self) -> bool {
         self.mode == Mode::Image
+    }
+
+    /// Whether a Flash movie is playing in the pane.
+    pub fn flash(&self) -> bool {
+        self.flash.is_some()
+    }
+
+    pub fn set_options(&mut self, options: Options, cx: &mut Context<Self>) {
+        if self.options != options {
+            self.options = options;
+            cx.notify();
+        }
+    }
+
+    /// Whether an image is on screen with a known size, so its zoom means
+    /// something.
+    pub fn has_image(&self) -> bool {
+        self.mode == Mode::Image && self.image_size().is_some()
+    }
+
+    /// The camera a newly shown image opens with.
+    fn opening(&self, image: Size, pane: Size) -> Camera {
+        if self.options.opens_actual {
+            Camera::actual()
+        } else {
+            Camera::fit(image, pane)
+        }
     }
 
     /// The zoom as the toolbar shows it, in percent.
@@ -193,6 +247,18 @@ impl MediaSurface {
             f32::from(event.position.x - centre.x),
             f32::from(event.position.y - centre.y),
         );
+        if self.options.scroll_pans && cfg!(target_os = "macos") && !event.modifiers.control {
+            // Pan by the scroll; lines count as wheel notches of pixels.
+            let (dx, dy) = match event.delta {
+                ScrollDelta::Lines(lines) => (lines.x * camera::NOTCH, lines.y * camera::NOTCH),
+                ScrollDelta::Pixels(pixels) => (f32::from(pixels.x), f32::from(pixels.y)),
+            };
+            self.glide = None;
+            let camera = self.camera.panned(dx, dy);
+            self.set_camera(camera, cx);
+            cx.stop_propagation();
+            return;
+        }
         // The browser's `deltaY` is positive scrolling down; GPUI's is the
         // other way round.
         let (notch, delta) = match event.delta {
@@ -576,13 +642,16 @@ impl Render for MediaSurface {
         {
             self.needs_fit = false;
             self.glide = None;
-            self.set_camera(Camera::fit(image, pane), cx);
+            let opening = self.opening(image, pane);
+            self.set_camera(opening, cx);
         }
         if self.animate(cx) {
             window.request_animation_frame();
         }
         // The navigator appears a moment after the image first overflows.
-        let part = image.and_then(|image| camera::visible_part(self.camera, image, pane));
+        let part = image
+            .filter(|_| self.options.navigator)
+            .and_then(|image| camera::visible_part(self.camera, image, pane));
         let navigator = match (part, self.overflowing_since) {
             (None, _) => {
                 self.overflowing_since = None;
@@ -619,7 +688,15 @@ impl Render for MediaSurface {
                     move |bounds, _, cx| {
                         let _ = entity.update(cx, |this, cx| {
                             if this.bounds != bounds {
+                                let from = this.pane();
                                 this.bounds = bounds;
+                                if this.options.follows_resize
+                                    && !this.needs_fit
+                                    && let Some(image) = this.image_size()
+                                {
+                                    let camera = this.camera.resized(image, from, this.pane());
+                                    this.set_camera(camera, cx);
+                                }
                                 // The first measurement lets a waiting
                                 // image be fitted.
                                 if this.needs_fit {
