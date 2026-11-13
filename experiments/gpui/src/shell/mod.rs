@@ -98,9 +98,23 @@ impl Shell {
                 },
             ),
         ];
+        let duplicates = cx.new(|cx| {
+            screens::duplicates::DuplicatesScreen::new(
+                session.clone(),
+                thumbnails.clone(),
+                window,
+                cx,
+            )
+        });
+        let toolbar = cx.new(|cx| Toolbar::new(session.clone(), cx));
+        // A screen's titlebar controls take the grid's place in the toolbar.
+        let controls = duplicates.read(cx).toolbar();
+        toolbar.update(cx, |toolbar, _| {
+            toolbar.set_screen_controls(Screen::Duplicates, controls.into())
+        });
         Self {
             sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
-            toolbar: cx.new(|cx| Toolbar::new(session.clone(), cx)),
+            toolbar,
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
             viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
             tags: cx.new(|cx| {
@@ -114,14 +128,7 @@ impl Shell {
                     cx,
                 )
             }),
-            duplicates: cx.new(|cx| {
-                screens::duplicates::DuplicatesScreen::new(
-                    session.clone(),
-                    thumbnails.clone(),
-                    window,
-                    cx,
-                )
-            }),
+            duplicates,
             grid,
             session,
             focus,

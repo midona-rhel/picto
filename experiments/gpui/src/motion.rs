@@ -6,6 +6,10 @@ use std::time::Duration;
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// CSS `ease-in`.
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// CSS `ease-out`.
+pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
+/// `--ease-standard`
+pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
 /// `ScrollToTopButton`: its rise and fade.
@@ -66,6 +70,14 @@ pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
 pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
+
+/// `EmptyState.module.css` `.action`: its hover, on `--ease-standard`.
+pub const EMPTY_ACTION_HOVER: Duration = Duration::from_millis(250);
+/// Duplicate review: an original fades in over its thumbnail (`.fullImage`).
+pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
+/// `LOADING_MESSAGE_DELAY_MS`: a loading message waits this long, so a
+/// quick load shows none.
+pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);

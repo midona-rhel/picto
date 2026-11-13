@@ -149,26 +149,8 @@ impl Inspector {
         self.name.update(cx, |name, cx| name.select_everything(cx));
     }
 
-    fn property(label: &'static str, value: String, cx: &App) -> Div {
-        div()
-            .h(px(20.))
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .whitespace_nowrap()
-            .text(theme::TEXT_CAPTION)
-            .child(div().w(px(88.)).flex_none().child(label))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_right()
-                    .truncate()
-                    .font_family(theme::FONT_INSPECTOR_MONO)
-                    .font_features(theme::tabular_figures())
-                    .text_color(theme::theme(cx).contrast(80.))
-                    .child(value),
-            )
+    fn property(label: &'static str, value: String, _: &App) -> ui::property_row::PropertyRow {
+        ui::property_row(label, value)
     }
 
     fn section(

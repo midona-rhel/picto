@@ -140,6 +140,18 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--color-black-NN`: black at that strength, the same in every theme.
+    pub fn black(&self, percent: f32) -> Rgba {
+        translucent(0x000000, percent)
+    }
+    /// `--color-primary-NN`
+    pub fn primary_at(&self, percent: f32) -> Rgba {
+        translucent(self.primary, percent)
+    }
+    /// `--color-on-primary`: text on a primary surface.
+    pub fn on_primary(&self) -> Rgba {
+        rgb(0xffffff)
+    }
 }
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
@@ -226,6 +238,8 @@ pub const FONT_UI: &str = ".SystemUIFont";
 /// `Picto Inspector Roboto`
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
+/// `--font-family-mono`. Its first name, SF Mono, is a macOS system font.
+pub const FONT_MONO: &str = "SF Mono";
 /// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
 /// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a
 /// fractional line box would put centred text half a pixel off.
@@ -249,6 +263,8 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-xl`
+pub const TEXT_XL: f32 = 16.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
@@ -265,6 +281,8 @@ pub const CONTROL_SM: f32 = 26.;
 pub const CONTROL_MD: f32 = 28.;
 /// `--control-height-lg`
 pub const CONTROL_LG: f32 = 32.;
+/// `--action-button-height`
+pub const ACTION_BUTTON: f32 = 30.;
 /// `--icon-button-size`
 pub const ICON_BUTTON: f32 = 24.;
 /// The macOS window's corner radius, which its rim follows.

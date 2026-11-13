@@ -118,12 +118,39 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Space/Enter/double-click preview, Escape back, previous/next item, and
   navigation through members of a collection. Thumbnail-first preview with
   asynchronous full decode; stale loads are fenced.
+- The Duplicates screen, from `DuplicatesScreen.tsx`: the review queue of
+  `picto_library`'s duplicate candidates, one pair at a time, side by side
+  with each file's facts (resolution, size, format, rating, tags, dates,
+  group, occurrences) and the similarity, the footer of decisions, and the
+  titlebar's counter, Zoom to fit, Actual pixels and previous/next pair in
+  place of the grid's controls. A pair goes on screen only once its details
+  and both thumbnails are ready; the originals then fade in over 130 ms.
+  Zoom and pan are linked between the two previews (wheel about the
+  pointer, drag, double-click to fit), and Show Difference shows the
+  difference of the two images while hovered. "Not duplicates" and "Keep
+  both" record the pair as different files through the library, keep the
+  queue's place and update the sidebar count; ←, →, F, ⌘0, N and B work as
+  in Electron. Below 900 and 620 points the layout tightens and then stacks
+  as the container queries do. Loading message after 200 ms, and the empty
+  states for an empty queue, a finished review and an error.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-- Tags, Subscriptions and Duplicates are sidebar rows without screens.
+- Tags and Subscriptions are sidebar rows without screens.
+- Duplicates: Keep left, Keep right and Smart merge (Z, X, S) are drawn
+  disabled, because they merge one item into the other and free the other
+  file for deletion from disk, which this prototype must never cause; with
+  them goes Smart merge's green survivor ring. Scan library and Retry are
+  drawn but do nothing: the scanner lives in the application core, which the
+  prototype does not link, so its progress bar is not ported either. Errors
+  show only in the empty state, not as toasts. No context menu on the
+  candidates (Open with Default App, Open in New Window). The difference
+  picture is computed from the decoded images (GPUI has no blend modes), at
+  most 4096 pixels on its longest side, from the thumbnails until both
+  originals are in. A zoomed image is clipped to the preview's rectangle,
+  not its rounded corners.
 - Drawn with their hover states and tooltips but not wired: Settings, View
   options, the section headers' add buttons, the inspector's Add to Folder,
   Add Tags, Export, source-address list and Pin, and the library switcher.
@@ -180,7 +207,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
 ```
 
-The regular tests cover the three layout modes against hand-computed geometry,
+The regular tests cover the duplicate review's linked zoom, queue order,
+labels and difference picture, the three layout modes against hand-computed geometry,
 banded visibility against a full scan of 20,000 tiles in every mode, view
 preference fallbacks, grid labels, the reveal timeline, the easing curve
 against the sampled bezier, tree ordering and the text-search gates. The
@@ -229,8 +257,11 @@ One model, separate views, shared components:
   presentation).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, sidebar row, section header, chip, inspector section, action row,
-  field frame and text input, scrollbar, "Return to Top", badge, button, zoom
-  control and the titlebar drag region. Views compose these.
+  field frame and text input, scrollbar, "Return to Top", badge, button,
+  action button, property row, empty state, zoom control and the titlebar
+  drag region. Views compose these.
+- `screens/` holds the destinations that are screens rather than a grid.
+  A screen can hand the toolbar controls to show in the grid's place.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.
   `motion.rs` holds durations and easing. Views take colours, sizes and

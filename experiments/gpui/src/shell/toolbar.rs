@@ -1,4 +1,5 @@
 //! The grid toolbar (`GridToolbar.tsx`), which sits in the titlebar row.
+use crate::backend::Screen;
 use crate::session::{Change, Session};
 use crate::ui::{self, field::Look, text_input::TextInput, zoom};
 use crate::{theme, ui::zoom::Zoom};
@@ -8,6 +9,8 @@ pub struct Toolbar {
     session: Entity<Session>,
     search: Entity<TextInput>,
     zoom: Entity<Zoom>,
+    /// The controls a screen puts in the titlebar in place of the grid's.
+    screen_controls: Vec<(Screen, AnyView)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -43,8 +46,16 @@ impl Toolbar {
             session,
             search,
             zoom,
+            screen_controls: Vec::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Shows `controls` after the history buttons while `screen` is the
+    /// destination shown.
+    pub fn set_screen_controls(&mut self, screen: Screen, controls: AnyView) {
+        self.screen_controls.retain(|(owner, _)| *owner != screen);
+        self.screen_controls.push((screen, controls));
     }
 }
 
@@ -128,7 +139,7 @@ impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
-        let (opacity, animating, back, forward, filtered) = {
+        let (opacity, animating, back, forward, filtered, screen) = {
             let session = self.session.read(cx);
             (
                 session.transition.opacity(),
@@ -136,6 +147,7 @@ impl Render for Toolbar {
                 session.can_step_history(-1),
                 session.can_step_history(1),
                 session.filter.is_some(),
+                session.screen(),
             )
         };
         // The scope title fades with the grid.
@@ -157,7 +169,7 @@ impl Render for Toolbar {
                 }))
         };
         let background = theme.background();
-        ui::drag_region("toolbar", window, cx)
+        let toolbar = ui::drag_region("toolbar", window, cx)
             .relative()
             .size_full()
             // 8px either side from the titlebar, and 8 more on the right
@@ -182,7 +194,19 @@ impl Render for Toolbar {
                 forward,
                 ui::tip("Forward").keys(&["⌥", "→"]),
                 cx,
-            ))
+            ));
+        // A screen has no grid to zoom, filter or search: the Electron
+        // titlebar shows the grid's controls only over the grid, and a
+        // screen's own controls, if it has any, in their place.
+        if let Some(screen) = screen {
+            let controls = self
+                .screen_controls
+                .iter()
+                .find(|(owner, _)| *owner == screen)
+                .map(|(_, controls)| controls.clone());
+            return toolbar.children(controls);
+        }
+        toolbar
             .child(
                 // The zoom is centred in the space between the history
                 // buttons and the right-hand controls. It has the app
