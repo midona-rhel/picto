@@ -39,6 +39,13 @@ pub fn extension(mime: &str) -> String {
     }
 }
 
+/// `mimeToExt`: the grid's extension for a type, as its labels spell it.
+pub fn label_extension(mime: &str) -> String {
+    mime.split_once('/')
+        .map(|(_, subtype)| extension_for_subtype(&subtype.to_lowercase()).to_owned())
+        .unwrap_or_default()
+}
+
 pub fn format_label(mime: &str) -> String {
     let Some((_, subtype)) = mime.split_once('/') else {
         return String::new();

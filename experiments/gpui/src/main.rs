@@ -107,6 +107,7 @@ fn main() {
             stats::start_reporting(cx);
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
+            grid::filter_picker::bind(cx);
             ui::modal::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);

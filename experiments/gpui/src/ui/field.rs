@@ -31,6 +31,16 @@ pub enum Look {
     /// `.renameInput`: a name edited in place, in a 20px box outlined in the
     /// primary colour over the app background.
     Rename,
+    /// `.rangeEditor input`: the filter bar's 26px number fields.
+    Range,
+    /// `.hexField input`: a colour's code, with room on the left for its
+    /// swatch.
+    Hex,
+    /// `.saveFilterEditor input`: the saved filter's name.
+    SavedFilter,
+    /// `OverlayShell` `.searchRow`: the pickers' search, a glyph and the text
+    /// with no frame of their own.
+    Picker,
 }
 
 struct Frame {
@@ -153,6 +163,54 @@ impl Look {
                 right: 25.,
                 drop: 0.,
             },
+            Look::Range => Frame {
+                height: theme::CONTROL_SM,
+                radius: theme::RADIUS_MD,
+                border: (theme.border_secondary(), theme.border()),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: 6.,
+                right: 6.,
+                drop: 0.,
+            },
+            Look::Hex => Frame {
+                height: theme::CONTROL_LG,
+                radius: theme::RADIUS_MD,
+                border: (theme.border(), theme.primary()),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: 32.,
+                right: 10.,
+                drop: 0.,
+            },
+            Look::SavedFilter => Frame {
+                height: theme::CONTROL_MD,
+                radius: theme::RADIUS_MD,
+                border: (theme.border_secondary(), theme.primary()),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: 8.,
+                right: 8.,
+                drop: 0.,
+            },
+            Look::Picker => {
+                let clear: Rgba = gpui::transparent_black().into();
+                Frame {
+                    height: 36.,
+                    radius: 0.,
+                    border: (clear, clear),
+                    fill: (clear, clear),
+                    focus: Duration::ZERO,
+                    curve: motion::EASE_DEFAULT,
+                    // 3px in, a 14px glyph and a 6px gap.
+                    left: 23.,
+                    right: 0.,
+                    drop: 0.,
+                }
+            }
             Look::Rename => Frame {
                 height: 20.,
                 radius: 3.,

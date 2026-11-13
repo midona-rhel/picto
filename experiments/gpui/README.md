@@ -200,7 +200,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   fade-out on `--ease-default`, hidden until the first page is ready, 170 ms
   fade-in; clicks during the fade-out retarget it.
 - Inspector for the selected item: fitted preview with its format badge,
-  colour palette (a click adds that colour to the grid's filters), name,
+  colour palette (a click opens the filter bar with that colour in its
+  colour filter), name,
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
   inspector lists. Its left edge drags between 260 and 550px.
@@ -321,7 +322,46 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   tag editor, merge picker, group dialogs and confirmations use it, with the
   shared action button (`actionButton.module.css`) and dialog fields.
 - Context menus have a row of colour swatches (`ColorPicker`), used by the
-  Tags screen's group menu, in both presentations.
+  Tags screen's group menu, in both presentations. Rows can carry a right-click
+  action (`contextAction`), be replaced while the menu is open, and be an
+  owner's own view (`custom: true`) at a height the owner gives; a menu with
+  such rows draws in the window, where its fields and selects take the
+  keyboard.
+- The view menu of the titlebar's "View options" button (`GridViewMenu.tsx`),
+  at the button's left edge 4px below it, the button lit while it is open:
+  Layout (Waterfall, Grid, Justified, with their glyphs), Sort by with the
+  direction pill (hidden for folders and Recently Viewed, the pill hidden for
+  Random), and the toggles Show Name, Show Resolution, Show Extension, Show
+  File Type, Show Item Count, Compact, Fit Thumbnails (Grid only), Show
+  Subfolder Content (folders), Show Sidebar and Show Inspector. Each choice
+  shows at once and is saved to the destination's `view_pref` row through the
+  library's `update_auxiliary_json` as `settings.view.patch` does, out of
+  undo; a page still on its way keeps the change. A new sort or the subfolder
+  toggle fetches again behind the scope fade. When the layout changes (zoom,
+  spacing, mode, labels, width) the topmost visible tile, a selected one
+  first, stays where it was on screen (`resolveGridScrollAnchor`). Show
+  Extension adds `.EXT` to the names.
+- The filter bar (`GridFilterToolbar`), toggled by "Filter library", whose
+  button is lit with a count while the bar is open or any filter is set. It
+  sits over the grid aligned with the titlebar's panel edges, with a control
+  per pinned or set filter: Color, Tags, Folders, Rating, Type, Date
+  Imported, Date Modified, Resolution, Duration and File Size, each showing
+  what it holds, cleared by a right click or its corner button, and opening
+  its editor 4px below it. The menus: ratings and types with check marks
+  (types from the library's facets for the other filters, families first, a
+  right click excluding), date presets with a From/To calendar
+  (`DatePickerButton`), min/max ranges with their units, the colour editor
+  (`ColorFilterEditor`: saturation square, hue strip, tolerance, presets,
+  hex code, 250 ms settling), the pin menu, and saved filters (save, apply,
+  right click to delete). Tags and folders open the pickers
+  (`TagSelectPanel` and `FolderPickerPanel` in their filter mode, in the
+  shared `OverlayShell`): search, Match any/all/exactly, the group rail or
+  the folder tree with its guides, All/Recent/Selected, a click to include,
+  a right click to exclude, arrows, Enter and Tab, a draggable panel. The
+  filters combine as `compileGridQuery` builds them; the lock keeps them on
+  navigation, otherwise a destination opens unfiltered and Back restores the
+  filters it had; Clear empties them. The Tags screen's "Filter Items with
+  This Tag" puts the tag in the bar.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
@@ -372,14 +412,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   copied from the source catalog in `core`. Letter spacing on badges and
   table headers, and the native `title` tooltips of truncated cells, are
   not drawn.
-- Drawn with their hover states and tooltips but not wired: View
-  options, the inspector's Add to Folder,
+- Drawn with their hover states and tooltips but not wired: the inspector's
+  Add to Folder,
   Add Tags, Export (for an item, a selection and a destination),
   source-address list and Pin, and in the library switcher's popover
   choosing another library, Create Library, Open Library and Library Manager
   (those rows only close the popover). Each has a `TODO` where its action
-  belongs. The Filter button only clears a filter the inspector set; there
-  is no filter bar.
+  belongs.
+- Filter bar: a change of filters is not a step of Back and Forward as
+  `navigateWithGridFilters` makes it (the palette's colour included); the
+  grid goes to its top on each change. Pinned fields, saved filters and
+  recent folders last the session (production keeps them in localStorage).
+  The type menu's rows are the facets known when it opens and refresh when
+  new ones arrive. The tag picker lists the tags the library had when the
+  window opened (or the sidebar last rebuilt), filtered here rather than
+  paged from the library; its panel does not animate its width when the rail
+  is hidden. The colour editor's hue strip is six two-stop bands, its square
+  is not clipped round, and the hex field neither capitalises as typed nor
+  stops at seven characters. The range editors' unit is the shared select,
+  not a native one. Menus with editors do not reach past the window's edge.
+  A layout change keeps the anchored tile without the scope fade production
+  runs for it. The view menu's sort row keeps its height while open when
+  Random hides the direction pill. None of the bar, its menus, the pickers,
+  the calendar or the view menu has been seen running.
 - Inspector: the stacked preview's cards cannot turn (GPUI rotates only
   SVGs), so they lie straight; the folder card's radial light is a vertical
   gradient. Overwriting the notes of a selection that already has notes needs
@@ -462,8 +517,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   renderer patch; two open-source implementations exist to port. GPUI cannot
   scale or rotate arbitrary elements, so the menu and modal scale-in needs a
   substitute.
-- Sidebar expansion, rail widths, hidden rails and view changes are not
-  persisted. The sidebar cannot be resized.
+- Sidebar expansion, rail widths and hidden rails are not persisted. The sidebar cannot be resized.
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
@@ -487,7 +541,10 @@ ranking, shimmer and starred-tag edits, the dialogs' timing, the context menu's 
 cleaning, keyboard stepping and placement and flip arithmetic, the duplicate review's linked zoom, queue order,
 labels and difference picture, the three layout modes against hand-computed geometry,
 the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
-logarithmic zoom track,
+logarithmic zoom track, the filter model (the expression built from the
+bar, counting, labels, types, dates and ranges), the saved view options'
+round trip, the scroll anchor, the folder tree, the calendar, the colour
+conversions, the pickers' placement and drag, the view menu's heights,
 banded visibility against a full scan of 20,000 tiles in every mode, the
 rubber band's hit geometry and auto-scroll speed, the hover preview's timing
 and fit, the empty-state copy, the broken and font artwork as rendered, view
@@ -536,7 +593,8 @@ One model, separate views, shared components:
   changes it shows: `shell/` (the root, the sidebar, the library popover, the
   toolbar), `grid/` (the grid view with its layout, saved view, labels,
   reveal, keyboard movement, rubber band, hover preview, tile artwork,
-  thumbnail cache and originals), `inspector/` (one item, several items, and
+  thumbnail cache and originals, and the filter bar with its model, editors
+  and pickers), `inspector/` (one item, several items, and
   the destination), `viewer/` (the media surface with its zoom and pan
   arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
   shows) and `screens/` (the destinations that are screens of their own).
@@ -545,7 +603,10 @@ One model, separate views, shared components:
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom
-  control, empty state and the titlebar drag region. Views compose these.
+  control, empty state, the titlebar drag region, the filter bar's field and
+  buttons, segmented glyph controls (match rule, sort direction, view tabs),
+  the colour editor, the date picker and the floating picker panel
+  (`OverlayShell`). Views compose these.
 - `screens/` holds the destinations that are screens rather than a grid.
   A screen can hand the toolbar controls to show in the grid's place.
 - `settings/` is the settings model the app reads, the shortcut registry, and

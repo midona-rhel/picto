@@ -84,6 +84,10 @@ pub enum Kind {
     Popover,
     /// A context menu's search row (`.searchInput`).
     Menu,
+    /// A small field at 12px on a 26px line: the filter bar's ranges.
+    Compact,
+    /// A colour's hex code, in the monospaced font at 12px (`.hexField`).
+    Mono,
 }
 
 impl Kind {
@@ -94,13 +98,15 @@ impl Kind {
             | Kind::Number
             | Kind::Popover
             | Kind::Rename(_)
-            | Kind::Menu => crate::theme::FONT_UI,
+            | Kind::Menu
+            | Kind::Compact => crate::theme::FONT_UI,
+            Kind::Mono => crate::theme::FONT_MONO,
             Kind::Sidebar | Kind::Inspector | Kind::SidebarRename => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
-            Kind::Search | Kind::Number => crate::theme::TEXT_SM,
+            Kind::Search | Kind::Number | Kind::Compact | Kind::Mono => crate::theme::TEXT_SM,
             Kind::Sidebar
             | Kind::Inspector
             | Kind::Form
@@ -120,6 +126,8 @@ impl Kind {
             Kind::SidebarRename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
             Kind::Popover => 48.,
             Kind::Menu => 36.,
+            Kind::Compact => 24.,
+            Kind::Mono => 30.,
         }
     }
     /// The popover's input has no `::placeholder` rule, so it keeps
@@ -892,6 +900,20 @@ impl TextInput {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
         input.kind = Kind::Form;
+        input
+    }
+    /// A small field of the filter bar's editors, at 12px.
+    pub fn compact(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Compact;
+        input
+    }
+    /// A colour's hex code.
+    pub fn mono(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "".into();
+        input.kind = Kind::Mono;
         input
     }
     /// A number field, set against its right edge.

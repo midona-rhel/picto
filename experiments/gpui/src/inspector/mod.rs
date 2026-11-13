@@ -16,7 +16,6 @@ use crate::ui::{
     text_input::{self, TextInput},
 };
 use gpui::*;
-use picto_library::predicate::FilterClause;
 use picto_library::query::ItemScope;
 use picto_library::{RootDetails, RootId};
 use std::collections::HashSet;
@@ -578,13 +577,16 @@ impl Inspector {
                             .border_1()
                             .border_color(theme.contrast(10.)),
                     )
+                    // `ColorPalette`'s `onFilter`: the filter bar opens with
+                    // this colour in its colour filter.
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let clause = FilterClause::Color {
-                            color: color.clone(),
-                            delta_e: 20.,
-                        };
-                        this.session
-                            .update(cx, |session, cx| session.add_filter(clause, cx));
+                        let hex = format!("#{:06x}", format::lab_to_rgb(color.l, color.a, color.b));
+                        this.session.update(cx, |session, cx| {
+                            session.set_filter_bar_open(true, cx);
+                            let mut filters = session.filters.clone();
+                            filters.color = Some(hex);
+                            session.set_filters(filters, cx);
+                        });
                     })),
             );
         }

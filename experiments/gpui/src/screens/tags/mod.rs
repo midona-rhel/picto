@@ -2,7 +2,7 @@
 //! tags of the chosen group, in letter sections. A tag opens its editor;
 //! tags and groups have context menus; the titlebar holds the search.
 mod dialogs;
-mod model;
+pub mod model;
 
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
@@ -703,17 +703,20 @@ impl TagsScreen {
             else {
                 return;
             };
-            // The filter goes in first, so the grid is fetched once, with it.
-            session.set_filter(
-                Some(picto_library::predicate::FilterExpr::Clause(
-                    picto_library::predicate::FilterClause::Tags {
-                        tag_ids: vec![tag_id],
-                        mode: picto_library::predicate::SetMatchMode::Any,
-                    },
-                )),
-                cx,
-            );
-            session.navigate(all, cx);
+            // The filter bar shows the tag, as `showTagItems` sets it.
+            let name = session
+                .tags
+                .get(&tag_id.0)
+                .map(|tag| model::tag_name(&tag.namespace, &tag.subname))
+                .unwrap_or_default();
+            let filters = crate::grid::filters::Filters {
+                include_tags: vec![crate::grid::filters::TagChoice {
+                    tag_id: tag_id.0,
+                    name,
+                }],
+                ..Default::default()
+            };
+            session.navigate_with_filters(all, filters, cx);
         });
     }
 

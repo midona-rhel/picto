@@ -90,6 +90,9 @@ pub enum Entry {
     Submenu(Submenu),
     /// A row of colour swatches (`ColorPicker`).
     Swatches(Swatches),
+    /// A row the owner draws itself (`custom: true`), such as a panel of
+    /// controls.
+    Custom(Custom),
 }
 
 pub struct Item {
@@ -108,6 +111,8 @@ pub struct Item {
     keep_open: bool,
     /// Tells rows that share an action apart; see [`Menu::chosen_value`].
     value: Option<SharedString>,
+    /// What a right click on the row tells the owner (`contextAction`).
+    context_action: Option<&'static str>,
 }
 
 pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
@@ -123,6 +128,7 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
         excluded: false,
         keep_open: false,
         value: None,
+        context_action: None,
     }
 }
 
@@ -159,24 +165,24 @@ impl Item {
     }
     /// A value a filter leaves out: negative colour, struck through, with a
     /// cross in the check slot.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn excluded(mut self, excluded: bool) -> Self {
         self.excluded = excluded;
         self
     }
     /// Choosing the row tells the owner and leaves the menu open, so several
     /// toggles can be changed together.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn keep_open(mut self, keep_open: bool) -> Self {
         self.keep_open = keep_open;
         self
     }
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn keywords<S: Into<SharedString>>(mut self, words: impl IntoIterator<Item = S>) -> Self {
         self.keywords = words.into_iter().map(Into::into).collect();
+        self
+    }
+    /// A right click on the row tells the owner this action, with the
+    /// row's value, and leaves the menu open.
+    pub fn context_action(mut self, action: &'static str) -> Self {
+        self.context_action = Some(action);
         self
     }
 }
@@ -254,6 +260,30 @@ impl From<Swatches> for Entry {
     }
 }
 
+/// A row the owner draws: a view, at a height the owner gives, inside the
+/// row padding of `.customItem`. It is not a stop for the arrow keys, nor
+/// found by a search.
+pub struct Custom {
+    view: AnyView,
+    height: f32,
+}
+
+pub fn custom(view: impl Into<AnyView>, height: f32) -> Custom {
+    Custom {
+        view: view.into(),
+        height,
+    }
+}
+
+impl From<Custom> for Entry {
+    fn from(custom: Custom) -> Self {
+        Entry::Custom(custom)
+    }
+}
+
+/// `.customItem`: `padding: 0 6px`.
+const CUSTOM_PADDING: f32 = 6.;
+
 /// `ColorPicker`'s row: 18px swatches with 4px above and below.
 const SWATCH_ROW: f32 = 26.;
 const SWATCH: f32 = 18.;
@@ -278,6 +308,8 @@ enum Row {
     Separator,
     /// A swatch row: not a stop for the arrow keys, nor found by a search.
     Swatches(Path),
+    /// An owner's row, and its height in whole pixels.
+    Custom(Path, u32),
 }
 
 /// A rectangle in the coordinates of the window or display it is placed in.
@@ -379,6 +411,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
             }
             Entry::Submenu(_) if parent.is_some() => {}
             Entry::Swatches(_) => rows.push(Row::Swatches(path)),
+            Entry::Custom(custom) => rows.push(Row::Custom(path, custom.height.round() as u32)),
             _ => rows.push(Row::Entry(path)),
         }
     }
@@ -442,7 +475,7 @@ fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     let mut order = 0;
     let mut visit = |entry: &Entry, path: Path| {
         let found = match entry {
-            Entry::Separator | Entry::Swatches(_) => return,
+            Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => return,
             Entry::Item(item) if item.disabled => None,
             Entry::Item(item) => matching(&item.label, &item.keywords),
             Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
@@ -497,6 +530,7 @@ fn row_height(row: &Row) -> f32 {
         Row::Entry(_) => theme::CONTROL_SM,
         Row::Separator => SEPARATOR,
         Row::Swatches(_) => SWATCH_ROW,
+        Row::Custom(_, height) => *height as f32,
     }
 }
 
@@ -604,8 +638,13 @@ impl Menu {
     pub fn new(entries: Vec<Entry>, position: Point<Pixels>, cx: &mut Context<Self>) -> Self {
         let searchable = entries
             .iter()
-            .filter(|entry| !matches!(entry, Entry::Separator))
+            .filter(|entry| !matches!(entry, Entry::Separator | Entry::Custom(_)))
             .count();
+        // An owner's rows can hold fields and selects, which need the
+        // keyboard and the owner's window: such a menu draws in the window.
+        let custom = entries
+            .iter()
+            .any(|entry| matches!(entry, Entry::Custom(_)));
         let search = (searchable >= SEARCH_THRESHOLD).then(|| cx.new(TextInput::menu_search));
         let mut subscriptions = Vec::new();
         if let Some(search) = &search {
@@ -637,7 +676,11 @@ impl Menu {
             focus: cx.focus_handle(),
             closing: None,
             chosen: None,
-            presentation: presentation(),
+            presentation: if custom {
+                Presentation::InWindow
+            } else {
+                presentation()
+            },
             main: None,
             viewport: Rect::default(),
             screen: None,
@@ -659,8 +702,6 @@ impl Menu {
     }
 
     /// A width other than the usual 270px, for content that needs it.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn width(mut self, width: f32) -> Self {
         self.width = width;
         self
@@ -680,6 +721,15 @@ impl Menu {
             }
         }
         visit(&mut self.entries, action, checked);
+        cx.notify();
+    }
+
+    /// Replaces the rows while the menu is open, for a menu whose rows
+    /// follow what they change. The search, and the row highlighted by
+    /// position, stay.
+    pub fn set_entries(&mut self, entries: Vec<Entry>, cx: &mut Context<Self>) {
+        self.entries = entries;
+        self.close_submenu(cx);
         cx.notify();
     }
 
@@ -703,6 +753,12 @@ impl Menu {
     /// action ([`Item::value`], [`Swatch::value`]).
     pub fn chosen_value(&self) -> Option<SharedString> {
         self.chosen.clone()
+    }
+
+    /// Whether the keyboard is in the menu, its search or a field of an
+    /// owner's row.
+    pub fn holds_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx) || self.focus_handle(cx).is_focused(window)
     }
 
     /// Whether the menu has faded out and can be dropped.
@@ -757,9 +813,9 @@ impl Menu {
                 Row::Entry(path) => match self.entry(*path) {
                     Entry::Item(item) => !item.disabled,
                     Entry::Submenu(_) => true,
-                    Entry::Separator | Entry::Swatches(_) => false,
+                    Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => false,
                 },
-                Row::Separator | Row::Swatches(_) => false,
+                Row::Separator | Row::Swatches(_) | Row::Custom(..) => false,
             })
             .collect()
     }
@@ -769,9 +825,9 @@ impl Menu {
             Row::Entry(path) => match self.entry(*path) {
                 Entry::Item(item) => item.icon.is_some(),
                 Entry::Submenu(submenu) => submenu.icon.is_some(),
-                Entry::Separator | Entry::Swatches(_) => false,
+                Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => false,
             },
-            Row::Separator | Row::Swatches(_) => false,
+            Row::Separator | Row::Swatches(_) | Row::Custom(..) => false,
         })
     }
 
@@ -795,7 +851,7 @@ impl Menu {
         let mut found = 0;
         for entry in &self.entries {
             match entry {
-                Entry::Separator | Entry::Swatches(_) => {}
+                Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => {}
                 Entry::Item(_) => found += 1,
                 Entry::Submenu(submenu) => {
                     found += 1 + submenu
@@ -978,6 +1034,25 @@ impl Menu {
         }
     }
 
+    /// A right click on a row with a context action: the owner is told,
+    /// and the menu stays open.
+    fn choose_context(&mut self, path: Path, cx: &mut Context<Self>) {
+        if self.closing.is_some() {
+            return;
+        }
+        let Entry::Item(item) = self.entry(path) else {
+            return;
+        };
+        if item.disabled {
+            return;
+        }
+        if let Some(action) = item.context_action {
+            self.chosen = item.value.clone();
+            cx.emit(Event::Chosen(action));
+            cx.notify();
+        }
+    }
+
     fn toggle_submenu(
         &mut self,
         row: usize,
@@ -1045,7 +1120,7 @@ impl Menu {
                     ),
                     _ => None,
                 },
-                Row::Separator | Row::Swatches(_) => None,
+                Row::Separator | Row::Swatches(_) | Row::Custom(..) => None,
             })
             .fold(0f32, f32::max);
         (2. * PADDING + widest).ceil()
@@ -1328,8 +1403,18 @@ impl Menu {
                 this.left(cx);
             }))
             .capture_action(cx.listener(|this, _: &text_input::Commit, window, cx| {
-                this.confirm(window, cx);
-                cx.stop_propagation();
+                // A field in an owner's row keeps its Enter unless a row is
+                // highlighted.
+                let in_row = this.current.is_some()
+                    || this.opened().is_some_and(|(_, _, inside)| inside.is_some());
+                let in_search = this
+                    .search
+                    .as_ref()
+                    .is_some_and(|search| search.focus_handle(cx).is_focused(window));
+                if in_row || in_search {
+                    this.confirm(window, cx);
+                    cx.stop_propagation();
+                }
             }))
             .capture_action(cx.listener(|this, _: &text_input::Cancel, _, cx| {
                 this.dismiss(cx);
@@ -1405,7 +1490,9 @@ impl Menu {
         let (label, icon) = match entry {
             Entry::Item(item) => (item.label.clone(), item.icon),
             Entry::Submenu(submenu) => (submenu.label.clone(), submenu.icon),
-            Entry::Separator | Entry::Swatches(_) => (SharedString::default(), None),
+            Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => {
+                (SharedString::default(), None)
+            }
         };
         let item = match entry {
             Entry::Item(item) => Some(item),
@@ -1531,6 +1618,10 @@ impl Menu {
                     list = list.child(self.swatch_row(path, window, cx));
                     continue;
                 }
+                Row::Custom(path, height) => {
+                    list = list.child(self.custom_row(path, height, cx));
+                    continue;
+                }
                 Row::Separator => {
                     list = list.child(separator(cx));
                     continue;
@@ -1556,6 +1647,10 @@ impl Menu {
                             this.set_current(None, cx);
                         }
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, cx| this.choose_context(path, cx)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.choose(path, cx))),
                 // A submenu row keeps its highlight when the pointer leaves
                 // it for the submenu.
@@ -1640,6 +1735,10 @@ impl Menu {
                     list = list.child(self.swatch_row(path, window, cx));
                     continue;
                 }
+                Row::Custom(path, height) => {
+                    list = list.child(self.custom_row(path, height, cx));
+                    continue;
+                }
                 Row::Separator => {
                     list = list.child(separator(cx));
                     continue;
@@ -1664,6 +1763,10 @@ impl Menu {
                             this.set_submenu_current(None, cx);
                         }
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, _, cx| this.choose_context(path, cx)),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.choose(path, cx))),
                 _ => element,
             });
@@ -1860,6 +1963,33 @@ impl Menu {
             ));
         }
         line
+    }
+}
+
+impl Menu {
+    /// An owner's row: its view inside `.customItem`'s padding. Reaching it
+    /// takes the highlight off the menu's rows, as `onMouseEnter` does.
+    fn custom_row(&self, path: Path, height: u32, cx: &mut Context<Self>) -> Stateful<Div> {
+        let id = (
+            "menu-custom",
+            path.top * 1000 + path.child.map_or(0, |child| child + 1),
+        );
+        let Entry::Custom(custom) = self.entry(path) else {
+            return div().id(id);
+        };
+        div()
+            .id(id)
+            .relative()
+            .h(px(height as f32))
+            .flex_none()
+            .px(px(CUSTOM_PADDING))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.set_current(None, cx);
+                    this.leave_submenu(cx);
+                }
+            }))
+            .child(custom.view.clone())
     }
 }
 

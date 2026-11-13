@@ -2,7 +2,7 @@
 //! viewer. One model that every view reads, so a view repaints only for the
 //! kind of change it shows and no view owns another's state.
 use crate::backend::{self, Navigation, Reply, Request};
-use crate::grid::{nav, prefs::ViewPrefs};
+use crate::grid::{filters::Filters, nav, prefs::ViewPrefs};
 use crate::motion;
 use gpui::*;
 use picto_library::predicate::FilterExpr;
@@ -79,9 +79,9 @@ struct SavedGrid {
     selection: std::collections::BTreeSet<usize>,
     focus: Option<usize>,
     scroll: f32,
-    /// The search and filter the results were for.
+    /// The search and filters the results were for.
     search_text: String,
-    filter: Option<FilterExpr>,
+    filters: Filters,
 }
 
 pub struct Session {
@@ -138,6 +138,15 @@ pub struct Session {
     pub demo: Option<(&'static str, &'static str)>,
     search_text: String,
     pub filter: Option<FilterExpr>,
+    /// The filter bar's filters, which `filter` is built from.
+    pub filters: Filters,
+    /// Whether the filter bar shows under the titlebar.
+    pub filter_bar_open: bool,
+    /// Whether the filters stay when another destination opens.
+    pub filters_locked: bool,
+    /// A view change, and the last query sent before it was saved: pages of
+    /// that query or older bring the preferences from before it.
+    view_patch: Option<(u64, serde_json::Value)>,
     blobs: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
@@ -207,6 +216,10 @@ impl Session {
             demo: None,
             search_text: String::new(),
             filter: None,
+            filters: Filters::default(),
+            filter_bar_open: false,
+            filters_locked: false,
+            view_patch: None,
             blobs,
             library_cover,
             fixtures,
@@ -370,7 +383,7 @@ impl Session {
                     place: None,
                 });
                 self.history_index = self.history.len() - 1;
-                self.open(fallback, None, cx);
+                self.open(fallback, None, None, cx);
                 // What `open` kept of the grid on screen was the deleted
                 // destination's, not the fallback's.
                 self.saved.remove(&fallback);
@@ -425,22 +438,122 @@ impl Session {
         self.query(false, cx);
     }
 
-    /// Narrows the grid by one more clause, keeping the filters it has.
-    pub fn add_filter(
+    /// Replaces the filter bar's filters and narrows the grid by them.
+    pub fn set_filters(&mut self, filters: Filters, cx: &mut Context<Self>) {
+        if filters == self.filters {
+            return;
+        }
+        let filter = Self::filter_of(&filters);
+        self.filters = filters;
+        self.set_filter(filter, cx);
+    }
+
+    fn filter_of(filters: &Filters) -> Option<FilterExpr> {
+        let expr = filters.to_expr();
+        (expr != FilterExpr::default()).then_some(expr)
+    }
+
+    /// Shows or hides the filter bar.
+    pub fn set_filter_bar_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.filter_bar_open != open {
+            self.filter_bar_open = open;
+            cx.emit(Change::Results);
+        }
+    }
+
+    /// Keeps the filters when another destination opens, or not.
+    pub fn set_filters_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
+        if self.filters_locked != locked {
+            self.filters_locked = locked;
+            cx.emit(Change::Results);
+        }
+    }
+
+    /// Opens a destination with these filters, as a step of Back and
+    /// Forward (`navigateWithGridFilters`); on the destination already
+    /// showing, only the filters change.
+    pub fn navigate_with_filters(
         &mut self,
-        clause: picto_library::predicate::FilterClause,
+        index: usize,
+        filters: Filters,
         cx: &mut Context<Self>,
     ) {
-        let clause = FilterExpr::Clause(clause);
-        let filter = match self.filter.take() {
-            Some(FilterExpr::All(mut clauses)) => {
-                clauses.push(clause);
-                FilterExpr::All(clauses)
-            }
-            Some(other) => FilterExpr::All(vec![other, clause]),
-            None => clause,
+        if index == self.scope {
+            self.set_filters(filters, cx);
+            return;
+        }
+        self.record(Visit {
+            scope: index,
+            viewing: false,
+            place: None,
+        });
+        self.open(index, None, Some(filters), cx);
+    }
+
+    /// Changes the current destination's view (`gridController.updateView`)
+    /// and saves the change to its `view_pref` row (`saveViewPref`), as
+    /// `settings.view.patch` does: out of undo. With `refetch` the results
+    /// are fetched again behind the scope fade, as a new sort needs.
+    pub fn update_view(&mut self, patch: serde_json::Value, refetch: bool, cx: &mut Context<Self>) {
+        let Some(entry) = self.nav.get(self.scope) else {
+            return;
         };
-        self.set_filter(Some(filter), cx);
+        if entry.screen.is_some() {
+            return;
+        }
+        let scope = entry.scope.clone();
+        self.prefs = self.prefs.patched(&scope, &patch);
+        let mut merged = match self.view_patch.take() {
+            Some((_, serde_json::Value::Object(earlier))) => earlier,
+            _ => serde_json::Map::new(),
+        };
+        let fields = patch.as_object().cloned().unwrap_or_default();
+        merged.extend(fields.clone());
+        self.view_patch = Some((self.generation, serde_json::Value::Object(merged)));
+        let key = crate::grid::prefs::scope_key(&scope);
+        let _ = self.sender.send(Request::Job(Box::new(move |library| {
+            let saved = library.update_auxiliary_json(
+                "settings.view.patch",
+                "Change view preferences",
+                "view_pref",
+                &key,
+                false,
+                move |stored| {
+                    Ok(Some(
+                        crate::settings::model::patched(stored, &fields).to_string(),
+                    ))
+                },
+            );
+            if let Err(error) = saved {
+                eprintln!("picto: could not save the view of {key}: {error}");
+            }
+        })));
+        if refetch {
+            self.close_viewer(cx);
+            if matches!(self.transition, Transition::Idle) {
+                self.transition = Transition::FadingOut(Instant::now());
+            }
+            self.query(false, cx);
+            cx.emit(Change::Navigation);
+        } else {
+            cx.emit(Change::Results);
+        }
+    }
+
+    /// The preferences a page of `generation` brought, with any view change
+    /// made after that query was sent.
+    fn fresh_prefs(&mut self, generation: u64, prefs: ViewPrefs) -> ViewPrefs {
+        match &self.view_patch {
+            Some((sent, patch)) if generation <= *sent => {
+                let scope = self.nav.get(self.scope).map(|entry| entry.scope.clone());
+                scope.map_or(prefs.clone(), |scope| prefs.patched(&scope, patch))
+            }
+            Some(_) => {
+                self.view_patch = None;
+                prefs
+            }
+            None => prefs,
+        }
     }
 
     /// The open library's folder, the one that holds its blobs.
@@ -474,6 +587,7 @@ impl Session {
                     self.query(false, cx);
                 }
                 Reply::Page(generation, append, page, prefs) if generation == self.generation => {
+                    let prefs = self.fresh_prefs(generation, prefs);
                     if !append && matches!(self.transition, Transition::FadingOut(_)) {
                         // The previous grid is still fading out. Hold the
                         // destination until it is gone.
@@ -563,8 +677,10 @@ impl Session {
             viewing: false,
             place: None,
         });
-        // A destination chosen afresh opens at its top.
-        self.open(index, None, cx);
+        // A destination chosen afresh opens at its top, without filters
+        // unless they are locked.
+        let filters = (!self.filters_locked).then(Filters::default);
+        self.open(index, None, filters, cx);
     }
 
     /// Adds a place after the current one, dropping any Forward steps.
@@ -599,13 +715,22 @@ impl Session {
             cx.emit(Change::Navigation);
             return;
         }
-        // Another destination comes back as it was left, when nothing has
-        // changed what it would show.
+        // Another destination comes back with the filters it had, unless
+        // they are locked, and as it was left when nothing has changed what
+        // it would show.
+        let filters = if self.filters_locked {
+            self.filters.clone()
+        } else {
+            self.saved
+                .get(&visit.scope)
+                .map(|saved| saved.filters.clone())
+                .unwrap_or_default()
+        };
         let saved = self
             .saved
             .remove(&visit.scope)
-            .filter(|saved| saved.search_text == self.search_text && saved.filter == self.filter);
-        self.open(visit.scope, saved, cx);
+            .filter(|saved| saved.search_text == self.search_text && saved.filters == filters);
+        self.open(visit.scope, saved, Some(filters), cx);
     }
 
     /// What the current grid holds, to return to.
@@ -631,7 +756,7 @@ impl Session {
                 focus: self.focus,
                 scroll: self.grid_scroll,
                 search_text: self.search_text.clone(),
-                filter: self.filter.clone(),
+                filters: self.filters.clone(),
             },
         );
     }
@@ -663,8 +788,20 @@ impl Session {
         cx.emit(Change::Results);
     }
 
-    fn open(&mut self, index: usize, saved: Option<SavedGrid>, cx: &mut Context<Self>) {
+    /// Opens a destination: a saved grid, or its results fetched with
+    /// `filters` in place of the current ones when given.
+    fn open(
+        &mut self,
+        index: usize,
+        saved: Option<SavedGrid>,
+        filters: Option<Filters>,
+        cx: &mut Context<Self>,
+    ) {
         self.save_grid();
+        if let Some(filters) = filters {
+            self.filter = Self::filter_of(&filters);
+            self.filters = filters;
+        }
         self.scope = index;
         self.pending_page = None;
         self.pending_restore = None;

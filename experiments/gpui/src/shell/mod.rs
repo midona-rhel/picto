@@ -5,9 +5,16 @@
 pub mod library;
 pub mod sidebar;
 pub mod toolbar;
+pub mod view_menu;
 
 use crate::backend::Screen;
-use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
+use crate::grid::{
+    self, GridView,
+    filter_bar::{BarEvent, FilterBar},
+    filter_picker::{FilterPicker, PickerClosed},
+    nav,
+    thumbnails::Thumbnails,
+};
 use crate::inspector::Inspector;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
@@ -70,6 +77,13 @@ pub struct Shell {
     /// The open context menu. It stays here while it fades out.
     menu: Option<Entity<Menu>>,
     _menu: Option<Subscription>,
+    /// The filter bar under the titlebar, over the grid.
+    filter_bar: Entity<FilterBar>,
+    /// The filter bar's open tag or folder picker.
+    picker: Option<(Entity<FilterPicker>, Subscription)>,
+    /// The view menu's panels while it is open, which show the rails.
+    view_panels: Vec<Entity<view_menu::ViewOptions>>,
+    _view_panels: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -128,6 +142,30 @@ impl Shell {
             screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
         });
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
+        let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
+        let mut subscriptions = subscriptions;
+        subscriptions.extend([
+            // The bar's height belongs to the layout here.
+            cx.observe(&filter_bar, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &filter_bar,
+                window,
+                |this, _, event: &BarEvent, window, cx| match event {
+                    BarEvent::Menu(menu) => {
+                        this._menu = None;
+                        this.show_menu(menu.clone(), window, cx);
+                    }
+                    BarEvent::Picker(picker) => this.show_picker(picker.clone(), window, cx),
+                },
+            ),
+            cx.subscribe_in(
+                &toolbar,
+                window,
+                |this, _, event: &toolbar::ViewMenuRequested, window, cx| {
+                    this.open_view_menu(event.0, window, cx)
+                },
+            ),
+        ]);
         // A screen's titlebar controls take the grid's place in the toolbar.
         let controls = duplicates.read(cx).toolbar();
         let tag_controls = tags.read(cx).toolbar();
@@ -167,13 +205,81 @@ impl Shell {
             rails: motion::Fades::default(),
             menu: None,
             _menu: None,
+            filter_bar,
+            picker: None,
+            view_panels: Vec::new(),
+            _view_panels: Vec::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Opens the view menu (`GridViewMenu`) at `position`, and keeps the
+    /// button lit while it is open.
+    fn open_view_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (menu, panels) = view_menu::build(
+            &self.session,
+            position,
+            !self.sidebar_collapsed,
+            !self.inspector_collapsed,
+            cx,
+        );
+        let mut subscriptions = panels
+            .iter()
+            .map(|panel| {
+                cx.subscribe(
+                    panel,
+                    |this, _, event: &view_menu::RailToggled, cx| match event {
+                        view_menu::RailToggled::Sidebar => this.toggle_rails(true, false, cx),
+                        view_menu::RailToggled::Inspector => this.toggle_rails(false, true, cx),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        subscriptions.push(cx.observe_release(&menu, |this, _, _| this.view_panels.clear()));
+        self.view_panels = panels.to_vec();
+        self._view_panels = subscriptions;
+        self._menu = None;
+        self.toolbar
+            .update(cx, |toolbar, cx| toolbar.watch_view_menu(menu.clone(), cx));
+        self.show_menu(menu, window, cx);
+    }
+
+    /// Shows the filter bar's tag or folder picker with its search focused.
+    fn show_picker(
+        &mut self,
+        picker: Entity<FilterPicker>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu(cx);
+        let closed = cx.subscribe_in(&picker, window, |this, _, _: &PickerClosed, window, cx| {
+            this.picker = None;
+            window.focus(&this.focus, cx);
+            cx.notify();
+        });
+        window.focus(&picker.focus_handle(cx), cx);
+        self.picker = Some((picker, closed));
+        cx.notify();
     }
 
     /// Hides or shows the rails. The sidebar slides out over 50 ms and the
     /// inspector over 100 ms; the grid takes the freed width at once.
     fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
+        let shown = (
+            !(self.sidebar_collapsed ^ sidebar),
+            !(self.inspector_collapsed ^ inspector),
+        );
+        for panel in &self.view_panels {
+            panel.update(cx, |panel, cx| {
+                (panel.sidebar_shown, panel.inspector_shown) = shown;
+                cx.notify();
+            });
+        }
         if sidebar {
             self.sidebar_collapsed = !self.sidebar_collapsed;
             self.rails.set(
@@ -466,6 +572,7 @@ impl Render for Shell {
         } else {
             inspector_width
         };
+        let filter_bar = !viewer_open && screen.is_none() && self.session.read(cx).filter_bar_open;
         let sidebar_hidden = self.rails.value(("sidebar", 0));
         let inspector_hidden = self.rails.value(("inspector", 0));
         let fill = || StyleRefinement::default().size_full();
@@ -493,7 +600,27 @@ impl Render for Shell {
                     })
                     .into_any_element(),
                 // The grid keeps its scroll position and thumbnails while the
-                // viewer is open; it is only not painted.
+                // viewer is open; it is only not painted. The filter bar sits
+                // above it, aligned with the titlebar's panel edges even while
+                // a rail is hidden.
+                None if filter_bar => div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex_none()
+                            .ml(px(theme::SIDEBAR_WIDTH - left))
+                            .mr(px(inspector_width - right))
+                            .child(self.filter_bar.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(self.grid.clone().cached(fill())),
+                    )
+                    .into_any_element(),
                 None => self.grid.clone().cached(fill()).into_any_element(),
             });
         let sidebar = (sidebar_hidden < 1.).then(|| {
@@ -709,10 +836,11 @@ impl Render for Shell {
             // Unless its action moved the keyboard somewhere, such as into
             // the name field. A menu shown in pop-up windows can outlive
             // this by a moment, still holding the keyboard.
-            if window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window) {
+            if window.focused(cx).is_none() || menu.read(cx).holds_focus(window, cx) {
                 window.focus(&self.focus, cx);
             }
         }
+        root = root.children(self.picker.as_ref().map(|(picker, _)| picker.clone()));
         root = root.children(self.menu.clone());
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());

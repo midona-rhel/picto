@@ -2,6 +2,10 @@
 //! fades repaint the grid and nothing else.
 pub mod art;
 pub mod empty;
+pub mod filter_bar;
+pub mod filter_editors;
+pub mod filter_picker;
+pub mod filters;
 pub mod format;
 pub mod layout;
 pub mod marquee;
@@ -625,10 +629,19 @@ impl GridView {
                             })
                             .truncate()
                             .line_height(px(15.))
-                            .child(if item.name.is_empty() {
-                                "Untitled".to_owned()
-                            } else {
-                                item.name.clone()
+                            .child({
+                                let name = if item.name.is_empty() {
+                                    "Untitled".to_owned()
+                                } else {
+                                    item.name.clone()
+                                };
+                                // Show Extension adds `.EXT` after it.
+                                let extension = format::label_extension(&item.mime);
+                                if prefs.show_extension && !extension.is_empty() {
+                                    format!("{name}.{}", extension.to_uppercase())
+                                } else {
+                                    name
+                                }
                             }),
                     ),
             );
@@ -774,7 +787,7 @@ impl Render for GridView {
         // The scrollbar's gutter is not grid: tiles lay out beside it.
         let width = self.grid_width();
         let viewport = f32::from(self.bounds.size.height);
-        let top = self.scroll_top();
+        let mut top = self.scroll_top();
         // Any scroll ends the hover and closes the preview at once; the
         // hover comes back 80 ms after the last one, where the pointer is.
         if top != self.last_top {
@@ -824,14 +837,33 @@ impl Render for GridView {
                     // `gridLayoutModel.ts`: an unknown shape lays out as 3:2.
                     .map(|item| aspect(item).unwrap_or(1.5))
                     .collect::<Vec<_>>();
-                self.layout = Layout::compute(
-                    &aspects,
-                    width,
-                    session.tile,
-                    prefs.gap,
-                    prefs.mode,
-                    text_height,
+                let previous = std::mem::replace(
+                    &mut self.layout,
+                    Layout::compute(
+                        &aspects,
+                        width,
+                        session.tile,
+                        prefs.gap,
+                        prefs.mode,
+                        text_height,
+                    ),
                 );
+                // The same items laid out anew (zoom, spacing, layout mode,
+                // labels, width): the topmost visible tile stays in place,
+                // as `CanvasGrid` keeps it.
+                if self.layout_key.is_some()
+                    && let Some(anchored) = layout::scroll_anchor(
+                        &previous.tiles,
+                        &self.layout.tiles,
+                        &session.selection,
+                        top,
+                        viewport,
+                    )
+                    && anchored != top
+                {
+                    top = anchored;
+                    self.scroll.set_offset(point(px(0.), px(-anchored)));
+                }
                 self.layout_key = key;
             }
             if let Some(marquee) = &mut self.marquee {
