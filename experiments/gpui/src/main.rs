@@ -104,6 +104,8 @@ fn main() {
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
             ui::modal::bind(cx);
+            ui::tag_token_input::bind(cx);
+            shell::sidebar::bind(cx);
             ui::overlay_shell::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);

@@ -1,8 +1,10 @@
-//! The folder picker the inspector opens (`FolderPickerPanel.tsx` in its
-//! `OverlayShell`, with `FolderTree`): the folder tree with a search, the
-//! items' folders checked, a click that adds the items to a folder or takes
-//! them out at once, the recent and selected views, and New Subfolder and
-//! New Sibling Folder from a row's menu.
+//! The folder picker (`FolderPickerPanel.tsx` in its `OverlayShell`, with
+//! `FolderTree`): the folder tree with a search, the recent and selected
+//! views, and New Subfolder and New Sibling Folder from a row's menu. The
+//! inspector opens it with the items' folders checked, a click adding the
+//! items to a folder or taking them out at once; the sidebar opens it in
+//! its move mode (`onApplyFolderParent`), choosing one new parent, Library
+//! for the top level, among the folders the moving ones can go under.
 use super::membership;
 use crate::backend::Navigation;
 use crate::session::Session;
@@ -50,6 +52,15 @@ impl View {
 pub enum Event {
     /// Add the items to the folder (`add`) or take them out.
     Toggle { folder: FolderId, add: bool },
+    /// Move mode's Move: the chosen parent, `None` for Library.
+    MoveTo(Option<FolderId>),
+}
+
+/// The move mode: the folders that can be chosen, and whether Library (the
+/// top level) is.
+struct ParentMode {
+    available: HashSet<FolderId>,
+    root: bool,
 }
 
 impl EventEmitter<Event> for FolderPicker {}
@@ -217,6 +228,7 @@ pub struct FolderPicker {
     create: Option<Create>,
     /// The keyboard goes back to the search at the next frame.
     refocus: bool,
+    parent_mode: Option<ParentMode>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -253,6 +265,7 @@ impl FolderPicker {
             _menu: None,
             create: None,
             refocus: false,
+            parent_mode: None,
             _subscriptions: subscriptions,
         }
     }
@@ -278,6 +291,7 @@ impl FolderPicker {
             WIDTH,
             HEIGHT,
         );
+        self.parent_mode = None;
         self.query.clear();
         self.search.update(cx, |search, cx| search.clear(cx));
         self.view = View::All;
@@ -290,6 +304,51 @@ impl FolderPicker {
         let handle = self.search.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
         cx.notify();
+    }
+
+    /// The move mode: `available` are the folders the moving ones can go
+    /// under, `current` their shared parent (Library when `None`).
+    pub fn open_for_parent(
+        &mut self,
+        anchor: Option<Point<f32>>,
+        available: Vec<FolderId>,
+        current: Option<FolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(anchor, current.into_iter().collect(), window, cx);
+        self.parent_mode = Some(ParentMode {
+            available: available.into_iter().collect(),
+            root: current.is_none(),
+        });
+    }
+
+    /// Library's row: in move mode, unless a search leaves it out.
+    fn shows_root(&self) -> bool {
+        self.parent_mode.is_some()
+            && (self.query.is_empty() || "library".contains(&self.query.to_lowercase()))
+    }
+
+    /// The rows the keyboard reaches before the tree's.
+    fn key_offset(&self) -> usize {
+        usize::from(self.shows_root())
+    }
+
+    /// Move: the chosen parent goes to the owner, and the picker closes.
+    fn apply_parent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mode) = &self.parent_mode else {
+            return;
+        };
+        let parent = if mode.root {
+            None
+        } else {
+            match self.selected.iter().next() {
+                Some(folder) => Some(*folder),
+                None => return,
+            }
+        };
+        cx.emit(Event::MoveTo(parent));
+        self.close(window, cx);
     }
 
     /// The items' folders changed (or arrived).
@@ -313,7 +372,14 @@ impl FolderPicker {
     }
 
     fn all_folders(&self, cx: &App) -> Vec<Folder> {
-        folders(&self.session.read(cx).nav)
+        let all = folders(&self.session.read(cx).nav);
+        match &self.parent_mode {
+            Some(mode) => all
+                .into_iter()
+                .filter(|folder| mode.available.contains(&folder.id))
+                .collect(),
+            None => all,
+        }
     }
 
     fn visible(&self, cx: &App) -> Vec<Row> {
@@ -340,6 +406,13 @@ impl FolderPicker {
 
     /// `handleToggle` for the inspector's items: added or taken out at once.
     fn toggle(&mut self, folder: FolderId, cx: &mut Context<Self>) {
+        // Move mode chooses one parent and moves nothing yet.
+        if let Some(mode) = &mut self.parent_mode {
+            mode.root = false;
+            self.selected = [folder].into();
+            cx.notify();
+            return;
+        }
         self.dirty = true;
         let add = membership::toggle(&mut self.selected, folder);
         if add {
@@ -355,24 +428,31 @@ impl FolderPicker {
             return false;
         }
         let rows = self.visible(cx);
+        let offset = self.key_offset();
+        let targets = rows.len() + offset;
         match key {
             Nav::Next => {
                 self.view = self.view.next();
                 self.focus_index = None;
             }
             Nav::Down => {
-                if !rows.is_empty() {
-                    self.focus_index = Some(
-                        self.focus_index
-                            .map_or(0, |at| (at + 1).min(rows.len() - 1)),
-                    );
+                if targets > 0 {
+                    self.focus_index =
+                        Some(self.focus_index.map_or(0, |at| (at + 1).min(targets - 1)));
                 }
             }
             Nav::Up => {
                 self.focus_index = Some(self.focus_index.map_or(0, |at| at.saturating_sub(1)));
             }
             Nav::Confirm => {
-                if let Some(row) = rows.get(self.focus_index.unwrap_or(0)) {
+                let at = self.focus_index.unwrap_or(0);
+                if offset == 1 && at == 0 {
+                    // Library: the top level.
+                    if let Some(mode) = &mut self.parent_mode {
+                        mode.root = true;
+                    }
+                    self.selected.clear();
+                } else if let Some(row) = rows.get(at - offset) {
                     self.toggle(row.folder.id, cx);
                 }
             }
@@ -385,6 +465,10 @@ impl FolderPicker {
 
     fn reveal_focus(&mut self) {
         let Some(at) = self.focus_index else { return };
+        // Library's row sits above the scrolling tree.
+        let Some(at) = at.checked_sub(self.key_offset()) else {
+            return;
+        };
         let top = 4. + at as f32 * ROW;
         let viewport = f32::from(self.scroll.bounds().size.height);
         let scrolled = -f32::from(self.scroll.offset().y);
@@ -591,7 +675,7 @@ impl FolderPicker {
         let theme = theme::theme(cx);
         let folder = row.folder.clone();
         let selected = self.selected.contains(&folder.id);
-        let focused = self.focus_index == Some(index);
+        let focused = self.focus_index == Some(index + self.key_offset());
         let indent = 4. + row.depth as f32 * 24.;
         let group = SharedString::from(format!("folder-row-{index}"));
         // `.row::before`: the highlight, kept clear of the tree's indent.
@@ -754,6 +838,48 @@ impl FolderPicker {
             )
     }
 
+    /// Move mode's Library row (`.checkRow`): the top level.
+    fn root_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = theme::theme(cx);
+        let chosen = self.parent_mode.as_ref().is_some_and(|mode| mode.root);
+        let focused = self.focus_index == Some(0);
+        let mut row = div()
+            .id("folder-picker-library")
+            .h(px(theme::CONTROL_MD))
+            .flex_none()
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(theme::RADIUS_MD))
+            .cursor_pointer()
+            .text(theme::TEXT_MD)
+            .text_color(theme.text())
+            .child(overlay_shell::check_box(
+                if chosen { Mark::Checked } else { Mark::Empty },
+                cx,
+            ))
+            .child(ui::icon("picker-folder", 14., theme.text()).flex_none())
+            .child(div().flex_1().min_w_0().truncate().child("Library"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                if let Some(mode) = &mut this.parent_mode {
+                    mode.root = true;
+                }
+                this.selected.clear();
+                cx.notify();
+            }));
+        row = if chosen {
+            row.bg(theme.surface_active())
+                .border_1()
+                .border_color(theme.contrast(25.))
+        } else if focused {
+            row.border_1().border_color(theme.border_focus())
+        } else {
+            row.hover(move |style| style.bg(theme.subtle_overlay()))
+        };
+        row.into_any_element()
+    }
+
     fn create_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let create = self.create.as_ref()?;
         let typed = !create.name.read(cx).value().trim().is_empty();
@@ -867,6 +993,7 @@ impl Render for FolderPicker {
         );
 
         let rows = self.visible(cx);
+        let root = self.shows_root().then(|| self.root_row(cx));
         let body = if rows.is_empty() {
             div()
                 .h(px(60.))
@@ -951,15 +1078,29 @@ impl Render for FolderPicker {
         })
         .header(search)
         .header(tabs)
-        .child(body)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .children(root)
+                .child(body),
+        )
         .footer(hints)
-        .footer(
+        .footer(if self.parent_mode.is_some() {
+            div().ml_auto().flex_none().child(
+                ui::action_button("folder-picker-move", ButtonLook::Primary)
+                    .label("Move")
+                    .on_click(cx.listener(|this, _, window, cx| this.apply_parent(window, cx))),
+            )
+        } else {
             div().ml_auto().flex_none().child(
                 overlay_shell::hint(cx)
                     .child("Close ")
                     .child(overlay_shell::kbd("Esc", cx)),
-            ),
-        );
+            )
+        });
         let mut root = div().child(shell).children(self.create_dialog(cx));
         if let Some(menu) = self.menu.clone() {
             let view = window.viewport_size();

@@ -3,7 +3,7 @@
 //! several. Layout follows InspectorSkeleton, InspectorField, TagChip and
 //! PropertyRow.
 mod edits;
-mod folder_picker;
+pub mod folder_picker;
 mod membership;
 mod scope;
 mod selection;
@@ -250,8 +250,9 @@ impl Inspector {
             cx.subscribe(
                 &folder_picker,
                 |this, _, event: &folder_picker::Event, cx| {
-                    let folder_picker::Event::Toggle { folder, add } = *event;
-                    this.set_membership(folder, add, cx);
+                    if let folder_picker::Event::Toggle { folder, add } = *event {
+                        this.set_membership(folder, add, cx);
+                    }
                 },
             ),
             // Enter, or leaving the address being edited, saves it.

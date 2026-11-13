@@ -376,6 +376,18 @@ impl Shell {
                 cx.propagate();
             }
         }))
+        .on_action(cx.listener(|this, _: &NewSmartFolder, window, cx| {
+            this.sidebar
+                .update(cx, |sidebar, cx| sidebar.new_top_smart_folder(window, cx));
+        }))
+        .on_action(cx.listener(|this, _: &FolderAutoTags, window, cx| {
+            let opened = this
+                .sidebar
+                .update(cx, |sidebar, cx| sidebar.auto_tags_shortcut(window, cx));
+            if !opened {
+                cx.propagate();
+            }
+        }))
         .on_action(cx.listener(|this, _: &AddTags, window, cx| this.pick(Picker::Tags, window, cx)))
         .on_action(
             cx.listener(|this, _: &AddToFolders, window, cx| {

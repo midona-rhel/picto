@@ -90,6 +90,31 @@ pub enum Entry {
     Submenu(Submenu),
     /// A row of colour swatches (`ColorPicker`).
     Swatches(Swatches),
+    /// A view of the owner's drawn in place of rows, as a menu entry with
+    /// `custom` content is (the icon picker in "Change Icon"). It handles
+    /// its own pointer; the arrow keys and the search pass over it.
+    View(ViewEntry),
+}
+
+pub struct ViewEntry {
+    view: AnyView,
+    width: f32,
+    height: f32,
+}
+
+/// A view shown in the menu at this size, for content that is not rows.
+pub fn view(view: impl Into<AnyView>, width: f32, height: f32) -> ViewEntry {
+    ViewEntry {
+        view: view.into(),
+        width,
+        height,
+    }
+}
+
+impl From<ViewEntry> for Entry {
+    fn from(view: ViewEntry) -> Self {
+        Entry::View(view)
+    }
 }
 
 pub struct Item {
@@ -282,6 +307,8 @@ enum Row {
     Separator,
     /// A swatch row: not a stop for the arrow keys, nor found by a search.
     Swatches(Path),
+    /// A view entry and its height in pixels.
+    View(Path, u32),
 }
 
 /// A rectangle in the coordinates of the window or display it is placed in.
@@ -401,6 +428,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
             }
             Entry::Submenu(_) if parent.is_some() => {}
             Entry::Swatches(_) => rows.push(Row::Swatches(path)),
+            Entry::View(view) => rows.push(Row::View(path, view.height.round() as u32)),
             _ => rows.push(Row::Entry(path)),
         }
     }
@@ -464,7 +492,7 @@ fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     let mut order = 0;
     let mut visit = |entry: &Entry, path: Path| {
         let found = match entry {
-            Entry::Separator | Entry::Swatches(_) => return,
+            Entry::Separator | Entry::Swatches(_) | Entry::View(_) => return,
             Entry::Item(item) if item.disabled => None,
             Entry::Item(item) => matching(&item.label, &item.keywords),
             Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
@@ -519,6 +547,7 @@ fn row_height(row: &Row) -> f32 {
         Row::Entry(_) => theme::CONTROL_SM,
         Row::Separator => SEPARATOR,
         Row::Swatches(_) => SWATCH_ROW,
+        Row::View(_, height) => *height as f32,
     }
 }
 
@@ -793,9 +822,9 @@ impl Menu {
                 Row::Entry(path) => match self.entry(*path) {
                     Entry::Item(item) => !item.disabled,
                     Entry::Submenu(_) => true,
-                    Entry::Separator | Entry::Swatches(_) => false,
+                    Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
                 },
-                Row::Separator | Row::Swatches(_) => false,
+                Row::Separator | Row::Swatches(_) | Row::View(..) => false,
             })
             .collect()
     }
@@ -805,9 +834,9 @@ impl Menu {
             Row::Entry(path) => match self.entry(*path) {
                 Entry::Item(item) => item.icon.is_some(),
                 Entry::Submenu(submenu) => submenu.icon.is_some(),
-                Entry::Separator | Entry::Swatches(_) => false,
+                Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
             },
-            Row::Separator | Row::Swatches(_) => false,
+            Row::Separator | Row::Swatches(_) | Row::View(..) => false,
         })
     }
 
@@ -831,7 +860,7 @@ impl Menu {
         let mut found = 0;
         for entry in &self.entries {
             match entry {
-                Entry::Separator | Entry::Swatches(_) => {}
+                Entry::Separator | Entry::Swatches(_) | Entry::View(_) => {}
                 Entry::Item(_) => found += 1,
                 Entry::Submenu(submenu) => {
                     found += 1 + submenu
@@ -1085,6 +1114,10 @@ impl Menu {
                                 SHORTCUT_GAP + measure(shortcut, theme::TEXT_CAPTION)
                             }),
                     ),
+                    _ => None,
+                },
+                Row::View(path, _) => match self.entry(*path) {
+                    Entry::View(view) => Some(view.width - 2. * PADDING),
                     _ => None,
                 },
                 Row::Separator | Row::Swatches(_) => None,
@@ -1472,7 +1505,9 @@ impl Menu {
         let (label, icon) = match entry {
             Entry::Item(item) => (item.label.clone(), item.icon),
             Entry::Submenu(submenu) => (submenu.label.clone(), submenu.icon),
-            Entry::Separator | Entry::Swatches(_) => (SharedString::default(), None),
+            Entry::Separator | Entry::Swatches(_) | Entry::View(_) => {
+                (SharedString::default(), None)
+            }
         };
         let item = match entry {
             Entry::Item(item) => Some(item),
@@ -1598,6 +1633,10 @@ impl Menu {
                     list = list.child(self.swatch_row(path, window, cx));
                     continue;
                 }
+                Row::View(path, height) => {
+                    list = list.child(self.view_row(path, height));
+                    continue;
+                }
                 Row::Separator => {
                     list = list.child(separator(cx));
                     continue;
@@ -1715,6 +1754,10 @@ impl Menu {
                 Row::Entry(path) => path,
                 Row::Swatches(path) => {
                     list = list.child(self.swatch_row(path, window, cx));
+                    continue;
+                }
+                Row::View(path, height) => {
+                    list = list.child(self.view_row(path, height));
                     continue;
                 }
                 Row::Separator => {
@@ -1950,6 +1993,21 @@ impl Menu {
             ));
         }
         line
+    }
+}
+
+impl Menu {
+    /// A view entry, at its own size.
+    fn view_row(&self, path: Path, height: u32) -> Stateful<Div> {
+        let Entry::View(entry) = self.entry(path) else {
+            return div().id("menu-view");
+        };
+        div()
+            .id(("menu-view", path.top))
+            .relative()
+            .h(px(height as f32))
+            .flex_none()
+            .child(entry.view.clone())
     }
 }
 

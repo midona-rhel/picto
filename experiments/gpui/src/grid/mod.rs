@@ -1,6 +1,7 @@
 //! The grid of results. Its own view, so scrolling, thumbnail reveals and
 //! fades repaint the grid and nothing else.
 pub mod art;
+pub mod drag;
 pub mod empty;
 pub mod format;
 pub mod layout;
@@ -68,6 +69,12 @@ pub struct GridView {
     marquee: Option<marquee::Marquee>,
     /// The click that ends a rubber band selects nothing.
     swallow_click: bool,
+    /// A press on a tile that becomes a drag after 5px: the tile, and where.
+    press: Option<(usize, Point<Pixels>)>,
+    /// The tile's selected items are being dragged.
+    dragging: bool,
+    /// The click that ends a drag selects nothing.
+    swallow_tile_click: bool,
     preview: preview::HoverPreview,
     /// The broken-thumbnail and font artwork.
     art: Option<art::Art>,
@@ -194,6 +201,9 @@ impl GridView {
             text_height: 0.,
             marquee: None,
             swallow_click: false,
+            press: None,
+            dragging: false,
+            swallow_tile_click: false,
             preview: preview::HoverPreview::default(),
             art: None,
             _session: subscription,
@@ -361,8 +371,15 @@ impl GridView {
     /// keeps what is selected.
     fn pressed(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.swallow_click = false;
+        self.swallow_tile_click = false;
         let (x, y) = self.local(event.position);
-        if x < 0. || x >= self.grid_width() || self.image_at(event.position).is_some() {
+        if x < 0. || x >= self.grid_width() {
+            return;
+        }
+        // A press on an image may become a drag of the items.
+        if let Some((index, _, _)) = self.image_at(event.position) {
+            self.press = Some((index, event.position));
+            cx.notify();
             return;
         }
         let modifiers = event.modifiers;
@@ -376,6 +393,103 @@ impl GridView {
             (x, y),
             base,
         ));
+        cx.notify();
+    }
+
+    /// The pointer moved with the button held after a press on a tile:
+    /// past 5px the selection, or that tile if it is not selected, is
+    /// dragged (`CanvasGrid.tsx`), and the ghost follows the pointer.
+    fn drag_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let drags = drag::model(cx);
+        if self.dragging {
+            drags.update(cx, |drags, cx| {
+                if let Some(items) = &mut drags.items {
+                    items.position = position;
+                    cx.emit(drag::DragEvent::Moved);
+                }
+            });
+            cx.notify();
+            return;
+        }
+        let Some((index, from)) = self.press else {
+            return;
+        };
+        if !drag::past_threshold(from, position) {
+            return;
+        }
+        let items = {
+            let session = self.session.read(cx);
+            let theme = theme::theme(cx);
+            let indices = if session.selection.contains(&index) {
+                session.selection.iter().copied().collect::<Vec<_>>()
+            } else {
+                vec![index]
+            };
+            let chosen = indices
+                .iter()
+                .filter_map(|index| session.items.get(*index))
+                .collect::<Vec<_>>();
+            drag::ItemDrag {
+                roots: chosen.iter().map(|item| item.root_id).collect(),
+                source: session
+                    .nav
+                    .get(session.displayed)
+                    .map(|entry| entry.scope.clone())
+                    .unwrap_or(picto_library::query::ItemScope::All),
+                covers: chosen
+                    .iter()
+                    .take(3)
+                    .map(|item| drag::Cover {
+                        thumbnail: session.thumbnail(&item.content_hash),
+                        matte: item
+                            .palette
+                            .first()
+                            .map(|color| rgb(format::lab_to_rgb(color.l, color.a, color.b)))
+                            .unwrap_or(theme.background()),
+                    })
+                    .collect(),
+                position,
+            }
+        };
+        if items.roots.is_empty() {
+            self.press = None;
+            return;
+        }
+        for (holder, cover) in ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"]
+            .into_iter()
+            .zip(items.covers.iter().map(Some).chain(std::iter::repeat(None)))
+        {
+            let resource = cover.map(|cover| Resource::Path(cover.thumbnail.clone().into()));
+            self.thumbnails
+                .update(cx, |thumbnails, _| thumbnails.pin(holder, resource));
+        }
+        self.dragging = true;
+        self.pointer_left(cx);
+        drags.update(cx, |drags, cx| {
+            drags.items = Some(items);
+            cx.emit(drag::DragEvent::Moved);
+        });
+        cx.notify();
+    }
+
+    /// The button came up after a press on a tile: a drag hands its items
+    /// to whatever is under the pointer, and the click it makes selects
+    /// nothing.
+    fn drag_released(&mut self, cx: &mut Context<Self>) {
+        self.press = None;
+        if !std::mem::take(&mut self.dragging) {
+            return;
+        }
+        self.swallow_tile_click = true;
+        for holder in ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"] {
+            self.thumbnails
+                .update(cx, |thumbnails, _| thumbnails.pin(holder, None));
+        }
+        drag::model(cx).update(cx, |drags, cx| {
+            if let Some(items) = drags.items.take() {
+                cx.emit(drag::DragEvent::Dropped(items));
+            }
+        });
         cx.notify();
     }
 
@@ -716,6 +830,9 @@ impl GridView {
                 .h(px(image_height))
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     cx.stop_propagation();
+                    if std::mem::take(&mut this.swallow_tile_click) {
+                        return;
+                    }
                     let modifiers = event.modifiers();
                     let open = event.click_count() == 2;
                     this.session.update(cx, |session, cx| {
@@ -1198,6 +1315,45 @@ impl Render for GridView {
                 .absolute()
                 .size_full(),
             );
+        }
+        // A press on a tile is followed anywhere in the window until the
+        // button comes up, as pointer capture does, so it can become a drag.
+        if self.press.is_some() || self.dragging {
+            let entity = cx.entity().downgrade();
+            root = root.child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let moved = entity.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase != DispatchPhase::Capture {
+                                return;
+                            }
+                            let _ = moved.update(cx, |this, cx| {
+                                if event.pressed_button == Some(MouseButton::Left) {
+                                    this.drag_moved(event.position, cx);
+                                } else {
+                                    this.drag_released(cx);
+                                }
+                            });
+                        });
+                        let released = entity.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture && event.button == MouseButton::Left
+                            {
+                                let _ = released.update(cx, |this, cx| this.drag_released(cx));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
+        }
+        if self.dragging
+            && let Some(items) = drag::model(cx).read(cx).items.clone()
+        {
+            root = root.child(drag::ghost(&items, &self.thumbnails, cx));
         }
         if let Some(shown) = &self.preview.shown {
             let (overlay, fading) = preview::overlay(shown, window);

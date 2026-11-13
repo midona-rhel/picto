@@ -95,6 +95,10 @@ impl Theme {
     pub fn border_secondary(&self) -> Rgba {
         translucent(self.contrast, 8.)
     }
+    /// `color-mix(in srgb, var(--color-text-primary) NN%, transparent)`.
+    pub fn text_at(&self, percent: f32) -> Rgba {
+        translucent(self.text, percent)
+    }
     /// `--color-contrast-NN`
     pub fn contrast(&self, percent: f32) -> Rgba {
         translucent(self.contrast, percent)
@@ -102,10 +106,6 @@ impl Theme {
     /// `--color-primary`, selection and focus.
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
-    }
-    /// `--color-surface-drop`: `--color-primary-30`, a row taking a drop.
-    pub fn surface_drop(&self) -> Rgba {
-        translucent(self.primary, 30.)
     }
     /// `::selection`: `--color-primary-30`.
     pub fn selection(&self) -> Rgba {
