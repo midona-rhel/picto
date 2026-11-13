@@ -615,22 +615,30 @@ impl Sidebar {
                 then,
             } => {
                 let then = then.clone();
-                frame(title, Size::Small, cx)
-                    .child(
-                        div()
-                            .text(theme::TEXT_MD)
-                            .line_height(px(19.5))
-                            .text_color(theme.text_secondary())
-                            .child(message.clone()),
+                let sidebar = cx.entity().downgrade();
+                let (cancel, close) = (sidebar.clone(), sidebar.clone());
+                return Some(
+                    ui::confirm::confirm(
+                        "sidebar-confirm",
+                        *title,
+                        message.clone(),
+                        *label,
+                        layer.presence,
                     )
-                    .footer(cancel)
-                    .footer(
-                        ui::action_button("sidebar-dialog-confirm", ButtonLook::Danger)
-                            .label(*label)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirmed(then.clone(), window, cx)
-                            })),
-                    )
+                    .danger(true)
+                    .focus(&layer.focus)
+                    .on_confirm(move |window, cx| {
+                        let _ =
+                            sidebar.update(cx, |this, cx| this.confirmed(then.clone(), window, cx));
+                    })
+                    .on_cancel(move |window, cx| {
+                        let _ = cancel.update(cx, |this, cx| this.close_dialog(window, cx));
+                    })
+                    .on_close(move |window, cx| {
+                        let _ = close.update(cx, |this, cx| this.dismiss_dialog(window, cx));
+                    })
+                    .into_any_element(),
+                );
             }
         };
         let _ = window;

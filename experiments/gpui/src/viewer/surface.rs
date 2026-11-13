@@ -117,6 +117,11 @@ impl MediaSurface {
         self.mode == Mode::Image
     }
 
+    /// Whether a Flash movie is playing in the pane.
+    pub fn flash(&self) -> bool {
+        self.flash.is_some()
+    }
+
     pub fn set_options(&mut self, options: Options, cx: &mut Context<Self>) {
         if self.options != options {
             self.options = options;

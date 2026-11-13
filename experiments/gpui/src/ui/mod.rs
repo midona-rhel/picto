@@ -6,6 +6,7 @@ mod avatar;
 pub mod check;
 mod chip;
 pub mod color_picker;
+pub mod confirm;
 mod empty_state;
 pub mod field;
 mod icon_button;

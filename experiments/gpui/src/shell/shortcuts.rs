@@ -252,7 +252,7 @@ impl Shell {
         }
         if ids.len() == 1 {
             // The shown member of one item, as the context menu copies it.
-            self.run_menu_action("copy-path", window, cx);
+            self.act_on_selection(crate::grid::menu::Action::CopyPath, window, cx);
             return;
         }
         let job = self.session.read(cx).run(move |library| {
@@ -333,14 +333,14 @@ impl Shell {
         .on_action(cx.listener(|this, _: &QuickLook, window, cx| this.quick_look(window, cx)))
         .on_action(cx.listener(|this, _: &OpenDefaultApp, window, cx| {
             if this.single_media(cx) {
-                this.run_menu_action("open-default", window, cx);
+                this.act_on_selection(crate::grid::menu::Action::OpenDefault, window, cx);
             } else {
                 cx.propagate();
             }
         }))
         .on_action(cx.listener(|this, _: &RevealInFinder, window, cx| {
             if this.single_media(cx) {
-                this.run_menu_action("reveal", window, cx);
+                this.act_on_selection(crate::grid::menu::Action::Reveal, window, cx);
             } else {
                 cx.propagate();
             }

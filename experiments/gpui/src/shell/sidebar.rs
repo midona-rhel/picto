@@ -1041,6 +1041,32 @@ impl Sidebar {
         );
     }
 
+    /// A folder named "New Folder" under `parent`, revealed and renamed in
+    /// place, holding `members` when given (the grid's "New Folder" and "New
+    /// Folder with Selection").
+    pub fn new_folder_in(
+        &mut self,
+        parent: Option<FolderId>,
+        members: Option<picto_library::selection::SelectionTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(
+            move |library| {
+                let (id, _) = library.create_folder("New Folder", parent)?;
+                if let Some(members) = &members {
+                    library.add_to_folder(members, id)?;
+                }
+                Ok(id)
+            },
+            |this, id, window, cx| {
+                this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
+            },
+            window,
+            cx,
+        );
+    }
+
     /// `createSmartFolderGroupAndRename`.
     fn create_group(
         &mut self,

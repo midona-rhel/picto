@@ -39,6 +39,15 @@ actions!(
     ]
 );
 
+/// The viewer was right-clicked at this window position; `flash` says a
+/// Flash movie is showing.
+pub struct MenuRequested {
+    pub position: Point<Pixels>,
+    pub flash: bool,
+}
+
+impl EventEmitter<MenuRequested> for Viewer {}
+
 /// Which end of the results a step ran into.
 #[derive(Clone, Copy, PartialEq)]
 pub enum End {
@@ -452,6 +461,16 @@ impl Render for Viewer {
                 this.surface
                     .update(cx, |surface, cx| surface.step_zoom(false, cx));
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    let flash = this.surface.read(cx).flash();
+                    cx.emit(MenuRequested {
+                        position: event.position,
+                        flash,
+                    });
+                }),
+            )
             .child(self.surface.clone())
             .child(self.boundary.notice(End::First, cx))
             .child(self.boundary.notice(End::Last, cx));

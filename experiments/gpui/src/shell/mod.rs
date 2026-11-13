@@ -2,6 +2,7 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+mod item_menu;
 pub mod library;
 mod shortcuts;
 pub mod sidebar;
@@ -12,7 +13,7 @@ use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
-use crate::ui::menu::{self, Menu};
+use crate::ui::menu::Menu;
 use crate::viewer::{
     Viewer, detail,
     quick_look::{self, QuickLook},
@@ -50,9 +51,6 @@ actions!(
     ]
 );
 
-/// The grid menu's "Set Rating" rows, from no rating to five stars.
-const RATE_ACTIONS: [&str; 6] = ["rate-0", "rate-1", "rate-2", "rate-3", "rate-4", "rate-5"];
-
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -88,6 +86,9 @@ pub struct Shell {
     /// The open context menu. It stays here while it fades out.
     menu: Option<Entity<Menu>>,
     _menu: Option<Subscription>,
+    /// The item menus' state: what the open one acts on, copied tags, and
+    /// the confirmation it may ask.
+    items: item_menu::ItemMenus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -108,6 +109,8 @@ impl Shell {
         let sidebar =
             cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
         let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
+        let inspector =
+            cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx));
         let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
             cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
@@ -134,7 +137,28 @@ impl Shell {
                 &grid,
                 window,
                 |this, _, event: &grid::MenuRequested, window, cx| {
-                    this.open_menu(event.0, window, cx)
+                    this.open_tile_menu(event.0, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, _, event: &grid::EmptyMenuRequested, window, cx| {
+                    this.open_empty_menu(event.0, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &viewer,
+                window,
+                |this, _, event: &crate::viewer::MenuRequested, window, cx| {
+                    this.open_viewer_menu(event.position, event.flash, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &inspector,
+                window,
+                |this, _, event: &crate::inspector::PreviewMenuRequested, window, cx| {
+                    this.open_preview_menu(event.0, window, cx)
                 },
             ),
             // The sidebar builds its own menus and acts on them; the shell
@@ -170,7 +194,7 @@ impl Shell {
         Self {
             sidebar,
             toolbar,
-            inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
+            inspector,
             viewer,
             quick_look,
             tags,
@@ -203,6 +227,7 @@ impl Shell {
             viewer_exit: false,
             menu: None,
             _menu: None,
+            items: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -229,123 +254,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens the grid's context menu for the selection, at the pointer. The
-    /// rows follow `gridContextMenu.tsx`, for the actions this prototype has.
-    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let (count, trash) = {
-            let session = self.session.read(cx);
-            let trash = session
-                .nav
-                .get(session.displayed)
-                .is_some_and(|entry| entry.label == "Trash");
-            (session.selection.len(), trash)
-        };
-        if count == 0 {
-            return;
-        }
-        let mut entries: Vec<menu::Entry> = Vec::new();
-        if count == 1 {
-            entries.extend([
-                menu::item("open-default", "Open with Default App")
-                    .icon("menu-external-link")
-                    .shortcut_for("file.openDefaultApp", cx)
-                    .into(),
-                menu::item("reveal", "Reveal in Finder")
-                    .icon("menu-brand-finder")
-                    .shortcut_for("file.revealInFolder", cx)
-                    .into(),
-                menu::item("open-window", "Open in New Window")
-                    .icon("menu-app-window")
-                    .shortcut_for("file.openNewWindow", cx)
-                    .into(),
-                menu::Entry::Separator,
-                menu::item("copy-path", "Copy File Path")
-                    .icon("menu-clipboard-copy")
-                    .shortcut_for("edit.copyFilePath", cx)
-                    .into(),
-                menu::item("copy-name", "Copy Name")
-                    .icon("menu-clipboard-copy")
-                    .into(),
-                menu::Entry::Separator,
-                menu::item("rename", "Rename")
-                    .icon("menu-rename")
-                    .shortcut_for("edit.rename", cx)
-                    .into(),
-                menu::Entry::Separator,
-            ]);
-            // The library rates one item per request here, so the row is
-            // offered for a single item, with its rating checked.
-            let rating = self
-                .session
-                .read(cx)
-                .selected_details()
-                .map(|details| details.rating);
-            let rows = picto_library::Rating::ALL
-                .iter()
-                .zip(RATE_ACTIONS)
-                .enumerate()
-                .map(|(stars, (value, action))| {
-                    let label = match stars {
-                        0 => "No Rating".to_owned(),
-                        _ => "★".repeat(stars),
-                    };
-                    menu::item(action, label)
-                        .checked(rating == Some(*value))
-                        .into()
-                })
-                .collect();
-            entries.extend([
-                menu::submenu("Set Rating", rows).icon("menu-star").into(),
-                menu::Entry::Separator,
-            ]);
-        }
-        let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
-        if trash {
-            entries.push(
-                menu::item(
-                    "restore",
-                    several("Restore", format!("Restore {count} Items")),
-                )
-                .icon("menu-arrow-back-up")
-                .shortcut_for("file.restore", cx)
-                .into(),
-            );
-            // The one destructive row. This prototype borrows the library's
-            // files, so it never deletes them: the row is shown, not offered.
-            entries.push(
-                menu::item(
-                    "delete",
-                    several("Delete Permanently", format!("Delete {count} Permanently")),
-                )
-                .icon("menu-trash")
-                .shortcut_for("file.delete", cx)
-                .danger(true)
-                .disabled(true)
-                .into(),
-            );
-        } else {
-            let mut row = menu::item(
-                "trash",
-                several("Move to Trash", format!("Move {count} to Trash")),
-            )
-            .icon("menu-trash");
-            // In a folder the key removes from the folder instead.
-            if self.scope_kind(cx).folder.is_none() {
-                row = row.shortcut_for("file.delete", cx);
-            }
-            entries.push(row.into());
-        }
-        let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    this.run_menu_action(action, window, cx);
-                }),
-            );
-        self.show_menu(menu, window, cx);
-    }
-
     /// Puts a context menu above the window and gives it the keyboard.
     fn show_menu(&mut self, menu: Entity<Menu>, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&menu.focus_handle(cx), cx);
@@ -363,68 +271,6 @@ impl Shell {
             }
             _ => false,
         }
-    }
-
-    fn run_menu_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
-        // The file the menu acts on: the shown member of the focused item.
-        let (name, path) = {
-            let session = self.session.read(cx);
-            (
-                session.selected_item().map(|item| item.name.clone()),
-                session
-                    .selected_details()
-                    .and_then(|details| details.media.get(session.member))
-                    .map(|media| media.file_path.clone()),
-            )
-        };
-        match action {
-            "open-default" => {
-                if let Some(path) = path {
-                    cx.open_with_system(std::path::Path::new(&path));
-                }
-            }
-            "reveal" => {
-                if let Some(path) = path {
-                    cx.reveal_path(std::path::Path::new(&path));
-                }
-            }
-            "copy-path" => {
-                if let Some(path) = path {
-                    cx.write_to_clipboard(ClipboardItem::new_string(path));
-                }
-            }
-            "copy-name" => {
-                if let Some(name) = name {
-                    cx.write_to_clipboard(ClipboardItem::new_string(name));
-                }
-            }
-            "open-window" => {
-                let focus = self.session.read(cx).focus;
-                if let Some(index) = focus {
-                    self.open_in_window(vec![index], index, cx);
-                }
-            }
-            "rename" => {
-                self.inspector
-                    .update(cx, |inspector, cx| inspector.edit_name(window, cx));
-                return;
-            }
-            rate if RATE_ACTIONS.contains(&rate) => {
-                let stars = RATE_ACTIONS.iter().position(|action| *action == rate);
-                let session = self.session.read(cx);
-                if let (Some(item), Some(stars)) = (session.selected_item(), stars) {
-                    session.rate(item.root_id, picto_library::Rating::ALL[stars]);
-                }
-            }
-            "trash" => self.session.update(cx, |session, cx| {
-                session.move_selection_to(picto_library::Lifecycle::Trash, cx)
-            }),
-            "restore" => self.session.update(cx, |session, cx| {
-                session.move_selection_to(picto_library::Lifecycle::Active, cx)
-            }),
-            _ => {}
-        }
-        window.focus(&self.focus, cx);
     }
 
     /// What the grid has open, for deciding what a key or click does.
@@ -928,6 +774,7 @@ impl Render for Shell {
             }
         }
         root = root.children(self.menu.clone());
+        root = root.children(self.confirmation(window, cx));
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.
