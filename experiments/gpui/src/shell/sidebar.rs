@@ -3,9 +3,9 @@
 //! take Cmd and Shift selection, open their context menus, and folders and
 //! smart folders are created, renamed in place and deleted here.
 use super::library::{LibraryPopover, Toggled};
-use crate::backend::{self, Navigation, Screen};
+use crate::backend::{Navigation, Screen};
 use crate::grid::thumbnails::Thumbnails;
-use crate::session::{Change, Session};
+use crate::session::{Change, Reread, Session};
 use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
 use crate::ui::sidebar_row::DropPosition;
@@ -941,9 +941,9 @@ fn sorted_by_name(mut input: SmartFolderInput) -> SmartFolderInput {
 impl Sidebar {
     // ── Edits ───────────────────────────────────────────────────────
 
-    /// Runs an edit on the library's thread, then reads the destinations
-    /// again, since names, counts and the trees may have changed, and hands
-    /// the edit's answer to `then`.
+    /// Runs an edit on the library's thread through the session and hands
+    /// its answer to `then`. Names, counts and the trees follow the
+    /// library's change events.
     fn edit<T: Send + 'static>(
         &self,
         work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
@@ -951,26 +951,36 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.edit_reading(work, Reread::NOTHING, then, window, cx);
+    }
+
+    /// An edit whose follow-up needs the new destination list at once: a
+    /// folder it made, revealed and renamed in place.
+    fn create<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_reading(work, Reread::NAVIGATION, then, window, cx);
+    }
+
+    fn edit_reading<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
+        reread: Reread,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let answer = self
             .session
-            .read(cx)
-            .run(move |library| (work(library), backend::navigation(library)));
+            .update(cx, |session, cx| session.edit(work, reread, cx));
         cx.spawn_in(window, async move |this, cx| {
-            let Ok((result, navigation)) = answer.await else {
-                return;
-            };
-            let _ = this.update_in(cx, move |this, window, cx| {
-                if let Ok((nav, tags)) = navigation {
-                    this.session
-                        .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
-                }
-                match result {
-                    Ok(value) => then(this, value, window, cx),
-                    // TODO: show this as a notification, as the Electron
-                    // sidebar's `showErrorNotification` does.
-                    Err(error) => eprintln!("sidebar: {error}"),
-                }
-            });
+            if let Ok(Ok(value)) = answer.await {
+                let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
+            }
         })
         .detach();
     }
@@ -1045,7 +1055,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
+        self.create(
             move |library| library.create_folder("New Folder", parent),
             |this, (id, _), window, cx| {
                 this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
@@ -1065,7 +1075,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
+        self.create(
             move |library| {
                 let (id, _) = library.create_folder("New Folder", parent)?;
                 if let Some(members) = &members {
@@ -1088,7 +1098,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
+        self.create(
             move |library| library.create_smart_folder(new_group(parent)),
             |this, (id, _), window, cx| {
                 this.rename_new(format!("smart:{}", id.0), "Untitled".into(), window, cx)
@@ -1106,7 +1116,7 @@ impl Sidebar {
             .map(|node| self.label_of(node, cx).unwrap_or_default())
             .collect::<Vec<_>>();
         let single = nodes.len() == 1;
-        self.edit(
+        self.create(
             move |library| {
                 let mut made = Vec::new();
                 for (node, name) in nodes.iter().zip(&names) {
@@ -1244,55 +1254,41 @@ impl Sidebar {
         color: Option<Option<String>>,
         cx: &mut Context<Self>,
     ) {
-        let answer = self.session.read(cx).run(move |library| {
-            let result = (|| -> picto_library::Result<()> {
-                let folders = library.folders()?;
-                for node in &nodes {
-                    if let Some(id) = folder_id(node) {
-                        let Some(folder) = folders.iter().find(|folder| folder.folder_id == id)
-                        else {
-                            continue;
-                        };
-                        let icon = icon.clone().unwrap_or(folder.icon.clone());
-                        let color = color.clone().unwrap_or(folder.color.clone());
-                        library.set_folder_metadata(
-                            id,
-                            icon.as_deref(),
-                            color.as_deref(),
-                            folder.notes.as_deref(),
-                        )?;
-                    } else if let Some(id) = smart_folder_id(node) {
-                        let mut input = smart_input(library, id)?;
-                        if let Some(icon) = &icon {
-                            input.icon = icon.clone();
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(
+                move |library| -> picto_library::Result<()> {
+                    let folders = library.folders()?;
+                    for node in &nodes {
+                        if let Some(id) = folder_id(node) {
+                            let Some(folder) = folders.iter().find(|folder| folder.folder_id == id)
+                            else {
+                                continue;
+                            };
+                            let icon = icon.clone().unwrap_or(folder.icon.clone());
+                            let color = color.clone().unwrap_or(folder.color.clone());
+                            library.set_folder_metadata(
+                                id,
+                                icon.as_deref(),
+                                color.as_deref(),
+                                folder.notes.as_deref(),
+                            )?;
+                        } else if let Some(id) = smart_folder_id(node) {
+                            let mut input = smart_input(library, id)?;
+                            if let Some(icon) = &icon {
+                                input.icon = icon.clone();
+                            }
+                            if let Some(color) = &color {
+                                input.color = color.clone();
+                            }
+                            library.update_smart_folder(id, input)?;
                         }
-                        if let Some(color) = &color {
-                            input.color = color.clone();
-                        }
-                        library.update_smart_folder(id, input)?;
                     }
-                }
-                Ok(())
-            })();
-            (result, backend::navigation(library))
+                    Ok(())
+                },
+                Reread::NOTHING,
+                cx,
+            );
         });
-        cx.spawn(async move |this, cx| {
-            let Ok((result, navigation)) = answer.await else {
-                return;
-            };
-            if let Err(error) = result {
-                // TODO: show this as a notification, as the Electron sidebar
-                // does.
-                eprintln!("sidebar: {error}");
-            }
-            let _ = this.update(cx, |this, cx| {
-                if let Ok((nav, tags)) = navigation {
-                    this.session
-                        .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
-                }
-            });
-        })
-        .detach();
     }
 
     /// `foldersController.sortContents`: orders each folder's items by a
@@ -1816,13 +1812,14 @@ impl Sidebar {
         }
         match target {
             Target::System => match action {
-                "clear-recent" => self.edit(
+                "clear-recent" => self.edit_reading(
                     |library| library.clear_recent_views().map(|_| ()),
-                    |this, (), _, cx| this.session.update(cx, |session, cx| session.reload(cx)),
+                    Reread::RESULTS_ONLY,
+                    |_, (), _, _| {},
                     window,
                     cx,
                 ),
-                "restore-all" => self.edit(
+                "restore-all" => self.edit_reading(
                     |library| {
                         library
                             .set_lifecycle(
@@ -1837,7 +1834,8 @@ impl Sidebar {
                             )
                             .map(|_| ())
                     },
-                    |this, (), _, cx| this.session.update(cx, |session, cx| session.reload(cx)),
+                    Reread::RESULTS_ONLY,
+                    |_, (), _, _| {},
                     window,
                     cx,
                 ),

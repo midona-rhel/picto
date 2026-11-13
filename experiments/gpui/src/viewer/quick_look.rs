@@ -267,7 +267,7 @@ impl Render for QuickLook {
         }))
         .map(|pane| super::document::handle_actions(pane, &self.surface))
         // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
-        // on a right-click, and the rating and copy shortcuts.
+        // on a right-click, and the copy shortcuts.
         .child(frame.child(self.surface.clone()))
         .child(
             div()

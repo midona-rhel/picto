@@ -291,6 +291,22 @@ impl Shell {
             !self.inspector_collapsed,
             cx,
         );
+        self.watch_view_panels(&menu, panels, cx);
+        self._menu = None;
+        self.toolbar
+            .update(cx, |toolbar, cx| toolbar.watch_view_menu(menu.clone(), cx));
+        self.show_menu(menu, window, cx);
+    }
+
+    /// Keeps a menu's view panels while it is open: their rail switches
+    /// toggle the rails, and the rails' state reaches them.
+    fn watch_view_panels(
+        &mut self,
+        menu: &Entity<Menu>,
+        panels: view_menu::Panels,
+        cx: &mut Context<Self>,
+    ) {
+        let panels = panels.both();
         let mut subscriptions = panels
             .iter()
             .map(|panel| {
@@ -303,13 +319,9 @@ impl Shell {
                 )
             })
             .collect::<Vec<_>>();
-        subscriptions.push(cx.observe_release(&menu, |this, _, _| this.view_panels.clear()));
+        subscriptions.push(cx.observe_release(menu, |this, _, _| this.view_panels.clear()));
         self.view_panels = panels.to_vec();
         self._view_panels = subscriptions;
-        self._menu = None;
-        self.toolbar
-            .update(cx, |toolbar, cx| toolbar.watch_view_menu(menu.clone(), cx));
-        self.show_menu(menu, window, cx);
     }
 
     /// Hides or shows the rails. The sidebar slides out over 50 ms and the
@@ -853,8 +865,12 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &TogglePanels, _, cx| this.toggle_rails(true, true, cx)),
             )
-            .on_action(cx.listener(|this, _: &Undo, _, cx| this.session.read(cx).undo()))
-            .on_action(cx.listener(|this, _: &Redo, _, cx| this.session.read(cx).redo()))
+            .on_action(cx.listener(|this, _: &Undo, _, cx| {
+                this.session.update(cx, |session, cx| session.undo(cx))
+            }))
+            .on_action(cx.listener(|this, _: &Redo, _, cx| {
+                this.session.update(cx, |session, cx| session.redo(cx))
+            }))
             .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
                 this.session.update(cx, |session, cx| {
                     session.show_demo("vector.svg", "image/svg+xml", cx)

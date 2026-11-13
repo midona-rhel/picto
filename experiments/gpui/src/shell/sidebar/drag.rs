@@ -4,6 +4,7 @@
 //! (`dragState.ts`, `dragController.executeDrop`).
 use super::{Sidebar, folder_id, smart_folder_id, tree};
 use crate::grid::drag::{self, DragEvent, ItemDrag};
+use crate::session::Reread;
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
@@ -161,7 +162,7 @@ impl Sidebar {
             root_ids: items.roots.clone(),
         };
         let activate = matches!(items.source, ItemScope::Inbox | ItemScope::Trash);
-        self.edit(
+        self.edit_reading(
             move |library| {
                 match target {
                     GridDrop::Folder(folder) => {
@@ -176,12 +177,8 @@ impl Sidebar {
                 }
                 Ok(())
             },
-            |this, (), _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.reload(cx);
-                    session.refresh_details();
-                })
-            },
+            Reread::RESULTS,
+            |_, (), _, _| {},
             window,
             cx,
         );

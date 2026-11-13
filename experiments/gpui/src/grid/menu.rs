@@ -8,10 +8,8 @@
 //! shell turns the rows into a [`menu::Entry`] list and performs the chosen
 //! [`Action`].
 use crate::grid::format::grouped;
-use crate::grid::layout::ViewMode;
 use crate::ui::menu;
 use picto_library::ContentSortField;
-use picto_library::predicate::{SortDirection, SortField};
 
 /// Where the menu was opened (`GridMenuContext.surface`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -85,95 +83,14 @@ pub const CONTENT_SORT: [(ContentSortField, &str); 6] = [
     (ContentSortField::Notes, "Notes"),
 ];
 
-/// `LAYOUT_OPTIONS` of the view panel.
-pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
-    (ViewMode::Waterfall, "Waterfall", "menu-layout-board"),
-    (ViewMode::Grid, "Grid", "menu-border-all"),
-    (
-        ViewMode::Justified,
-        "Justified",
-        "menu-layout-board-rotated",
-    ),
-];
-
-/// `SORT_OPTIONS` of the view panel.
-pub const SORTS: [(SortField, &str); 6] = [
-    (SortField::ImportedAt, "Date Added"),
-    (SortField::CapturedAt, "Date Created"),
-    (SortField::Name, "Name"),
-    (SortField::TotalSize, "File Size"),
-    (SortField::Rating, "Rating"),
-    (SortField::Random, "Random"),
-];
-
-/// The display panel's switches (`DisplayPanel`).
+/// One of the view panels production draws in the menu as custom
+/// entries (`buildContextMenuViewEntries`); the shell supplies them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Toggle {
-    Name,
-    Resolution,
-    Extension,
-    FileType,
-    ItemCount,
-    Compact,
-    FitThumbnails,
-    Subfolders,
-    Sidebar,
-    Inspector,
-}
-
-/// What the view panel shows as chosen.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ViewState {
-    pub mode: ViewMode,
-    pub sort: SortField,
-    pub direction: SortDirection,
-    pub show_name: bool,
-    pub show_resolution: bool,
-    pub show_extension: bool,
-    pub show_file_type: bool,
-    pub show_item_count: bool,
-    pub compact: bool,
-    pub fit_thumbnails: bool,
-    pub show_subfolders: bool,
-    pub sidebar: bool,
-    pub inspector: bool,
-}
-
-impl Default for ViewState {
-    fn default() -> Self {
-        Self {
-            mode: ViewMode::Waterfall,
-            sort: SortField::ImportedAt,
-            direction: SortDirection::Descending,
-            show_name: true,
-            show_resolution: false,
-            show_extension: false,
-            show_file_type: false,
-            show_item_count: true,
-            compact: false,
-            fit_thumbnails: false,
-            show_subfolders: true,
-            sidebar: true,
-            inspector: true,
-        }
-    }
-}
-
-impl ViewState {
-    pub fn toggled(&self, toggle: Toggle) -> bool {
-        match toggle {
-            Toggle::Name => self.show_name,
-            Toggle::Resolution => self.show_resolution,
-            Toggle::Extension => self.show_extension,
-            Toggle::FileType => self.show_file_type,
-            Toggle::ItemCount => self.show_item_count,
-            Toggle::Compact => self.compact,
-            Toggle::FitThumbnails => self.fit_thumbnails,
-            Toggle::Subfolders => self.show_subfolders,
-            Toggle::Sidebar => self.sidebar,
-            Toggle::Inspector => self.inspector,
-        }
-    }
+pub enum Panel {
+    /// `ViewPanel`: the layout and the sort, inline.
+    Layout,
+    /// `DisplayPanel`: the display switches, inside "Display".
+    Display,
 }
 
 /// Which of production's optional handlers the caller has: a row whose
@@ -258,9 +175,6 @@ pub struct Description {
     pub open_with: OpenWith,
     /// Another import is running, so none can start.
     pub import_blocked: bool,
-    /// A folder or Recently Viewed: the view panel offers no sort.
-    pub fixed_order: bool,
-    pub view: ViewState,
     pub handlers: Handlers,
 }
 
@@ -315,10 +229,6 @@ pub enum Action {
     ImportFiles,
     ImportFolder,
     PasteImport,
-    Layout(ViewMode),
-    Sort(SortField),
-    Direction(SortDirection),
-    Display(Toggle),
     FlashPlay,
     FlashStop,
     FlashMute,
@@ -393,28 +303,6 @@ impl Action {
             ImportFiles => "import-files",
             ImportFolder => "import-folder",
             PasteImport => "paste-import",
-            Layout(ViewMode::Waterfall) => "view-layout-waterfall",
-            Layout(ViewMode::Grid) => "view-layout-grid",
-            Layout(ViewMode::Justified) => "view-layout-justified",
-            Sort(SortField::ImportedAt) => "view-sort-imported",
-            Sort(SortField::CapturedAt) => "view-sort-captured",
-            Sort(SortField::Name) => "view-sort-name",
-            Sort(SortField::TotalSize) => "view-sort-size",
-            Sort(SortField::Rating) => "view-sort-rating",
-            Sort(SortField::Random) => "view-sort-random",
-            Sort(SortField::FolderOrder) => "view-sort-folder-order",
-            Direction(SortDirection::Ascending) => "view-sort-ascending",
-            Direction(SortDirection::Descending) => "view-sort-descending",
-            Display(Toggle::Name) => "view-show-name",
-            Display(Toggle::Resolution) => "view-show-resolution",
-            Display(Toggle::Extension) => "view-show-extension",
-            Display(Toggle::FileType) => "view-show-file-type",
-            Display(Toggle::ItemCount) => "view-show-item-count",
-            Display(Toggle::Compact) => "view-compact",
-            Display(Toggle::FitThumbnails) => "view-fit-thumbnails",
-            Display(Toggle::Subfolders) => "view-show-subfolders",
-            Display(Toggle::Sidebar) => "view-show-sidebar",
-            Display(Toggle::Inspector) => "view-show-inspector",
             FlashPlay => "flash-play",
             FlashStop => "flash-stop",
             FlashMute => "flash-mute",
@@ -433,6 +321,7 @@ pub enum Row {
         icon: Option<&'static str>,
         children: Vec<Row>,
     },
+    Panel(Panel),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -616,88 +505,15 @@ impl Builder<'_> {
         )
     }
 
-    /// `buildContextMenuViewEntries`. Production draws the layout and sort
-    /// choices as one inline panel of selects and the display switches as a
-    /// panel inside "Display"; here they are rows that check, which the menu
-    /// keeps open while they change.
-    fn view_entries(&self, d: &Description, rows: &mut Vec<Row>) {
-        let view = &d.view;
-        rows.push(submenu(
-            "Layout",
-            None,
-            LAYOUTS
-                .iter()
-                .map(|(mode, label, icon)| {
-                    item(Action::Layout(*mode), *label, true)
-                        .icon(icon)
-                        .checked(view.mode == *mode)
-                        .keep_open()
-                        .into()
-                })
-                .collect(),
-        ));
-        if !d.fixed_order {
-            let mut sorts: Vec<Row> = SORTS
-                .iter()
-                .map(|(field, label)| {
-                    item(Action::Sort(*field), *label, true)
-                        .checked(view.sort == *field)
-                        .keep_open()
-                        .into()
-                })
-                .collect();
-            if view.sort != SortField::Random {
-                sorts.push(Row::Separator);
-                for (direction, label, icon) in [
-                    (SortDirection::Ascending, "Ascending", "menu-sort-ascending"),
-                    (
-                        SortDirection::Descending,
-                        "Descending",
-                        "menu-sort-descending",
-                    ),
-                ] {
-                    sorts.push(
-                        item(Action::Direction(direction), label, true)
-                            .icon(icon)
-                            .checked(view.direction == direction)
-                            .keep_open()
-                            .into(),
-                    );
-                }
-            }
-            rows.push(submenu("Sort by", None, sorts));
-        }
+    /// `buildContextMenuViewEntries`: the layout and sort panel inline,
+    /// then the display panel inside "Display".
+    fn view_entries(&self, rows: &mut Vec<Row>) {
+        rows.push(Row::Panel(Panel::Layout));
         rows.push(Row::Separator);
-        let toggle = |toggle: Toggle, label: &str, enabled: bool| -> Row {
-            item(Action::Display(toggle), label, true)
-                .disabled(!enabled)
-                .checked(view.toggled(toggle))
-                .keep_open()
-                .into()
-        };
-        let mut display = vec![
-            toggle(Toggle::Name, "Show Name", true),
-            toggle(Toggle::Resolution, "Show Resolution", true),
-            toggle(Toggle::Extension, "Show Extension", true),
-            toggle(Toggle::FileType, "Show File Type", true),
-            toggle(Toggle::ItemCount, "Show Item Count", true),
-            toggle(Toggle::Compact, "Compact", true),
-            toggle(
-                Toggle::FitThumbnails,
-                "Fit Thumbnails",
-                view.mode == ViewMode::Grid,
-            ),
-        ];
-        if d.scope == Some(ScopeKind::Folder) {
-            display.push(toggle(Toggle::Subfolders, "Show Subfolder Content", true));
-        }
-        display.push(Row::Separator);
-        display.push(toggle(Toggle::Sidebar, "Show Sidebar", true));
-        display.push(toggle(Toggle::Inspector, "Show Inspector", true));
         rows.push(submenu(
             "Display",
             Some("menu-adjustments-rotated"),
-            display,
+            vec![Row::Panel(Panel::Display)],
         ));
     }
 }
@@ -802,7 +618,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             rows.push(b.content_sort());
             rows.push(Row::Separator);
         }
-        b.view_entries(d, &mut rows);
+        b.view_entries(&mut rows);
         rows.push(
             item(Action::Grayscale, "Grayscale", h.toggle_grayscale)
                 .icon("menu-contrast")
@@ -1164,7 +980,7 @@ pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec
         rows.push(b.content_sort());
         rows.push(Row::Separator);
     }
-    b.view_entries(d, &mut rows);
+    b.view_entries(&mut rows);
     rows.push(Row::Separator);
     rows
 }
@@ -1301,24 +1117,26 @@ pub fn actions(rows: &[Row]) -> Vec<Action> {
         match row {
             Row::Item(item) => found.push(item.action),
             Row::Submenu { children, .. } => found.extend(actions(children)),
-            Row::Separator => {}
+            Row::Separator | Row::Panel(_) => {}
         }
     }
     found
 }
 
-/// The rows as the shared menu draws them.
-pub fn entries(rows: Vec<Row>) -> Vec<menu::Entry> {
+/// The rows as the shared menu draws them, with `panel` drawing the view
+/// panels.
+pub fn entries(rows: Vec<Row>, panel: &mut dyn FnMut(Panel) -> menu::Entry) -> Vec<menu::Entry> {
     rows.into_iter()
         .map(|row| match row {
             Row::Item(row) => item_entry(row).into(),
             Row::Separator => menu::Entry::Separator,
+            Row::Panel(which) => panel(which),
             Row::Submenu {
                 label,
                 icon,
                 children,
             } => {
-                let mut submenu = menu::submenu(label, entries(children));
+                let mut submenu = menu::submenu(label, entries(children, panel));
                 if let Some(icon) = icon {
                     submenu = submenu.icon(icon);
                 }

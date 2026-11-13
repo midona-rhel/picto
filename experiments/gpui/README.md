@@ -226,7 +226,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   rules at 760px. Rules come in groups matching all or any of their rules,
   included or excluded, each rule a field, an operator and its value
   (`ui::tag_token_input` for tags, the selects of file type, rating and
-  size unit, number fields with their unit, "between" with a second value),
+  size unit, number fields with their unit, a day from `ui::date_picker`, a
+  colour from `ui::color_editor` in its popover, "between" with a second
+  value),
   at most ten, with the minus and plus buttons. The model
   (`sidebar/rules.rs`) compiles to the library's `FilterExpr` as
   `queryModel.ts` does and reads it back, tested both ways. While rules are
@@ -684,9 +686,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Folder Cover, Group (when it needs no organizer), Ungroup (after its
   question), Rename (in the inspector's name field), Copy Tags and Paste
   Tags (an in-app tag clipboard, and the JSON on the clipboard), Set Rating
-  for any selection, and the view options (layout, sort, the display
-  switches, the rails), saved to the destination's view as production saves
-  them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
+  for any selection, and the view options as production embeds them: the
+  titlebar view menu's layout and sort panel inline and its display panel
+  inside "Display" (the same `shell::view_menu` panels), saved to the
+  destination's view as production saves them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 - Flash's controls (`FlashControls.tsx`): play or pause, stop (the movie
@@ -870,9 +873,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   puts it. Tab from the grid
   toggles the panels as in production, so the rows are entered from the
   tree filter; section headers are not in the keyboard order. The smart-folder
-  editor's notes are one line rather than a three-row text area, dates are
-  typed as YYYY-MM-DD rather than picked, a colour rule's hex is typed
-  rather than chosen in the colour editor popover, the file types are the
+  editor's notes are one line rather than a three-row text area, the file types are the
   six built-in choices rather than the accepted formats, and a failed save
   or preview shows in the dialog rather than as a notification. Set Auto
   Tags edits the tags with the tag token input, not production's tag
@@ -967,11 +968,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   cover dialog that frames the square), Find Items with This Media (an
   ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
   Group (the collection editor), Group when the selection needs the group
-  organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
-  editor), Import Files, Import Folder and Paste Import, Flash's Play,
-  Stop and Mute, and Set as Thumbnail. "Add Tags" and "Add to Folder"
-  dispatch the shortcuts' `AddTags` and `AddToFolder`, which open the
-  inspector's pickers. "Open in New Window" opens the item alone in a detail window.
+  organizer, Batch Rename, Auto Tag, Import Files, Import Folder and Paste Import, Flash's Play,
+  Stop and Mute, and Set as Thumbnail. "Add Tags", "Add to Folder" and
+  "New Smart Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
+  `NewSmartFolder`, which open the inspector's pickers and the smart-folder
+  editor. "Open in New Window" opens the item alone in a detail window.
   Quick Look and the detail window have no context menu yet.
   "Add to “…”" appears once a folder has been used (the folder picker and
   this row record it; for the session only). Show Extension and Show Subfolder Content are saved
