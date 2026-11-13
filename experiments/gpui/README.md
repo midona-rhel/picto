@@ -1143,7 +1143,8 @@ isolated reference: a development build from this checkout in its
 automation mode (`PICTO_E2E`), on its own detached copy of the library, with
 its own application data, and a DevTools port (9222 + n).
 `node reference.mjs steps.txt outdir` plays the same script lines into it
-(`size 1213 865` first sets the viewport), so one script photographs a view
+(`reload` and `size 1213 865` first, to start from a fresh window at that
+size; the GPUI test skips those lines), so one script photographs a view
 in both apps and `pixel_diff.py` compares the pairs. Both apps then open the
 inspector at its default width; the reference has no traffic lights and
 shows the default library avatar.

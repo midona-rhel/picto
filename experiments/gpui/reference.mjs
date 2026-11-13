@@ -5,10 +5,12 @@
 //
 //   move X Y | down X Y [clicks] | up X Y [clicks] | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
-//   shot <name> | size W H | js <expression>
+//   shot <name> | size W H | js <expression> | reload
 //
 // `size` sets the viewport in points (pictures are twice that), `js` prints
-// an expression's value. The app must be a development build started with
+// an expression's value, and `reload` loads the window again so that a
+// script starts where a freshly opened app does (the GPUI test opens the
+// app anew each run and ignores the line). The app must be a development build started with
 // its automation switches on a disposable library copy; see the README.
 //
 //   node reference.mjs steps.txt outdir            (PICTO_REFERENCE_PORT, default 9222)
@@ -93,6 +95,9 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   } else if (kind === 'size') {
     await send('Emulation.setDeviceMetricsOverride', { width: numbers[0], height: numbers[1], deviceScaleFactor: 2, mobile: false });
     await sleep(500);
+  } else if (kind === 'reload') {
+    await send('Page.reload');
+    await sleep(4000);
   } else if (kind === 'js') {
     const result = await send('Runtime.evaluate', { expression: rest.join(' '), returnByValue: true, awaitPromise: true });
     console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.text ?? null));
@@ -106,6 +111,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);
-  if (!['wait', 'shot', 'js', 'size'].includes(kind)) await sleep(200);
+  if (!['wait', 'shot', 'js', 'size', 'reload'].includes(kind)) await sleep(200);
 }
 socket.close();
