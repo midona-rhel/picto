@@ -934,10 +934,13 @@ impl SubscriptionsScreen {
 fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
     let view = window.current_view();
     canvas(
-        move |bounds, _, cx| {
+        move |bounds, window, cx| {
             let width = f32::from(bounds.size.width);
             if (cell.replace(width) - width).abs() > 0.5 {
                 cx.notify(view);
+                // A notification made while a frame is being drawn does not
+                // by itself bring another frame.
+                window.request_animation_frame();
             }
         },
         |_, _, _, _| {},

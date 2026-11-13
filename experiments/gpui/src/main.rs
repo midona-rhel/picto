@@ -9,6 +9,7 @@ mod grid;
 mod imports;
 mod inspector;
 mod keymap;
+mod meter;
 mod motion;
 // Draws through the macOS text system and renderer.
 #[cfg(all(test, target_os = "macos"))]
@@ -19,6 +20,7 @@ mod screens;
 mod session;
 mod settings;
 mod shell;
+mod state;
 mod stats;
 mod tags;
 mod text;
@@ -99,6 +101,8 @@ fn match_chromium_text_weight() {
 /// What the app needs before its window opens: the bundled fonts, the
 /// theme, and every component's key bindings.
 fn prepare(cx: &mut App) {
+    // What the user arranged last time, which the keymap and views start from.
+    state::init(cx);
     cx.text_system()
         .add_fonts(vec![
             std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto.ttf")),
@@ -123,13 +127,81 @@ fn prepare(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     imports::bind(cx);
     viewer::document::bind(cx);
-    // The registry's shortcuts, at their defaults until the
-    // settings are read and applied.
-    keymap::install(
-        settings::registry::KeyboardPreset::Us,
-        &settings::registry::Overrides::new(),
-        cx,
-    );
+    // The registry's shortcuts, with the preset and the bindings the user
+    // changed.
+    let (preset, overrides) = settings::keyboard(cx);
+    keymap::install(preset, &overrides, cx);
+}
+
+/// Where the main window opens: `PICTO_GPUI_WINDOW=1213x865` centres it at
+/// an exact size, so a capture can be compared pixel for pixel with the
+/// Electron window's; otherwise where it was last, on a display that is still
+/// there (`getSavedMainWindowState`), else centred at the default size.
+fn main_window_bounds(cx: &App) -> WindowBounds {
+    let exact = std::env::var("PICTO_GPUI_WINDOW").ok().and_then(|value| {
+        let (width, height) = value.split_once('x')?;
+        Some((width.parse().ok()?, height.parse().ok()?))
+    });
+    let centred = |width: f32, height: f32| {
+        let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+        // A centred origin can land on a half point, which makes the
+        // system round the window a point larger.
+        bounds.origin = bounds.origin.map(|at| at.floor());
+        bounds
+    };
+    if let Some((width, height)) = exact {
+        return WindowBounds::Windowed(centred(width, height));
+    }
+    let Some(saved) = state::get(cx).window.clone() else {
+        return WindowBounds::Windowed(centred(1320., 850.));
+    };
+    let displays = cx
+        .displays()
+        .iter()
+        .map(|display| {
+            let area = display.visible_bounds();
+            state::Rect {
+                x: f32::from(area.origin.x),
+                y: f32::from(area.origin.y),
+                width: f32::from(area.size.width),
+                height: f32::from(area.size.height),
+            }
+        })
+        .collect::<Vec<_>>();
+    let place = saved.on_displays(&displays);
+    let bounds = match (place.x, place.y) {
+        (Some(x), Some(y)) => {
+            Bounds::new(point(px(x), px(y)), size(px(place.width), px(place.height)))
+        }
+        _ => centred(place.width, place.height),
+    };
+    if place.maximized {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    }
+}
+
+/// Keeps the main window's normal bounds and whether it is maximised. A
+/// window in full screen keeps the bounds it will return to, as production's
+/// `getNormalBounds` does, and opens at them next time.
+fn remember_window(window: &Window, cx: &mut App) {
+    if std::env::var_os("PICTO_GPUI_WINDOW").is_some() {
+        return;
+    }
+    let (bounds, maximized) = match window.window_bounds() {
+        WindowBounds::Windowed(bounds) => (bounds, false),
+        WindowBounds::Maximized(bounds) => (bounds, true),
+        WindowBounds::Fullscreen(bounds) => (bounds, false),
+    };
+    let place = state::WindowPlace {
+        x: Some(f32::from(bounds.origin.x)),
+        y: Some(f32::from(bounds.origin.y)),
+        width: f32::from(bounds.size.width),
+        height: f32::from(bounds.size.height),
+        maximized,
+    };
+    state::update(cx, |state| state.window = Some(place));
 }
 
 fn main() {
@@ -170,25 +242,14 @@ fn main() {
             cx.on_action(|_: &Quit, cx| cx.quit());
             // Stop the workers and checkpoint the copy before the process
             // ends, as the Electron app closes its library before quitting.
-            cx.on_app_quit(move |_| {
+            cx.on_app_quit(move |cx| {
+                state::flush(cx);
                 closing.close();
                 async {}
             })
             .detach();
             cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
-            // `PICTO_GPUI_WINDOW=1213x865` opens at an exact size, so a capture
-            // can be compared pixel for pixel with the Electron window's.
-            let (width, height) = std::env::var("PICTO_GPUI_WINDOW")
-                .ok()
-                .and_then(|value| {
-                    let (width, height) = value.split_once('x')?;
-                    Some((width.parse().ok()?, height.parse().ok()?))
-                })
-                .unwrap_or((1320., 850.));
-            let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
-            // A centred origin can land on a half point, which makes the
-            // system round the window a point larger.
-            bounds.origin = bounds.origin.map(|at| at.floor());
+            let window_bounds = main_window_bounds(cx);
             // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
             // keyboard from whatever the user is working in, and keeps it
             // drawing while it is covered.
@@ -196,7 +257,7 @@ fn main() {
             let window = cx
                 .open_window(
                     WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(1000.), px(600.))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Picto GPUI · Library copy".into()),
@@ -212,7 +273,15 @@ fn main() {
                     },
                     move |window, cx| {
                         covered::keep_painting(window);
-                        cx.new(|cx| Shell::new(root, application, delivered, window, cx))
+                        cx.new(|cx| {
+                            // The window's place is kept as it changes
+                            // (`queueSaveMainWindowState`).
+                            cx.observe_window_bounds(window, |_, window, cx| {
+                                remember_window(window, cx)
+                            })
+                            .detach();
+                            Shell::new(root, application, delivered, window, cx)
+                        })
                     },
                 )
                 .unwrap();

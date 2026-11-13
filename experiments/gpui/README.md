@@ -496,7 +496,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   and Tab work in the tag dialog's search as in production; in the folder
   dialog Enter applies. As in production the checks start from the item the
   inspector shows or last showed, whatever is selected; Folders' Apply
-  clears the selection. Recent tags and folders last for the session.
+  clears the selection. Recent tags and folders are kept across launches
+  (see "What is kept across launches").
 - After any of these edits the library is read again: the sidebar's
   destinations and counts, the tags, the item or the selection's summary,
   and the grid when its destination's results can change (Untagged, a
@@ -580,7 +581,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   too. Each id maps to actions in the key context of production's scope:
   `Browser` for the app-wide keys (Back and Forward on both bindings, ⌘1–⌘4
   to All, Inbox, Untagged and Trash, ⌘F into the grid's or the Tags
-  screen's search, the rail toggles, Undo and Redo, New Folder, New
+  screen's search, the rail toggles, Undo and Redo (with or without a
+  selection; the results, the selection and the sidebar are read again
+  after either), New Folder, New
   Subfolder, Rename into the inspector's name field, Copy File Path),
   `Grid` while the grid shows (movement with Shift extending, Select All,
   Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
@@ -921,8 +924,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
     printed) and RTF on the 816px text page, and EPUB chapters (the spine of
     the package document, one chapter to a page, its pictures decoded) on
     the 760px book page in Georgia, laid out as GPUI text with the page's
-    heading, paragraph, quote, code, list, link and rule styles. Parsing runs
-    off the drawing thread.
+    heading, paragraph, quote, code, list, link and rule styles. As in
+    production, the app stylesheet's `* { margin: 0; padding: 0 }` applies:
+    only the text page's headings have margins, lists hang their markers
+    outside the text, a book's quote is not indented, and a table's columns
+    are as wide as their widest cell (header cells are not bold yet).
+    Parsing runs off the drawing thread.
   - Fonts (TTF, OTF, the first face of a collection, and WOFF, unpacked)
     loaded into GPUI's text system: the title in the font, the Preview,
     Waterfall, Glyphs and Information modes, the five paper colours, and the
@@ -977,8 +984,53 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   stretching), and the visualizer reads the samples being played through a
   port of the Web Audio analyser.
 
+### What is kept across launches
+
+What production keeps per machine (the renderer's localStorage and the main
+process's `config.json`) is kept in one JSON file of this app's own,
+`state.json` in the platform's configuration folder under "Picto GPUI"
+(`~/Library/Application Support/Picto GPUI/` on macOS), never in the
+Electron app's folder and never beside the disposable copy, so it outlives
+the copy (`src/state.rs`). It is read once at start and written 250 ms after
+the last change through a temporary file renamed over the old one, and at
+once on quit. A missing or unreadable field takes its default and leaves the
+others; an unreadable file is set aside as `state.json.corrupt`; fields of a
+newer version are written back untouched. It holds:
+
+- the main window's normal bounds and whether it was maximised
+  (`windowState.main`), placed where it was only while that still overlaps a
+  display, else centred, and never smaller than 700×500; a window closed in
+  full screen opens at its normal bounds, as production's does.
+  `PICTO_GPUI_WINDOW` wins over it, and a window opened with it is not kept;
+- the sidebar's and the inspector's widths and whether each is hidden;
+- the folded sidebar sections and nodes (`picto-sidebar-collapsed`);
+- the filter bar's pinned fields and saved filters;
+- the tag picker's layout and counts, which every picker takes when it
+  opens;
+- recent tags, and recent folders by the library the copy was made from;
+- the keyboard preset and the rebound shortcuts (the keymap is installed
+  with them before the window opens), the language and the audio
+  visualization.
+
+What production keeps in the library (the settings, each destination's view
+including its zoom) stays in the library through the settings model. The
+grid's zoom is saved to its destination's view 500 ms after the slider, the
+buttons or the zoom keys last moved it. As in production, the app starts on
+All each launch, and the destination, its scroll and selection, the detail
+window's pin and the inspector's pin are not kept.
+
+The sidebar is resized by dragging its right edge, between 220 and 500
+points, as the inspector is by its left edge (260 to 550); both edges are one
+element (`shell/rails.rs`).
+
 ## Not yet equivalent to Picto
 
+- A whole destination selected names no collection count in the item
+  menu's Ungroup row ("Ungroup Collections..."); production looks the count
+  up. Open With Other offers the system chooser instead of listing the
+  applications (macOS lists them in production).
+- Tab in the Folders dialog leaves the keyboard in the search field;
+  production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a failed save or a next page that cannot load is reported
   on the console, not in a notification. A review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
@@ -1012,8 +1064,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The pickers: with
   several items selected, a picker starts from the tags or folders they all
   share (production starts from the details of the item last shown). The
-  pickers' layout, counts, folded rail, pin and recent folders last for the
-  session (production keeps some in localStorage). Not drawn: the create
+  tag picker's folded rail and pin last for the session, as in production.
+  Not drawn: the create
   row's sticky position, the 60 ms row highlight transitions, and an error
   notification when an edit fails (it is
   printed).
@@ -1022,9 +1074,6 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   belong (language, the grid's wheel action, image rendering
   and the transparency grid, notifications,
   imports, subscriptions).
-  The keyboard preset, language, audio visualization and shortcut bindings
-  live for the session only, since production keeps them in the renderer's
-  localStorage.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
   are downloaded) are drawn but not performed; every model shows as not
@@ -1056,8 +1105,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   belongs.
 - Filter bar: a change of filters is not a step of Back and Forward as
   `navigateWithGridFilters` makes it (the palette's colour included); the
-  grid goes to its top on each change. Pinned fields and saved filters last
-  the session (production keeps them in localStorage).
+  grid goes to its top on each change.
   The type menu's rows are the facets known when it opens and refresh when
   new ones arrive. The colour editor's hue strip is six two-stop bands, its
   square is not clipped round, and the hex field neither capitalises as typed nor
@@ -1103,8 +1151,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   or preview shows in the dialog rather than as a notification. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
   tiles light at once rather than over 50 ms. Dragging items out of the
-  window and reordering a folder's items by dragging are not built. Folded
-  nodes and sections are kept in memory, not persisted. The sidebar's
+  window and reordering a folder's items by dragging are not built. The sidebar's
   preferences (which system rows and sections show, counts, guides, the
   double-click action, Quick Access) come from the settings model and are
   written through it.
@@ -1189,7 +1236,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   inspector's pickers from the viewer's menu) and the smart-folder editor.
   "Open in New Window" opens the item alone in a detail window.
   "Add to “…”" appears once a folder has been used (the folder picker and
-  this row record it; for the session only). Errors go to the
+  this row record it, and it is kept across launches). Errors go to the
   console, not to notifications. Edits that change what the destination
   holds (Remove from Folder, Sort by, Group, Ungroup, the lifecycle rows,
   deletes) fetch the grid again, which clears the selection; after a rating
@@ -1279,8 +1326,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   backdrop blur on Windows (DirectX renderer), and no window vibrancy. GPUI
   cannot scale or rotate arbitrary elements; see Motion above for what stands
   in.
-- Sidebar expansion, rail widths and hidden rails are not persisted. The
-  sidebar cannot be resized.
+- UI zoom (production's ⌘+, ⌘- and ⌘0, kept in `picto-zoom-factor`) is not
+  built, so there is nothing to keep. Settings' Zoom Level is saved but, as
+  in production, not applied.
+- The main window's place is restored by code that has only been tested in
+  its pure parts (`state::WindowPlace::on_displays`); the off-screen tool has
+  no real window, so opening at the kept bounds, maximised, on a second
+  display, has not been watched.
 - Home, End, Page keys and shift-moves in the grid go to the destination's
   first and last items; production's `useGridArrowNav` stops at the ends of
   the loaded window. A search keeps no scroll position (production keeps
@@ -1379,7 +1431,11 @@ taking the real pointer. GPUI stops painting a window that is fully covered;
 keeps it drawing behind other applications. `PICTO_GPUI_MENU=window` draws
 menus inside the window (a pop-up menu closes when the app is not the active
 one). `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
-width, and `PICTO_GPUI_SILENT=1` starts every player muted.
+width whatever was kept, and `PICTO_GPUI_SILENT=1` starts every player muted.
+`PICTO_GPUI_STATE=<folder>` keeps what the user arranges in that folder
+instead of the app's own (see "What is kept across launches"); the off-screen
+tool keeps nothing without it, so its pictures never depend on how the app
+was left, and two runs with the same folder show a restart.
 
 The whole app can also be drawn with no screen at all. The ignored test
 `plays_a_script` (`src/offscreen.rs`) opens the shell on a disposable copy
@@ -1398,6 +1454,16 @@ folder, file or save dialog the app asks for answer with that path without
 opening (`answer` alone cancels it); put it before the line that opens the
 dialog. Only the off-screen test reads it (`prompt.rs`). The reference's
 dialogs are the system's own and cannot be answered from a script.
+
+It redraws the whole window every tick, which hides a view that changes its
+state while a frame is drawn and waits for a frame nothing asks for (on
+screen it "fixes itself when the mouse moves"). `PICTO_GPUI_LAZY=1`, or a
+`lazy` line in the script (`eager` goes back), draws only when a real
+window would: after something invalidated it outside a draw, or asked for
+the next animation frame (`Window::is_dirty`, a test-support addition to
+the vendored GPUI). Run a script both ways and treat any difference as a
+fault. Video does not play off-screen (AVFoundation needs the main run
+loop), and the tool cannot resize a window.
 
 The reference takes `dragfiles`, `drop` and `dragexit` too, through the
 browser's drag events (`Input.dispatchDragEvent`), so a drop imports into
@@ -1423,6 +1489,18 @@ rules dialog, the Settings window, a detail window, and the viewer on a JPEG,
 a GIF, a JPEG XL, a `.mov`, a `.webm`, an MP3 and a PDF collection. Timers
 advance with the real clock there, so animations play, but nothing was
 measured.
+
+`PICTO_GPUI_FPS=1` shows a frame meter in the window's bottom-left corner:
+the frames drawn in the last second, the time between the last two, and how
+long the app took to draw one (from the start of the shell's render to the end
+of its paint; the GPU's share is not in it). It reads "idle" once nothing has
+drawn for a second.
+
+`million.sh [items]` makes a synthetic library (a million items by default:
+4,096 generated JPEGs shared among them by hard links, with five smart
+folders) with the repository's `million_grid_demo` example and opens the app
+on it with the meter on, for checking scrolling, resizing and loading at
+scale. It reads no existing library.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap

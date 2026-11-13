@@ -544,8 +544,18 @@ impl VideoPlayer {
             .cursor_pointer()
             .child(
                 canvas(
-                    move |bounds, _, cx| {
-                        let _ = entity.update(cx, |this, _| this.bar = bounds);
+                    move |bounds, window, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            // The waveform is drawn at the bar's width: a new
+                            // width needs another frame, which a notification
+                            // made while drawing does not bring by itself.
+                            let resized = this.bar.size != bounds.size;
+                            this.bar = bounds;
+                            if resized {
+                                cx.notify();
+                                window.request_animation_frame();
+                            }
+                        });
                     },
                     |_, _, _, _| {},
                 )

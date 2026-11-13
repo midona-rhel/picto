@@ -194,10 +194,12 @@ impl Shell {
         };
         let media = single.is_some_and(|item| item.kind == RootKind::Media);
         let last_folder_name = self.last_folder_name(cx);
+        let whole = self.session.read(cx).selects_whole();
         let description = Description {
             surface: Surface::Grid,
             // With the whole destination selected, all of it.
             selection_count: self.session.read(cx).selection_count() as usize,
+            query_selection: whole,
             ai_tag_enabled: Some(count > 0),
             single: single.is_some(),
             single_hash: single.map(|item| item.content_hash.clone()),
@@ -206,7 +208,15 @@ impl Shell {
             single_name: single.map(|item| item.name.clone()),
             single_mime: single.map(|item| item.mime.clone()),
             contains_group: collections > 0,
-            collection_count: Some(Some(collections)),
+            // The loaded items say how many collections a whole destination
+            // holds only when it is all loaded; otherwise the count is not
+            // known here.
+            // TODO: count the collections the destination's query holds, as
+            // production looks them up, and name the number.
+            collection_count: Some(
+                (!whole || self.session.read(cx).selection_count() as usize == count)
+                    .then_some(collections),
+            ),
             scope: Some(scope_kind),
             status,
             grayscale: false,
