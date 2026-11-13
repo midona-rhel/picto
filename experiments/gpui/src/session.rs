@@ -139,6 +139,8 @@ pub struct Session {
     search_text: String,
     pub filter: Option<FilterExpr>,
     blobs: PathBuf,
+    /// The disposable database the library opened.
+    database: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
@@ -149,7 +151,7 @@ impl EventEmitter<Change> for Session {}
 
 impl Session {
     pub fn new(database: PathBuf, blobs: PathBuf, cx: &mut Context<Self>) -> Self {
-        let (sender, receiver) = backend::start(database);
+        let (sender, receiver) = backend::start(database.clone());
         cx.spawn(async move |session, cx| {
             loop {
                 cx.background_executor()
@@ -208,10 +210,17 @@ impl Session {
             search_text: String::new(),
             filter: None,
             blobs,
+            database,
             library_cover,
             fixtures,
             place_label: None,
         }
+    }
+
+    /// Whether the open database is still a marked disposable copy, which
+    /// edits that cannot be undone require.
+    pub fn disposable(&self) -> bool {
+        crate::marked_disposable(&self.database)
     }
 
     /// The library's blob store.
@@ -939,14 +948,6 @@ impl Session {
         }
         cx.emit(Change::Viewer);
         cx.emit(Change::Navigation);
-    }
-
-    pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.close_viewer(cx)
-        } else {
-            self.open_viewer(cx)
-        }
     }
 
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {

@@ -112,6 +112,21 @@ impl Camera {
         }
     }
 
+    /// The detail window's resize: the scale follows the fit scale's change
+    /// and the offset the pane's, so a fitted image stays fitted and a
+    /// zoomed one keeps its framing (`DetailWindow`'s `ResizeObserver`).
+    pub fn resized(self, image: Size, from: Size, to: Size) -> Self {
+        let (old, new) = (fit_scale(image, from), fit_scale(image, to));
+        if from.0 <= 0. || from.1 <= 0. || old <= 0. || new <= 0. {
+            return self;
+        }
+        Self {
+            scale: self.scale * new / old,
+            tx: self.tx * to.0 / from.0,
+            ty: self.ty * to.1 / from.1,
+        }
+    }
+
     /// Where the image is drawn, relative to the pane's top-left corner:
     /// `(left, top, width, height)`.
     pub fn image_rect(&self, image: Size, pane: Size) -> (f32, f32, f32, f32) {
@@ -251,6 +266,29 @@ mod tests {
         let fitted = Camera::fit(IMAGE, PANE);
         assert_eq!(fitted.image_rect(IMAGE, PANE), (0., 100., 800., 400.));
         assert_eq!(fitted.percent(), 40.);
+    }
+
+    #[test]
+    fn a_resized_pane_keeps_the_framing() {
+        // Fitted stays fitted.
+        let fitted = Camera::fit(IMAGE, PANE);
+        let bigger = (1200., 900.);
+        assert!(close(
+            fitted.resized(IMAGE, PANE, bigger).scale,
+            fit_scale(IMAGE, bigger)
+        ));
+        // A zoomed, panned view scales with the pane.
+        let zoomed = Camera {
+            scale: 0.8,
+            tx: 40.,
+            ty: -30.,
+        };
+        let resized = zoomed.resized(IMAGE, PANE, bigger);
+        assert!(close(resized.scale, 1.2));
+        assert!(close(resized.tx, 60.));
+        assert!(close(resized.ty, -45.));
+        // Nothing measured yet: unchanged.
+        assert_eq!(zoomed.resized(IMAGE, (0., 0.), bigger), zoomed);
     }
 
     #[test]

@@ -153,7 +153,7 @@ impl RenderOnce for DocumentShell {
                     .child(
                         ui::icon_button("document-previous", "toolbar-chevron-left")
                             .disabled(!can_previous)
-                            .tip(ui::tip("Previous page").keys(&["J"]))
+                            .tip(ui::tip("Previous page").shortcut("document.previousPage", cx))
                             .on_click(move |_, window, cx| {
                                 if let Some(previous) = &previous {
                                     previous(window, cx);
@@ -179,7 +179,7 @@ impl RenderOnce for DocumentShell {
                     .child(
                         ui::icon_button("document-next", "toolbar-chevron-right")
                             .disabled(!can_next)
-                            .tip(ui::tip("Next page").keys(&["L"]))
+                            .tip(ui::tip("Next page").shortcut("document.nextPage", cx))
                             .on_click(move |_, window, cx| {
                                 if let Some(next) = &next {
                                     next(window, cx);

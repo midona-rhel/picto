@@ -56,7 +56,7 @@ pub fn view(
             ui::action_button("document-open-default", Look::Standard)
                 .icon("menu-external-link", 14.)
                 .label("Open with Default App")
-                .tip(ui::tip("Open with Default App").keys(&["⇧", "↩"]))
+                .tip(ui::tip("Open with Default App").shortcut("file.openDefaultApp", cx))
                 .on_click(move |_, _, cx| cx.open_with_system(&path)),
         );
     shell::shell(scroll, 1, 1).content(Some(content))

@@ -17,6 +17,8 @@ pub mod unsupported;
 #[cfg(test)]
 mod matrix;
 
+use super::surface::MediaSurface;
+use crate::keymap::Scope;
 use font::FontViewer;
 use gpui::*;
 use kind::RendererKind;
@@ -30,16 +32,47 @@ actions!(
     [PreviousPage, NextPage, PreviewLarger, PreviewSmaller]
 );
 
-/// `document.previousPage` and `document.nextPage` (J and L), and the font
-/// preview's Cmd+= and Cmd+−, while the viewer has the keyboard.
+/// The font preview's Cmd+= and Cmd+−, which `FontViewer.tsx` handles
+/// itself rather than through the shortcut registry, in each host that shows
+/// a document. The registry's J and L pages are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
-    let viewer = Some("Viewer && !Flash");
-    cx.bind_keys([
-        KeyBinding::new("j", PreviousPage, viewer),
-        KeyBinding::new("l", NextPage, viewer),
-        KeyBinding::new("cmd-=", PreviewLarger, viewer),
-        KeyBinding::new("cmd--", PreviewSmaller, viewer),
-    ]);
+    let mut bindings = Vec::new();
+    for scope in [Scope::Viewer, Scope::DetailWindow] {
+        let predicate = scope.predicate();
+        bindings.push(KeyBinding::new(
+            "cmd-=",
+            PreviewLarger,
+            predicate.as_deref(),
+        ));
+        bindings.push(KeyBinding::new(
+            "cmd--",
+            PreviewSmaller,
+            predicate.as_deref(),
+        ));
+    }
+    cx.bind_keys(bindings);
+}
+
+/// Hands the document keys to the media surface. A host puts this on the
+/// element that has the keyboard, since the surface itself never does.
+pub fn handle_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSurface>) -> E {
+    let (previous, next, larger, smaller) = (
+        surface.clone(),
+        surface.clone(),
+        surface.clone(),
+        surface.clone(),
+    );
+    element
+        .on_action(move |_: &PreviousPage, _, cx| {
+            previous.update(cx, |surface, cx| surface.previous_page(cx))
+        })
+        .on_action(move |_: &NextPage, _, cx| next.update(cx, |surface, cx| surface.next_page(cx)))
+        .on_action(move |_: &PreviewLarger, _, cx| {
+            larger.update(cx, |surface, cx| surface.preview_size(true, cx))
+        })
+        .on_action(move |_: &PreviewSmaller, _, cx| {
+            smaller.update(cx, |surface, cx| surface.preview_size(false, cx))
+        })
 }
 
 /// An open document and the view that shows it.
