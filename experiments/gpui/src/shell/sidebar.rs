@@ -154,6 +154,8 @@ const SYSTEM_ROWS: [(&str, &str, &str); 10] = [
     ("system:trash", "Trash", "menu-trash"),
 ];
 const ALWAYS_SHOWN: [&str; 2] = ["system:active", "system:trash"];
+/// The id Quick Access is folded under.
+const QUICK_ACCESS: &str = "quick_access";
 
 /// What a context menu was opened on.
 #[derive(Clone)]
@@ -2081,6 +2083,32 @@ impl Render for Sidebar {
             ));
         }
 
+        // Quick Access, the folders and smart folders pinned to it, in
+        // their order, when there are any.
+        let quick = self
+            .quick_access(cx)
+            .iter()
+            .filter_map(|id| ids.iter().position(|known| known == id))
+            .filter(|index| section(*index).is_some())
+            .collect::<Vec<_>>();
+        if prefs.show_quick_access && !quick.is_empty() {
+            let expanded = !self.collapsed.contains(QUICK_ACCESS);
+            list = list.child(
+                ui::section_header("quick-access", "Quick Access")
+                    .count(if prefs.show_counts { quick.len() } else { 0 })
+                    .expanded(expanded)
+                    .on_toggle(
+                        cx.listener(|this, _, _, cx| this.toggle_collapsed(QUICK_ACCESS, cx)),
+                    ),
+            );
+            if expanded {
+                list = list.child(div().h(px(2.)));
+                for index in quick {
+                    list = list.child(self.quick_row(index, &entries[index], active == index, cx));
+                }
+            }
+        }
+
         let mut matches = 0;
         for which in SECTIONS {
             if !prefs.shows(which) {
@@ -2272,6 +2300,44 @@ impl Render for Sidebar {
 }
 
 impl Sidebar {
+    /// A Quick Access row: the node's glyph, name and count, without its
+    /// tree, opening it and offering its menu as the tree's row does.
+    fn quick_row(
+        &self,
+        index: usize,
+        entry: &Navigation,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> ui::sidebar_row::SidebarRow {
+        let prefs = Preferences::current(cx);
+        let id = entry.id();
+        let icon = match &entry.icon {
+            Some(name) if crate::assets::has_icon(name) => name.clone(),
+            None if entry.group => "layout-grid".into(),
+            _ => "folder".into(),
+        };
+        let node = id.clone();
+        ui::sidebar_row(
+            ElementId::Name(format!("quick-{id}").into()),
+            icon,
+            entry.label.clone(),
+        )
+        .tint(entry.tint.map(rgb))
+        .count(entry.count.filter(|_| prefs.show_counts))
+        .active(active)
+        .context_highlight(!active && self.context.as_deref() == Some(id.as_str()))
+        .focused(self.keyboard_row.as_deref() == Some(format!("quick-{id}").as_str()))
+        .dragging(self.grid_dragging || self.node_drag.is_some())
+        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            this.click_node(index, node.clone(), event.modifiers(), cx)
+        }))
+        .on_secondary(
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.node_menu(index, event.position, window, cx)
+            }),
+        )
+    }
+
     /// One folder or smart-folder row.
     #[allow(clippy::too_many_arguments)]
     fn node_row(

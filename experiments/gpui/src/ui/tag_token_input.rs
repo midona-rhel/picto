@@ -120,6 +120,11 @@ impl TagTokenInput {
         &self.values
     }
 
+    /// The search field's focus, to type in it at once.
+    pub fn input_focus(&self, cx: &App) -> FocusHandle {
+        self.input.focus_handle(cx)
+    }
+
     fn search_for(&mut self, query: String, cx: &mut Context<Self>) {
         if query.trim().is_empty() {
             self.pending = None;
