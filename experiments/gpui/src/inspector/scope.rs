@@ -181,7 +181,9 @@ impl Inspector {
                     .iter()
                     .take(COVERS)
                     .map(|item| Cover {
-                        thumbnail: session.thumbnail(&item.content_hash),
+                        thumbnail: crate::viewer::thumbnail_file(
+                            session.thumbnail(&item.content_hash),
+                        ),
                         background: item
                             .palette
                             .first()

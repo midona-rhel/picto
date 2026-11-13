@@ -1072,7 +1072,9 @@ impl Inspector {
                     .iter()
                     .find(|media| media.media_id == details.root.cover_media_id)
                     .or(details.media.first())
-                    .map(|media| session.thumbnail(&media.facts.content_hash))
+                    .map(|media| {
+                        crate::viewer::thumbnail_file(session.thumbnail(&media.facts.content_hash))
+                    })
             });
             let tags = details.as_ref().map_or_else(Vec::new, |details| {
                 details

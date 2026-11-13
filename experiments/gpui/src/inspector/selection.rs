@@ -82,13 +82,6 @@ fn chosen_order(previous: &[RootId], selected: &[RootId], focus: Option<RootId>)
     order
 }
 
-/// Items in the order of their import, the newest last.
-fn newest_last(items: impl Iterator<Item = (i64, RootId)>) -> Vec<RootId> {
-    let mut items = items.collect::<Vec<_>>();
-    items.sort_by_key(|(imported, id)| (*imported, id.0));
-    items.into_iter().map(|(_, id)| id).collect()
-}
-
 impl SelectionState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Inspector>) -> Self {
         Self {
@@ -116,21 +109,8 @@ impl Inspector {
     /// Follows the grid's selection, and asks for the summary of a new
     /// multiple selection. The summary shown so far stays until it arrives.
     pub(super) fn selection_changed(&mut self, cx: &mut Context<Self>) {
-        let (selected, focus, everything) = {
+        let (selected, focus) = {
             let session = self.session.read(cx);
-            // Select All covers the whole result, which production
-            // summarises as a query: its covers are the six newest imports.
-            let everything = (session.selection.len() > 1
-                && session.selection.len() == session.items.len()
-                && session.items.len() as u64 == session.total)
-                .then(|| {
-                    newest_last(
-                        session
-                            .items
-                            .iter()
-                            .map(|item| (item.imported_at_ms, item.root_id)),
-                    )
-                });
             (
                 session
                     .selection
@@ -139,14 +119,8 @@ impl Inspector {
                     .map(|item| item.root_id)
                     .collect::<Vec<_>>(),
                 session.selected_item().map(|item| item.root_id),
-                everything,
             )
         };
-        if let Some(order) = everything {
-            self.selection.order = order;
-            self.ensure_summary(cx);
-            return;
-        }
         self.selection.order = chosen_order(&self.selection.order, &selected, focus);
         self.ensure_summary(cx);
     }
@@ -370,7 +344,7 @@ impl Inspector {
             (
                 cards
                     .iter()
-                    .map(|card| session.thumbnail(&card.hash))
+                    .map(|card| crate::viewer::thumbnail_file(session.thumbnail(&card.hash)))
                     .collect::<Vec<_>>(),
                 cards
                     .iter()
@@ -701,7 +675,7 @@ impl Inspector {
 
 #[cfg(test)]
 mod tests {
-    use super::{chosen_order, newest_last};
+    use super::chosen_order;
     use picto_library::RootId;
 
     fn ids(values: &[u32]) -> Vec<RootId> {
@@ -718,12 +692,6 @@ mod tests {
     fn items_taken_out_of_the_selection_leave_the_order() {
         let order = chosen_order(&ids(&[5, 9, 1]), &ids(&[1, 5]), Some(RootId(5)));
         assert_eq!(order, ids(&[5, 1]));
-    }
-
-    #[test]
-    fn select_all_puts_the_newest_imports_last() {
-        let order = newest_last([(30, RootId(1)), (10, RootId(2)), (20, RootId(3))].into_iter());
-        assert_eq!(order, ids(&[2, 3, 1]));
     }
 
     #[test]
