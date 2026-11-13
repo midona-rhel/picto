@@ -1,0 +1,1282 @@
+//! The media player (`VideoPlayer.tsx`) for video and audio items: the
+//! picture (or, for audio, the visualizer) filling the pane, and the
+//! controls along the bottom that hide 2.5 s after the pointer stops: the
+//! scrubber with its buffered and played ranges and the time under the
+//! pointer (or the waveform, for audio), play and the 5 s skips, the time,
+//! the speed menu, loop, the volume slider and mute, and fullscreen; the
+//! volume display that keys bring up; and the player's keys.
+//!
+//! The player knows media only through [`backend::Backend`]; decoding never
+//! runs on the thread that draws.
+pub mod audio;
+#[cfg(target_os = "macos")]
+mod avf;
+pub mod backend;
+mod button;
+mod dsp;
+mod ffmpeg;
+pub mod model;
+mod visualizer;
+
+use crate::theme::Text as _;
+use crate::{motion, theme, ui};
+use backend::{Backend, Frame, Status};
+use button::{label_button, media_button};
+use gpui::*;
+use model::{
+    ControlsVisibility, Kind, Options, PLAYBACK_RATES, Playback, SKIP_STEP, VOLUME_HUD_DURATION,
+    VOLUME_STEP,
+};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+actions!(
+    video,
+    [
+        TogglePlay,
+        SeekBackward,
+        SeekForward,
+        StepFrameBackward,
+        StepFrameForward,
+        VolumeUp,
+        VolumeDown,
+        ToggleMute,
+        ToggleLoop,
+        RateIncrease,
+        RateDecrease,
+        RateReset
+    ]
+);
+
+/// Whether a media type plays in this player, and as what.
+pub fn kind_of(mime: &str) -> Option<Kind> {
+    if mime.starts_with("video/") {
+        Some(Kind::Video)
+    } else if mime.starts_with("audio/") {
+        Some(Kind::Audio)
+    } else {
+        None
+    }
+}
+
+/// A viewer's key context, with `Media` added while it shows the player,
+/// for the player's keys (`keymap::Scope::Media`).
+pub fn key_context(base: &'static str, showing: bool) -> KeyContext {
+    let mut context = KeyContext::default();
+    context.add(base);
+    if showing {
+        context.add("Media");
+    }
+    context
+}
+
+/// Forwards the player's actions from the element that has the keyboard
+/// (a viewer) to the player, if one is showing.
+pub fn on_actions<E: InteractiveElement>(
+    element: E,
+    player: impl Fn(&App) -> Option<Entity<VideoPlayer>> + Clone + 'static,
+) -> E {
+    fn forward<A: Action, E: InteractiveElement>(
+        element: E,
+        player: impl Fn(&App) -> Option<Entity<VideoPlayer>> + 'static,
+        run: fn(&mut VideoPlayer, &mut Context<VideoPlayer>),
+    ) -> E {
+        element.on_action(move |_: &A, _, cx| {
+            if let Some(player) = player(cx) {
+                player.update(cx, |player, cx| {
+                    player.reveal(cx);
+                    run(player, cx);
+                    cx.notify();
+                });
+            }
+        })
+    }
+    let element = forward::<TogglePlay, _>(element, player.clone(), |p, cx| p.toggle_play(cx));
+    let element = forward::<SeekBackward, _>(element, player.clone(), |p, _| p.seek_by(-SKIP_STEP));
+    let element = forward::<SeekForward, _>(element, player.clone(), |p, _| p.seek_by(SKIP_STEP));
+    let element = forward::<StepFrameBackward, _>(element, player.clone(), |p, _| p.step_frame(-1));
+    let element = forward::<StepFrameForward, _>(element, player.clone(), |p, _| p.step_frame(1));
+    let element = forward::<VolumeUp, _>(element, player.clone(), |p, cx| {
+        p.set_volume(p.playback.volume + VOLUME_STEP);
+        p.show_hud(cx);
+    });
+    let element = forward::<VolumeDown, _>(element, player.clone(), |p, cx| {
+        p.set_volume(p.playback.volume - VOLUME_STEP);
+        p.show_hud(cx);
+    });
+    let element = forward::<ToggleMute, _>(element, player.clone(), |p, _| p.toggle_mute());
+    let element = forward::<ToggleLoop, _>(element, player.clone(), |p, _| {
+        p.playback.looping = !p.playback.looping
+    });
+    let element = forward::<RateIncrease, _>(element, player.clone(), |p, _| {
+        p.set_rate(model::cycle_rate(p.playback.rate, 1))
+    });
+    let element = forward::<RateDecrease, _>(element, player.clone(), |p, _| {
+        p.set_rate(model::cycle_rate(p.playback.rate, -1))
+    });
+    forward::<RateReset, _>(element, player, |p, _| p.set_rate(1.))
+}
+
+/// `reportPlaybackFailure`: one diagnostic line in production's shape.
+fn report_playback_failure(source: &Path, message: &str, status: &Status) {
+    let entry = serde_json::json!({
+        "level": "ERROR",
+        "source": "renderer",
+        "target": "media.playback",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "message": serde_json::json!({
+            "source": source.display().to_string(),
+            "code": "MEDIA_ERR_DECODE",
+            "message": message,
+            "currentTime": status.position,
+            "duration": status.duration,
+            "paused": !status.playing,
+        })
+        .to_string(),
+    });
+    eprintln!("{entry}");
+}
+
+/// The scrubber and volume slider's drags, and the pointer over the
+/// scrubber.
+#[derive(Clone, Copy, PartialEq)]
+enum Drag {
+    Seek,
+    Volume,
+}
+
+pub struct VideoPlayer {
+    kind: Kind,
+    path: PathBuf,
+    backend: Option<Box<dyn Backend>>,
+    /// AVFoundation refused the file and `ffmpeg` took over.
+    fell_back: bool,
+    playback: Playback,
+    status: Status,
+    reported: bool,
+    frame: Option<Frame>,
+    /// The thumbnail, shown until the first picture.
+    poster: Option<Arc<RenderImage>>,
+    controls: ControlsVisibility,
+    controls_fade: motion::Fade,
+    hide_task: Option<Task<()>>,
+    drag: Option<Drag>,
+    /// The scrubber's and the volume track's bounds, and where the pointer
+    /// is over the scrubber (a fraction), while it is.
+    bar: Bounds<Pixels>,
+    bar_hover: Option<f32>,
+    bar_fraction: f32,
+    bar_expand: motion::Fade,
+    volume_track: Bounds<Pixels>,
+    volume_shown: bool,
+    volume_visit: u64,
+    rate_open: bool,
+    /// The rate button's container and the open list, for closing the list
+    /// on a press outside both.
+    rate_bounds: Bounds<Pixels>,
+    rate_menu_bounds: Bounds<Pixels>,
+    /// When the volume display was last brought up.
+    hud: Option<Instant>,
+    hud_fade: motion::Fade,
+    hud_visit: u64,
+    analyser: visualizer::Analyser,
+    /// The waveform the audio scrubber draws: unplayed and played.
+    waveform: Option<(Arc<RenderImage>, Arc<RenderImage>)>,
+    _waveform_task: Option<Task<()>>,
+    /// Frames are polled until this time even while paused, so a seek's
+    /// picture arrives.
+    settle_until: Instant,
+    /// Until when a picture is waited for after opening.
+    first_picture_until: Instant,
+}
+
+impl VideoPlayer {
+    /// Opens `path` and starts it as `MediaView` does: autoplay and loop from
+    /// the options, sound muted for video. `waveform` is the audio item's
+    /// thumbnail, which is its waveform.
+    pub fn new(
+        kind: Kind,
+        path: PathBuf,
+        mime: &str,
+        options: Options,
+        waveform: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let now = Instant::now();
+        let opened = match kind {
+            Kind::Video => backend::open_video(&path, mime),
+            Kind::Audio => backend::open_audio(&path),
+        };
+        let mut playback = Playback::new(options);
+        let (backend, status) = match opened {
+            Ok(mut backend) => {
+                backend.set_volume(playback.volume, playback.muted);
+                backend.set_rate(playback.rate);
+                if options.auto_play {
+                    backend.play();
+                    playback.playing = true;
+                }
+                (Some(backend), Status::default())
+            }
+            Err(error) => (
+                None,
+                Status {
+                    error: Some(error),
+                    ..Status::default()
+                },
+            ),
+        };
+        let waveform_task = waveform.filter(|_| kind == Kind::Audio).map(|thumbnail| {
+            let load = cx
+                .background_executor()
+                .spawn(async move { waveform_layers(&thumbnail) });
+            cx.spawn(async move |this, cx| {
+                if let Some(layers) = load.await {
+                    let _ = this.update(cx, |this: &mut Self, cx| {
+                        this.waveform = Some(layers);
+                        cx.notify();
+                    });
+                }
+            })
+        });
+        let mut player = Self {
+            kind,
+            path,
+            backend,
+            fell_back: false,
+            playback,
+            status,
+            reported: false,
+            frame: None,
+            poster: None,
+            controls: ControlsVisibility::new(now),
+            controls_fade: motion::Fade::at(true),
+            hide_task: None,
+            drag: None,
+            bar: Bounds::default(),
+            bar_hover: None,
+            bar_fraction: 0.,
+            bar_expand: motion::Fade::default(),
+            volume_track: Bounds::default(),
+            volume_shown: false,
+            volume_visit: 0,
+            rate_open: false,
+            rate_bounds: Bounds::default(),
+            rate_menu_bounds: Bounds::default(),
+            hud: None,
+            hud_fade: motion::Fade::default(),
+            hud_visit: 0,
+            analyser: visualizer::Analyser::default(),
+            waveform: None,
+            _waveform_task: waveform_task,
+            settle_until: now,
+            first_picture_until: now + Duration::from_secs(10),
+        };
+        player.schedule_hide(cx);
+        player
+    }
+
+    /// The thumbnail to show until the first picture.
+    pub fn set_poster(&mut self, poster: Option<Arc<RenderImage>>, cx: &mut Context<Self>) {
+        let same = match (&self.poster, &poster) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.poster = poster;
+            cx.notify();
+        }
+    }
+
+    /// Keeps taking pictures for a moment after a seek or a change of
+    /// state, so the new picture arrives even while paused.
+    fn settle(&mut self) {
+        self.settle_until = Instant::now() + Duration::from_secs(1);
+    }
+
+    /// `revealControls`.
+    fn reveal(&mut self, cx: &mut Context<Self>) {
+        self.controls.reveal(Instant::now());
+        self.controls_fade.set(true, motion::MEDIA_CONTROLS_FADE);
+        self.schedule_hide(cx);
+        cx.notify();
+    }
+
+    /// Wakes the player when the controls are due to hide.
+    fn schedule_hide(&mut self, cx: &mut Context<Self>) {
+        self.hide_task = self.controls.deadline().map(|deadline| {
+            cx.spawn(async move |this, cx| {
+                let wait = deadline.saturating_duration_since(Instant::now());
+                cx.background_executor().timer(wait).await;
+                let _ = this.update(cx, |this: &mut Self, cx| {
+                    if this.controls.tick(Instant::now()) {
+                        this.controls_fade.set(false, motion::MEDIA_CONTROLS_FADE);
+                        this.rate_open = false;
+                        cx.notify();
+                    }
+                });
+            })
+        });
+    }
+
+    fn set_seeking(&mut self, seeking: bool, cx: &mut Context<Self>) {
+        self.controls.set_hold(seeking, Instant::now());
+        if seeking {
+            self.controls_fade.set(true, motion::MEDIA_CONTROLS_FADE);
+        }
+        self.schedule_hide(cx);
+    }
+
+    /// `togglePlay`: playing from the end starts again from the beginning,
+    /// as a media element does.
+    fn toggle_play(&mut self, _: &mut Context<Self>) {
+        let Some(backend) = &mut self.backend else {
+            return;
+        };
+        if self.playback.playing {
+            backend.pause();
+            self.playback.playing = false;
+        } else {
+            if self.status.ended {
+                backend.seek(0.);
+                self.playback.seek_to(0., Instant::now());
+            }
+            backend.play();
+            self.playback.playing = true;
+        }
+        self.settle();
+    }
+
+    fn seek(&mut self, target: f64) {
+        let target = self.playback.seek_to(target, Instant::now());
+        if let Some(backend) = &mut self.backend {
+            backend.seek(target);
+        }
+        self.settle();
+    }
+
+    fn seek_by(&mut self, delta: f64) {
+        self.seek(model::seek_relative(
+            self.playback.current,
+            delta,
+            self.playback.duration,
+        ));
+    }
+
+    /// `stepFrame`: pauses, then moves one frame.
+    fn step_frame(&mut self, direction: i8) {
+        if let Some(backend) = &mut self.backend {
+            backend.pause();
+        }
+        self.playback.playing = false;
+        let fps = self.status.fps.unwrap_or(model::DEFAULT_FPS);
+        self.seek(model::step_frame(
+            self.playback.current,
+            direction,
+            fps,
+            self.playback.duration,
+        ));
+    }
+
+    fn set_volume(&mut self, volume: f32) {
+        self.playback.set_volume(volume);
+        self.apply_volume();
+    }
+
+    fn toggle_mute(&mut self) {
+        self.playback.muted = !self.playback.muted;
+        self.apply_volume();
+    }
+
+    fn apply_volume(&mut self) {
+        if let Some(backend) = &mut self.backend {
+            backend.set_volume(self.playback.volume, self.playback.muted);
+        }
+    }
+
+    fn set_rate(&mut self, rate: f32) {
+        self.playback.rate = rate;
+        if let Some(backend) = &mut self.backend {
+            backend.set_rate(rate);
+        }
+    }
+
+    fn toggle_fullscreen(&mut self) {
+        if self.kind == Kind::Audio {
+            return;
+        }
+        // TODO: fullscreen the player alone (`requestFullscreen` on the
+        // player's element): the shell has to give the pane the whole
+        // window and the window go full screen.
+    }
+
+    /// `VolumeHUD`: shown for 800 ms after a volume key.
+    fn show_hud(&mut self, cx: &mut Context<Self>) {
+        let first = self.hud.is_none();
+        self.hud = Some(Instant::now());
+        if first {
+            self.hud_fade = motion::Fade::default();
+            self.hud_fade.set(true, motion::MEDIA_VOLUME_HUD_IN);
+        }
+        self.hud_visit += 1;
+        let visit = self.hud_visit;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(VOLUME_HUD_DURATION).await;
+            let _ = this.update(cx, |this: &mut Self, cx| {
+                if this.hud_visit == visit {
+                    this.hud = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// `VolumePanel`'s `enter` and `leave`: the slider shows at once and goes
+    /// 300 ms after the pointer leaves, unless it is being dragged.
+    fn hover_volume(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.volume_visit += 1;
+        if hovered {
+            self.volume_shown = true;
+            cx.notify();
+        } else if self.drag != Some(Drag::Volume) {
+            let visit = self.volume_visit;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(motion::MEDIA_VOLUME_PANEL_GRACE)
+                    .await;
+                let _ = this.update(cx, |this: &mut Self, cx| {
+                    if this.volume_visit == visit {
+                        this.volume_shown = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Takes in what the media is doing, and the next picture.
+    fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(backend) = &mut self.backend else {
+            return;
+        };
+        let status = backend.status();
+        if let Some(error) = &status.error {
+            // AVFoundation turns some QuickTime files down that ffmpeg plays.
+            if backend.is_native() && self.frame.is_none() && !self.fell_back {
+                self.fell_back = true;
+                if let Ok(mut fallback) = backend::open_video_fallback(&self.path) {
+                    fallback.set_volume(self.playback.volume, self.playback.muted);
+                    fallback.set_rate(self.playback.rate);
+                    if self.playback.playing {
+                        fallback.play();
+                    }
+                    self.backend = Some(fallback);
+                    self.settle();
+                    return;
+                }
+            }
+            if !self.reported {
+                self.reported = true;
+                report_playback_failure(&self.path, error, &status);
+            }
+        }
+        let now = Instant::now();
+        self.playback.duration = status.duration;
+        self.playback.buffered = status.buffered;
+        if self.drag != Some(Drag::Seek) {
+            self.playback.report_position(status.position, now);
+        }
+        if status.ended && self.playback.playing {
+            if self.playback.looping {
+                backend.seek(0.);
+                backend.play();
+                self.playback.seek_to(0., now);
+                self.settle_until = now + Duration::from_secs(1);
+            } else {
+                self.playback.playing = false;
+            }
+        } else if status.error.is_some() {
+            self.playback.playing = false;
+        }
+        self.status = status;
+        if let Some(frame) = backend.take_frame()
+            && let Some(Frame::Image(old)) = self.frame.replace(frame)
+        {
+            cx.drop_image(old, Some(window));
+        }
+    }
+
+    // ---- drawing ----
+
+    fn picture(&self) -> Option<AnyElement> {
+        match &self.frame {
+            #[cfg(target_os = "macos")]
+            Some(Frame::Surface(buffer)) => Some(
+                surface(buffer.clone())
+                    .object_fit(ObjectFit::Contain)
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .into_any_element(),
+            ),
+            Some(Frame::Image(image)) => Some(
+                img(image.clone())
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element(),
+            ),
+            None => self.poster.clone().map(|poster| {
+                img(poster)
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+                    .into_any_element()
+            }),
+        }
+    }
+
+    /// `ProgressBar`: the track, or the waveform for audio, with the time
+    /// under the pointer.
+    fn progress_bar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let progress = model::progress(self.playback.current, self.playback.duration);
+        let buffered = model::progress(self.playback.buffered, self.playback.duration);
+        let waveform = self.waveform.clone().filter(|_| self.kind == Kind::Audio);
+        let height = if waveform.is_some() { 40. } else { 16. };
+        let entity = cx.entity().downgrade();
+        let mut bar = div()
+            .id("media-progress")
+            .relative()
+            .w_full()
+            .h(px(height))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let _ = entity.update(cx, |this, _| this.bar = bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            );
+        bar = match waveform {
+            Some((base, played)) => {
+                let width = f32::from(self.bar.size.width);
+                let layer = |image: Arc<RenderImage>| {
+                    img(image)
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(px(width))
+                        .h(px(40.))
+                        .object_fit(ObjectFit::Fill)
+                };
+                bar.min_w(px(64.))
+                    .child(layer(base))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .h_full()
+                            .w(relative(progress))
+                            .overflow_hidden()
+                            .child(layer(played)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(relative(progress))
+                            .w(px(1.))
+                            .bg(rgba(theme::MEDIA_FILL)),
+                    )
+            }
+            None => {
+                // `.progressTrack`, 4px tall, 6px while hovered or dragged.
+                let expand = self.bar_expand.value_with(motion::EASE);
+                let thickness = 4. + 2. * expand;
+                let radius = thickness / 2.;
+                let range = |fraction: f32, color: u32| {
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded(px(radius))
+                        .bg(rgba(color))
+                };
+                bar.child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .h(px(thickness))
+                        .rounded(px(radius))
+                        .overflow_hidden()
+                        .bg(rgba(theme::MEDIA_TRACK))
+                        .child(range(buffered, theme::MEDIA_FAINT))
+                        .child(range(progress, theme::MEDIA_FILL)),
+                )
+            }
+        };
+        let hover = self
+            .bar_hover
+            .or_else(|| (self.drag == Some(Drag::Seek)).then_some(self.bar_fraction));
+        if let Some(fraction) = hover.filter(|_| self.playback.duration > 0.) {
+            // `.progressHoverTime`: centred over the pointer, its bottom 20px
+            // above the bar's.
+            bar = bar.child(
+                div()
+                    .absolute()
+                    .bottom(px(20.))
+                    .left(relative(fraction))
+                    .w(px(0.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(3.))
+                            .bg(rgba(theme::MEDIA_POPUP))
+                            .text_color(rgba(theme::MEDIA_FILL))
+                            .font_family(theme::FONT_MONO)
+                            .text(theme::TEXT_CAPTION)
+                            .whitespace_nowrap()
+                            .child(model::format_time(fraction as f64 * self.playback.duration)),
+                    ),
+            );
+        }
+        bar.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if !*hovered {
+                this.bar_hover = None;
+            }
+            this.bar_expand.set(
+                *hovered || this.drag == Some(Drag::Seek),
+                motion::MEDIA_SCRUBBER_EXPAND,
+            );
+            cx.notify();
+        }))
+        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+            this.bar_hover = Some(model::fraction_at(
+                f32::from(event.position.x),
+                f32::from(this.bar.origin.x),
+                f32::from(this.bar.size.width),
+            ));
+            cx.notify();
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.reveal(cx);
+                this.drag = Some(Drag::Seek);
+                this.set_seeking(true, cx);
+                this.scrub(event.position);
+                this.bar_expand.set(true, motion::MEDIA_SCRUBBER_EXPAND);
+                cx.notify();
+            }),
+        )
+    }
+
+    fn scrub(&mut self, position: Point<Pixels>) {
+        self.bar_fraction = model::fraction_at(
+            f32::from(position.x),
+            f32::from(self.bar.origin.x),
+            f32::from(self.bar.size.width),
+        );
+        self.seek(self.bar_fraction as f64 * self.playback.duration);
+    }
+
+    fn drag_volume(&mut self, position: Point<Pixels>) {
+        let volume = model::volume_at(
+            f32::from(position.y),
+            f32::from(self.volume_track.origin.y),
+            f32::from(self.volume_track.size.height),
+        );
+        self.set_volume(volume);
+    }
+
+    /// `VolumePanel`: the mute button, and the slider above it while the
+    /// pointer is over either.
+    fn volume_panel(&self, cx: &mut Context<Self>) -> Div {
+        let (volume, muted) = (self.playback.volume, self.playback.muted);
+        let effective = self.playback.effective_volume();
+        let label = if muted { "Unmute" } else { "Mute" };
+        let mut panel = div().relative().flex().items_center().child(
+            div()
+                .id("media-volume-hover")
+                .on_hover(
+                    cx.listener(|this, hovered: &bool, _, cx| this.hover_volume(*hovered, cx)),
+                )
+                .child(
+                    media_button(
+                        "media-mute",
+                        model::volume_icon(volume, muted),
+                        16.,
+                        ui::tip(label).shortcut("video.toggleMute", cx),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_mute();
+                        cx.notify();
+                    })),
+                ),
+        );
+        if self.volume_shown {
+            let entity = cx.entity().downgrade();
+            let popup = div()
+                .id("media-volume-popup")
+                .occlude()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(4.))
+                .px(px(6.))
+                .py(px(8.))
+                .rounded(px(theme::RADIUS_MD))
+                .bg(rgba(theme::MEDIA_POPUP))
+                .border_1()
+                .border_color(rgba(theme::MEDIA_POPUP_BORDER))
+                .on_hover(
+                    cx.listener(|this, hovered: &bool, _, cx| this.hover_volume(*hovered, cx)),
+                )
+                .child(
+                    div()
+                        .font_family(theme::FONT_MONO)
+                        .text(theme::TEXT_XS)
+                        .text_color(rgba(theme::MEDIA_TEXT))
+                        .child(format!("{}%", (effective * 100.).round() as i32)),
+                )
+                .child(
+                    div()
+                        .id("media-volume-track")
+                        .relative()
+                        .w(px(4.))
+                        .h(px(80.))
+                        .rounded(px(2.))
+                        .bg(rgba(theme::MEDIA_TRACK))
+                        .cursor_pointer()
+                        .child(
+                            canvas(
+                                move |bounds, _, cx| {
+                                    let _ = entity.update(cx, |this, _| this.volume_track = bounds);
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .bottom_0()
+                                .w_full()
+                                .h(relative(effective))
+                                .rounded(px(2.))
+                                .bg(rgba(theme::MEDIA_FILL)),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.drag = Some(Drag::Volume);
+                                this.drag_volume(event.position);
+                                cx.notify();
+                            }),
+                        ),
+                );
+            // `bottom: 36px; left: 50%; transform: translateX(-50%)`.
+            panel = panel.child(
+                div()
+                    .absolute()
+                    .bottom(px(36.))
+                    .left(relative(0.5))
+                    .w(px(0.))
+                    .flex()
+                    .justify_center()
+                    .child(popup),
+            );
+        }
+        panel
+    }
+
+    /// `PlaybackRateMenu`: the rate button and, while open, its list above.
+    fn rate_menu(&self, cx: &mut Context<Self>) -> Div {
+        let rate = self.playback.rate;
+        let entity = cx.entity().downgrade();
+        let mut container = div()
+            .relative()
+            .flex()
+            .child(
+                canvas(
+                    move |bounds, _, cx| {
+                        let _ = entity.update(cx, |this, _| this.rate_bounds = bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                label_button(
+                    "media-rate",
+                    model::rate_label(rate),
+                    ui::tip("Playback speed"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.rate_open = !this.rate_open;
+                    cx.notify();
+                })),
+            );
+        if self.rate_open {
+            let entity = cx.entity().downgrade();
+            let mut menu = div()
+                .id("media-rate-menu")
+                .occlude()
+                .relative()
+                .child(
+                    canvas(
+                        move |bounds, _, cx| {
+                            let _ = entity.update(cx, |this, _| this.rate_menu_bounds = bounds);
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+                .flex()
+                .flex_col()
+                .py(px(4.))
+                .min_w(px(56.))
+                .rounded(px(theme::RADIUS_MD))
+                .bg(rgba(theme::MEDIA_MENU))
+                .border_1()
+                .border_color(rgba(theme::MEDIA_POPUP_BORDER));
+            for choice in PLAYBACK_RATES {
+                menu = menu.child(rate_row(choice, choice == rate).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.set_rate(choice);
+                        this.rate_open = false;
+                        cx.notify();
+                    },
+                )));
+            }
+            container = container.child(
+                div()
+                    .absolute()
+                    .bottom(px(36.))
+                    .left(relative(0.5))
+                    .w(px(0.))
+                    .flex()
+                    .justify_center()
+                    .child(menu),
+            );
+        }
+        container
+    }
+
+    /// `VideoControls`.
+    fn controls(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let playing = self.playback.playing;
+        let separator = div()
+            .flex_none()
+            .w(px(1.))
+            .h(px(16.))
+            .mx(px(4.))
+            .bg(rgba(theme::MEDIA_FAINT));
+        let time = div()
+            .px(px(4.))
+            .font_family(theme::FONT_MONO)
+            .text(theme::TEXT_CAPTION)
+            .text_color(rgba(theme::MEDIA_TEXT))
+            .whitespace_nowrap()
+            .child(format!(
+                "{} / {}",
+                model::format_time(self.playback.current),
+                model::format_time(self.playback.duration)
+            ));
+        let skip = |seconds: f64| {
+            format!(
+                "Skip {} {}s",
+                if seconds < 0. { "back" } else { "forward" },
+                SKIP_STEP
+            )
+        };
+        let left = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(
+                media_button(
+                    "media-play",
+                    if playing {
+                        "player-pause"
+                    } else {
+                        "player-play"
+                    },
+                    20.,
+                    ui::tip(if playing { "Pause" } else { "Play" })
+                        .shortcut("video.togglePlay", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_play(cx);
+                    cx.notify();
+                })),
+            )
+            .child(
+                media_button(
+                    "media-back",
+                    "player-skip-back",
+                    18.,
+                    ui::tip(skip(-1.)).shortcut("video.seekBackward", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.seek((this.playback.current - SKIP_STEP).max(0.));
+                    cx.notify();
+                })),
+            )
+            .child(
+                media_button(
+                    "media-forward",
+                    "player-skip-forward",
+                    18.,
+                    ui::tip(skip(1.)).shortcut("video.seekForward", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.seek((this.playback.current + SKIP_STEP).min(this.playback.duration));
+                    cx.notify();
+                })),
+            )
+            .child(separator)
+            .child(time);
+        let looping = self.playback.looping;
+        let mut right = div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(self.rate_menu(cx))
+            .child(
+                media_button(
+                    "media-loop",
+                    if looping { "repeat" } else { "repeat-off" },
+                    18.,
+                    ui::tip(if looping { "Loop on" } else { "Loop off" })
+                        .shortcut("video.toggleLoop", cx),
+                )
+                .active(looping)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.playback.looping = !this.playback.looping;
+                    cx.notify();
+                })),
+            )
+            .child(self.volume_panel(cx));
+        if self.kind == Kind::Video {
+            right = right.child(
+                media_button(
+                    "media-fullscreen",
+                    "maximize",
+                    18.,
+                    ui::tip("Fullscreen").shortcut("video.fullscreen", cx),
+                )
+                .on_click(cx.listener(|this, _, _, _| this.toggle_fullscreen())),
+            );
+        }
+        div()
+            .id("media-controls")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .pt(px(24.))
+            .px(px(12.))
+            .pb(px(10.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .bg(linear_gradient(
+                0.,
+                linear_color_stop(rgba(theme::MEDIA_CONTROLS_SHADE), 0.),
+                linear_color_stop(rgba(0x00000000), 1.),
+            ))
+            .child(self.progress_bar(cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(4.))
+                    .child(left)
+                    .child(right),
+            )
+    }
+
+    /// `VolumeHUD`: the glyph and percentage in a dark box at the middle.
+    fn hud(&self) -> Option<Div> {
+        self.hud?;
+        let effective = self.playback.effective_volume();
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap(px(4.))
+                        .px(px(24.))
+                        .py(px(16.))
+                        .rounded(px(12.))
+                        .bg(rgba(theme::MEDIA_HUD))
+                        .text_color(rgba(theme::MEDIA_FILL))
+                        .opacity(self.hud_fade.value_with(motion::EASE))
+                        .child(ui::icon(
+                            model::volume_icon(self.playback.volume, self.playback.muted),
+                            28.,
+                            rgba(theme::MEDIA_FILL),
+                        ))
+                        .child(
+                            div()
+                                .font_family(theme::FONT_MONO)
+                                .text(theme::TEXT_XL)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{}%", (effective * 100.).round() as i32)),
+                        ),
+                ),
+        )
+    }
+}
+
+/// `.rateMenuItem`: a rate, highlighted under the pointer, bright when it is
+/// the current one.
+fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
+    let id = SharedString::from(format!("media-rate-{rate}"));
+    let color = if current {
+        theme::MEDIA_GLYPH_STRONG
+    } else {
+        theme::MEDIA_TEXT
+    };
+    div()
+        .id(id)
+        .w_full()
+        .px(px(12.))
+        .py(px(4.))
+        .flex()
+        .justify_center()
+        .font_family(theme::FONT_MONO)
+        .text(theme::TEXT_SM)
+        .text_color(rgba(color))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(|row| {
+            row.bg(rgba(theme::MEDIA_POPUP_BORDER))
+                .text_color(rgba(theme::MEDIA_GLYPH_STRONG))
+        })
+        .child(model::rate_label(rate))
+}
+
+/// The two looks of the audio scrubber's waveform, from the thumbnail's
+/// alpha (`mask-image`): white at 20% for what is to come and 95% for what
+/// has played. BGRA, as `RenderImage` holds pixels.
+fn waveform_layers(path: &Path) -> Option<(Arc<RenderImage>, Arc<RenderImage>)> {
+    let source = image::open(path).ok()?.to_rgba8();
+    let layer = |alpha: f32| {
+        let mut layer = source.clone();
+        tint(&mut layer, alpha);
+        Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+            layer
+        )]))
+    };
+    Some((layer(0.2), layer(0.95)))
+}
+
+/// White at `alpha`, through the image's own alpha.
+fn tint(image: &mut image::RgbaImage, alpha: f32) {
+    for pixel in image.pixels_mut() {
+        let coverage = pixel.0[3] as f32 / 255.;
+        pixel.0 = [255, 255, 255, (alpha * coverage * 255.).round() as u8];
+    }
+}
+
+impl Render for VideoPlayer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.poll(window, cx);
+        let now = Instant::now();
+        if self.playback.playing
+            || now < self.settle_until
+            || (self.kind == Kind::Video && self.frame.is_none() && now < self.first_picture_until)
+            || self.controls_fade.animating()
+            || self.bar_expand.animating()
+            || self.hud_fade.animating()
+        {
+            window.request_animation_frame();
+        }
+        let visible = self.controls.visible();
+        let video = self.kind == Kind::Video;
+        let mut root = div()
+            .id("media-player")
+            .relative()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .bg(if video {
+                rgba(theme::MEDIA_BACKGROUND)
+            } else {
+                theme::theme(cx).background()
+            })
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
+            .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.reveal(cx)))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.toggle_play(cx);
+                this.reveal(cx);
+            }));
+        if video {
+            root = root.cursor_pointer().children(self.picture());
+        } else {
+            // `AudioVisualizer`: the analyser's numbers for this frame, drawn
+            // under the controls.
+            let mode = visualizer::Mode::from_setting(
+                crate::settings::model(cx)
+                    .read(cx)
+                    .saved
+                    .audio_visualization,
+            );
+            let data = match self.backend.as_ref().and_then(|b| b.analysis()) {
+                Some(analysis) if mode != visualizer::Mode::None => {
+                    self.analyser.read(mode, &analysis).to_vec()
+                }
+                _ => Vec::new(),
+            };
+            root = root.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| visualizer::paint(mode, &data, bounds, window),
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            );
+        }
+        // Drags of the scrubber and the volume slider follow the pointer
+        // anywhere in the window until the button is up; an open rate menu
+        // closes on a press anywhere outside it.
+        let entity = cx.entity().downgrade();
+        let (dragging, rate_open) = (self.drag.is_some(), self.rate_open);
+        root = root.child(
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    if dragging {
+                        let player = entity.clone();
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = player.update(cx, |this, cx| {
+                                    match this.drag {
+                                        Some(Drag::Seek) => this.scrub(event.position),
+                                        Some(Drag::Volume) => this.drag_volume(event.position),
+                                        None => {}
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        });
+                        let player = entity.clone();
+                        window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = player.update(cx, |this, cx| {
+                                    if this.drag.take() == Some(Drag::Seek) {
+                                        this.set_seeking(false, cx);
+                                        this.reveal(cx);
+                                        let over = this.bar.contains(&event.position);
+                                        this.bar_expand.set(over, motion::MEDIA_SCRUBBER_EXPAND);
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        });
+                    }
+                    if rate_open {
+                        let player = entity.clone();
+                        window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = player.update(cx, |this, cx| {
+                                    let inside = this.rate_bounds.contains(&event.position)
+                                        || this.rate_menu_bounds.contains(&event.position);
+                                    if !inside {
+                                        this.rate_open = false;
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        });
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
+        );
+        // `.controlsHidden`: faded out and passing the pointer through.
+        let fade = self.controls_fade.value_with(motion::EASE);
+        if fade > 0. {
+            let controls = self.controls(cx).opacity(fade);
+            root = root.child(if visible {
+                controls
+                    .occlude()
+                    .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
+            } else {
+                controls
+            });
+        }
+        root.children(self.hud())
+    }
+}
+
+impl Drop for VideoPlayer {
+    fn drop(&mut self) {
+        // Stop sound at once; the backend's threads wind down by themselves.
+        if let Some(backend) = &mut self.backend {
+            backend.pause();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Kind, kind_of, tint};
+
+    #[test]
+    fn media_types_choose_the_player() {
+        assert_eq!(kind_of("video/webm"), Some(Kind::Video));
+        assert_eq!(kind_of("video/quicktime"), Some(Kind::Video));
+        assert_eq!(kind_of("audio/mpeg"), Some(Kind::Audio));
+        assert_eq!(kind_of("audio/wav"), Some(Kind::Audio));
+        assert_eq!(kind_of("image/gif"), None);
+    }
+
+    #[test]
+    fn the_waveform_takes_its_shape_from_the_thumbnail_alpha() {
+        let mut image =
+            image::RgbaImage::from_raw(2, 1, vec![0, 114, 239, 255, 0, 0, 0, 0]).unwrap();
+        tint(&mut image, 0.2);
+        assert_eq!(image.as_raw(), &vec![255, 255, 255, 51, 255, 255, 255, 0]);
+    }
+}

@@ -11,27 +11,48 @@
 //!     scroll 600 400 -900
 //!     key space
 //!     key cmd-shift-j
+//!     type some text
 //!
 //! Coordinates are window points. A fourth number is the click count for
 //! `down` and `up`, and the distance in points for `scroll`. `key` takes a
-//! keystroke as GPUI writes them. Nothing is read when the variable is unset.
+//! keystroke as GPUI writes them and `type` the text to enter in the focused
+//! field. Nothing is read when the variable is unset.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::time::Duration;
 
-fn parse(line: &str) -> Option<PlatformInput> {
+/// One line of playback.
+enum Line {
+    Input(PlatformInput),
+    /// Pressed as though typed: bindings first, then the focused text field.
+    Keys(Vec<Keystroke>),
+}
+
+fn parse(line: &str) -> Option<Line> {
+    let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
+    // GPUI parses static text; a playback line lives for the whole run.
+    let keystroke = |text: String| Keystroke::parse(String::leak(text)).ok();
+    match kind {
+        "key" => return Some(Line::Keys(vec![keystroke(rest.trim().to_string())?])),
+        "type" => {
+            let keys = rest
+                .chars()
+                .filter_map(|character| match character {
+                    ' ' => keystroke("space-> ".to_string()),
+                    character => keystroke(format!("{character}->{character}")),
+                })
+                .collect();
+            return Some(Line::Keys(keys));
+        }
+        _ => {}
+    }
+    pointer(line).map(Line::Input)
+}
+
+fn pointer(line: &str) -> Option<PlatformInput> {
     let mut parts = line.split_whitespace();
     let kind = parts.next()?;
-    if kind == "key" {
-        // A playback line lives for the whole run; GPUI parses static text.
-        let keystroke = Keystroke::parse(String::leak(parts.next()?.to_string())).ok()?;
-        return Some(PlatformInput::KeyDown(KeyDownEvent {
-            keystroke,
-            is_held: false,
-            prefer_character_input: false,
-        }));
-    }
     let position = point(
         px(parts.next()?.parse().ok()?),
         px(parts.next()?.parse().ok()?),
@@ -114,8 +135,15 @@ pub fn start(window: AnyWindowHandle, cx: &mut App) {
                 .timer(Duration::from_millis(8))
                 .await;
             while let Ok(event) = receiver.try_recv() {
-                let delivered = window.update(cx, |_, window, cx| {
-                    window.dispatch_event(event, cx);
+                let delivered = window.update(cx, |_, window, cx| match event {
+                    Line::Input(event) => {
+                        window.dispatch_event(event, cx);
+                    }
+                    Line::Keys(keys) => {
+                        for key in keys {
+                            window.dispatch_keystroke(key, cx);
+                        }
+                    }
                 });
                 if delivered.is_err() {
                     return;

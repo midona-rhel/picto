@@ -1660,11 +1660,11 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    #[ignore = "Requires PICTO_GPUI_TEST_DB pointing to a marked disposable snapshot"]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy made by run.sh"]
     fn real_snapshot_tags_browse_rename_and_groups() {
-        let path = PathBuf::from(std::env::var("PICTO_GPUI_TEST_DB").unwrap());
-        assert!(path.parent().unwrap().join(".gpui-snapshot").is_file());
-        let library = Library::open(path).unwrap();
+        let root = PathBuf::from(std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap());
+        let root = crate::application::guard(&root).unwrap();
+        let library = Library::open(root.join("library.sqlite")).unwrap();
 
         // The rail's counts add up to every tag, and General is the
         // namespace with no name.

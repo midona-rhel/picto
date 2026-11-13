@@ -289,8 +289,9 @@ impl SubscriptionsScreen {
                 subscription.run_status.as_deref(),
                 Some("paused" | "inbox_full")
             );
-        // TODO: start, pause, resume and retry runs through the subscription
-        // runner.
+        // Run Now, Pause, Resume and Retry (`subscriptions.run`,
+        // `subscriptions.run.pause`, `subscriptions.run.resume`).
+        let acting = self.acting.contains(&id);
         let primary = if active {
             let (variant, icon, label) = if running {
                 (Look::Standard, "player-pause", "Pause")
@@ -306,13 +307,16 @@ impl SubscriptionsScreen {
             ui::action_button("subscription-run", variant)
                 .label(label)
                 .icon(icon, 14.)
+                .disabled(acting)
         } else {
             ui::action_button("subscription-run", Look::Primary)
                 .label("Run now")
                 .icon("player-play", 14.)
-                .disabled(subscription.paused || subscription.queries.is_empty())
-        };
-        // TODO: stop the run, or hold and release future runs.
+                .disabled(acting || subscription.paused || subscription.queries.is_empty())
+        }
+        .on_click(cx.listener(move |this, _, _, cx| this.run_control(id, cx)));
+        // Stop the run (`subscriptions.cancel`), or hold and release future
+        // runs (`subscriptions.hold`).
         let (hold_icon, hold_label, hold_tip) = if active {
             (
                 "player-stop",
@@ -344,7 +348,9 @@ impl SubscriptionsScreen {
                     .label(hold_label)
                     .icon(hold_icon, 14.)
                     .padding(10.)
-                    .tip(ui::tip(hold_tip)),
+                    .tip(ui::tip(hold_tip))
+                    .disabled(acting)
+                    .on_click(cx.listener(move |this, _, _, cx| this.hold_control(id, cx))),
             )
             .child(
                 // The 30px button overhangs its 24px column, as it does in

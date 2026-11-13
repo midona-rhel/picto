@@ -51,6 +51,10 @@ enum MenuKind {
 }
 
 impl MenuKind {
+    fn has_editor(self) -> bool {
+        !matches!(self, MenuKind::Rating | MenuKind::Type | MenuKind::Pin)
+    }
+
     /// `activeMenuWidth`; the others keep the menu's 270px.
     fn width(self) -> Option<f32> {
         match self {
@@ -278,6 +282,13 @@ impl FilterBar {
         let menu = cx.new(|cx| {
             let menu = Menu::new(entries, position, cx)
                 .search(matches!(kind, MenuKind::Type | MenuKind::Pin));
+            // Editors take the keyboard, and their selects and calendars
+            // open over the window.
+            let menu = if kind.has_editor() {
+                menu.in_window()
+            } else {
+                menu
+            };
             match kind.width() {
                 Some(width) => menu.width(width),
                 None => menu,
@@ -441,6 +452,8 @@ impl FilterBar {
     }
 
     fn entries(&self, kind: MenuKind, filters: &Filters, cx: &App) -> Vec<menu::Entry> {
+        // The menu's width, which an editor fills.
+        let width = kind.width().unwrap_or(270.);
         match kind {
             MenuKind::Rating => [5u8, 4, 3, 2, 1, 0]
                 .into_iter()
@@ -503,7 +516,11 @@ impl FilterBar {
                     .collect::<Vec<menu::Entry>>();
                 entries.push(menu::Entry::Separator);
                 if let Some(editor) = &self.editors.dates {
-                    entries.push(menu::custom(editor.clone(), filter_editors::DATE_HEIGHT).into());
+                    entries.push(
+                        menu::view(editor.clone(), width, filter_editors::DATE_HEIGHT)
+                            .padded()
+                            .into(),
+                    );
                 }
                 entries
             }
@@ -511,20 +528,30 @@ impl FilterBar {
                 .editors
                 .color
                 .iter()
-                .map(|editor| menu::custom(editor.clone(), color_editor::height(true)).into())
+                .map(|editor| {
+                    menu::view(editor.clone(), width, color_editor::height(true))
+                        .padded()
+                        .into()
+                })
                 .collect(),
             MenuKind::Duration | MenuKind::Size => self
                 .editors
                 .range
                 .iter()
-                .map(|editor| menu::custom(editor.clone(), filter_editors::RANGE_HEIGHT).into())
+                .map(|editor| {
+                    menu::view(editor.clone(), width, filter_editors::RANGE_HEIGHT)
+                        .padded()
+                        .into()
+                })
                 .collect(),
             MenuKind::Resolution => self
                 .editors
                 .resolution
                 .iter()
                 .map(|editor| {
-                    menu::custom(editor.clone(), filter_editors::RESOLUTION_HEIGHT).into()
+                    menu::view(editor.clone(), width, filter_editors::RESOLUTION_HEIGHT)
+                        .padded()
+                        .into()
                 })
                 .collect(),
             MenuKind::Saved => {
@@ -532,7 +559,11 @@ impl FilterBar {
                     .editors
                     .save
                     .iter()
-                    .map(|editor| menu::custom(editor.clone(), filter_editors::SAVE_HEIGHT).into())
+                    .map(|editor| {
+                        menu::view(editor.clone(), width, filter_editors::SAVE_HEIGHT)
+                            .padded()
+                            .into()
+                    })
                     .collect::<Vec<menu::Entry>>();
                 if !self.saved.is_empty() {
                     entries.push(menu::Entry::Separator);

@@ -41,6 +41,8 @@ pub struct ViewOptions {
 
 impl EventEmitter<RailToggled> for ViewOptions {}
 
+/// The menu's usual width.
+const WIDTH: f32 = 270.;
 /// `.panel`: 4px above and below, rows 6px apart.
 const PADDING: f32 = 4.;
 const GAP: f32 = 6.;
@@ -148,11 +150,20 @@ pub fn build(
     let layout = panel(Part::Layout, cx);
     let display = panel(Part::Display, cx);
     let entries = vec![
-        menu::custom(layout.clone(), height(Part::Layout, &scope, random)).into(),
+        menu::view(layout.clone(), WIDTH, height(Part::Layout, &scope, random))
+            .padded()
+            .into(),
         menu::Entry::Separator,
-        menu::custom(display.clone(), height(Part::Display, &scope, random)).into(),
+        menu::view(
+            display.clone(),
+            WIDTH,
+            height(Part::Display, &scope, random),
+        )
+        .padded()
+        .into(),
     ];
-    let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
+    // The selects open over the window, so the menu draws in it.
+    let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false).in_window());
     (menu, [layout, display])
 }
 

@@ -2,15 +2,14 @@ use super::text_input::TextInput;
 use crate::grid::format;
 use crate::theme::Text as _;
 use crate::{motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+pub type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 /// Where a dragged folder would land relative to this row
 /// (`.dropBefore`, `.dropInside`, `.dropAfter`).
-// Nothing drags rows yet; the looks are here for when something does.
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DropPosition {
     Before,
@@ -27,6 +26,36 @@ struct State {
     /// On while the row's children are folded away: the triangle's quarter
     /// turn, 200 ms.
     folded: motion::Fade,
+}
+
+/// The Subscriptions row's activity button (`.activityButton`), shown in
+/// place of a count while subscriptions run or are held: a pulsing dot that
+/// becomes a pause glyph under the pointer, or, while everything is held, a
+/// pause glyph that becomes a play glyph.
+pub struct Activity {
+    pub paused: bool,
+    /// The pause or resume is on its way.
+    pub busy: bool,
+    /// What a click does, also its tooltip.
+    pub label: SharedString,
+    pub on_click: ClickHandler,
+}
+
+/// `subscriptionActivityPulse`, 2.4 s: from 65% opacity with a 3px glow at
+/// 30% to full opacity with a 9px glow at 60% and back, each half on
+/// `ease-in-out`. Returns the opacity, the glow's blur and its strength.
+pub fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
+    let period = motion::STATUS_PULSE.as_secs_f32();
+    let phase = (elapsed.as_secs_f32() % period) / (period / 2.);
+    let along = motion::EASE_IN_OUT.ease(if phase < 1. { phase } else { 2. - phase });
+    let between = |from: f32, to: f32| from + (to - from) * along;
+    (between(0.65, 1.), between(3., 9.), between(30., 60.))
+}
+
+/// One clock for the pulse, so it does not restart when the row repaints.
+fn pulse_clock() -> std::time::Instant {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *START.get_or_init(std::time::Instant::now)
 }
 
 /// Where a nested row sits in its tree, for the guide lines.
@@ -50,6 +79,7 @@ pub struct SidebarRow {
     tint: Option<Rgba>,
     label: SharedString,
     count: Option<u64>,
+    activity: Option<Activity>,
     active: bool,
     /// One of several rows chosen with Cmd or Shift (`.selected`).
     selected: bool,
@@ -57,8 +87,12 @@ pub struct SidebarRow {
     context: bool,
     /// The row holds keyboard focus (`.rowInteractive:focus-visible`).
     focused: bool,
-    /// The whole row takes a drop (`.dropTarget`).
-    drop_target: bool,
+    /// Items dragged from the grid are over the row
+    /// (`[data-drop-highlighted]`): the hover look, held.
+    drop_highlight: bool,
+    /// Something is being dragged, so the pointer lights no row
+    /// (`html[data-grid-drag-active]`, `[data-sidebar-drag-active]`).
+    dragging: bool,
     drop: Option<DropPosition>,
     /// The field that replaces the label while the row is renamed.
     rename: Option<Entity<TextInput>>,
@@ -70,6 +104,7 @@ pub struct SidebarRow {
     on_click: Option<ClickHandler>,
     on_toggle: Option<ClickHandler>,
     on_secondary: Option<PressHandler>,
+    on_press: Option<PressHandler>,
 }
 
 pub fn sidebar_row(
@@ -84,11 +119,13 @@ pub fn sidebar_row(
         tint: None,
         label: label.into(),
         count: None,
+        activity: None,
         active: false,
         selected: false,
         context: false,
         focused: false,
-        drop_target: false,
+        drop_highlight: false,
+        dragging: false,
         drop: None,
         rename: None,
         disclosure: None,
@@ -97,6 +134,7 @@ pub fn sidebar_row(
         on_click: None,
         on_toggle: None,
         on_secondary: None,
+        on_press: None,
     }
 }
 
@@ -112,6 +150,11 @@ impl SidebarRow {
     /// A count of zero is not shown.
     pub fn count(mut self, count: Option<u64>) -> Self {
         self.count = count.filter(|count| *count > 0);
+        self
+    }
+    /// The activity button, which takes the count's place.
+    pub fn activity(mut self, activity: Option<Activity>) -> Self {
+        self.activity = activity;
         self
     }
     pub fn active(mut self, active: bool) -> Self {
@@ -132,8 +175,12 @@ impl SidebarRow {
         self.focused = focused;
         self
     }
-    pub fn drop_target(mut self, drop_target: bool) -> Self {
-        self.drop_target = drop_target;
+    pub fn drop_highlight(mut self, highlighted: bool) -> Self {
+        self.drop_highlight = highlighted;
+        self
+    }
+    pub fn dragging(mut self, dragging: bool) -> Self {
+        self.dragging = dragging;
         self
     }
     pub fn drop(mut self, drop: Option<DropPosition>) -> Self {
@@ -171,6 +218,14 @@ impl SidebarRow {
         self.on_toggle = Some(Box::new(handler));
         self
     }
+    /// A left-button press, which may start a drag.
+    pub fn on_press(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_press = Some(Box::new(handler));
+        self
+    }
     /// A right-button press: the row's context menu.
     pub fn on_secondary(
         mut self,
@@ -182,19 +237,19 @@ impl SidebarRow {
 }
 
 /// The highlight behind a row (`.row::before`) in the order the stylesheet
-/// resolves it: a drop inside, a drop target, then the active row, each
-/// forced; otherwise the hover colour, held on while the row is selected,
-/// focused or showing its menu, and fading with the pointer otherwise.
+/// resolves it: a drop inside, then the active row, each forced; otherwise
+/// the hover colour, held on while the row is selected, focused, showing
+/// its menu or under items dragged from the grid, and fading with the
+/// pointer otherwise, except while something is dragged.
 /// Returns the fill, the 1px border inside it, and its opacity.
 fn highlight(theme: theme::Theme, row: &SidebarRow, hover: f32) -> (Rgba, Option<Rgba>, f32) {
     if row.drop == Some(DropPosition::Inside) {
         (theme.primary_at(10.), Some(theme.primary_at(30.)), 1.)
-    } else if row.drop_target {
-        (theme.surface_drop(), Some(theme.primary()), 1.)
     } else if row.active {
         (theme.surface_active(), None, 1.)
     } else {
-        let held = row.selected || row.context || row.focused;
+        let held = row.selected || row.context || row.focused || row.drop_highlight;
+        let hover = if row.dragging { 0. } else { hover };
         (
             theme.surface_hover(),
             row.context.then(|| theme.border()),
@@ -305,7 +360,7 @@ impl RenderOnce for SidebarRow {
         let interactive = self.on_click.is_some();
         let (fill, edge, shown) = highlight(theme, &self, hover);
         // The icon brightens with the pointer and on the active row.
-        let lit = self.active || hovered;
+        let lit = self.active || (hovered && !self.dragging) || self.drop_highlight;
         let count_color = if self.active || self.selected {
             theme.text()
         } else {
@@ -467,7 +522,9 @@ impl RenderOnce for SidebarRow {
                     .child(self.label),
             ),
         };
-        if let Some(count) = self.count {
+        if let Some(activity) = self.activity {
+            row = row.child(activity_button(activity, window, cx));
+        } else if let Some(count) = self.count {
             row = row.child(
                 div()
                     .relative()
@@ -488,6 +545,110 @@ impl RenderOnce for SidebarRow {
         if let Some(handler) = self.on_secondary {
             row = row.on_mouse_down(MouseButton::Right, handler);
         }
+        if let Some(handler) = self.on_press {
+            row = row.on_mouse_down(MouseButton::Left, handler);
+        }
         row
+    }
+}
+
+/// `.activitySlot` holding `.activityButton`: 22 × 22, radius 5, primary
+/// glyphs, a 30% primary fill under the pointer.
+fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    let theme = theme::theme(cx);
+    let hovered_state = window.use_keyed_state("subscriptions-activity", cx, |_, _| false);
+    let hint = window.use_keyed_state("subscriptions-activity-tip", cx, |_, _| {
+        super::tooltip::Hover::default()
+    });
+    if hint.read(cx).animating() {
+        window.request_animation_frame();
+    }
+    let hovered = *hovered_state.read(cx) && !activity.busy;
+    // What shows: the dot while running and not hovered; the pause glyph
+    // under the pointer, or while held; the play glyph on a held one hovered.
+    let glyph = match (activity.paused, hovered) {
+        (false, false) => None,
+        (false, true) | (true, false) => Some("activity-pause"),
+        (true, true) => Some("activity-play"),
+    };
+    let inside = match glyph {
+        Some(name) => super::icon(name, 14., theme.primary()).into_any_element(),
+        None => {
+            window.request_animation_frame();
+            let (opacity, blur, strength) = activity_pulse(pulse_clock().elapsed());
+            div()
+                .size(px(8.))
+                .rounded_full()
+                .bg(theme.primary())
+                .opacity(opacity)
+                .shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), theme.primary_at(strength).into())
+                        .blur_radius(px(blur)),
+                ])
+                .into_any_element()
+        }
+    };
+    let tip = hint
+        .read(cx)
+        .layer(&super::tip(activity.label.clone()), 22., cx);
+    let on_click = activity.on_click;
+    let busy = activity.busy;
+    div()
+        .relative()
+        .flex_none()
+        .min_w(px(22.))
+        .h(px(theme::SIDEBAR_ROW))
+        .ml_auto()
+        .flex()
+        .items_center()
+        .justify_end()
+        .child(
+            div()
+                .id("subscriptions-activity")
+                .relative()
+                .size(px(22.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.))
+                .when(hovered, |button| button.bg(theme.primary_at(30.)))
+                .when(busy, |button| button.opacity(0.55))
+                .when(!busy, |button| button.cursor_pointer())
+                .on_hover(move |hovered, _, cx| {
+                    hovered_state.update(cx, |state, cx| {
+                        *state = *hovered;
+                        cx.notify();
+                    });
+                    hint.update(cx, |hint, cx| hint.set(*hovered, cx));
+                })
+                // The press and the click are the button's, not the row's.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |event, window, cx| {
+                    cx.stop_propagation();
+                    if !busy {
+                        on_click(event, window, cx);
+                    }
+                })
+                .child(inside)
+                .children(tip),
+        )
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::activity_pulse;
+    use std::time::Duration;
+
+    #[test]
+    fn the_activity_dot_breathes_between_dim_and_glowing() {
+        let (opacity, blur, strength) = activity_pulse(Duration::ZERO);
+        assert!((opacity - 0.65).abs() < 1e-4 && (blur - 3.).abs() < 1e-4);
+        assert!((strength - 30.).abs() < 1e-3);
+        let (opacity, blur, strength) = activity_pulse(Duration::from_millis(1200));
+        assert!((opacity - 1.).abs() < 1e-4 && (blur - 9.).abs() < 1e-4);
+        assert!((strength - 60.).abs() < 1e-3);
+        let rising = activity_pulse(Duration::from_millis(600));
+        let falling = activity_pulse(Duration::from_millis(1800));
+        assert!((rising.0 - falling.0).abs() < 1e-3);
     }
 }

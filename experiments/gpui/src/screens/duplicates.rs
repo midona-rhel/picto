@@ -6,6 +6,7 @@
 mod compare;
 mod difference;
 
+use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
@@ -15,17 +16,14 @@ use crate::{motion, theme, ui};
 use compare::{Extent, LinkedZoom, Mode, PairKey, pair_key};
 use gpui::*;
 use picto_library::{
-    DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, DuplicateResolutionChoice, FileId,
-    MediaRecord, Rating, RootDetails, RootKind,
+    DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, DuplicateQualityDecision,
+    DuplicateResolutionChoice, FileId, MediaRecord, Rating, RootDetails, RootKind,
 };
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
 // The review's actions. Their keys come from the shortcut registry
 // (`crate::keymap`) and win over the grid's while the screen has the
 // keyboard, as its `useShortcutScope` does.
-// TODO: Z keeps the left file, X the right one and S smart-merges
-// (`dup.keepLeft`, `dup.keepRight`, `dup.smartMerge`), once those decisions
-// can be made (see the buttons).
 actions!(
     duplicates,
     [
@@ -34,13 +32,18 @@ actions!(
         FitPair,
         ActualPixels,
         KeepBoth,
-        NotDuplicate
+        NotDuplicate,
+        KeepLeft,
+        KeepRight,
+        SmartMerge
     ]
 );
 
 const CONTEXT: &str = "Duplicates";
 /// `getDuplicatePairs`: the queue is read 500 pairs at a time.
 const QUEUE_LIMIT: usize = 500;
+/// `scanDuplicates(distanceThreshold = 16)`.
+const SCAN_DISTANCE: u32 = 16;
 /// `.mediaCard { grid-template-rows: 42px minmax(180px, 1fr) 222px }`.
 const CARD_HEADER: f32 = 42.;
 const PREVIEW_MIN: f32 = 180.;
@@ -120,13 +123,26 @@ struct Shown {
     difference: Option<Arc<RenderImage>>,
 }
 
+/// A decision on the pair on screen (`DuplicateAction`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Decision {
+    /// "Not duplicates" and "Keep both": two different files; neither
+    /// file is touched.
+    KeepBoth,
+    /// Keep this file and merge the other's item into it. The other file
+    /// is freed and the application deletes it from the copy's blobs.
+    Keep(FileId),
+    /// Keep whichever file the library judges better, if it can tell.
+    Smart,
+}
+
 /// What a fetch is for.
 #[derive(Clone, Copy)]
 enum Fetch {
     /// Read the queue again; `reset` starts the progress count afresh.
     Queue { reset: bool },
-    /// Settle a pair as two different files, then read the queue.
-    Resolve(FileId, FileId),
+    /// Settle a pair, then read the queue.
+    Resolve(FileId, FileId, Decision),
     /// Show another pair of the queue already read.
     Pair(PairKey),
 }
@@ -141,6 +157,8 @@ struct Fetched {
     details: Option<[Option<RootDetails>; 2]>,
     /// The sidebar's duplicate count.
     count: Option<u64>,
+    /// Smart merge found no clear winner; the pair stays.
+    ambiguous: bool,
 }
 
 /// A drag of one preview: where it started and the centre then.
@@ -199,7 +217,17 @@ pub struct DuplicatesScreen {
     original_tasks: [Option<Task<()>>; 2],
     difference_task: Option<Task<()>>,
     message_task: Option<Task<()>>,
-    _session: Subscription,
+    /// A scan of the library is running.
+    scanning: bool,
+    /// Its progress bar, which waits 200 ms (`useDelayedFlag`).
+    scan_progress: bool,
+    scan_task: Option<Task<()>>,
+    /// The read of the queue that ends the scan.
+    scan_fetch: Option<u64>,
+    /// Smart merge is hovered, which rings the file it would keep.
+    smart_hovered: bool,
+    survivor: motion::Fade,
+    _session: Vec<Subscription>,
 }
 
 impl DuplicatesScreen {
@@ -211,12 +239,27 @@ impl DuplicatesScreen {
     ) -> Self {
         let screen = cx.weak_entity();
         let controls = cx.new(|_| DuplicatesToolbar { screen });
-        let subscription =
+        let subscriptions = vec![
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 if *change == Change::Navigation {
                     this.navigated(window, cx);
                 }
-            });
+            }),
+            // A scan made elsewhere (the media worker scans new images by
+            // itself) changes the queue; a decision of this screen reads the
+            // queue itself and is not read twice.
+            cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
+                if let BackendEvent::Changed(changed) = event
+                    && crate::application::touches(changed, "duplicates")
+                    && this.visible
+                    && !this.loading
+                    && !this.resolving
+                    && !this.scanning
+                {
+                    this.fetch(Fetch::Queue { reset: true }, cx);
+                }
+            }),
+        ];
         Self {
             session,
             focus: cx.focus_handle(),
@@ -245,7 +288,13 @@ impl DuplicatesScreen {
             original_tasks: [None, None],
             difference_task: None,
             message_task: None,
-            _session: subscription,
+            scanning: false,
+            scan_progress: false,
+            scan_task: None,
+            scan_fetch: None,
+            smart_hovered: false,
+            survivor: motion::Fade::default(),
+            _session: subscriptions,
         }
     }
 
@@ -378,6 +427,70 @@ impl DuplicatesScreen {
         self.message_task = None;
         self.resolving = false;
         self.navigating = false;
+        if self.scan_fetch == Some(self.generation) {
+            self.end_scan();
+        }
+    }
+
+    // ── Scanning ────────────────────────────────────────────────
+
+    /// "Scan library" and "Retry": the application compares every image's
+    /// perceptual hash (`duplicates.scan`), then the queue is read again.
+    /// The progress bar shows if it takes longer than 200 ms.
+    fn scan(&mut self, cx: &mut Context<Self>) {
+        if self.scanning {
+            return;
+        }
+        self.scanning = true;
+        self.error = None;
+        let answer = self.session.read(cx).dispatch(
+            "duplicates.scan",
+            serde_json::json!({ "distance_threshold": SCAN_DISTANCE }),
+        );
+        self.scan_task = Some(cx.spawn(async move |this, cx| {
+            let delay = cx
+                .background_executor()
+                .timer(motion::LOADING_MESSAGE_DELAY);
+            let mut answer = std::pin::pin!(answer);
+            let delayed = futures::future::select(delay, answer.as_mut()).await;
+            let result = match delayed {
+                futures::future::Either::Left(((), answer)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.scanning {
+                            this.scan_progress = true;
+                            this.changed(cx);
+                        }
+                    });
+                    answer.await
+                }
+                futures::future::Either::Right((result, _)) => result,
+            };
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Ok(_summary)) => {
+                    // TODO: "Duplicate scan complete" with the number of new
+                    // pairs, as a toast, once the prototype has toasts.
+                    this.fetch(Fetch::Queue { reset: true }, cx);
+                    this.scan_fetch = Some(this.generation);
+                }
+                Ok(Err(error)) => {
+                    // TODO: also as a toast ("Unable to scan for duplicates").
+                    this.error = Some(error);
+                    this.end_scan();
+                    this.changed(cx);
+                }
+                Err(_) => {
+                    this.end_scan();
+                    this.changed(cx);
+                }
+            });
+        }));
+        self.changed(cx);
+    }
+
+    fn end_scan(&mut self) {
+        self.scanning = false;
+        self.scan_progress = false;
+        self.scan_fetch = None;
     }
 
     /// Asks the library for what `fetch` needs, then prepares the pair to
@@ -405,6 +518,7 @@ impl DuplicatesScreen {
                 key: None,
                 details: None,
                 count: None,
+                ambiguous: false,
             };
             let pair = match fetch {
                 Fetch::Pair(_) => target,
@@ -412,10 +526,30 @@ impl DuplicatesScreen {
                     // A settled pair is gone from the queue: the next one
                     // after it takes its place.
                     let mut active = shown;
-                    if let Fetch::Resolve(a, b) = fetch {
-                        library
-                            .resolve_duplicate(a, b, DuplicateResolutionChoice::KeepBoth, now_ms())
-                            .map_err(error)?;
+                    if let Fetch::Resolve(a, b, decision) = fetch {
+                        let choice = match decision {
+                            Decision::KeepBoth => Some(DuplicateResolutionChoice::KeepBoth),
+                            Decision::Keep(winner) => Some(DuplicateResolutionChoice::KeepFile {
+                                winner_file_id: winner,
+                            }),
+                            Decision::Smart => None,
+                        };
+                        match choice {
+                            Some(choice) => {
+                                library
+                                    .resolve_duplicate(a, b, choice, now_ms())
+                                    .map_err(error)?;
+                            }
+                            None => {
+                                let resolved = library
+                                    .resolve_duplicate_automatically(a, b, now_ms())
+                                    .map_err(error)?;
+                                if resolved.is_none() {
+                                    fetched.ambiguous = true;
+                                    return Ok(fetched);
+                                }
+                            }
+                        }
                         active = Some(pair_key(a, b));
                     }
                     let pairs = library.duplicate_candidates(QUEUE_LIMIT).map_err(error)?;
@@ -469,6 +603,14 @@ impl DuplicatesScreen {
             return;
         }
         let fetched = match reply {
+            Ok(fetched) if fetched.ambiguous => {
+                // TODO: "Smart merge needs a choice: no clear quality winner.
+                // Choose left or right, or keep both." as a warning toast,
+                // once the prototype has toasts. The pair stays.
+                self.settle();
+                self.changed(cx);
+                return;
+            }
             Ok(fetched) => fetched,
             Err(error) => {
                 // TODO: report it as a toast, as the Electron screen does,
@@ -684,6 +826,13 @@ impl DuplicatesScreen {
     /// Settles the pair on screen as two different files. "Not duplicates"
     /// and "Keep both" both record this; neither touches a file.
     fn keep_both(&mut self, cx: &mut Context<Self>) {
+        self.decide(Decision::KeepBoth, cx);
+    }
+
+    /// `resolveCurrent`: makes a decision on the pair on screen, then shows
+    /// the next one. Keeping one file merges the other's item into it; the
+    /// merged-away file is deleted from the copy by the application.
+    fn decide(&mut self, decision: Decision, cx: &mut Context<Self>) {
         if self.resolving || self.navigating {
             return;
         }
@@ -691,7 +840,31 @@ impl DuplicatesScreen {
             return;
         };
         self.difference_hovered = false;
-        self.fetch(Fetch::Resolve(a, b), cx);
+        self.set_smart_hovered(false, cx);
+        self.fetch(Fetch::Resolve(a, b, decision), cx);
+    }
+
+    /// Keeps the left (0) or right (1) file.
+    fn keep(&mut self, side: usize, cx: &mut Context<Self>) {
+        let Some((a, b)) = self.shown.as_ref().map(|shown| shown.files) else {
+            return;
+        };
+        self.decide(Decision::Keep(if side == 0 { a } else { b }), cx);
+    }
+
+    /// Rings the file Smart merge would keep while it is hovered.
+    fn set_smart_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.smart_hovered != hovered {
+            self.smart_hovered = hovered;
+            cx.notify();
+        }
+    }
+
+    /// The side Smart merge keeps (`smartMergeWinner`), when it is clear.
+    fn survivor_side(&self) -> Option<usize> {
+        let shown = self.shown.as_ref()?;
+        let pair = self.pair(shown.key)?;
+        survivor(pair.decision)
     }
 
     fn fit(&mut self, cx: &mut Context<Self>) {
@@ -801,6 +974,15 @@ fn now_ms() -> i64 {
 }
 
 /// The rating as the Electron screen prints it: the stored name.
+/// `smartMergeWinner`: the side the library judges better, if it can tell.
+fn survivor(decision: DuplicateQualityDecision) -> Option<usize> {
+    match decision {
+        DuplicateQualityDecision::LeftBetter | DuplicateQualityDecision::AutoTieLeft => Some(0),
+        DuplicateQualityDecision::RightBetter | DuplicateQualityDecision::AutoTieRight => Some(1),
+        DuplicateQualityDecision::NeedsChoice => None,
+    }
+}
+
 fn rating_name(rating: Rating) -> &'static str {
     match rating {
         Rating::Unrated => "unrated",
@@ -833,7 +1015,7 @@ impl DuplicatesScreen {
             )
     }
 
-    fn empty_state(&self, cx: &App) -> AnyElement {
+    fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let resolved = self.initial_total.saturating_sub(self.total);
         let (title, description) = match &self.error {
             Some(error) => ("Unable to load duplicate review".to_owned(), error.clone()),
@@ -846,9 +1028,6 @@ impl DuplicatesScreen {
                 "Scan the library to find similar images.".to_owned(),
             ),
         };
-        // TODO: scan the library for duplicates and read the queue again.
-        // The scanner lives in the application core, which this prototype
-        // does not link; Retry would scan as well.
         let action = ui::empty_state_action(
             "duplicates-scan",
             "action-refresh",
@@ -858,7 +1037,8 @@ impl DuplicatesScreen {
                 "Scan library"
             },
         )
-        .disabled(self.resolving);
+        .disabled(self.scanning || self.resolving)
+        .on_click(cx.listener(|this, _, _, cx| this.scan(cx)));
         ui::empty_state(
             "empty-copy",
             title,
@@ -866,9 +1046,16 @@ impl DuplicatesScreen {
             vec![action.into_any_element()],
             cx,
         )
-        // The 180 × 2 slot of the scan's progress bar keeps its place while
-        // empty. TODO: the indeterminate `ProgressBar` while a scan runs.
-        .child(div().w(px(180.)).h(px(2.)).flex_none())
+        // `.progress`: the 180 × 2 slot of the scan's progress bar, which
+        // keeps its place while empty.
+        .child(
+            div()
+                .w(px(180.))
+                .h(px(2.))
+                .flex_none()
+                .overflow_hidden()
+                .children(self.scan_progress.then(|| ui::progress_bar().height(2.))),
+        )
         .into_any_element()
     }
 
@@ -889,9 +1076,8 @@ impl DuplicatesScreen {
         } else {
             ("Right candidate", "Keep right")
         };
-        // TODO: keep this file and merge the other into it. That frees the
-        // other file for deletion from disk, which this prototype must never
-        // cause, so the button is shown and not offered (Z and X likewise).
+        // Keeps this file and merges the other's item into it; the other
+        // file is deleted from the copy.
         let mut keep_button = ui::action_button(("duplicate-keep", index), Look::Standard)
             .icon("check", 15.)
             .height(theme::CONTROL_MD)
@@ -904,7 +1090,8 @@ impl DuplicatesScreen {
                 },
                 cx,
             ))
-            .disabled(true);
+            .disabled(self.resolving)
+            .on_click(cx.listener(move |this, _, _, cx| this.keep(index, cx)));
         keep_button = if compact {
             keep_button.width(theme::CONTROL_MD).padding(0.)
         } else {
@@ -926,6 +1113,31 @@ impl DuplicatesScreen {
                     .child(label),
             )
             .child(keep_button);
+        // `.mediaCard::after`: the green ring around the file Smart merge
+        // would keep, 5px outside the card, fading over 140 ms.
+        let ring = self.survivor.value();
+        if self.survivor.animating() {
+            window.request_animation_frame();
+        }
+        let survivor = (ring > 0. && self.survivor_side() == Some(index)).then(|| {
+            let at = |color: u32| {
+                let color = rgba(color);
+                Rgba {
+                    a: color.a * ring,
+                    ..color
+                }
+            };
+            div()
+                .absolute()
+                .top(px(-5.))
+                .left(px(-5.))
+                .right(px(-5.))
+                .bottom(px(-5.))
+                .rounded(px(theme::RADIUS_MD + 5.))
+                .bg(at(theme::MERGE_SURVIVOR_FILL))
+                .border_1()
+                .border_color(at(theme::MERGE_SURVIVOR_RING))
+        });
         div()
             .relative()
             .min_w_0()
@@ -935,6 +1147,7 @@ impl DuplicatesScreen {
             .child(header)
             .child(self.preview(index, window, cx))
             .child(self.metadata(side, cx))
+            .children(survivor)
     }
 
     /// The preview pane: the image in its frame, zoomed and panned with the
@@ -1164,10 +1377,9 @@ impl DuplicatesScreen {
             .label("Keep both")
             .tip(ui::tip("Keep both files").shortcut("dup.keepBoth", cx))
             .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
-        // TODO: keep the better file of the two and merge the other into it,
-        // previewing the survivor with a green ring while hovered. The
-        // merged-away file is freed for deletion from disk, which this
-        // prototype must never cause, so the button is shown and not offered.
+        // Keeps the better file of the two and merges the other into it,
+        // ringing the survivor in green while hovered.
+        let hover = cx.weak_entity();
         let smart_merge = button("duplicates-smart-merge", Look::Primary)
             .icon("action-arrows-join", 16.)
             .label("Smart merge")
@@ -1175,7 +1387,10 @@ impl DuplicatesScreen {
                 ui::tip("Keep the stronger file and preserve item metadata")
                     .shortcut("dup.smartMerge", cx),
             )
-            .disabled(true);
+            .on_click(cx.listener(|this, _, _, cx| this.decide(Decision::Smart, cx)))
+            .on_hover(move |hovered, _, cx| {
+                let _ = hover.update(cx, |this, cx| this.set_smart_hovered(hovered, cx));
+            });
         let entity = cx.weak_entity();
         let difference = button("duplicates-difference", Look::Standard)
             .icon("toolbar-difference", 16.)
@@ -1353,7 +1568,10 @@ impl Render for DuplicatesScreen {
             .on_action(cx.listener(|this, _: &FitPair, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &ActualPixels, _, cx| this.actual(cx)))
             .on_action(cx.listener(|this, _: &KeepBoth, _, cx| this.keep_both(cx)))
-            .on_action(cx.listener(|this, _: &NotDuplicate, _, cx| this.keep_both(cx)));
+            .on_action(cx.listener(|this, _: &NotDuplicate, _, cx| this.keep_both(cx)))
+            .on_action(cx.listener(|this, _: &KeepLeft, _, cx| this.keep(0, cx)))
+            .on_action(cx.listener(|this, _: &KeepRight, _, cx| this.keep(1, cx)))
+            .on_action(cx.listener(|this, _: &SmartMerge, _, cx| this.decide(Decision::Smart, cx)));
         if self.shown.is_none() {
             return root.child(if self.loading {
                 self.loading_state(cx).into_any_element()
@@ -1391,11 +1609,16 @@ impl Render for DuplicatesScreen {
                 .size_full(),
             );
         }
+        // `mergePreviewActive`: hovered, nothing resolving, a clear winner.
+        let ring = self.smart_hovered && !self.resolving && self.survivor_side().is_some();
+        self.survivor.set(ring, motion::SURVIVOR_RING);
         let compact = self.width > 0. && self.width <= COMPACT_WIDTH;
         let narrow = self.width > 0. && self.width <= NARROW_WIDTH;
         let comparison = self.comparison(compact, narrow, window, cx);
         let footer = self.footer(compact, narrow, window, cx);
-        root.child(comparison).child(footer)
+        root.children(self.scan_progress.then(|| ui::progress_bar().height(2.)))
+            .child(comparison)
+            .child(footer)
     }
 }
 

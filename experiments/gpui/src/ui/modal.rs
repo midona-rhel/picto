@@ -120,6 +120,8 @@ pub struct Modal {
     id: ElementId,
     title: SharedString,
     size: Size,
+    /// A width other than the size's (`panelClassName` widths).
+    width: Option<f32>,
     presence: Presence,
     body: Vec<AnyElement>,
     footer: Vec<AnyElement>,
@@ -139,6 +141,7 @@ pub fn modal(
         id: id.into(),
         title: title.into(),
         size: Size::Medium,
+        width: None,
         presence,
         body: Vec::new(),
         footer: Vec::new(),
@@ -151,6 +154,11 @@ pub fn modal(
 impl Modal {
     pub fn size(mut self, size: Size) -> Self {
         self.size = size;
+        self
+    }
+    /// A width other than the size's, for a dialog that sets its own.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
         self
     }
     pub fn child(mut self, child: impl IntoElement) -> Self {
@@ -238,7 +246,7 @@ impl RenderOnce for Modal {
         // the contents' height, measured on an earlier frame; until there is
         // one, and whenever the dialog is at rest, the contents size the
         // panel as usual.
-        let width = self.size.width();
+        let width = self.width.unwrap_or(self.size.width());
         let measured = window.use_keyed_state(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "height".into()),
             cx,

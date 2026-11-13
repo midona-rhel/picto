@@ -209,6 +209,9 @@ impl gpui::EventEmitter<Committed> for TextInput {}
 /// Enter was pressed in a field made with [`TextInput::dialog`].
 pub struct Submitted;
 impl gpui::EventEmitter<Submitted> for TextInput {}
+/// Backspace was pressed in an empty field.
+pub struct EmptyBackspace;
+impl gpui::EventEmitter<EmptyBackspace> for TextInput {}
 
 /// How an in-place rename ended: Enter or leaving the field commits the
 /// trimmed text, Escape cancels (`useInlineRename.ts`).
@@ -257,6 +260,10 @@ impl TextInput {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() {
+            cx.emit(EmptyBackspace);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
         }

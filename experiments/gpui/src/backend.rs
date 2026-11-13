@@ -1,9 +1,9 @@
 use picto_library::predicate::{FilterClause, FilterExpr, TextField};
 use picto_library::query::{ItemScope, PageRequest, RootPage, RootQuery};
 use picto_library::{Library, RootDetails, RootId, TagRecord};
-use std::{
-    path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver, Sender},
 };
 
 #[derive(Clone)]
@@ -24,6 +24,8 @@ pub struct Navigation {
     /// A smart folder with no rules of its own. It only holds others: it
     /// has no count and cannot be opened.
     pub group: bool,
+    /// A folder that watches a directory for new files.
+    pub watched: bool,
     pub depth: usize,
     pub parent: Option<usize>,
 }
@@ -138,6 +140,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
         icon: Some(String::from(icon)),
         tint: None,
         group: false,
+        watched: false,
         depth: 0,
         parent: None,
     };
@@ -199,6 +202,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     icon: f.icon,
                     tint: f.color.as_deref().and_then(hex_color),
                     group: false,
+                    watched: f.watch_enabled,
                     depth: 0,
                     parent: None,
                 },
@@ -225,6 +229,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     icon: f.icon,
                     tint: f.color.as_deref().and_then(hex_color),
                     group,
+                    watched: false,
                     depth: 0,
                     parent: None,
                 },
@@ -234,20 +239,25 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     append_tree(&smart, None, None, &mut nav);
     Ok((nav, tags))
 }
-pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
+/// Starts the library's thread, which opens the application on the copy and
+/// then answers requests with the application's own `Library`.
+pub fn start(
+    application: Arc<crate::application::Application>,
+) -> (Sender<Request>, Receiver<Reply>) {
     let (tx, requests) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
-            let library = Library::open(database)?;
-            let (nav, tags) = navigation(&library)?;
+            let library = application.open()?;
+            let library: &Library = &library;
+            let (nav, tags) = navigation(library)?;
             replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
             let seed = now_ms().to_string();
             for request in requests {
                 let request = match request {
                     Request::Job(job) => {
-                        job(&library);
+                        job(library);
                         continue;
                     }
                     other => other,
@@ -407,6 +417,7 @@ mod acceptance {
             icon: None,
             tint: None,
             group: false,
+            watched: false,
             depth: 0,
             parent: None,
         };
@@ -434,11 +445,11 @@ mod acceptance {
         assert_ne!(text_filter("日本語"), FilterExpr::default());
     }
     #[test]
-    #[ignore = "Requires PICTO_GPUI_TEST_DB pointing to a marked disposable snapshot"]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy made by run.sh"]
     fn real_snapshot_query_details_rating_undo_redo() {
-        let path = PathBuf::from(std::env::var("PICTO_GPUI_TEST_DB").unwrap());
-        assert!(path.parent().unwrap().join(".gpui-snapshot").is_file());
-        let library = Library::open(path).unwrap();
+        let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
+        let root = crate::application::guard(std::path::Path::new(&root)).unwrap();
+        let library = Library::open(root.join("library.sqlite")).unwrap();
         let page = library
             .query(
                 &RootQuery {

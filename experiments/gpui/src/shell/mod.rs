@@ -105,12 +105,13 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(
-        database: PathBuf,
-        blobs: PathBuf,
+        root: PathBuf,
+        application: std::sync::Arc<crate::application::Application>,
+        events: std::sync::mpsc::Receiver<crate::application::Event>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|cx| Session::new(database, blobs, cx));
+        let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
@@ -181,6 +182,11 @@ impl Shell {
                     this._menu = None;
                     this.show_menu(event.0.clone(), window, cx)
                 },
+            ),
+            cx.subscribe_in(
+                &sidebar,
+                window,
+                |this, _, _: &sidebar::EmptyTrash, window, cx| this.empty_trash(window, cx),
             ),
         ];
         let duplicates = cx.new(|cx| {

@@ -10,6 +10,7 @@
 use crate::theme::Text as _;
 use crate::ui::text_input::{self, TextInput};
 use crate::{motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::time::{Duration, Instant};
 
@@ -90,9 +91,41 @@ pub enum Entry {
     Submenu(Submenu),
     /// A row of colour swatches (`ColorPicker`).
     Swatches(Swatches),
-    /// A row the owner draws itself (`custom: true`), such as a panel of
-    /// controls.
-    Custom(Custom),
+    /// A view of the owner's drawn in place of rows, as a menu entry with
+    /// `custom` content is (the icon picker in "Change Icon"). It handles
+    /// its own pointer; the arrow keys and the search pass over it.
+    View(ViewEntry),
+}
+
+pub struct ViewEntry {
+    view: AnyView,
+    width: f32,
+    height: f32,
+    padded: bool,
+}
+
+/// A view shown in the menu at this size, for content that is not rows.
+pub fn view(view: impl Into<AnyView>, width: f32, height: f32) -> ViewEntry {
+    ViewEntry {
+        view: view.into(),
+        width,
+        height,
+        padded: false,
+    }
+}
+
+impl ViewEntry {
+    /// Inside `.customItem`'s 6px either side, as a panel of controls is.
+    pub fn padded(mut self) -> Self {
+        self.padded = true;
+        self
+    }
+}
+
+impl From<ViewEntry> for Entry {
+    fn from(view: ViewEntry) -> Self {
+        Entry::View(view)
+    }
 }
 
 pub struct Item {
@@ -266,27 +299,6 @@ impl From<Swatches> for Entry {
     }
 }
 
-/// A row the owner draws: a view, at a height the owner gives, inside the
-/// row padding of `.customItem`. It is not a stop for the arrow keys, nor
-/// found by a search.
-pub struct Custom {
-    view: AnyView,
-    height: f32,
-}
-
-pub fn custom(view: impl Into<AnyView>, height: f32) -> Custom {
-    Custom {
-        view: view.into(),
-        height,
-    }
-}
-
-impl From<Custom> for Entry {
-    fn from(custom: Custom) -> Self {
-        Entry::Custom(custom)
-    }
-}
-
 /// `.customItem`: `padding: 0 6px`.
 const CUSTOM_PADDING: f32 = 6.;
 
@@ -314,8 +326,8 @@ enum Row {
     Separator,
     /// A swatch row: not a stop for the arrow keys, nor found by a search.
     Swatches(Path),
-    /// An owner's row, and its height in whole pixels.
-    Custom(Path, u32),
+    /// A view entry and its height in pixels.
+    View(Path, u32),
 }
 
 /// A rectangle in the coordinates of the window or display it is placed in.
@@ -435,7 +447,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
             }
             Entry::Submenu(_) if parent.is_some() => {}
             Entry::Swatches(_) => rows.push(Row::Swatches(path)),
-            Entry::Custom(custom) => rows.push(Row::Custom(path, custom.height.round() as u32)),
+            Entry::View(view) => rows.push(Row::View(path, view.height.round() as u32)),
             _ => rows.push(Row::Entry(path)),
         }
     }
@@ -499,7 +511,7 @@ fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     let mut order = 0;
     let mut visit = |entry: &Entry, path: Path| {
         let found = match entry {
-            Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => return,
+            Entry::Separator | Entry::Swatches(_) | Entry::View(_) => return,
             Entry::Item(item) if item.disabled => None,
             Entry::Item(item) => matching(&item.label, &item.keywords),
             Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
@@ -554,7 +566,7 @@ fn row_height(row: &Row) -> f32 {
         Row::Entry(_) => theme::CONTROL_SM,
         Row::Separator => SEPARATOR,
         Row::Swatches(_) => SWATCH_ROW,
-        Row::Custom(_, height) => *height as f32,
+        Row::View(_, height) => *height as f32,
     }
 }
 
@@ -666,13 +678,8 @@ impl Menu {
     pub fn new(entries: Vec<Entry>, position: Point<Pixels>, cx: &mut Context<Self>) -> Self {
         let searchable = entries
             .iter()
-            .filter(|entry| !matches!(entry, Entry::Separator | Entry::Custom(_)))
+            .filter(|entry| !matches!(entry, Entry::Separator | Entry::View(_)))
             .count();
-        // An owner's rows can hold fields and selects, which need the
-        // keyboard and the owner's window: such a menu draws in the window.
-        let custom = entries
-            .iter()
-            .any(|entry| matches!(entry, Entry::Custom(_)));
         let search = (searchable >= SEARCH_THRESHOLD).then(|| cx.new(TextInput::menu_search));
         let mut subscriptions = Vec::new();
         if let Some(search) = &search {
@@ -705,11 +712,7 @@ impl Menu {
             shown: None,
             closing: None,
             chosen: None,
-            presentation: if custom {
-                Presentation::InWindow
-            } else {
-                presentation()
-            },
+            presentation: presentation(),
             main: None,
             viewport: Rect::default(),
             screen: None,
@@ -727,6 +730,14 @@ impl Menu {
         if !show {
             self.search = None;
         }
+        self
+    }
+
+    /// Draws the menu in its owner's window rather than in pop-up windows,
+    /// for views whose fields need the keyboard and whose selects and
+    /// calendars open over the window.
+    pub fn in_window(mut self) -> Self {
+        self.presentation = Presentation::InWindow;
         self
     }
 
@@ -851,9 +862,9 @@ impl Menu {
                 Row::Entry(path) => match self.entry(*path) {
                     Entry::Item(item) => !item.disabled,
                     Entry::Submenu(_) => true,
-                    Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => false,
+                    Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
                 },
-                Row::Separator | Row::Swatches(_) | Row::Custom(..) => false,
+                Row::Separator | Row::Swatches(_) | Row::View(..) => false,
             })
             .collect()
     }
@@ -863,9 +874,9 @@ impl Menu {
             Row::Entry(path) => match self.entry(*path) {
                 Entry::Item(item) => item.icon.is_some(),
                 Entry::Submenu(submenu) => submenu.icon.is_some(),
-                Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => false,
+                Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
             },
-            Row::Separator | Row::Swatches(_) | Row::Custom(..) => false,
+            Row::Separator | Row::Swatches(_) | Row::View(..) => false,
         })
     }
 
@@ -889,7 +900,7 @@ impl Menu {
         let mut found = 0;
         for entry in &self.entries {
             match entry {
-                Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => {}
+                Entry::Separator | Entry::Swatches(_) | Entry::View(_) => {}
                 Entry::Item(_) => found += 1,
                 Entry::Submenu(submenu) => {
                     found += 1 + submenu
@@ -1164,7 +1175,11 @@ impl Menu {
                     ),
                     _ => None,
                 },
-                Row::Separator | Row::Swatches(_) | Row::Custom(..) => None,
+                Row::View(path, _) => match self.entry(*path) {
+                    Entry::View(view) => Some(view.width - 2. * PADDING),
+                    _ => None,
+                },
+                Row::Separator | Row::Swatches(_) => None,
             })
             .fold(0f32, f32::max);
         (2. * PADDING + widest).ceil()
@@ -1559,7 +1574,7 @@ impl Menu {
         let (label, icon) = match entry {
             Entry::Item(item) => (item.label.clone(), item.icon),
             Entry::Submenu(submenu) => (submenu.label.clone(), submenu.icon),
-            Entry::Separator | Entry::Swatches(_) | Entry::Custom(_) => {
+            Entry::Separator | Entry::Swatches(_) | Entry::View(_) => {
                 (SharedString::default(), None)
             }
         };
@@ -1687,8 +1702,8 @@ impl Menu {
                     list = list.child(self.swatch_row(path, window, cx));
                     continue;
                 }
-                Row::Custom(path, height) => {
-                    list = list.child(self.custom_row(path, height, cx));
+                Row::View(path, height) => {
+                    list = list.child(self.view_row(path, height, cx));
                     continue;
                 }
                 Row::Separator => {
@@ -1814,8 +1829,8 @@ impl Menu {
                     list = list.child(self.swatch_row(path, window, cx));
                     continue;
                 }
-                Row::Custom(path, height) => {
-                    list = list.child(self.custom_row(path, height, cx));
+                Row::View(path, height) => {
+                    list = list.child(self.view_row(path, height, cx));
                     continue;
                 }
                 Row::Separator => {
@@ -2059,29 +2074,28 @@ impl Menu {
 }
 
 impl Menu {
-    /// An owner's row: its view inside `.customItem`'s padding. Reaching it
-    /// takes the highlight off the menu's rows, as `onMouseEnter` does.
-    fn custom_row(&self, path: Path, height: u32, cx: &mut Context<Self>) -> Stateful<Div> {
-        let id = (
-            "menu-custom",
-            path.top * 1000 + path.child.map_or(0, |child| child + 1),
-        );
-        let Entry::Custom(custom) = self.entry(path) else {
-            return div().id(id);
+    /// A view entry, at its own size. Reaching it takes the highlight off
+    /// the menu's rows, as `.customItem`'s `onMouseEnter` does.
+    fn view_row(&self, path: Path, height: u32, cx: &mut Context<Self>) -> Stateful<Div> {
+        let Entry::View(entry) = self.entry(path) else {
+            return div().id("menu-view");
         };
         div()
-            .id(id)
+            .id((
+                "menu-view",
+                path.top * 1000 + path.child.map_or(0, |child| child + 1),
+            ))
             .relative()
             .h(px(height as f32))
             .flex_none()
-            .px(px(CUSTOM_PADDING))
+            .when(entry.padded, |row| row.px(px(CUSTOM_PADDING)))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.set_current(None, cx);
                     this.leave_submenu(cx);
                 }
             }))
-            .child(custom.view.clone())
+            .child(entry.view.clone())
     }
 }
 

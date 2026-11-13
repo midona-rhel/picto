@@ -3,7 +3,7 @@
 //! take Cmd and Shift selection, open their context menus, and folders and
 //! smart folders are created, renamed in place and deleted here.
 use super::library::{LibraryPopover, Toggled};
-use crate::backend::{self, Navigation};
+use crate::backend::{self, Navigation, Screen};
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
@@ -13,11 +13,19 @@ use crate::ui::text_input::{Renamed, TextInput};
 use crate::ui::{self, field::Look, sidebar_row::Branch};
 use crate::{motion, theme};
 use gpui::*;
+use picto_library::model::ContentSortField;
 use picto_library::query::{ItemScope, RootQuery};
 use picto_library::{FolderId, Library, LibraryError, SmartFolderId, SmartFolderInput};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
+
+mod dialogs;
+mod drag;
+mod keyboard;
+mod rules;
+mod smart_folder;
+mod tree;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Section {
@@ -73,10 +81,20 @@ fn smart_folder_id(node: &str) -> Option<SmartFolderId> {
     node.strip_prefix("smart:")?.parse().ok().map(SmartFolderId)
 }
 
+/// The sidebar's key bindings.
+pub fn bind(cx: &mut App) {
+    keyboard::bind(cx);
+}
+
 /// Asks the shell to show a context menu. The sidebar acts on what is chosen.
 pub struct ShowMenu(pub Entity<Menu>);
 
 impl EventEmitter<ShowMenu> for Sidebar {}
+
+/// Empty Trash was chosen; the shell confirms and deletes.
+pub struct EmptyTrash;
+
+impl EventEmitter<EmptyTrash> for Sidebar {}
 
 /// What a double-click on a folder does (`sidebarDoubleClickAction`).
 #[derive(Clone, Copy, PartialEq)]
@@ -147,6 +165,8 @@ const SYSTEM_ROWS: [(&str, &str, &str); 10] = [
     ("system:trash", "Trash", "menu-trash"),
 ];
 const ALWAYS_SHOWN: [&str; 2] = ["system:active", "system:trash"];
+/// The id Quick Access is folded under.
+const QUICK_ACCESS: &str = "quick_access";
 
 /// What a context menu was opened on.
 #[derive(Clone)]
@@ -230,13 +250,39 @@ pub struct Sidebar {
     /// The row whose context menu is open.
     context: Option<String>,
     renaming: Option<Renaming>,
-    // TODO: move keyboard focus through the rows, as the Electron rows'
-    // `tabIndex` does; the row is drawn focused while this names it.
+    /// The row the keyboard is on while the rows have it.
     keyboard_row: Option<String>,
-    // TODO: set while a folder is dragged over the sidebar (drag reorder
-    // and drops from the grid).
+    /// The rows' keyboard focus.
+    rows_focus: FocusHandle,
+    /// The rows as last drawn, in order, for the keyboard.
+    shown_rows: Vec<String>,
+    _rows_focus: Option<Subscription>,
+    /// Where a dragged folder or smart folder would land.
     drop: Option<(String, DropPosition)>,
-    drop_target: Option<String>,
+    /// The row items dragged from the grid are over.
+    grid_drop: Option<String>,
+    /// Items are being dragged from the grid.
+    grid_dragging: bool,
+    /// Where the rows that take drops were last drawn.
+    bounds: drag::RowBounds,
+    /// A left press on a folder or smart-folder row, and where.
+    press: Option<(String, Point<Pixels>)>,
+    /// The row being dragged.
+    node_drag: Option<drag::NodeDrag>,
+    /// The click that ends a drag opens nothing.
+    swallow_click: bool,
+    _drags: Option<Subscription>,
+    /// The open dialog.
+    dialog: Option<dialogs::Layer>,
+    /// The folder picker "Move to..." opens, the folders it moves, and
+    /// where the last context menu opened, which it opens at.
+    folder_picker: Entity<crate::inspector::FolderPicker>,
+    moving_folders: Vec<FolderId>,
+    menu_position: Point<Pixels>,
+    /// The smart-folder editor, while open.
+    smart_editor: Option<(Entity<smart_folder::SmartFolderEditor>, Subscription)>,
+    /// The open context menu, whose checks follow what its rows toggle.
+    menu: Option<WeakEntity<Menu>>,
     _menu: Vec<Subscription>,
     scroll: ScrollHandle,
     /// The library switcher's popover, and the switcher's bounds it opens
@@ -271,12 +317,13 @@ impl Sidebar {
         let library_popover = cx.new(|cx| {
             LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)
         });
+        let folder_picker = cx.new(|cx| crate::inspector::FolderPicker::new(session.clone(), cx));
         let subscriptions = vec![
             cx.observe(&filter, |_, _, cx| cx.notify()),
             // The switcher shows whether its popover is open.
             cx.subscribe(&library_popover, |_, _, _: &Toggled, cx| cx.notify()),
             cx.subscribe(&session, |_, _, change: &Change, cx| {
-                if matches!(change, Change::Navigation) {
+                if matches!(change, Change::Navigation | Change::Activity) {
                     cx.notify();
                 }
             }),
@@ -297,8 +344,23 @@ impl Sidebar {
             context: None,
             renaming: None,
             keyboard_row: None,
+            rows_focus: cx.focus_handle(),
+            shown_rows: Vec::new(),
+            _rows_focus: None,
             drop: None,
-            drop_target: None,
+            grid_drop: None,
+            grid_dragging: false,
+            bounds: drag::RowBounds::default(),
+            press: None,
+            node_drag: None,
+            swallow_click: false,
+            _drags: None,
+            dialog: None,
+            smart_editor: None,
+            folder_picker,
+            moving_folders: Vec::new(),
+            menu_position: Point::default(),
+            menu: None,
             _menu: Vec::new(),
             scroll: ScrollHandle::new(),
             library_popover,
@@ -445,9 +507,7 @@ impl Sidebar {
 // ── Menus ───────────────────────────────────────────────────────────
 
 /// `sidebarVisibilityEntries`: which system rows and sections show, each
-/// with a check while it is shown.
-// TODO: keep the menu open when a row is toggled (`keepOpen`), once the
-// menu can.
+/// with a check while it is shown. Toggling a row keeps the menu open.
 fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
     let mut entries = SYSTEM_ROWS
         .iter()
@@ -456,6 +516,7 @@ fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
                 .icon(icon)
                 .checked(ALWAYS_SHOWN.contains(&id) || prefs.visible_system.contains(id))
                 .disabled(ALWAYS_SHOWN.contains(&id))
+                .keep_open(true)
                 .into()
         })
         .collect::<Vec<menu::Entry>>();
@@ -464,28 +525,105 @@ fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
         menu::item("section:quick_access", "Quick Access")
             .icon("menu-star")
             .checked(prefs.show_quick_access)
+            .keep_open(true)
             .into(),
         menu::item("section:smart_folders", "Smart Folders")
             .icon("menu-bookmark")
             .checked(prefs.show_smart_folders)
+            .keep_open(true)
             .into(),
         menu::item("section:folders", "Folders")
             .icon("menu-folder")
             .checked(prefs.show_folders)
+            .keep_open(true)
             .into(),
     ]);
     entries
 }
 
-/// `openFolderMenu`.
-fn folder_menu(
+/// What a folder's or smart folder's menu shows besides its fixed rows.
+struct NodeMenu {
     expanded: bool,
     has_children: bool,
     any_expanded: bool,
     any_expandable: bool,
-    cx: &App,
-) -> Vec<menu::Entry> {
-    vec![
+    /// The node is in Quick Access.
+    quick: bool,
+    /// The folder watches a directory.
+    watched: bool,
+    /// The colour the swatch row shows chosen.
+    color: Option<String>,
+    /// The icon picker the "Change Icon" submenu holds.
+    icon_picker: AnyView,
+    /// Where a smart folder can move: its label and node id, after Top Level.
+    move_targets: Vec<(String, String)>,
+}
+
+fn quick_access_row(quick: bool) -> menu::Entry {
+    if quick {
+        menu::item("quick-access", "Remove from Quick Access")
+            .icon("menu-star-off")
+            .into()
+    } else {
+        menu::item("quick-access", "Add to Quick Access")
+            .icon("menu-star")
+            .into()
+    }
+}
+
+/// "Change Icon": the compact icon picker in a submenu of its own.
+fn change_icon(picker: AnyView) -> menu::Entry {
+    menu::submenu(
+        "Change Icon",
+        vec![
+            menu::view(
+                picker,
+                ui::icon_picker::WIDTH + 2. * MENU_PADDING,
+                ui::icon_picker::HEIGHT,
+            )
+            .into(),
+        ],
+    )
+    .icon("menu-change-icon")
+    .into()
+}
+
+/// `contentSortSubmenu`: the field a folder's items are sorted by.
+fn content_sort() -> menu::Entry {
+    menu::submenu(
+        "Sort by",
+        CONTENT_SORT
+            .iter()
+            .map(|(value, label, _)| menu::item("sort-contents", *label).value(*value).into())
+            .collect(),
+    )
+    .icon("menu-sort")
+    .into()
+}
+
+/// The content sort fields, with the value a menu row carries.
+const CONTENT_SORT: [(&str, &str, ContentSortField); 6] = [
+    ("name", "Name", ContentSortField::Name),
+    ("imported_at", "Import Date", ContentSortField::ImportedAt),
+    ("created_at", "Date Created", ContentSortField::CreatedAt),
+    ("modified_at", "Date Modified", ContentSortField::ModifiedAt),
+    ("size", "Size", ContentSortField::Size),
+    ("notes", "Notes", ContentSortField::Notes),
+];
+
+fn content_sort_field(value: &str) -> Option<ContentSortField> {
+    CONTENT_SORT
+        .iter()
+        .find(|(name, ..)| *name == value)
+        .map(|(.., field)| *field)
+}
+
+/// A menu row's padding inside its panel, which a view in a submenu fills.
+const MENU_PADDING: f32 = 4.;
+
+/// `openFolderMenu`.
+fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
+    let mut entries = vec![
         menu::item("new-folder", "New Folder")
             .icon("menu-folder-plus")
             .shortcut_for("file.newFolder", cx)
@@ -495,10 +633,7 @@ fn folder_menu(
             .shortcut_for("file.newSubfolder", cx)
             .into(),
         menu::Entry::Separator,
-        // Nothing is in Quick Access here, so the row always offers to add.
-        menu::item("quick-access", "Add to Quick Access")
-            .icon("menu-star")
-            .into(),
+        quick_access_row(node.quick),
         menu::item("rename", "Rename")
             .icon("menu-rename")
             .shortcut_for("edit.rename", cx)
@@ -520,29 +655,40 @@ fn folder_menu(
         menu::item("attach-watch", "Attach Watched Folder...")
             .icon("menu-watch-folder")
             .into(),
-        // TODO: "Remove Watched Folder" for a watched folder, once the
-        // navigation carries `watch_enabled`.
+    ];
+    if node.watched {
+        entries.push(
+            menu::item("remove-watch", "Remove Watched Folder")
+                .icon("menu-watch-folder")
+                .into(),
+        );
+    }
+    entries.extend([
         menu::Entry::Separator,
-        // TODO: "Sort Folders" and "Sort by" are submenus (this level or
-        // with descendants, A-Z or Z-A; name, import date, dates, size,
-        // notes); plain rows until the menu has submenus.
-        menu::item("sort-folders", "Sort Folders")
-            .icon("menu-sort")
-            .into(),
-        menu::item("sort-contents", "Sort by")
-            .icon("menu-sort")
-            .into(),
-        expand_row("Folder", expanded, has_children),
-        expand_all_row("Folders", any_expanded, any_expandable),
+        menu::submenu(
+            "Sort Folders",
+            vec![
+                menu::item("sort-tree", "This Level A–Z").value("az").into(),
+                menu::item("sort-tree", "This Level Z–A").value("za").into(),
+                menu::item("sort-tree", "This Level and Descendants A–Z")
+                    .value("az-all")
+                    .into(),
+                menu::item("sort-tree", "This Level and Descendants Z–A")
+                    .value("za-all")
+                    .into(),
+            ],
+        )
+        .icon("menu-sort")
+        .into(),
+        content_sort(),
+        expand_row("Folder", node.expanded, node.has_children),
+        expand_all_row("Folders", node.any_expanded, node.any_expandable),
         menu::Entry::Separator,
-        // TODO: "Change Icon" is a submenu holding the icon picker.
-        menu::item("change-icon", "Change Icon")
-            .icon("menu-change-icon")
-            .into(),
-        // TODO: the colour picker row (`ColorPicker` in the menu).
+        change_icon(node.icon_picker),
+        ui::color_picker::menu_row("color", node.color.as_deref()).into(),
         menu::Entry::Separator,
         // TODO: "Export" is a submenu: Export Originals..., Export As...,
-        // Export as Picto Pack....
+        // Export as Picto Pack.... Export is not built yet.
         menu::item("export", "Export")
             .icon("menu-file-export")
             .into(),
@@ -551,18 +697,27 @@ fn folder_menu(
             .icon("menu-trash")
             .danger(true)
             .into(),
-    ]
+    ]);
+    entries
+}
+
+/// A smart folder's "Move to..." submenu: Top Level, then every smart folder
+/// it can move under.
+fn smart_move_submenu(targets: &[(String, String)]) -> menu::Entry {
+    let mut rows: Vec<menu::Entry> = vec![menu::item("move-under", "Top Level").value("").into()];
+    rows.extend(targets.iter().map(|(label, node)| {
+        menu::item("move-under", label.clone())
+            .value(node.clone())
+            .into()
+    }));
+    menu::submenu("Move to...", rows)
+        .icon("menu-folder-open")
+        .into()
 }
 
 /// `openSmartFolderMenu`. A group has no rules, so it has nothing to edit,
 /// refresh, sort or export.
-fn smart_folder_menu(
-    group: bool,
-    expanded: bool,
-    has_children: bool,
-    any_expanded: bool,
-    any_expandable: bool,
-) -> Vec<menu::Entry> {
+fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
     let mut entries: Vec<menu::Entry> = Vec::new();
     if !group {
         entries.extend([
@@ -584,19 +739,11 @@ fn smart_folder_menu(
         menu::Entry::Separator,
     ]);
     if !group {
-        entries.push(
-            menu::item("quick-access", "Add to Quick Access")
-                .icon("menu-star")
-                .into(),
-        );
+        entries.push(quick_access_row(node.quick));
     }
     entries.extend([
         menu::item("rename", "Rename").icon("menu-rename").into(),
-        // TODO: "Move to..." is a submenu of Top Level and every smart
-        // folder it can move under.
-        menu::item("move-to", "Move to...")
-            .icon("menu-folder-open")
-            .into(),
+        smart_move_submenu(&node.move_targets),
         menu::item("duplicate", "Duplicate")
             .icon("menu-copy")
             .into(),
@@ -613,19 +760,16 @@ fn smart_folder_menu(
         ]);
     }
     entries.extend([
-        expand_row("Smart Folder", expanded, has_children),
-        expand_all_row("Smart Folders", any_expanded, any_expandable),
+        expand_row("Smart Folder", node.expanded, node.has_children),
+        expand_all_row("Smart Folders", node.any_expanded, node.any_expandable),
         menu::Entry::Separator,
-        // TODO: "Change Icon" is a submenu holding the icon picker.
-        menu::item("change-icon", "Change Icon")
-            .icon("menu-change-icon")
-            .into(),
-        // TODO: the colour picker row (`ColorPicker` in the menu).
+        change_icon(node.icon_picker),
+        ui::color_picker::menu_row("color", node.color.as_deref()).into(),
         menu::Entry::Separator,
     ]);
     if !group {
         // TODO: "Export" is a submenu: Export Originals..., Export As...,
-        // Export as Picto Pack....
+        // Export as Picto Pack.... Export is not built yet.
         entries.push(
             menu::item("export", "Export")
                 .icon("menu-file-export")
@@ -666,20 +810,38 @@ fn expand_all_row(noun: &str, any_expanded: bool, any_expandable: bool) -> menu:
         .into()
 }
 
-/// `openBulkMenu`: several folders, several smart folders, or a mix.
-fn bulk_menu(
-    nodes: &[String],
+/// What the selection's menu shows besides its fixed rows.
+struct BulkMenu {
     has_collapsed: bool,
     has_expanded: bool,
-    cx: &App,
-) -> Vec<menu::Entry> {
+    /// Selected rows in and out of Quick Access.
+    any_quick: bool,
+    any_not_quick: bool,
+    /// Where selected smart folders can move.
+    move_targets: Vec<(String, String)>,
+}
+
+/// `openBulkMenu`: several folders, several smart folders, or a mix.
+fn bulk_menu(nodes: &[String], bulk: BulkMenu, cx: &App) -> Vec<menu::Entry> {
     let all_folders = nodes.iter().all(|id| id.starts_with("folder:"));
     let all_smart = nodes.iter().all(|id| id.starts_with("smart:"));
     let count = nodes.len();
-    let mut entries: Vec<menu::Entry> = vec![
-        menu::item("quick-access", "Add to Quick Access")
-            .icon("menu-star")
-            .into(),
+    let mut entries: Vec<menu::Entry> = Vec::new();
+    if bulk.any_not_quick {
+        entries.push(
+            menu::item("quick-access-add", "Add to Quick Access")
+                .icon("menu-star")
+                .into(),
+        );
+    }
+    if bulk.any_quick {
+        entries.push(
+            menu::item("quick-access-remove", "Remove from Quick Access")
+                .icon("menu-star-off")
+                .into(),
+        );
+    }
+    entries.push(
         menu::item(
             "duplicate",
             format!(
@@ -689,7 +851,7 @@ fn bulk_menu(
         )
         .icon("menu-copy")
         .into(),
-    ];
+    );
     if all_folders {
         entries.push(
             menu::item("auto-tags", "Set Auto Tags...")
@@ -704,18 +866,11 @@ fn bulk_menu(
             menu::item("move-to", "Move to...")
                 .icon("menu-folder-open")
                 .into(),
-            // TODO: "Sort by" is a submenu of content sort fields.
-            menu::item("sort-contents", "Sort by")
-                .icon("menu-sort")
-                .into(),
+            content_sort(),
         ]);
     } else if all_smart {
         entries.extend([
-            // TODO: "Move to..." is a submenu of Top Level and the smart
-            // folders the selection can move under.
-            menu::item("move-to", "Move to...")
-                .icon("menu-folder-open")
-                .into(),
+            smart_move_submenu(&bulk.move_targets),
             menu::item("sort-by-name", "Sort Results by Name")
                 .icon("menu-sort")
                 .into(),
@@ -725,14 +880,14 @@ fn bulk_menu(
         entries.extend([
             menu::item("expand-selected", "Expand Selected")
                 .icon("menu-expand")
-                .disabled(!has_collapsed)
+                .disabled(!bulk.has_collapsed)
                 .into(),
             menu::item("collapse-selected", "Collapse Selected")
                 .icon("menu-collapse")
-                .disabled(!has_expanded)
+                .disabled(!bulk.has_expanded)
                 .into(),
             menu::Entry::Separator,
-            // TODO: the colour picker row (`ColorPicker` in the menu).
+            ui::color_picker::menu_row("color", None).into(),
             menu::Entry::Separator,
         ]);
     }
@@ -850,6 +1005,36 @@ impl Sidebar {
             }
             _ => false,
         }
+    }
+
+    /// `file.newSmartFolder`: the smart-folder editor for a new top-level
+    /// smart folder.
+    pub fn new_top_smart_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_smart_folder(None, window, cx);
+    }
+
+    /// `folder.autoTags`: the auto-tags editor for the folders chosen in the
+    /// sidebar, or the open folder. Returns false when there is none.
+    pub fn auto_tags_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut targets: Vec<FolderId> = self
+            .selection
+            .iter()
+            .filter_map(|node| folder_id(node))
+            .collect();
+        if targets.is_empty() {
+            let session = self.session.read(cx);
+            targets.extend(
+                session
+                    .nav
+                    .get(session.scope)
+                    .and_then(|entry| folder_id(&entry.id())),
+            );
+        }
+        if targets.is_empty() {
+            return false;
+        }
+        self.edit_auto_tags(targets, window, cx);
+        true
     }
 
     /// `createFolderAndRename`: a folder named "New Folder", revealed and
@@ -1020,6 +1205,221 @@ impl Sidebar {
         }
     }
 
+    /// The Quick Access node ids, in their order (`sidebarQuickAccess`).
+    fn quick_access(&self, cx: &App) -> Vec<String> {
+        crate::settings::current(cx).sidebar_quick_access.clone()
+    }
+
+    /// Saves Quick Access as `reorderQuickAccess` does: each id once.
+    fn set_quick_access(&mut self, ids: Vec<String>, cx: &mut Context<Self>) {
+        let mut unique = Vec::new();
+        for id in ids {
+            if !unique.contains(&id) {
+                unique.push(id);
+            }
+        }
+        crate::settings::model(cx).update(cx, |model, cx| {
+            model.apply_now(|app| app.sidebar_quick_access = unique.clone(), cx)
+        });
+        cx.notify();
+    }
+
+    /// Gives folders and smart folders an icon (`None` for the default).
+    fn apply_icon(&mut self, nodes: Vec<String>, icon: Option<String>, cx: &mut Context<Self>) {
+        self.edit_appearance(nodes, Some(icon), None, cx);
+    }
+
+    /// Gives folders and smart folders a colour (`None` for the default).
+    fn apply_color(&mut self, nodes: Vec<String>, color: Option<String>, cx: &mut Context<Self>) {
+        self.edit_appearance(nodes, None, Some(color), cx);
+    }
+
+    /// Writes an icon, a colour or both, keeping what else the definition
+    /// holds. The icon picker may be in a menu's pop-up window, so this
+    /// waits for the library without holding any window.
+    fn edit_appearance(
+        &mut self,
+        nodes: Vec<String>,
+        icon: Option<Option<String>>,
+        color: Option<Option<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = self.session.read(cx).run(move |library| {
+            let result = (|| -> picto_library::Result<()> {
+                let folders = library.folders()?;
+                for node in &nodes {
+                    if let Some(id) = folder_id(node) {
+                        let Some(folder) = folders.iter().find(|folder| folder.folder_id == id)
+                        else {
+                            continue;
+                        };
+                        let icon = icon.clone().unwrap_or(folder.icon.clone());
+                        let color = color.clone().unwrap_or(folder.color.clone());
+                        library.set_folder_metadata(
+                            id,
+                            icon.as_deref(),
+                            color.as_deref(),
+                            folder.notes.as_deref(),
+                        )?;
+                    } else if let Some(id) = smart_folder_id(node) {
+                        let mut input = smart_input(library, id)?;
+                        if let Some(icon) = &icon {
+                            input.icon = icon.clone();
+                        }
+                        if let Some(color) = &color {
+                            input.color = color.clone();
+                        }
+                        library.update_smart_folder(id, input)?;
+                    }
+                }
+                Ok(())
+            })();
+            (result, backend::navigation(library))
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok((result, navigation)) = answer.await else {
+                return;
+            };
+            if let Err(error) = result {
+                // TODO: show this as a notification, as the Electron sidebar
+                // does.
+                eprintln!("sidebar: {error}");
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Ok((nav, tags)) = navigation {
+                    this.session
+                        .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// `foldersController.sortContents`: orders each folder's items by a
+    /// field.
+    fn sort_contents(
+        &mut self,
+        folders: Vec<FolderId>,
+        field: ContentSortField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit(
+            move |library| {
+                for id in folders {
+                    library.sort_folder_items(id, field)?;
+                }
+                Ok(())
+            },
+            |this, (), _, cx| this.reload_if_showing(None, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// `smartFoldersController.moveMany`: moves smart folders under another
+    /// (`Some("")` or `None` for the top level), the topmost of a
+    /// selection only.
+    fn move_smart(
+        &mut self,
+        nodes: Vec<String>,
+        under: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let moving = {
+            let tree = tree::nodes(&self.session.read(cx).nav, "smart:");
+            tree::top_level(&tree, &nodes)
+                .iter()
+                .filter_map(|node| smart_folder_id(node))
+                .collect::<Vec<_>>()
+        };
+        let parent = under.as_deref().and_then(smart_folder_id);
+        self.edit(
+            move |library| {
+                for id in moving {
+                    let mut input = smart_input(library, id)?;
+                    input.parent_id = parent;
+                    library.update_smart_folder(id, input)?;
+                }
+                Ok(())
+            },
+            |_, (), _, _| {},
+            window,
+            cx,
+        );
+    }
+
+    /// "New Smart Folder" and "New Child Smart Folder": the editor with
+    /// every part, for a folder under `parent`.
+    fn new_smart_folder(
+        &mut self,
+        parent: Option<SmartFolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_smart_editor(
+            smart_folder::Target::Create { parent },
+            smart_folder::Part::All,
+            window,
+            cx,
+        );
+    }
+
+    /// "Edit Smart Folder..." (its details) and "Edit Rules...".
+    fn edit_smart_folder(
+        &mut self,
+        node: &str,
+        rules: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = smart_folder_id(node) else {
+            return;
+        };
+        let answer = self
+            .session
+            .read(cx)
+            .run(move |library| smart_input(library, id));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(original)) = answer.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.open_smart_editor(
+                    smart_folder::Target::Edit { id, original },
+                    if rules {
+                        smart_folder::Part::Rules
+                    } else {
+                        smart_folder::Part::Details
+                    },
+                    window,
+                    cx,
+                )
+            });
+        })
+        .detach();
+    }
+
+    fn open_smart_editor(
+        &mut self,
+        target: smart_folder::Target,
+        part: smart_folder::Part,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.session.clone();
+        let editor =
+            cx.new(|cx| smart_folder::SmartFolderEditor::new(session, target, part, window, cx));
+        let subscription = cx.subscribe(&editor, |this, _, event: &smart_folder::Event, cx| {
+            let smart_folder::Event::Created(id) = event;
+            this.reveal(&format!("smart:{}", id.0), cx);
+            cx.notify();
+        });
+        self.smart_editor = Some((editor, subscription));
+        cx.notify();
+    }
+
     // ── Rename in place ─────────────────────────────────────────────
 
     /// A new or duplicated node: open its section and branch, then rename it.
@@ -1030,7 +1430,14 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(section) = Section::of_node(&node) {
+        self.reveal(&node, cx);
+        self.start_rename(node, name, window, cx);
+    }
+
+    /// Opens a node's section and the branches above it
+    /// (`pendingSidebarRevealNodeId`).
+    fn reveal(&mut self, node: &str, cx: &App) {
+        if let Some(section) = Section::of_node(node) {
             self.collapsed.remove(section.id());
         }
         let ancestors = {
@@ -1049,7 +1456,6 @@ impl Sidebar {
         for ancestor in ancestors {
             self.collapsed.remove(&ancestor);
         }
-        self.start_rename(node, name, window, cx);
     }
 
     /// `useInlineRename.startRename`: the name selected in a focused field.
@@ -1173,6 +1579,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.menu_position = position;
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
         let chosen = target.clone();
         // The subscriptions of a menu replaced by this one go first, so its
@@ -1181,9 +1588,10 @@ impl Sidebar {
             cx.subscribe_in(
                 &menu,
                 window,
-                move |this, _, event: &menu::Event, window, cx| {
+                move |this, menu, event: &menu::Event, window, cx| {
                     let menu::Event::Chosen(action) = event;
-                    this.choose(&chosen, action, window, cx);
+                    let value = menu.read(cx).chosen_value().map(|value| value.to_string());
+                    this.choose(&chosen, action, value, window, cx);
                 },
             ),
             cx.observe_release(&menu, |this, _, cx| {
@@ -1191,6 +1599,7 @@ impl Sidebar {
                 cx.notify();
             }),
         ];
+        self.menu = Some(menu.downgrade());
         // Only a single folder's or smart folder's menu marks its row.
         self.context = match target {
             Target::Node(node) => Some(node),
@@ -1221,12 +1630,12 @@ impl Sidebar {
                     .into(),
             ],
             "system:trash" => vec![
-                // This prototype borrows the library's files and never
-                // deletes them, so the row is shown but not offered.
+                // Deletes everything in the Trash for good, after a
+                // confirmation. The files are the disposable copy's.
                 menu::item("empty-trash", "Empty Trash")
                     .icon("menu-trash")
                     .danger(true)
-                    .disabled(true)
+                    .disabled(count == 0)
                     .into(),
                 menu::item("restore-all", "Restore All")
                     .icon("menu-download")
@@ -1236,6 +1645,37 @@ impl Sidebar {
             _ => visibility_menu(&Preferences::current(cx)),
         };
         self.open_menu(Target::System, entries, position, window, cx);
+    }
+
+    /// The icon picker a menu's "Change Icon" holds, for these nodes.
+    fn icon_picker(
+        &self,
+        nodes: Vec<String>,
+        current: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyView {
+        let sidebar = cx.entity().downgrade();
+        cx.new(move |_| {
+            ui::icon_picker::IconPicker::new(current, move |icon, _, cx| {
+                let nodes = nodes.clone();
+                let _ = sidebar.update(cx, |this, cx| this.apply_icon(nodes, icon, cx));
+            })
+        })
+        .into()
+    }
+
+    /// The labels and ids of the nodes a smart-folder selection can move under.
+    fn smart_move_targets(&self, moving: &[String], cx: &App) -> Vec<(String, String)> {
+        let entries = &self.session.read(cx).nav;
+        let nodes = tree::nodes(entries, "smart:");
+        let moving = tree::top_level(&nodes, moving);
+        tree::move_targets(&nodes, &moving)
+            .into_iter()
+            .filter_map(|id| {
+                let label = entries.iter().find(|entry| entry.id() == id)?.label.clone();
+                Some((label, id))
+            })
+            .collect()
     }
 
     /// `handleFolderContextMenu` and `handleSmartFolderContextMenu`: the
@@ -1251,6 +1691,7 @@ impl Sidebar {
         let entries = self.session.read(cx).nav.clone();
         let ids = entries.iter().map(Navigation::id).collect::<Vec<_>>();
         let node = ids[index].clone();
+        let quick = self.quick_access(cx);
         if self.selection.len() > 1 && self.selection.contains(&node) {
             let nodes = ids
                 .iter()
@@ -1264,9 +1705,14 @@ impl Sidebar {
                 .map(|(_, id)| id)
                 .collect::<HashSet<_>>();
             let folding = nodes.iter().filter(|id| parents.contains(id));
-            let has_collapsed = folding.clone().any(|id| self.collapsed.contains(id));
-            let has_expanded = folding.clone().any(|id| !self.collapsed.contains(id));
-            let menu = bulk_menu(&nodes, has_collapsed, has_expanded, cx);
+            let bulk = BulkMenu {
+                has_collapsed: folding.clone().any(|id| self.collapsed.contains(id)),
+                has_expanded: folding.clone().any(|id| !self.collapsed.contains(id)),
+                any_quick: nodes.iter().any(|id| quick.contains(id)),
+                any_not_quick: nodes.iter().any(|id| !quick.contains(id)),
+                move_targets: self.smart_move_targets(&nodes, cx),
+            };
+            let menu = bulk_menu(&nodes, bulk, cx);
             self.open_menu(Target::Bulk(nodes), menu, position, window, cx);
             return;
         }
@@ -1275,20 +1721,24 @@ impl Sidebar {
             return;
         };
         let all = expandable(&entries, &ids, section);
-        let any_expanded = all.iter().any(|id| !self.collapsed.contains(id));
-        let has_children = all.contains(&node);
-        let expanded = !self.collapsed.contains(&node);
+        let entry = &entries[index];
+        let details = NodeMenu {
+            expanded: !self.collapsed.contains(&node),
+            has_children: all.contains(&node),
+            any_expanded: all.iter().any(|id| !self.collapsed.contains(id)),
+            any_expandable: !all.is_empty(),
+            quick: quick.contains(&node),
+            watched: entry.watched,
+            color: entry.tint.map(|tint| format!("#{tint:06X}")),
+            icon_picker: self.icon_picker(vec![node.clone()], entry.icon.clone(), cx),
+            move_targets: match section {
+                Section::SmartFolders => self.smart_move_targets(std::slice::from_ref(&node), cx),
+                Section::Folders => Vec::new(),
+            },
+        };
         let menu = match section {
-            Section::Folders => {
-                folder_menu(expanded, has_children, any_expanded, !all.is_empty(), cx)
-            }
-            Section::SmartFolders => smart_folder_menu(
-                entries[index].group,
-                expanded,
-                has_children,
-                any_expanded,
-                !all.is_empty(),
-            ),
+            Section::Folders => folder_menu(details, cx),
+            Section::SmartFolders => smart_folder_menu(entry.group, details),
         };
         self.open_menu(Target::Node(node), menu, position, window, cx);
     }
@@ -1323,32 +1773,42 @@ impl Sidebar {
         self.open_menu(Target::Section, entries, position, window, cx);
     }
 
-    /// Does what a menu row says, for what the menu was opened on.
+    /// Does what a menu row says, for what the menu was opened on. `value`
+    /// is the chosen row's or swatch's value, for rows that share an action.
     fn choose(
         &mut self,
         target: &Target,
-        action: &str,
+        action: &'static str,
+        value: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // The visibility rows and sections, saved as the Settings window
         // saves them (`persistSystemVisibility`, `persistSectionVisibility`).
+        // The menu stays open with the row's check following.
         if crate::settings::current(cx)
             .clone()
             .sidebar_visibility(action)
             .is_some()
         {
-            let key = action.to_owned();
             crate::settings::model(cx).update(cx, |model, cx| {
                 model.apply_now(
                     |app| {
-                        if let Some(on) = app.sidebar_visibility(&key) {
+                        if let Some(on) = app.sidebar_visibility(action) {
                             *on = !*on;
                         }
                     },
                     cx,
                 )
             });
+            let shown = crate::settings::current(cx)
+                .clone()
+                .sidebar_visibility(action)
+                .map(|on| *on);
+            if let (Some(shown), Some(menu)) = (shown, self.menu.as_ref().and_then(|m| m.upgrade()))
+            {
+                menu.update(cx, |menu, cx| menu.set_checked(action, shown, cx));
+            }
             return;
         }
         match target {
@@ -1378,61 +1838,105 @@ impl Sidebar {
                     window,
                     cx,
                 ),
+                // The shell asks and deletes, as it does for the grid's
+                // Delete Permanently.
+                "empty-trash" => cx.emit(EmptyTrash),
                 _ => {}
             },
             Target::Section => match action {
                 "new-folder" => self.create_folder(None, window, cx),
                 "new-group" => self.create_group(None, window, cx),
-                // TODO: "Import Folder..." chooses a folder and imports it,
-                // and "New Smart Folder" opens the smart-folder editor.
+                "new-smart-folder" => self.new_smart_folder(None, window, cx),
+                // TODO: "Import Folder..." chooses a folder and imports it
+                // into the library; import is not built yet.
                 _ => {}
             },
-            Target::Node(node) => self.choose_for_node(node, action, window, cx),
-            Target::Bulk(nodes) => match action {
-                "duplicate" => self.duplicate(nodes.clone(), window, cx),
-                "delete" => self.delete(nodes.clone(), window, cx),
-                "expand-selected" | "collapse-selected" => {
-                    let parents = {
-                        let nav = &self.session.read(cx).nav;
-                        nodes
-                            .iter()
-                            .filter(|node| {
-                                nav.iter()
-                                    .position(|entry| entry.id() == **node)
-                                    .is_some_and(|index| {
-                                        nav.iter().any(|entry| entry.parent == Some(index))
-                                    })
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    };
-                    self.set_expanded(&parents, action == "expand-selected", cx);
-                }
-                "sort-by-name" => {
-                    let ids = nodes
+            Target::Node(node) => self.choose_for_node(node, action, value, window, cx),
+            Target::Bulk(nodes) => self.choose_for_selection(nodes, action, value, window, cx),
+        }
+    }
+
+    fn choose_for_selection(
+        &mut self,
+        nodes: &[String],
+        action: &str,
+        value: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folders = nodes
+            .iter()
+            .filter_map(|node| folder_id(node))
+            .collect::<Vec<_>>();
+        match action {
+            "duplicate" => self.duplicate(nodes.to_vec(), window, cx),
+            "delete" => self.confirm_delete(nodes.to_vec(), window, cx),
+            "quick-access-add" => {
+                let mut next = self.quick_access(cx);
+                next.extend(
+                    nodes
                         .iter()
-                        .filter_map(|node| smart_folder_id(node))
-                        .collect::<Vec<_>>();
-                    self.edit(
-                        move |library| {
-                            for id in ids {
-                                library.update_smart_folder(
-                                    id,
-                                    sorted_by_name(smart_input(library, id)?),
-                                )?;
-                            }
-                            Ok(())
-                        },
-                        |this, (), _, cx| this.reload_if_showing(None, cx),
-                        window,
-                        cx,
-                    );
+                        .filter(|id| !next.contains(id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+                self.set_quick_access(next, cx);
+            }
+            "quick-access-remove" => {
+                let next = self
+                    .quick_access(cx)
+                    .into_iter()
+                    .filter(|id| !nodes.contains(id))
+                    .collect();
+                self.set_quick_access(next, cx);
+            }
+            "expand-selected" | "collapse-selected" => {
+                let parents = {
+                    let nav = &self.session.read(cx).nav;
+                    nodes
+                        .iter()
+                        .filter(|node| {
+                            nav.iter()
+                                .position(|entry| entry.id() == **node)
+                                .is_some_and(|index| {
+                                    nav.iter().any(|entry| entry.parent == Some(index))
+                                })
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                self.set_expanded(&parents, action == "expand-selected", cx);
+            }
+            "sort-by-name" => {
+                let ids = nodes
+                    .iter()
+                    .filter_map(|node| smart_folder_id(node))
+                    .collect::<Vec<_>>();
+                self.edit(
+                    move |library| {
+                        for id in ids {
+                            library.update_smart_folder(
+                                id,
+                                sorted_by_name(smart_input(library, id)?),
+                            )?;
+                        }
+                        Ok(())
+                    },
+                    |this, (), _, cx| this.reload_if_showing(None, cx),
+                    window,
+                    cx,
+                );
+            }
+            "sort-contents" => {
+                if let Some(field) = value.as_deref().and_then(content_sort_field) {
+                    self.sort_contents(folders, field, window, cx);
                 }
-                // TODO: "Add to Quick Access", "Set Auto Tags...", "Move
-                // to..." and "Sort by" need Quick Access, the auto-tags
-                // editor, the folder picker and submenus.
-                _ => {}
-            },
+            }
+            "color" => self.apply_color(nodes.to_vec(), value.filter(|hex| !hex.is_empty()), cx),
+            "move-under" => self.move_smart(nodes.to_vec(), value, window, cx),
+            "move-to" => self.pick_folder_parent(nodes.to_vec(), window, cx),
+            "auto-tags" => self.edit_auto_tags(folders, window, cx),
+            _ => {}
         }
     }
 
@@ -1440,6 +1944,7 @@ impl Sidebar {
         &mut self,
         node: &str,
         action: &str,
+        value: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1455,14 +1960,22 @@ impl Sidebar {
             "new-folder" => self.create_folder(None, window, cx),
             "new-subfolder" => self.create_folder(folder_id(node), window, cx),
             "new-child-group" => self.create_group(smart_folder_id(node), window, cx),
+            "new-child-smart-folder" => self.new_smart_folder(smart_folder_id(node), window, cx),
+            "edit-smart-folder" => self.edit_smart_folder(node, false, window, cx),
+            "edit-rules" => self.edit_smart_folder(node, true, window, cx),
             "rename" => {
                 self.start_rename(node.to_owned(), entries[index].label.clone(), window, cx)
             }
             "duplicate" => self.duplicate(vec![node.to_owned()], window, cx),
-            "delete" => {
-                // TODO: ask first, as the Electron sidebar's confirmation
-                // does ("Media inside these folders will remain untouched").
-                self.delete(vec![node.to_owned()], window, cx)
+            "delete" => self.confirm_delete(vec![node.to_owned()], window, cx),
+            "quick-access" => {
+                let mut next = self.quick_access(cx);
+                if let Some(at) = next.iter().position(|id| id == node) {
+                    next.remove(at);
+                } else {
+                    next.push(node.to_owned());
+                }
+                self.set_quick_access(next, cx);
             }
             "toggle-expand" => {
                 if entries.iter().any(|entry| entry.parent == Some(index)) {
@@ -1498,13 +2011,66 @@ impl Sidebar {
                     cx,
                 );
             }
-            // TODO: these need parts the prototype does not have yet: Quick
-            // Access ("quick-access"), the folder picker ("move-to"), the
-            // auto-tags editor ("auto-tags"), import ("import-here"), watched
-            // folders ("attach-watch"), submenus ("sort-folders",
-            // "sort-contents", "change-icon", "export") and the smart-folder
-            // editor ("edit-smart-folder", "edit-rules",
-            // "new-child-smart-folder").
+            "sort-tree" => {
+                let (Some(id), Some(order)) = (folder_id(node), value) else {
+                    return;
+                };
+                let descending = order.starts_with("za");
+                let recursive = order.ends_with("-all");
+                self.edit(
+                    move |library| {
+                        library
+                            .sort_folder_tree(id, descending, recursive)
+                            .map(|_| ())
+                    },
+                    |_, (), _, _| {},
+                    window,
+                    cx,
+                );
+            }
+            "sort-contents" => {
+                if let (Some(id), Some(field)) = (
+                    folder_id(node),
+                    value.as_deref().and_then(content_sort_field),
+                ) {
+                    self.sort_contents(vec![id], field, window, cx);
+                }
+            }
+            "color" => self.apply_color(
+                vec![node.to_owned()],
+                value.filter(|hex| !hex.is_empty()),
+                cx,
+            ),
+            "move-under" => self.move_smart(vec![node.to_owned()], value, window, cx),
+            "move-to" => self.pick_folder_parent(vec![node.to_owned()], window, cx),
+            "auto-tags" => {
+                if let Some(id) = folder_id(node) {
+                    self.edit_auto_tags(vec![id], window, cx);
+                }
+            }
+            "attach-watch" => {
+                if let Some(id) = folder_id(node) {
+                    self.edit_watch(id, window, cx);
+                }
+            }
+            "remove-watch" => {
+                if let Some(id) = folder_id(node) {
+                    let name = entries[index].label.clone();
+                    self.open_dialog(
+                        dialogs::Dialog::Confirm {
+                            title: "Remove Watch",
+                            message: format!("Stop watching the folder for \"{name}\"?"),
+                            label: "Remove",
+                            then: dialogs::Confirmed::RemoveWatch(id),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            // TODO: "Import Folder Here..." chooses a folder on disk and
+            // imports it into this folder; import is not built yet. "Export"
+            // waits for export.
             _ => {}
         }
     }
@@ -1525,6 +2091,37 @@ impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = Preferences::current(cx);
         crate::stats::rendered(crate::stats::View::Sidebar);
+        // The grid's drags are followed from the first frame on, and the
+        // folder picker's Move.
+        if self._drags.is_none() {
+            self._subscriptions.push(cx.subscribe_in(
+                &self.folder_picker,
+                window,
+                |this, _, event: &crate::inspector::folder_picker::Event, window, cx| {
+                    if let crate::inspector::folder_picker::Event::MoveTo(parent) = event {
+                        this.move_folders_to(*parent, window, cx);
+                    }
+                },
+            ));
+            let drags = crate::grid::drag::model(cx);
+            self._drags = Some(cx.subscribe_in(
+                &drags,
+                window,
+                |this, _, event: &crate::grid::drag::DragEvent, window, cx| {
+                    this.grid_drag(event, window, cx)
+                },
+            ));
+        }
+        self.bounds.clear();
+        self.shown_rows.clear();
+        // The focus look goes when the rows lose the keyboard.
+        if self._rows_focus.is_none() {
+            self._rows_focus = Some(cx.on_focus_out(&self.rows_focus, window, |this, _, _, cx| {
+                this.keyboard_row = None;
+                cx.notify();
+            }));
+        }
+        let dragging = self.grid_dragging || self.node_drag.is_some();
         let theme = theme::theme(cx);
         let filter = self.filter.read(cx).value().trim().to_lowercase();
         let filtering = !filter.is_empty();
@@ -1586,36 +2183,109 @@ impl Render for Sidebar {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .track_focus(&self.rows_focus)
+            .key_context("SidebarRows")
+            .on_action(
+                cx.listener(|this, _: &keyboard::FocusNext, _, cx| this.focus_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &keyboard::FocusPrevious, _, cx| this.focus_step(false, cx)),
+            )
+            .on_action(cx.listener(|this, _: &keyboard::OpenFocused, _, cx| this.open_focused(cx)))
+            .on_action(
+                cx.listener(|this, _: &keyboard::LeaveRows, window, cx| {
+                    this.leave_rows(window, cx)
+                }),
+            )
             .pr(px(ui::scrollbar::GUTTER + theme::SIDEBAR_LIST_PADDING))
             .pb(px(16.));
 
+        // The Subscriptions row's button while subscriptions run or are
+        // held: it holds or releases every subscription.
+        let activity = self.session.read(cx).subscriptions;
         // System rows, those the visibility menu leaves on.
         for (index, entry) in entries.iter().enumerate() {
             if section(index).is_some() || !prefs.visible_system.contains(ids[index].as_str()) {
                 continue;
             }
+            let row = ui::sidebar_row(
+                ElementId::Name(ids[index].clone().into()),
+                entry.icon.clone().unwrap_or_default(),
+                entry.label.clone(),
+            )
+            .count(entry.count.filter(|_| prefs.show_counts))
+            .activity(
+                (entry.screen == Some(Screen::Subscriptions) && activity.shown()).then(|| {
+                    let session = self.session.clone();
+                    ui::sidebar_row::Activity {
+                        paused: activity.paused,
+                        busy: activity.busy,
+                        label: if activity.paused {
+                            "Resume all subscriptions".into()
+                        } else {
+                            "Pause all subscriptions".into()
+                        },
+                        on_click: Box::new(move |_, _, cx| {
+                            session.update(cx, |session, cx| session.toggle_all_subscriptions(cx))
+                        }),
+                    }
+                }),
+            )
+            .active(active == index)
+            .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
+            .drop_highlight(self.grid_drop.as_ref() == Some(&ids[index]))
+            .dragging(dragging)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selection.clear();
+                this.session
+                    .update(cx, |session, cx| session.navigate(index, cx));
+                cx.notify();
+            }))
+            .on_secondary(cx.listener(
+                move |this, event: &MouseDownEvent, window, cx| {
+                    this.system_menu(index, event.position, window, cx)
+                },
+            ));
+            self.shown_rows.push(ids[index].clone());
             list = list.child(
-                ui::sidebar_row(
-                    ElementId::Name(ids[index].clone().into()),
-                    entry.icon.clone().unwrap_or_default(),
-                    entry.label.clone(),
-                )
-                .count(entry.count.filter(|_| prefs.show_counts))
-                .active(active == index)
-                .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
-                .drop_target(self.drop_target.as_ref() == Some(&ids[index]))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.selection.clear();
-                    this.session
-                        .update(cx, |session, cx| session.navigate(index, cx));
-                    cx.notify();
-                }))
-                .on_secondary(cx.listener(
-                    move |this, event: &MouseDownEvent, window, cx| {
-                        this.system_menu(index, event.position, window, cx)
-                    },
-                )),
+                div()
+                    .relative()
+                    .child(row)
+                    .child(self.bounds.recorder(ids[index].clone())),
             );
+        }
+
+        // Quick Access, the folders and smart folders pinned to it, in
+        // their order, when there are any.
+        let quick = self
+            .quick_access(cx)
+            .iter()
+            .filter_map(|id| ids.iter().position(|known| known == id))
+            .filter(|index| section(*index).is_some())
+            .collect::<Vec<_>>();
+        if prefs.show_quick_access && !quick.is_empty() {
+            let expanded = !self.collapsed.contains(QUICK_ACCESS);
+            list = list.child(
+                ui::section_header("quick-access", "Quick Access")
+                    .count(if prefs.show_counts { quick.len() } else { 0 })
+                    .expanded(expanded)
+                    .on_toggle(
+                        cx.listener(|this, _, _, cx| this.toggle_collapsed(QUICK_ACCESS, cx)),
+                    ),
+            );
+            if expanded {
+                list = list.child(div().h(px(2.)));
+                for index in quick {
+                    let key = format!("quick-{}", ids[index]);
+                    self.shown_rows.push(key.clone());
+                    list = list.child(
+                        div()
+                            .relative()
+                            .child(self.quick_row(index, &entries[index], active == index, cx))
+                            .child(self.bounds.recorder(key)),
+                    );
+                }
+            }
         }
 
         let mut matches = 0;
@@ -1678,35 +2348,41 @@ impl Render for Sidebar {
                         list = list.child(div().h(px(2.)));
                     }
                     rendered.push(ids[index].clone());
+                    self.shown_rows.push(ids[index].clone());
+                    let recorder = self.bounds.recorder(ids[index].clone());
                     list = list.child(
-                        self.node_row(
-                            index,
-                            entry,
-                            &ids[index],
-                            active == index,
-                            (0..entries.len())
-                                .any(|other| entries[other].parent == Some(index) && kept[other]),
-                            filtering,
-                            {
-                                // Each ancestor's vertical guide continues through
-                                // this row while that ancestor has siblings still
-                                // to come.
-                                let mut continues = vec![false; entry.depth];
-                                let mut ancestor = entry.parent;
-                                while let Some(at) = ancestor {
-                                    let depth = entries[at].depth;
-                                    if depth < continues.len() {
-                                        continues[depth] = has_next_sibling(at);
+                        div()
+                            .relative()
+                            .child(self.node_row(
+                                index,
+                                entry,
+                                &ids[index],
+                                active == index,
+                                (0..entries.len()).any(|other| {
+                                    entries[other].parent == Some(index) && kept[other]
+                                }),
+                                filtering,
+                                {
+                                    // Each ancestor's vertical guide continues through
+                                    // this row while that ancestor has siblings still
+                                    // to come.
+                                    let mut continues = vec![false; entry.depth];
+                                    let mut ancestor = entry.parent;
+                                    while let Some(at) = ancestor {
+                                        let depth = entries[at].depth;
+                                        if depth < continues.len() {
+                                            continues[depth] = has_next_sibling(at);
+                                        }
+                                        ancestor = entries[at].parent;
                                     }
-                                    ancestor = entries[at].parent;
-                                }
-                                Branch {
-                                    continues,
-                                    last_child: !has_next_sibling(index),
-                                }
-                            },
-                            cx,
-                        ),
+                                    Branch {
+                                        continues,
+                                        last_child: !has_next_sibling(index),
+                                    }
+                                },
+                                cx,
+                            ))
+                            .child(recorder),
                     );
                 }
             }
@@ -1724,6 +2400,16 @@ impl Render for Sidebar {
             );
         }
         let tree_filter = prefs.show_folders || prefs.show_smart_folders;
+        let dialog = self.dialog_layer(window, cx);
+        if self
+            .smart_editor
+            .as_ref()
+            .is_some_and(|(editor, _)| editor.read(cx).finished())
+        {
+            self.smart_editor = None;
+            window.focus(&self.home, cx);
+        }
+        let smart_editor = self.smart_editor.as_ref().map(|(editor, _)| editor.clone());
         // The rail's edge is drawn over the app background, as the shell's
         // border is in the Electron layout, with the rail surface inside it.
         div()
@@ -1752,6 +2438,7 @@ impl Render for Sidebar {
                             .flex_1()
                             .min_h_0()
                             .child(list)
+                            .child(self.bounds.list_recorder())
                             .child(ui::scrollbar("sidebar-scrollbar", &self.scroll, window, cx))
                             .children(ui::scroll_to_top(
                                 "sidebar-return-to-top",
@@ -1782,16 +2469,72 @@ impl Render for Sidebar {
                                     .bg(theme.rail()),
                             )
                             .child(
-                                ui::field("sidebar-filter", &self.filter, Look::SidebarFilter)
-                                    .icon("toolbar-filter", 16., 8., theme.text())
-                                    .clearable(),
+                                div()
+                                    .key_context("SidebarFilter")
+                                    .on_action(cx.listener(
+                                        |this, _: &keyboard::EnterRows, window, cx| {
+                                            this.enter_rows(window, cx)
+                                        },
+                                    ))
+                                    .child(
+                                        ui::field(
+                                            "sidebar-filter",
+                                            &self.filter,
+                                            Look::SidebarFilter,
+                                        )
+                                        .icon("toolbar-filter", 16., 8., theme.text())
+                                        .clearable(),
+                                    ),
                             )
                     })),
             )
+            .children(dialog)
+            .children(smart_editor)
+            .child(self.folder_picker.clone())
+            .children(self.drag_capture(cx))
+            .children(self.drag_ghost(window, cx))
     }
 }
 
 impl Sidebar {
+    /// A Quick Access row: the node's glyph, name and count, without its
+    /// tree, opening it and offering its menu as the tree's row does.
+    fn quick_row(
+        &self,
+        index: usize,
+        entry: &Navigation,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> ui::sidebar_row::SidebarRow {
+        let prefs = Preferences::current(cx);
+        let id = entry.id();
+        let icon = match &entry.icon {
+            Some(name) if crate::assets::has_icon(name) => name.clone(),
+            None if entry.group => "layout-grid".into(),
+            _ => "folder".into(),
+        };
+        let node = id.clone();
+        ui::sidebar_row(
+            ElementId::Name(format!("quick-{id}").into()),
+            icon,
+            entry.label.clone(),
+        )
+        .tint(entry.tint.map(rgb))
+        .count(entry.count.filter(|_| prefs.show_counts))
+        .active(active)
+        .context_highlight(!active && self.context.as_deref() == Some(id.as_str()))
+        .focused(self.keyboard_row.as_deref() == Some(format!("quick-{id}").as_str()))
+        .dragging(self.grid_dragging || self.node_drag.is_some())
+        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            this.click_node(index, node.clone(), event.modifiers(), cx)
+        }))
+        .on_secondary(
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                this.node_menu(index, event.position, window, cx)
+            }),
+        )
+    }
+
     /// One folder or smart-folder row.
     #[allow(clippy::too_many_arguments)]
     fn node_row(
@@ -1836,7 +2579,8 @@ impl Sidebar {
         .selected(!active && self.selection.contains(id))
         .context_highlight(!active && self.context.as_deref() == Some(id))
         .focused(self.keyboard_row.as_deref() == Some(id))
-        .drop_target(self.drop_target.as_deref() == Some(id))
+        .drop_highlight(self.grid_drop.as_deref() == Some(id))
+        .dragging(self.grid_dragging || self.node_drag.is_some())
         .drop(
             self.drop
                 .as_ref()
@@ -1851,7 +2595,17 @@ impl Sidebar {
         )
         .disclosure(has_children.then_some(expanded))
         .branch(branch)
+        .on_press({
+            let node = id.to_owned();
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.press_node(node.clone(), event.position, cx)
+            })
+        })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            // The release that ends a drag opens nothing.
+            if std::mem::take(&mut this.swallow_click) {
+                return;
+            }
             // A group is not a destination: a click folds or opens it.
             if group {
                 if has_children && !filtering {
@@ -1951,6 +2705,7 @@ mod tests {
             icon: None,
             tint: None,
             group: false,
+            watched: false,
             depth: 0,
             parent,
         };

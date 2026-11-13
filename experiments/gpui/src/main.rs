@@ -1,3 +1,4 @@
+mod application;
 mod assets;
 mod backend;
 mod cover;
@@ -65,25 +66,26 @@ fn match_chromium_text_weight() {
     }
 }
 
-/// Whether the database is a disposable copy the launcher made: its folder
-/// holds the snapshot marker. The app opens nothing else, and the edits that
-/// cannot be undone check it again before they run.
-pub fn marked_disposable(database: &std::path::Path) -> bool {
-    database
-        .parent()
-        .is_some_and(|folder| folder.join(".gpui-snapshot").is_file())
-}
-
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
-    let mut args = std::env::args().skip(1);
-    let database = PathBuf::from(args.next().expect("Pass a snapshot database from run.sh"));
-    let blobs = PathBuf::from(args.next().expect("Pass the source blobs directory"));
-    assert!(
-        marked_disposable(&database),
-        "Only a marked disposable snapshot is accepted"
+    // The one argument is the root of a disposable copy that run.sh made.
+    // Anything else, and the library it was copied from, is refused.
+    let root = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .expect("Pass the disposable library copy that run.sh made"),
     );
+    let root = match application::guard(&root) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("picto: {error}");
+            std::process::exit(2);
+        }
+    };
+    let (events, delivered) = std::sync::mpsc::channel();
+    let application = application::Application::new(root.clone(), events);
+    let closing = application.clone();
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
@@ -102,6 +104,8 @@ fn main() {
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
             ui::modal::bind(cx);
+            ui::tag_token_input::bind(cx);
+            shell::sidebar::bind(cx);
             ui::overlay_shell::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
@@ -114,6 +118,13 @@ fn main() {
                 cx,
             );
             cx.on_action(|_: &Quit, cx| cx.quit());
+            // Stop the workers and checkpoint the copy before the process
+            // ends, as the Electron app closes its library before quitting.
+            cx.on_app_quit(move |_| {
+                closing.close();
+                async {}
+            })
+            .detach();
             cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
             // `PICTO_GPUI_WINDOW=1213x865` opens at an exact size, so a capture
             // can be compared pixel for pixel with the Electron window's.
@@ -138,7 +149,7 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         window_min_size: Some(size(px(1000.), px(600.))),
                         titlebar: Some(TitlebarOptions {
-                            title: Some("Picto GPUI · Library snapshot".into()),
+                            title: Some("Picto GPUI · Library copy".into()),
                             appears_transparent: true,
                             traffic_light_position: Some(point(px(12.), px(15.))),
                         }),
@@ -151,7 +162,7 @@ fn main() {
                     },
                     move |window, cx| {
                         covered::keep_painting(window);
-                        cx.new(|cx| Shell::new(database, blobs, window, cx))
+                        cx.new(|cx| Shell::new(root, application, delivered, window, cx))
                     },
                 )
                 .unwrap();
