@@ -318,6 +318,16 @@ pub fn start(
                                         random_seed: Some(seed.clone()),
                                     };
                                 }
+                                // A folder without its subfolders' items
+                                // (`show_subfolders` off) is the folder alone.
+                                let scope = match scope {
+                                    ItemScope::FolderTree { folder_id }
+                                        if !prefs.show_subfolders =>
+                                    {
+                                        ItemScope::Folder { folder_id }
+                                    }
+                                    scope => scope,
+                                };
                                 let query = RootQuery {
                                     scope,
                                     view: picto_library::predicate::ViewQuerySpec {

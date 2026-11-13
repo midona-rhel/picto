@@ -10,7 +10,6 @@ use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
     Surface, Toggle, ViewState,
 };
-use crate::session::Change;
 use crate::ui::{self, menu::Menu, modal::Presence};
 use gpui::*;
 use picto_library::predicate::{SortDirection, SortField};
@@ -878,7 +877,6 @@ impl Shell {
                     self.check(menu, Action::Layout(each), each == mode, cx);
                 }
                 self.change_view(
-                    |prefs| prefs.mode = mode,
                     serde_json::json!({ "view_mode": mode_value(mode) }),
                     false,
                     cx,
@@ -891,7 +889,6 @@ impl Shell {
                 }
                 let direction = self.session.read(cx).prefs.sort.direction;
                 self.change_view(
-                    |prefs| prefs.sort.field = field,
                     serde_json::json!({
                         "sort_field": sort_value(field),
                         "sort_order": direction_value(direction),
@@ -907,7 +904,6 @@ impl Shell {
                 }
                 let field = self.session.read(cx).prefs.sort.field;
                 self.change_view(
-                    |prefs| prefs.sort.direction = direction,
                     serde_json::json!({
                         "sort_field": sort_value(field),
                         "sort_order": direction_value(direction),
@@ -1313,54 +1309,11 @@ impl Shell {
     // ── View ────────────────────────────────────────────────────
 
     /// Changes the grid's view at once and saves it as the destination's
-    /// own (`saveViewPref`). A new sort fetches the results again.
-    fn change_view(
-        &mut self,
-        change: impl FnOnce(&mut crate::grid::prefs::ViewPrefs),
-        patch: serde_json::Value,
-        requery: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(scope) = self.grid_scope(cx).0 else {
-            return;
-        };
-        let key = crate::grid::prefs::scope_key(&scope);
-        let saved = self.session.read(cx).run(move |library| {
-            library.update_auxiliary_json(
-                "settings.view.patch",
-                "Change view preferences",
-                "view_pref",
-                &key,
-                false,
-                move |before| {
-                    let mut value = before
-                        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                        .filter(serde_json::Value::is_object)
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    if let (Some(value), Some(patch)) = (value.as_object_mut(), patch.as_object()) {
-                        for (field, changed) in patch {
-                            value.insert(field.clone(), changed.clone());
-                        }
-                    }
-                    Ok(Some(value.to_string()))
-                },
-            )
-        });
-        self.session.update(cx, |session, cx| {
-            change(&mut session.prefs);
-            cx.emit(Change::Results);
-            // The query reads the saved view, so it goes after the write on
-            // the library's thread.
-            if requery {
-                session.reload(cx);
-            }
-        });
-        cx.spawn(async move |_, _| {
-            if let Ok(Err(error)) = saved.await {
-                eprintln!("picto: saving the view failed: {error}");
-            }
-        })
-        .detach();
+    /// own (`saveViewPref`), through the session's one path for it. A new
+    /// sort fetches the results again.
+    fn change_view(&mut self, patch: serde_json::Value, requery: bool, cx: &mut Context<Self>) {
+        self.session
+            .update(cx, |session, cx| session.update_view(patch, requery, cx));
     }
 
     fn toggle_display(&mut self, toggle: Toggle, on: bool, cx: &mut Context<Self>) {
@@ -1392,23 +1345,10 @@ impl Shell {
             ),
             Toggle::Subfolders => ("show_subfolders", serde_json::json!(on)),
         };
+        // Showing a folder's subfolder items or not fetches again.
         self.change_view(
-            move |prefs| match toggle {
-                Toggle::Name => prefs.show_name = on,
-                Toggle::Resolution => prefs.show_resolution = on,
-                // TODO: the grid's names do not show the extension yet.
-                Toggle::Extension => prefs.show_extension = on,
-                Toggle::FileType => prefs.show_extension_label = on,
-                Toggle::ItemCount => prefs.show_item_count = on,
-                Toggle::Compact => prefs.gap = if on { 8. } else { 16. },
-                Toggle::FitThumbnails => prefs.fit_cover = on,
-                // TODO: a folder always shows its subfolders' items here
-                // (`FolderTree`); follow the switch.
-                Toggle::Subfolders => prefs.show_subfolders = on,
-                Toggle::Sidebar | Toggle::Inspector => {}
-            },
             serde_json::json!({ field: value }),
-            false,
+            toggle == Toggle::Subfolders,
             cx,
         );
     }

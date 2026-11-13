@@ -9,7 +9,7 @@ mod scope;
 mod selection;
 mod sources;
 mod stack;
-mod tag_picker;
+pub mod tag_picker;
 
 pub use folder_picker::FolderPicker;
 pub use tag_picker::TagPicker;
@@ -26,7 +26,6 @@ use crate::ui::{
     text_input::{self, TextInput},
 };
 use gpui::*;
-use picto_library::predicate::FilterClause;
 use picto_library::{FolderId, RootDetails, RootId, TagRecord};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -250,6 +249,8 @@ impl Inspector {
             cx.subscribe(
                 &folder_picker,
                 |this, _, event: &folder_picker::Event, cx| {
+                    // The inspector opens the picker only to change the
+                    // items' folders.
                     if let folder_picker::Event::Toggle { folder, add } = *event {
                         this.set_membership(folder, add, cx);
                     }
@@ -830,13 +831,16 @@ impl Inspector {
                             .border_1()
                             .border_color(theme.contrast(10.)),
                     )
+                    // `ColorPalette`'s `onFilter`: the filter bar opens with
+                    // this colour in its colour filter.
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        let clause = FilterClause::Color {
-                            color: color.clone(),
-                            delta_e: 20.,
-                        };
-                        this.session
-                            .update(cx, |session, cx| session.add_filter(clause, cx));
+                        let hex = format!("#{:06x}", format::lab_to_rgb(color.l, color.a, color.b));
+                        this.session.update(cx, |session, cx| {
+                            session.set_filter_bar_open(true, cx);
+                            let mut filters = session.filters.clone();
+                            filters.color = Some(hex);
+                            session.set_filters(filters, cx);
+                        });
                     })),
             );
         }

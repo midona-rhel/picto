@@ -12,7 +12,6 @@ use crate::ui::{
     modal::Presence,
 };
 use gpui::*;
-use picto_library::predicate::{FilterClause, SetMatchMode};
 use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, Library, MutationReceipt, RootId, TagId, TagRecord};
@@ -236,19 +235,34 @@ impl Inspector {
                 })
                 .detach();
             }
+            // The inspector opens the picker only to change the items' tags.
+            tag_picker::Event::FilterChanged { .. } => {}
         }
     }
 
-    /// `showTagItems`: the grid's destination, narrowed to items with the tag.
+    /// `showTagItems`: the grid's destination, narrowed to items with the
+    /// tag as well as by the filters it has.
     fn show_tag_items(&mut self, tag: TagId, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
-            session.add_filter(
-                FilterClause::Tags {
-                    tag_ids: vec![tag],
-                    mode: SetMatchMode::Any,
-                },
-                cx,
-            )
+            let mut filters = session.filters.clone();
+            if !filters
+                .include_tags
+                .iter()
+                .any(|choice| choice.tag_id == tag.0)
+            {
+                let name = session
+                    .tags
+                    .get(&tag.0)
+                    .map(|record| {
+                        crate::screens::tags::model::tag_name(&record.namespace, &record.subname)
+                    })
+                    .unwrap_or_default();
+                filters.include_tags.push(crate::grid::filters::TagChoice {
+                    tag_id: tag.0,
+                    name,
+                });
+            }
+            session.set_filters(filters, cx);
         });
     }
 

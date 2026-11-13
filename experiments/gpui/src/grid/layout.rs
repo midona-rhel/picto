@@ -245,6 +245,36 @@ fn justified(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (V
     (tiles, (y - gap).max(0.))
 }
 
+/// `resolveGridScrollAnchor`: where to scroll once the layout changes so
+/// the topmost visible tile stays where it was on screen. A selected tile in
+/// view is preferred; the items are the same before and after.
+pub fn scroll_anchor(
+    previous: &[Tile],
+    next: &[Tile],
+    selected: &std::collections::BTreeSet<usize>,
+    scroll_top: f32,
+    viewport: f32,
+) -> Option<f32> {
+    let bottom = scroll_top + viewport;
+    let topmost = |only_selected: bool| {
+        previous
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !only_selected || selected.contains(index))
+            .filter(|(_, tile)| tile.y + tile.h >= scroll_top && tile.y <= bottom)
+            .fold(None::<(usize, f32)>, |best, (index, tile)| match best {
+                Some((_, top)) if top <= tile.y => best,
+                _ => Some((index, tile.y)),
+            })
+    };
+    let (anchor, top) = (!selected.is_empty())
+        .then(|| topmost(true))
+        .flatten()
+        .or_else(|| topmost(false))?;
+    let next = next.get(anchor)?;
+    Some((next.y - (top - scroll_top)).max(0.))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,5 +375,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_relayout_keeps_the_topmost_visible_tile_in_place() {
+        let tile = |y: f32| Tile {
+            x: 0.,
+            y,
+            w: 100.,
+            h: 100.,
+        };
+        let previous = [tile(0.), tile(120.), tile(240.), tile(360.)];
+        let next = [tile(0.), tile(200.), tile(400.), tile(600.)];
+        let none = std::collections::BTreeSet::new();
+        // Scrolled 150px: tile 1 (top 120) is the topmost in view, 30px above
+        // the viewport; it stays 30px above it.
+        assert_eq!(
+            scroll_anchor(&previous, &next, &none, 150., 200.),
+            Some(230.)
+        );
+        // A selected tile in view is preferred.
+        let selected = [2].into_iter().collect();
+        assert_eq!(
+            scroll_anchor(&previous, &next, &selected, 150., 200.),
+            Some(310.)
+        );
+        // Nothing laid out before: nothing to keep.
+        assert_eq!(scroll_anchor(&[], &next, &none, 0., 200.), None);
     }
 }

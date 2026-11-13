@@ -19,8 +19,10 @@ use crate::ui::{
     overlay_shell::{self, Geometry, Mark, Nav},
     text_input::{Submitted, TextInput},
 };
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::FolderId;
+use picto_library::predicate::SetMatchMode;
 use picto_library::query::ItemScope;
 use std::collections::{BTreeSet, HashSet};
 
@@ -54,6 +56,13 @@ pub enum Event {
     Toggle { folder: FolderId, add: bool },
     /// Move mode's Move: the chosen parent, `None` for Library.
     MoveTo(Option<FolderId>),
+    /// In the filter mode, the folders included and excluded and the match
+    /// rule (`onApplyFolderFilter`).
+    FilterChanged {
+        include: Vec<FolderId>,
+        exclude: Vec<FolderId>,
+        mode: SetMatchMode,
+    },
 }
 
 /// The move mode: the folders that can be chosen, and whether Library (the
@@ -61,6 +70,15 @@ pub enum Event {
 struct ParentMode {
     available: HashSet<FolderId>,
     root: bool,
+}
+
+/// The picker as the filter bar opens it (`onApplyFolderFilter`): a click
+/// includes a folder (Shift takes the range from the last one clicked), a
+/// right click excludes it, under a match rule.
+struct FilterMode {
+    excluded: BTreeSet<FolderId>,
+    mode: SetMatchMode,
+    last_clicked: Option<FolderId>,
 }
 
 impl EventEmitter<Event> for FolderPicker {}
@@ -228,6 +246,7 @@ pub struct FolderPicker {
     create: Option<Create>,
     /// The keyboard goes back to the search at the next frame.
     refocus: bool,
+    filter: Option<FilterMode>,
     parent_mode: Option<ParentMode>,
     _subscriptions: Vec<Subscription>,
 }
@@ -265,6 +284,7 @@ impl FolderPicker {
             _menu: None,
             create: None,
             refocus: false,
+            filter: None,
             parent_mode: None,
             _subscriptions: subscriptions,
         }
@@ -275,6 +295,43 @@ impl FolderPicker {
     }
 
     pub fn open(
+        &mut self,
+        anchor: Option<Point<f32>>,
+        folders: Vec<FolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter = None;
+        self.show(anchor, folders, window, cx);
+    }
+
+    /// Opens in the filter mode below a control of the filter bar, on the
+    /// folders the filter includes and excludes.
+    pub fn open_filter(
+        &mut self,
+        below: Point<f32>,
+        include: Vec<FolderId>,
+        exclude: Vec<FolderId>,
+        mode: SetMatchMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter = Some(FilterMode {
+            excluded: exclude.into_iter().collect(),
+            mode,
+            last_clicked: None,
+        });
+        self.show(None, include, window, cx);
+        let view = window.viewport_size();
+        self.geometry = overlay_shell::place_below(
+            below,
+            size(f32::from(view.width), f32::from(view.height)),
+            WIDTH,
+            HEIGHT,
+        );
+    }
+
+    fn show(
         &mut self,
         anchor: Option<Point<f32>>,
         folders: Vec<FolderId>,
@@ -404,6 +461,85 @@ impl FolderPicker {
         }
     }
 
+    /// A click on a folder. In the filter mode, Shift takes the range from
+    /// the last one clicked (keeping the rest with Cmd) and a plain click
+    /// toggles; either way the folder is no longer excluded.
+    fn click(&mut self, folder: FolderId, modifiers: Modifiers, cx: &mut Context<Self>) {
+        if self.filter.is_none() {
+            self.toggle(folder, cx);
+            return;
+        }
+        let order = self
+            .visible(cx)
+            .iter()
+            .map(|row| row.folder.id)
+            .collect::<Vec<_>>();
+        let Some(filter) = &mut self.filter else {
+            return;
+        };
+        filter.excluded.remove(&folder);
+        let range = filter
+            .last_clicked
+            .filter(|_| modifiers.shift)
+            .and_then(|last| {
+                Some((
+                    order.iter().position(|id| *id == last)?,
+                    order.iter().position(|id| *id == folder)?,
+                ))
+            });
+        match range {
+            Some((from, to)) => {
+                if !(modifiers.platform || modifiers.control) {
+                    self.selected.clear();
+                }
+                self.selected
+                    .extend(order[from.min(to)..=from.max(to)].iter().copied());
+            }
+            None => {
+                membership::toggle(&mut self.selected, folder);
+            }
+        }
+        filter.last_clicked = Some(folder);
+        self.dirty = true;
+        self.session
+            .update(cx, |session, _| session.record_folder_use(folder));
+        self.emit_filter(cx);
+        cx.notify();
+    }
+
+    /// `handleExclude`: in the filter mode, a right click excludes the
+    /// folder, or no longer.
+    fn exclude(&mut self, folder: FolderId, cx: &mut Context<Self>) {
+        let Some(filter) = &mut self.filter else {
+            return;
+        };
+        self.selected.remove(&folder);
+        membership::toggle(&mut filter.excluded, folder);
+        self.dirty = true;
+        self.session
+            .update(cx, |session, _| session.record_folder_use(folder));
+        self.emit_filter(cx);
+        cx.notify();
+    }
+
+    fn set_mode(&mut self, mode: SetMatchMode, cx: &mut Context<Self>) {
+        if let Some(filter) = &mut self.filter {
+            filter.mode = mode;
+            self.emit_filter(cx);
+            cx.notify();
+        }
+    }
+
+    fn emit_filter(&mut self, cx: &mut Context<Self>) {
+        if let Some(filter) = &self.filter {
+            cx.emit(Event::FilterChanged {
+                include: self.selected.iter().copied().collect(),
+                exclude: filter.excluded.iter().copied().collect(),
+                mode: filter.mode,
+            });
+        }
+    }
+
     /// `handleToggle` for the inspector's items: added or taken out at once.
     fn toggle(&mut self, folder: FolderId, cx: &mut Context<Self>) {
         // Move mode chooses one parent and moves nothing yet.
@@ -453,7 +589,7 @@ impl FolderPicker {
                     }
                     self.selected.clear();
                 } else if let Some(row) = rows.get(at - offset) {
-                    self.toggle(row.folder.id, cx);
+                    self.click(row.folder.id, Modifiers::default(), cx);
                 }
             }
             Nav::Left | Nav::Right => return false,
@@ -675,6 +811,10 @@ impl FolderPicker {
         let theme = theme::theme(cx);
         let folder = row.folder.clone();
         let selected = self.selected.contains(&folder.id);
+        let excluded = self
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.excluded.contains(&folder.id));
         let focused = self.focus_index == Some(index + self.key_offset());
         let indent = 4. + row.depth as f32 * 24.;
         let group = SharedString::from(format!("folder-row-{index}"));
@@ -810,10 +950,11 @@ impl FolderPicker {
                     .items_center()
                     .justify_center()
                     .child(overlay_shell::check_box(
-                        if selected {
-                            Mark::Selected
-                        } else {
-                            Mark::Empty
+                        match (excluded, selected, self.filter.is_some()) {
+                            (true, _, _) => Mark::Excluded,
+                            (false, true, true) => Mark::Included,
+                            (false, true, false) => Mark::Selected,
+                            (false, false, _) => Mark::Empty,
                         },
                         cx,
                     )),
@@ -823,17 +964,32 @@ impl FolderPicker {
                     .relative()
                     .flex_none(),
             )
-            .child(div().relative().flex_1().min_w_0().truncate().child(name))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    // `.rowExcluded .name`
+                    .when(excluded, |name| name.opacity(0.7))
+                    .child(name),
+            )
             .child(right.relative())
-            .on_click(cx.listener(move |this, _, _, cx| {
+            // `.rowExcluded`
+            .when(excluded, |row| row.opacity(0.58))
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 this.focus_index = Some(index);
-                this.toggle(id, cx);
+                this.click(id, event.modifiers(), cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    this.open_menu(menu_folder.clone(), event.position, window, cx);
+                    if this.filter.is_some() {
+                        this.exclude(menu_folder.id, cx);
+                    } else {
+                        this.open_menu(menu_folder.clone(), event.position, window, cx);
+                    }
                 }),
             )
     }
@@ -1031,32 +1187,61 @@ impl Render for FolderPicker {
                 .into_any_element()
         };
 
-        let hints = div()
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .min_w_0()
-            .child(
-                overlay_shell::hint(cx)
-                    .child("Switch ")
-                    .child(overlay_shell::tab_key(cx)),
+        let hints = div().flex().items_center().gap(px(12.)).min_w_0();
+        let hints = if self.filter.is_some() {
+            hints
+                .child(
+                    overlay_shell::hint(cx)
+                        .child("Select")
+                        .child(overlay_shell::kbd("L-Click", cx)),
+                )
+                .child(
+                    overlay_shell::hint(cx)
+                        .child("Exclude")
+                        .child(overlay_shell::kbd("R-Click", cx)),
+                )
+        } else {
+            hints
+                .child(
+                    overlay_shell::hint(cx)
+                        .child("Switch ")
+                        .child(overlay_shell::tab_key(cx)),
+                )
+                .child(
+                    overlay_shell::hint(cx).child("Move ").child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.))
+                            .child(overlay_shell::kbd("↑", cx))
+                            .child(overlay_shell::kbd("↓", cx)),
+                    ),
+                )
+                .child(
+                    overlay_shell::hint(cx)
+                        .child("Select ")
+                        .child(overlay_shell::kbd("↵", cx)),
+                )
+        };
+        // The filter mode's match rule follows the view tabs.
+        let logic = self.filter.as_ref().map(|filter| {
+            let modes = [SetMatchMode::Any, SetMatchMode::All, SetMatchMode::Exact];
+            let logic = cx.entity().downgrade();
+            ui::segmented::segmented(
+                "folder-picker-logic",
+                ui::segmented::Look::Logic,
+                vec![
+                    ui::segmented::segment("logic-any", "Match any"),
+                    ui::segmented::segment("logic-all", "Match all"),
+                    ui::segmented::segment("logic-exact", "Match exactly"),
+                ],
+                modes.iter().position(|mode| *mode == filter.mode),
             )
-            .child(
-                overlay_shell::hint(cx).child("Move ").child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(2.))
-                        .child(overlay_shell::kbd("↑", cx))
-                        .child(overlay_shell::kbd("↓", cx)),
-                ),
-            )
-            .child(
-                overlay_shell::hint(cx)
-                    .child("Select ")
-                    .child(overlay_shell::kbd("↵", cx)),
-            );
-        let shell = overlay_shell::overlay_shell(
+            .on_select(move |index, _, cx| {
+                let _ = logic.update(cx, |this, cx| this.set_mode(modes[index], cx));
+            })
+        });
+        let mut shell = overlay_shell::overlay_shell(
             "folder-picker",
             self.geometry,
             WIDTH,
@@ -1077,30 +1262,34 @@ impl Render for FolderPicker {
                 .unwrap_or(false)
         })
         .header(search)
-        .header(tabs)
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .flex()
-                .flex_col()
-                .children(root)
-                .child(body),
-        )
-        .footer(hints)
-        .footer(if self.parent_mode.is_some() {
-            div().ml_auto().flex_none().child(
-                ui::action_button("folder-picker-move", ButtonLook::Primary)
-                    .label("Move")
-                    .on_click(cx.listener(|this, _, window, cx| this.apply_parent(window, cx))),
+        .header(tabs);
+        if let Some(logic) = logic {
+            shell = shell.header(logic);
+        }
+        let shell = shell
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .children(root)
+                    .child(body),
             )
-        } else {
-            div().ml_auto().flex_none().child(
-                overlay_shell::hint(cx)
-                    .child("Close ")
-                    .child(overlay_shell::kbd("Esc", cx)),
-            )
-        });
+            .footer(hints)
+            .footer(if self.parent_mode.is_some() {
+                div().ml_auto().flex_none().child(
+                    ui::action_button("folder-picker-move", ButtonLook::Primary)
+                        .label("Move")
+                        .on_click(cx.listener(|this, _, window, cx| this.apply_parent(window, cx))),
+                )
+            } else {
+                div().ml_auto().flex_none().child(
+                    overlay_shell::hint(cx)
+                        .child("Close ")
+                        .child(overlay_shell::kbd("Esc", cx)),
+                )
+            });
         let mut root = div().child(shell).children(self.create_dialog(cx));
         if let Some(menu) = self.menu.clone() {
             let view = window.viewport_size();

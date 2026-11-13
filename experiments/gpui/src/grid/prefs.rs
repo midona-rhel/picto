@@ -101,6 +101,48 @@ impl ViewPrefs {
         }
     }
 
+    /// These preferences as the `view_pref` fields that give them back,
+    /// so a patch can be applied on top and resolved again.
+    pub fn to_json(&self) -> Value {
+        let sort_field = match self.sort.field {
+            SortField::ImportedAt => "imported_at",
+            SortField::CapturedAt => "captured_at",
+            SortField::Name => "name",
+            SortField::Rating => "rating",
+            SortField::TotalSize => "total_size",
+            SortField::Random => "random",
+            SortField::FolderOrder => "folder_order",
+        };
+        serde_json::json!({
+            "view_mode": match self.mode {
+                ViewMode::Waterfall => "waterfall",
+                ViewMode::Grid => "grid",
+                ViewMode::Justified => "justified",
+            },
+            "target_size": self.target_size,
+            "spacing": if self.gap == 8. { "tight" } else { "wide" },
+            "show_name": self.show_name,
+            "show_resolution": self.show_resolution,
+            "show_extension": self.show_extension,
+            "show_label": self.show_extension_label,
+            "show_item_count": self.show_item_count,
+            "thumbnail_fit": if self.fit_cover { "cover" } else { "contain" },
+            "show_subfolders": self.show_subfolders,
+            "sort_field": sort_field,
+            "sort_order": match self.sort.direction {
+                SortDirection::Ascending => "ascending",
+                SortDirection::Descending => "descending",
+            },
+        })
+    }
+
+    /// These preferences with a `view_pref` patch applied, as the grid shows
+    /// them at once while the patch is saved.
+    pub fn patched(&self, scope: &ItemScope, patch: &Value) -> Self {
+        let seed = self.sort.random_seed.clone().unwrap_or_default();
+        Self::resolve(scope, &self.to_json(), patch, &seed)
+    }
+
     pub fn text_height(&self) -> f32 {
         let rows = self.show_name as u8 + self.show_resolution as u8;
         rows as f32 * super::layout::TEXT_ROW_HEIGHT
@@ -140,6 +182,39 @@ mod tests {
         assert_eq!(
             (all.target_size, all.gap, all.mode),
             (220., 16., ViewMode::Waterfall)
+        );
+    }
+
+    #[test]
+    fn saved_view_options_round_trip() {
+        let saved = ViewPrefs::resolve(
+            &ItemScope::All,
+            &json!({ "target_size": 300 }),
+            &json!({ "view_mode": "justified", "spacing": "tight", "show_name": false,
+                     "show_resolution": true, "show_extension": true, "show_label": true,
+                     "show_item_count": false, "thumbnail_fit": "cover",
+                     "show_subfolders": false, "sort_field": "name",
+                     "sort_order": "ascending" }),
+            "7",
+        );
+        let again = ViewPrefs::resolve(&ItemScope::All, &json!({}), &saved.to_json(), "7");
+        assert_eq!(again, saved);
+        // A patch changes what it names and nothing else.
+        let patched = saved.patched(
+            &ItemScope::All,
+            &json!({ "view_mode": "grid", "show_name": true, "spacing": "wide" }),
+        );
+        assert_eq!(patched.mode, ViewMode::Grid);
+        assert!(patched.show_name);
+        assert_eq!(patched.gap, 16.);
+        assert_eq!(
+            ViewPrefs {
+                mode: saved.mode,
+                show_name: saved.show_name,
+                gap: saved.gap,
+                ..patched
+            },
+            saved
         );
     }
 

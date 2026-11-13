@@ -3,10 +3,17 @@
 //! viewer toolbar while an item is open.
 use crate::backend::Screen;
 use crate::session::{Change, Session, Transition};
-use crate::ui::{self, field::Look, text_input::TextInput, zoom};
+use crate::ui::{self, field::Look, menu::Menu, text_input::TextInput, zoom};
 use crate::viewer::{Viewer, toolbar::ViewerToolbar};
 use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
+use std::{cell::Cell, rc::Rc};
+
+/// The "View options" button was pressed: the view menu opens at this
+/// point, the button's left edge 4px below it.
+pub struct ViewMenuRequested(pub Point<Pixels>);
+
+impl EventEmitter<ViewMenuRequested> for Toolbar {}
 
 pub struct Toolbar {
     session: Entity<Session>,
@@ -19,6 +26,11 @@ pub struct Toolbar {
     viewer_exit: bool,
     /// The controls a screen puts in the titlebar in place of the grid's.
     screen_controls: Vec<(Screen, AnyView)>,
+    /// Where the "View options" button was painted.
+    view_button: Rc<Cell<Bounds<Pixels>>>,
+    /// The view menu while it is open or fading, which keeps the button
+    /// lit (`active={viewMenu.state != null}`).
+    view_menu: Option<(Entity<Menu>, Subscription)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -68,8 +80,29 @@ impl Toolbar {
             search,
             zoom,
             screen_controls: Vec::new(),
+            view_button: Rc::new(Cell::new(Bounds::default())),
+            view_menu: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Keeps the "View options" button lit while this menu is open, until
+    /// it has faded out.
+    pub fn watch_view_menu(&mut self, menu: Entity<Menu>, cx: &mut Context<Self>) {
+        let observed = cx.observe(&menu, |_, menu, cx| {
+            // A dismissed menu fades for 80 ms; look again once it is gone.
+            if !menu.read(cx).finished() {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(crate::motion::MENU_OUT)
+                        .await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+        });
+        self.view_menu = Some((menu, observed));
+        cx.notify();
     }
 
     /// Shows `controls` after the history buttons while `screen` is the
@@ -188,17 +221,26 @@ impl Render for Toolbar {
                 .child(self.viewer.clone())
                 .into_any_element();
         }
-        let (opacity, animating, back, forward, filtered, screen) = {
+        let (opacity, animating, back, forward, filter_count, bar_open, screen) = {
             let session = self.session.read(cx);
             (
                 session.transition.opacity(),
                 session.transition.animating(),
                 session.can_step_history(-1),
                 session.can_step_history(1),
-                session.filter.is_some(),
+                session.filters.count(),
+                session.filter_bar_open,
                 session.screen(),
             )
         };
+        if self
+            .view_menu
+            .as_ref()
+            .is_some_and(|(menu, _)| menu.read(cx).finished())
+        {
+            self.view_menu = None;
+        }
+        let view_menu_open = self.view_menu.is_some();
         // The scope title fades with the grid.
         if animating {
             window.request_animation_frame();
@@ -283,19 +325,40 @@ impl Render for Toolbar {
                     .justify_center()
                     .child(zoom::section(cx).child(self.zoom.clone())),
             )
-            // TODO: open the view menu at the button's left edge, 4px below it.
-            .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
+            .child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .child(
+                        ui::icon_button("view-options", "toolbar-layout")
+                            .tip(ui::tip("View options"))
+                            .toggled(view_menu_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let button = this.view_button.get();
+                                cx.emit(ViewMenuRequested(point(
+                                    button.left(),
+                                    button.bottom() + px(4.),
+                                )));
+                            })),
+                    )
+                    .child({
+                        let bounds = self.view_button.clone();
+                        canvas(move |painted, _, _| bounds.set(painted), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0()
+                    }),
+            )
             .child(div().w(px(4.)).flex_none())
             .child(
-                // TODO: this opens the filter bar. Until that exists, a
-                // press clears the filter the inspector set.
+                // Lit while the filter bar is open or any filter is set,
+                // with the number set.
                 ui::icon_button("filter-library", "toolbar-filter")
                     .tip(ui::tip("Filter library"))
-                    .toggled(filtered)
-                    .badge(filtered as usize)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .toggled(bar_open || filter_count > 0)
+                    .badge(filter_count)
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.session
-                            .update(cx, |session, cx| session.set_filter(None, cx));
+                            .update(cx, |session, cx| session.set_filter_bar_open(!bar_open, cx));
                     })),
             )
             .child(div().ml(px(4.)).w(px(148.)).flex_none().child(

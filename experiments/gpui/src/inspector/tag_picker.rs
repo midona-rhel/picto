@@ -15,8 +15,9 @@ use crate::ui::{
 };
 use crate::{grid::format, motion, theme};
 use gpui::*;
+use picto_library::predicate::SetMatchMode;
 use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 /// `PAGE_SIZE`
@@ -62,6 +63,23 @@ pub enum Event {
     Filter(TagId),
     /// A tag was renamed, so labels shown elsewhere are out of date.
     Renamed,
+    /// In the filter mode, the tags included and excluded (by id and name)
+    /// and the match rule (`onApplyTagFilter`).
+    FilterChanged {
+        include: Vec<(TagId, String)>,
+        exclude: Vec<(TagId, String)>,
+        mode: SetMatchMode,
+    },
+}
+
+/// The picker as the filter bar opens it (`onApplyTagFilter`): a click
+/// includes a tag, a right click excludes it, under a match rule; the list
+/// is one column and nothing is created.
+struct FilterMode {
+    excluded: BTreeSet<String>,
+    mode: SetMatchMode,
+    /// The ids of the tags chosen, by name.
+    ids: HashMap<String, TagId>,
 }
 
 impl EventEmitter<Event> for TagPicker {}
@@ -335,6 +353,7 @@ pub struct TagPicker {
     menu: Option<Entity<Menu>>,
     menu_tag: Option<TagRecord>,
     _menu: Option<Subscription>,
+    filter: Option<FilterMode>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -384,6 +403,7 @@ impl TagPicker {
             menu: None,
             menu_tag: None,
             _menu: None,
+            filter: None,
             _subscriptions: subscriptions,
         }
     }
@@ -399,6 +419,48 @@ impl TagPicker {
     /// Opens beside the inspector at `anchor` (or centred), on the items'
     /// current tags.
     pub fn open(
+        &mut self,
+        anchor: Option<Point<f32>>,
+        entity: Vec<TagRecord>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter = None;
+        self.show(anchor, entity, window, cx);
+    }
+
+    /// Opens in the filter mode below a control of the filter bar, on the
+    /// tags the filter includes and excludes.
+    pub fn open_filter(
+        &mut self,
+        below: Point<f32>,
+        include: Vec<TagRecord>,
+        exclude: Vec<TagRecord>,
+        mode: SetMatchMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter = Some(FilterMode {
+            excluded: exclude.iter().map(name).collect(),
+            mode,
+            ids: include
+                .iter()
+                .chain(&exclude)
+                .map(|tag| (name(tag), tag.tag_id))
+                .collect(),
+        });
+        self.pinned = false;
+        self.show(None, include, window, cx);
+        let view = window.viewport_size();
+        self.geometry = overlay_shell::place_below(
+            below,
+            size(f32::from(view.width), f32::from(view.height)),
+            if self.sidebar { WIDE } else { NARROW },
+            HEIGHT,
+        );
+    }
+
+    fn show(
         &mut self,
         anchor: Option<Point<f32>>,
         entity: Vec<TagRecord>,
@@ -641,13 +703,28 @@ impl TagPicker {
             tags: &self.tags,
             starred,
         });
-        let create = create_candidate(&self.view, settled, settled_group, &self.tags);
+        // The filter mode offers only tags that exist.
+        let create = create_candidate(&self.view, settled, settled_group, &self.tags)
+            .filter(|_| self.filter.is_none());
         (create, rows)
     }
 
-    /// `toggleTag`: the tag goes on the items or comes off, at once.
+    /// `toggleTag`: the tag goes on the items or comes off, at once; in the
+    /// filter mode it is included or no longer, and never excluded.
     fn toggle(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
         let tag_name = name(tag);
+        if let Some(filter) = &mut self.filter {
+            if tag.tag_id.0 == 0 {
+                return;
+            }
+            filter.ids.insert(tag_name.clone(), tag.tag_id);
+            filter.excluded.remove(&tag_name);
+            membership::toggle(&mut self.selected, tag_name);
+            self.dirty = true;
+            self.emit_filter(cx);
+            cx.notify();
+            return;
+        }
         self.dirty = true;
         let add = membership::toggle(&mut self.selected, tag_name.clone());
         cx.emit(Event::Toggle {
@@ -658,7 +735,51 @@ impl TagPicker {
         cx.notify();
     }
 
-    fn show(&mut self, view: View, cx: &mut Context<Self>) {
+    /// `toggleExcludedTag`: in the filter mode, a right click excludes the
+    /// tag, or no longer.
+    fn exclude(&mut self, tag: &TagRecord, cx: &mut Context<Self>) {
+        let Some(filter) = &mut self.filter else {
+            return;
+        };
+        if tag.tag_id.0 == 0 {
+            return;
+        }
+        let tag_name = name(tag);
+        filter.ids.insert(tag_name.clone(), tag.tag_id);
+        self.selected.remove(&tag_name);
+        membership::toggle(&mut filter.excluded, tag_name);
+        self.dirty = true;
+        self.emit_filter(cx);
+        cx.notify();
+    }
+
+    fn set_mode(&mut self, mode: SetMatchMode, cx: &mut Context<Self>) {
+        if let Some(filter) = &mut self.filter {
+            filter.mode = mode;
+            self.emit_filter(cx);
+            cx.notify();
+        }
+    }
+
+    /// Tells the filter bar what is included and excluded.
+    fn emit_filter(&mut self, cx: &mut Context<Self>) {
+        let Some(filter) = &self.filter else {
+            return;
+        };
+        let choices = |names: &BTreeSet<String>| {
+            names
+                .iter()
+                .filter_map(|name| Some((*filter.ids.get(name)?, name.clone())))
+                .collect::<Vec<_>>()
+        };
+        cx.emit(Event::FilterChanged {
+            include: choices(&self.selected),
+            exclude: choices(&filter.excluded),
+            mode: filter.mode,
+        });
+    }
+
+    fn show_view(&mut self, view: View, cx: &mut Context<Self>) {
         if self.view != view {
             self.view = view;
             self.focus_index = None;
@@ -667,6 +788,9 @@ impl TagPicker {
     }
 
     fn columns(&self) -> usize {
+        if self.filter.is_some() {
+            return 1;
+        }
         match self.layout {
             Layout::Grid => 2,
             Layout::List => 1,
@@ -704,7 +828,7 @@ impl TagPicker {
                 if self.sidebar {
                     let groups = self.group_names(cx);
                     let next = next_view(&self.view, &groups);
-                    self.show(next, cx);
+                    self.show_view(next, cx);
                 }
                 true
             }
@@ -965,7 +1089,7 @@ impl TagPicker {
                     .group_hover(group, |style| style.opacity(1.))
                     .child(format::grouped(count)),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.show(view.clone(), cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.show_view(view.clone(), cx)))
     }
 
     fn rail(&self, cx: &mut Context<Self>) -> Div {
@@ -1083,6 +1207,12 @@ impl TagPicker {
         let theme = theme::theme(cx);
         let tag_name = name(tag);
         let checked = self.selected.contains(&tag_name);
+        let excluded = self
+            .filter
+            .as_ref()
+            .is_some_and(|filter| filter.excluded.contains(&tag_name));
+        // `.tagRowExcluded`: the name, mark and count fade.
+        let dim = if excluded { 0.45 } else { 1. };
         let focused = self.focus_index == Some(index);
         let starred = preferences.is_starred(&tag_name);
         let color = model::group_color(&tag.namespace, preferences);
@@ -1146,16 +1276,28 @@ impl TagPicker {
             .cursor_pointer()
             .text(theme::TEXT_MD)
             .line_height(px(ROW))
-            .bg(fill)
-            .child(mark)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme::blend(theme.text(), rgb(color), 0.12))
-                    .child(text),
-            );
+            .bg(fill);
+        if self.filter.is_some() {
+            row = row.child(overlay_shell::check_box(
+                if excluded {
+                    Mark::Excluded
+                } else if checked {
+                    Mark::Included
+                } else {
+                    Mark::Empty
+                },
+                cx,
+            ));
+        }
+        row = row.child(mark.opacity(dim)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .opacity(dim)
+                .text_color(theme::blend(theme.text(), rgb(color), 0.12))
+                .child(text),
+        );
         if !checked && !focused {
             row = row.hover(move |style| style.bg(theme.surface_hover()));
         }
@@ -1166,8 +1308,8 @@ impl TagPicker {
                     .ml_auto()
                     .text(theme::TEXT_CAPTION)
                     .text_color(theme.text_tertiary())
-                    .opacity(0.7)
-                    .group_hover(group, |style| style.opacity(1.))
+                    .opacity(0.7 * dim)
+                    .group_hover(group, move |style| style.opacity(dim))
                     .child(format!("({})", format::grouped(tag.active_count))),
             );
         }
@@ -1189,7 +1331,11 @@ impl TagPicker {
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                this.open_menu(menu_tag.clone(), event.position, window, cx);
+                if this.filter.is_some() {
+                    this.exclude(&menu_tag, cx);
+                } else {
+                    this.open_menu(menu_tag.clone(), event.position, window, cx);
+                }
             }),
         )
     }
@@ -1558,7 +1704,7 @@ impl Render for TagPicker {
             .size_full()
             .child(self.rail(cx))
             .child(self.list(window, cx));
-        if self.settings_open {
+        if self.settings_open && self.filter.is_none() {
             body = body.children(self.settings_panel(window, cx));
         }
 
@@ -1595,19 +1741,55 @@ impl Render for TagPicker {
             nav.update(cx, |this, cx| this.navigate(key, cx))
                 .unwrap_or(false)
         })
-        .header(search)
-        .header(toggle_rail)
-        .header(settings)
-        .header(pin)
-        .child(body);
-        if self.sidebar {
-            shell = shell.footer(
-                overlay_shell::hint(cx)
-                    .child("Switch ")
-                    .child(overlay_shell::tab_key(cx)),
-            );
+        .header(search);
+        if let Some(filter) = &self.filter {
+            // The match rule in place of the settings and the pin.
+            let modes = [SetMatchMode::Any, SetMatchMode::All, SetMatchMode::Exact];
+            let logic = cx.entity().downgrade();
+            shell = shell
+                .header(
+                    ui::segmented::segmented(
+                        "tag-picker-logic",
+                        ui::segmented::Look::Logic,
+                        vec![
+                            ui::segmented::segment("logic-any", "Match any"),
+                            ui::segmented::segment("logic-all", "Match all"),
+                            ui::segmented::segment("logic-exact", "Match exactly"),
+                        ],
+                        modes.iter().position(|mode| *mode == filter.mode),
+                    )
+                    .on_select(move |index, _, cx| {
+                        let _ = logic.update(cx, |this, cx| this.set_mode(modes[index], cx));
+                    }),
+                )
+                .header(toggle_rail)
+                .child(body)
+                .footer(
+                    overlay_shell::hint(cx)
+                        .child("Select")
+                        .child(overlay_shell::kbd("L-Click", cx)),
+                )
+                .footer(
+                    overlay_shell::hint(cx)
+                        .child("Exclude")
+                        .child(overlay_shell::kbd("R-Click", cx)),
+                );
+        } else {
+            shell = shell
+                .header(toggle_rail)
+                .header(settings)
+                .header(pin)
+                .child(body);
+            if self.sidebar {
+                shell = shell.footer(
+                    overlay_shell::hint(cx)
+                        .child("Switch ")
+                        .child(overlay_shell::tab_key(cx)),
+                );
+            }
+            shell = shell.footer(footer_move);
         }
-        shell = shell.footer(footer_move).footer(
+        shell = shell.footer(
             overlay_shell::hint(cx)
                 .child("Close ")
                 .child(overlay_shell::kbd("Esc", cx)),

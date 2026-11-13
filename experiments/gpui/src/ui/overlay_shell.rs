@@ -111,6 +111,22 @@ pub fn place(anchor: Option<Point<f32>>, viewport: Size<f32>, width: f32, height
     }
 }
 
+/// Where a panel opens below a control (`anchorPlacement: 'below'`): its
+/// left edge and top at the anchor, kept 12px inside the window.
+pub fn place_below(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: f32) -> Geometry {
+    let mut top = anchor.y;
+    if top + height > viewport.height - MARGIN {
+        top = viewport.height - height - MARGIN;
+    }
+    let top = top.max(MARGIN);
+    let left = anchor.x.min(viewport.width - width - MARGIN).max(MARGIN);
+    Geometry {
+        right: None,
+        left: left.round(),
+        top: top.round(),
+    }
+}
+
 /// The panel dragged by `delta` from `start`, kept 12px inside the window.
 pub fn dragged(
     start: Geometry,
@@ -577,6 +593,12 @@ pub enum Mark {
     Checked,
     /// `FolderTree`'s `.checkSelected`: the primary colour with a white tick.
     Selected,
+    /// `.checkBoxFilterChecked`: a filter includes it; the primary colour
+    /// with a white tick and no ring.
+    Included,
+    /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
+    /// a white cross.
+    Excluded,
 }
 
 /// `.checkBox`: 14px, the control surface ringed by the pressed overlay
@@ -603,6 +625,14 @@ pub fn check_box(mark: Mark, cx: &App) -> Div {
             .bg(theme.primary())
             .border_color(rgba(theme::BLACK_10))
             .child(super::icon("picker-check", 10., theme.on_primary())),
+        Mark::Included => base
+            .bg(theme.primary())
+            .border_color(gpui::transparent_black())
+            .child(super::icon("picker-check", 10., theme.on_primary())),
+        Mark::Excluded => base
+            .bg(theme.negative())
+            .border_color(gpui::transparent_black())
+            .child(super::icon("x", 10., theme.on_primary())),
     }
 }
 
@@ -679,6 +709,16 @@ mod tests {
             (geometry.right, geometry.left, geometry.top),
             (None, 420., 160.)
         );
+    }
+
+    #[test]
+    fn a_panel_opens_below_its_control() {
+        let viewport = size(1000., 700.);
+        let below = super::place_below(point(100., 80.), viewport, 360., 480.);
+        assert_eq!((below.right, below.left, below.top), (None, 100., 80.));
+        // Pushed in from the right edge and up from the bottom.
+        let pushed = super::place_below(point(900., 400.), viewport, 360., 480.);
+        assert_eq!((pushed.left, pushed.top), (628., 208.));
     }
 
     #[test]

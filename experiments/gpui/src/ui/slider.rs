@@ -1,4 +1,5 @@
 use crate::theme;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -15,6 +16,7 @@ pub struct Slider {
     max: f64,
     step: f64,
     width: f32,
+    filled: bool,
     on_change: Option<ChangeHandler>,
 }
 
@@ -26,6 +28,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         max,
         step,
         width: WIDTH,
+        filled: false,
         on_change: None,
     }
 }
@@ -34,6 +37,13 @@ impl Slider {
     /// The track's length, for the few sliders that are not 200px.
     pub fn width(mut self, width: f32) -> Self {
         self.width = width;
+        self
+    }
+
+    /// `.toleranceSlider`: the track in the primary colour up to the thumb,
+    /// and a thumb with a border and a small shadow.
+    pub fn filled(mut self) -> Self {
+        self.filled = true;
         self
     }
 
@@ -87,7 +97,21 @@ impl RenderOnce for Slider {
                     .top(px((THUMB - 3.) / 2.))
                     .h(px(3.))
                     .rounded(px(2.))
-                    .bg(theme.border()),
+                    .bg(theme.border())
+                    // The filled part runs to the thumb's place along the
+                    // whole track, as `--tolerance-progress` does.
+                    .when(self.filled, |track| {
+                        track.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(relative(along))
+                                .rounded(px(2.))
+                                .bg(theme.primary()),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -96,7 +120,13 @@ impl RenderOnce for Slider {
                     .left(px((width - THUMB) * along))
                     .size(px(THUMB))
                     .rounded_full()
-                    .bg(theme.text()),
+                    .bg(theme.text())
+                    .when(self.filled, |thumb| {
+                        thumb.border_1().border_color(theme.border()).shadow(vec![
+                            BoxShadow::new(px(0.), px(1.), rgba(0x00000040).into())
+                                .blur_radius(px(2.)),
+                        ])
+                    }),
             )
             .child(
                 canvas(
