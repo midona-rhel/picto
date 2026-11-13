@@ -313,6 +313,17 @@ impl Shell {
             });
     }
 
+    /// `view.zoomIn` / `view.zoomOut` in the grid: the tile size one step
+    /// of the toolbar's slider buttons.
+    fn zoom_grid(&mut self, larger: bool, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            let size = crate::ui::zoom::step_tile(session.tile, larger);
+            if size != session.tile {
+                session.set_tile(size, cx);
+            }
+        });
+    }
+
     /// Wires the registry's actions on the window's root.
     pub(super) fn shortcut_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
         root.on_action(cx.listener(|this, _: &GoBack, _, cx| {
@@ -323,6 +334,8 @@ impl Shell {
             this.session
                 .update(cx, |session, cx| session.step_history(1, cx));
         }))
+        .on_action(cx.listener(|this, _: &GridZoomIn, _, cx| this.zoom_grid(true, cx)))
+        .on_action(cx.listener(|this, _: &GridZoomOut, _, cx| this.zoom_grid(false, cx)))
         .on_action(cx.listener(|this, _: &FocusSearch, window, cx| this.focus_search(window, cx)))
         .on_action(cx.listener(|this, _: &ShowAll, _, cx| this.show_scope(ItemScope::All, cx)))
         .on_action(cx.listener(|this, _: &ShowInbox, _, cx| this.show_scope(ItemScope::Inbox, cx)))

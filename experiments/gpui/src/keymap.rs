@@ -24,6 +24,8 @@ actions!(
     shortcut,
     [
         GoBack,
+        GridZoomIn,
+        GridZoomOut,
         GoForward,
         FocusSearch,
         ShowAll,
@@ -201,10 +203,12 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(DetailWindow, viewer::ActualSize),
         ],
         "view.zoomIn" => vec![
+            to!(Grid, GridZoomIn),
             to!(Viewer, viewer::ZoomIn),
             to!(DetailWindow, viewer::ZoomIn),
         ],
         "view.zoomOut" => vec![
+            to!(Grid, GridZoomOut),
             to!(Viewer, viewer::ZoomOut),
             to!(DetailWindow, viewer::ZoomOut),
         ],
