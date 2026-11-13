@@ -140,7 +140,8 @@ pub fn place_above(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: 
     }
 }
 
-/// The panel dragged by `delta` from `start`, kept 12px inside the window.
+/// The panel dragged by `delta` from `start`, kept 12px inside the window
+/// and below the titlebar, whose buttons it must never cover.
 pub fn dragged(
     start: Geometry,
     delta: Point<f32>,
@@ -151,7 +152,8 @@ pub fn dragged(
     let max_left = (viewport.width - width - MARGIN).max(MARGIN);
     let max_top = (viewport.height - height - MARGIN).max(MARGIN);
     let left = (start.left(width) + delta.x).clamp(MARGIN, max_left);
-    let top = (start.top + delta.y).clamp(MARGIN, max_top);
+    let min_top = theme::TITLEBAR_HEIGHT + MARGIN;
+    let top = (start.top + delta.y).clamp(min_top, max_top.max(min_top));
     Geometry {
         right: start.right.map(|_| left + width),
         left,
@@ -639,5 +641,8 @@ mod tests {
         assert_eq!(moved.top, 308.);
         let far = dragged(start, point(-1000., 1000.), size(1200., 800.), 540., 480.);
         assert_eq!((far.left(540.), far.top), (12., 308.));
+        // Never up under the titlebar and its window buttons.
+        let up = dragged(start, point(0., -1000.), size(1200., 800.), 540., 480.);
+        assert_eq!(up.top, crate::theme::TITLEBAR_HEIGHT + 12.);
     }
 }
