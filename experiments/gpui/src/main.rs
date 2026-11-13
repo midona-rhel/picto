@@ -122,6 +122,17 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // `--detach` after the copy: cut it loose from the real library's cloud
+    // sync, watched folders and queued runs, and stop. For opening the copy
+    // with another app (the Electron reference) that would otherwise resume
+    // that work.
+    if std::env::args().nth(2).as_deref() == Some("--detach") {
+        if let Err(error) = application::detach(&root) {
+            eprintln!("picto: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let (events, delivered) = std::sync::mpsc::channel();
     let application = application::Application::new(root.clone(), events);
     let closing = application.clone();
