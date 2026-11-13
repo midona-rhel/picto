@@ -100,7 +100,9 @@ async function key(stroke) {
     name.toUpperCase().charCodeAt(0),
     name.length === 1 ? name : undefined,
   ];
-  const base = { key: keyName, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers };
+  // No native key code: a Windows one given as the Mac's is another key there
+  // (65, the A key's, is one the app treats as Settings).
+  const base = { key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers };
   // With Command or Control held the key is a shortcut, not text.
   const typed = modifiers & 6 ? undefined : text;
   await send('Input.dispatchKeyEvent', { type: typed ? 'keyDown' : 'rawKeyDown', ...base, text: typed });
