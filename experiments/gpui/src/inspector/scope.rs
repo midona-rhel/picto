@@ -268,6 +268,9 @@ impl Inspector {
         let Some(record) = self.scope.records.get(&kind).cloned().flatten() else {
             return;
         };
+        // The row is found again by id when the save lands: the sidebar may
+        // have rebuilt the destination list in between.
+        let node = self.session.read(cx).nav.get(index).map(|entry| entry.id());
         let job = self
             .session
             .read(cx)
@@ -279,6 +282,15 @@ impl Inspector {
                         auto_tags,
                     },
                 ) => {
+                    // The sidebar may have renamed or recoloured it since the
+                    // record was read; write over what the library has now.
+                    if let Some(fresh) = library
+                        .folders()?
+                        .into_iter()
+                        .find(|folder| folder.folder_id == id)
+                    {
+                        record = fresh;
+                    }
                     if let Some(name) = name {
                         library.rename_folder(id, &name)?;
                         record.name = name;
@@ -295,6 +307,13 @@ impl Inspector {
                     Ok(Record::Folder { record, auto_tags })
                 }
                 (Kind::Smart(id), Record::Smart(mut record)) => {
+                    if let Some(fresh) = library
+                        .smart_folders()?
+                        .into_iter()
+                        .find(|folder| folder.smart_folder_id == id)
+                    {
+                        record = fresh;
+                    }
                     if let Some(name) = name {
                         record.name = name;
                     }
@@ -331,7 +350,10 @@ impl Inspector {
                     this.scope.records.insert(kind, Some(record));
                     // The sidebar and the title show the new name too.
                     this.session.update(cx, |session, cx| {
-                        if let Some(entry) = session.nav.get_mut(index)
+                        if let Some(entry) = session
+                            .nav
+                            .iter_mut()
+                            .find(|entry| Some(entry.id()) == node)
                             && entry.label != name
                         {
                             entry.label = name;

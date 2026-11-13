@@ -83,6 +83,28 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shows them: the grid glyph, no count, and a click that folds the group
   rather than opening it. Folders and smart folders show the icon and colour
   the user chose, from the icon picker's registry (`assets/Icon*.svg`).
+- Sidebar context menus with the Electron rows in their order: the
+  visibility menu on system rows (which system rows and sections show),
+  Clear Recently Viewed, Trash's Restore All, the Folders and Smart Folders
+  headers' menus, and the folder, smart-folder, group and multi-selection
+  menus. Wired through the library: New Folder (header "+", menus), New
+  Subfolder, New Smart Folder Group and its child groups, each created,
+  revealed and renamed in place; Rename; Duplicate; Delete, which removes
+  folder and smart-folder definitions and never media; Refresh Results; Sort
+  Results by Name; Expand and Collapse for a row, the whole tree or the
+  selection; Clear Recently Viewed and Restore All. After an edit the
+  destination list is read again; places are kept by id, and deleting the
+  open folder falls back to its nearest surviving ancestor, or All.
+- Rename in place (`.renameInput`): a 20px field with a 1px primary border
+  on the app background, the name selected; Enter or leaving it commits,
+  Escape cancels, a right-click commits. The row shows the new name at once.
+  A double-click folds the branch, the Electron default setting.
+- Sidebar multi-selection as `handleRowClick` does it: Cmd toggles a row,
+  Shift adds the shown rows from the last one clicked in the same section,
+  a plain click selects the row alone and opens it. The row states of
+  `SidebarRow.module.css`: selected, context menu open (hover fill and a
+  1px border), keyboard focus, drop target, drop inside and the 2px
+  before/after bars.
 - Hover and pressed states from the Electron styles, with their timings: icon
   buttons (hover, pressed, toggled, disabled), sidebar rows and section
   headers (title pill, chevron, add button), the library switcher's highlight,
@@ -261,7 +283,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   table headers, and the native `title` tooltips of truncated cells, are
   not drawn.
 - Drawn with their hover states and tooltips but not wired: Settings, View
-  options, the section headers' add buttons, the inspector's Add to Folder,
+  options, the inspector's Add to Folder,
   Add Tags, Export (for an item, a selection and a destination),
   source-address list and Pin, and in the library switcher's popover
   choosing another library, Create Library, Open Library and Library Manager
@@ -282,15 +304,27 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot, rename in place,
-  context menus, multi-selection and drag reorder.
+- Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
+  drops from the grid (the rows have the drop looks; nothing drives them),
+  Quick Access, keyboard movement through the rows (the focused look is
+  there; nothing moves focus to a row), the New Folder and New Subfolder
+  shortcuts, and the confirmation before deleting a folder (it deletes at
+  once). Menu rows shown but not performed yet, each
+  with a `TODO`: Add to Quick Access, Move to..., Set Auto Tags..., Import
+  Folder (Here)..., Attach Watched Folder..., Edit Smart Folder..., Edit
+  Rules..., New Smart Folder and New Child Smart Folder (no smart-folder
+  editor), Change Icon, Sort Folders, Sort by and Export (submenus). The
+  visibility rows close the menu when chosen; the
+  colour picker row and Remove Watched Folder are not drawn. Empty Trash is
+  shown disabled. Sidebar preferences, folded nodes and sections are kept in
+  memory in the Electron shape, not persisted or read from Settings.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
 - Context menus have no submenus or search row yet, exist only for grid
-  items, and are drawn inside the window, so they cannot extend past its
+  items and the sidebar, and are drawn inside the window, so they cannot extend past its
   edge. "Delete Permanently" is shown disabled: the prototype reads the
   library's files in place and must never delete them.
 - The library popover's glass has no blur, and only its surface scales in;

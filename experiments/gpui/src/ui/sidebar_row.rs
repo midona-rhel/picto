@@ -1,9 +1,22 @@
+use super::text_input::TextInput;
 use crate::grid::format;
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
+
+/// Where a dragged folder would land relative to this row
+/// (`.dropBefore`, `.dropInside`, `.dropAfter`).
+// Nothing drags rows yet; the looks are here for when something does.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DropPosition {
+    Before,
+    Inside,
+    After,
+}
 
 /// What a row keeps between frames.
 struct State {
@@ -38,11 +51,23 @@ pub struct SidebarRow {
     label: SharedString,
     count: Option<u64>,
     active: bool,
+    /// One of several rows chosen with Cmd or Shift (`.selected`).
+    selected: bool,
+    /// The row whose context menu is open (`.contextHighlight`).
+    context: bool,
+    /// The row holds keyboard focus (`.rowInteractive:focus-visible`).
+    focused: bool,
+    /// The whole row takes a drop (`.dropTarget`).
+    drop_target: bool,
+    drop: Option<DropPosition>,
+    /// The field that replaces the label while the row is renamed.
+    rename: Option<Entity<TextInput>>,
     /// `Some(expanded)` when the row has children.
     disclosure: Option<bool>,
     branch: Branch,
     on_click: Option<ClickHandler>,
     on_toggle: Option<ClickHandler>,
+    on_secondary: Option<PressHandler>,
 }
 
 pub fn sidebar_row(
@@ -58,10 +83,17 @@ pub fn sidebar_row(
         label: label.into(),
         count: None,
         active: false,
+        selected: false,
+        context: false,
+        focused: false,
+        drop_target: false,
+        drop: None,
+        rename: None,
         disclosure: None,
         branch: Branch::default(),
         on_click: None,
         on_toggle: None,
+        on_secondary: None,
     }
 }
 
@@ -81,6 +113,33 @@ impl SidebarRow {
     }
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+    /// Not drawn on the active row, which is already highlighted.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+    /// Not drawn on the active row.
+    pub fn context_highlight(mut self, context: bool) -> Self {
+        self.context = context;
+        self
+    }
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+    pub fn drop_target(mut self, drop_target: bool) -> Self {
+        self.drop_target = drop_target;
+        self
+    }
+    pub fn drop(mut self, drop: Option<DropPosition>) -> Self {
+        self.drop = drop;
+        self
+    }
+    /// Shows this field in place of the label.
+    pub fn rename(mut self, input: Option<Entity<TextInput>>) -> Self {
+        self.rename = input;
         self
     }
     pub fn disclosure(mut self, expanded: Option<bool>) -> Self {
@@ -104,6 +163,36 @@ impl SidebarRow {
     ) -> Self {
         self.on_toggle = Some(Box::new(handler));
         self
+    }
+    /// A right-button press: the row's context menu.
+    pub fn on_secondary(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_secondary = Some(Box::new(handler));
+        self
+    }
+}
+
+/// The highlight behind a row (`.row::before`) in the order the stylesheet
+/// resolves it: a drop inside, a drop target, then the active row, each
+/// forced; otherwise the hover colour, held on while the row is selected,
+/// focused or showing its menu, and fading with the pointer otherwise.
+/// Returns the fill, the 1px border inside it, and its opacity.
+fn highlight(theme: theme::Theme, row: &SidebarRow, hover: f32) -> (Rgba, Option<Rgba>, f32) {
+    if row.drop == Some(DropPosition::Inside) {
+        (theme.primary_at(10.), Some(theme.primary_at(30.)), 1.)
+    } else if row.drop_target {
+        (theme.surface_drop(), Some(theme.primary()), 1.)
+    } else if row.active {
+        (theme.surface_active(), None, 1.)
+    } else {
+        let held = row.selected || row.context || row.focused;
+        (
+            theme.surface_hover(),
+            row.context.then(|| theme.border()),
+            if held { 1. } else { hover },
+        )
     }
 }
 
@@ -207,6 +296,14 @@ impl RenderOnce for SidebarRow {
         }
         let indent = self.depth as f32 * theme::SIDEBAR_INDENT;
         let interactive = self.on_click.is_some();
+        let (fill, edge, shown) = highlight(theme, &self, hover);
+        // The icon brightens with the pointer and on the active row.
+        let lit = self.active || hovered;
+        let count_color = if self.active || self.selected {
+            theme.text()
+        } else {
+            theme.text_tertiary()
+        };
 
         let row_state = state.clone();
         let mut row = div()
@@ -223,21 +320,37 @@ impl RenderOnce for SidebarRow {
                     cx.notify();
                 })
             })
-            .child(
-                div()
+            .child({
+                let mut layer = div()
                     .absolute()
                     .left(px(theme::SIDEBAR_INSET + indent))
                     .right(px(2.))
                     .top_0()
                     .bottom(px(1.))
                     .rounded(px(theme::RADIUS_MD))
-                    .bg(if self.active {
-                        theme.surface_active()
-                    } else {
-                        theme.surface_hover()
-                    })
-                    .opacity(if self.active { 1. } else { hover }),
-            );
+                    .bg(fill)
+                    .opacity(shown);
+                if let Some(edge) = edge {
+                    layer = layer.border_1().border_color(edge);
+                }
+                layer
+            });
+        // `.dropBefore::after` / `.dropAfter::after`: a 2px bar across the
+        // row's top or bottom edge, from the label column to the list edge.
+        if let Some(position @ (DropPosition::Before | DropPosition::After)) = self.drop {
+            let bar = div()
+                .absolute()
+                .left(px(theme::SIDEBAR_INSET + indent))
+                .right_0()
+                .h(px(2.))
+                .rounded(px(1.))
+                .bg(theme.primary());
+            row = row.child(if position == DropPosition::Before {
+                bar.top(px(-1.))
+            } else {
+                bar.bottom(px(-1.))
+            });
+        }
         if interactive {
             row = row.cursor_pointer();
         }
@@ -289,37 +402,64 @@ impl RenderOnce for SidebarRow {
             }
             row = row.child(disclosure);
         }
-        row = row
-            .child(
-                div()
-                    .relative()
-                    .w(px(theme::SIDEBAR_GLYPH_COLUMN))
-                    .h(px(theme::SIDEBAR_ROW))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        super::icon(
-                            self.icon,
-                            theme::SIDEBAR_ICON,
-                            self.tint.unwrap_or(theme.text()),
-                        )
-                        .opacity(if self.active || hovered {
-                            1.
-                        } else {
-                            0.8
-                        }),
-                    ),
-            )
-            .child(
+        row = row.child(
+            div()
+                .relative()
+                .w(px(theme::SIDEBAR_GLYPH_COLUMN))
+                .h(px(theme::SIDEBAR_ROW))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    super::icon(
+                        self.icon,
+                        theme::SIDEBAR_ICON,
+                        self.tint.unwrap_or(theme.text()),
+                    )
+                    .opacity(if lit { 1. } else { 0.8 }),
+                ),
+        );
+        row = match self.rename {
+            // `.renameInput`: a 20px field with a 1px primary border on the
+            // app background, pulled 1px left so the text starts where the
+            // label did.
+            Some(input) => {
+                let commit = input.clone();
+                row.child(
+                    div()
+                        .id("rename")
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h(px(theme::SIDEBAR_RENAME_HEIGHT))
+                        .ml(px(-1.))
+                        .border_1()
+                        .border_color(theme.primary())
+                        .rounded(px(theme::SIDEBAR_RENAME_RADIUS))
+                        .bg(theme.background())
+                        .overflow_hidden()
+                        // A press in the field edits the name; it is not a
+                        // click on the row.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        // A right-click commits the name, as the Electron
+                        // field's context-menu handler does.
+                        .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                            cx.stop_propagation();
+                            commit.update(cx, |input, cx| input.finish_rename(true, cx));
+                        })
+                        .child(input),
+                )
+            }
+            None => row.child(
                 div()
                     .relative()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .child(self.label),
-            );
+            ),
+        };
         if let Some(count) = self.count {
             row = row.child(
                 div()
@@ -331,16 +471,15 @@ impl RenderOnce for SidebarRow {
                     .text(theme::TEXT_CAPTION)
                     .font_family(theme::FONT_INSPECTOR_MONO)
                     .font_features(theme::tabular_figures())
-                    .text_color(if self.active {
-                        theme.text()
-                    } else {
-                        theme.text_tertiary()
-                    })
+                    .text_color(count_color)
                     .child(format::grouped(count)),
             );
         }
         if let Some(handler) = self.on_click {
             row = row.on_click(handler);
+        }
+        if let Some(handler) = self.on_secondary {
+            row = row.on_mouse_down(MouseButton::Right, handler);
         }
         row
     }
