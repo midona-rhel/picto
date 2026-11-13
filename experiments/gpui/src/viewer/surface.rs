@@ -1099,11 +1099,17 @@ impl Render for MediaSurface {
             .overflow_hidden()
             .child(
                 canvas(
-                    move |bounds, _, cx| {
+                    move |bounds, window, cx| {
                         let _ = entity.update(cx, |this, cx| {
                             if this.bounds != bounds {
                                 let from = this.pane();
                                 this.bounds = bounds;
+                                // What follows changes what is drawn, and a
+                                // notification made while a frame is being
+                                // drawn does not by itself bring another:
+                                // without one the picture stays fitted to
+                                // the size the pane had before.
+                                window.request_animation_frame();
                                 if this.options.follows_resize
                                     && !this.needs_fit
                                     && let Some(image) = this.image_size()
