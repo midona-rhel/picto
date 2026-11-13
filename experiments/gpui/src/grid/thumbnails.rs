@@ -160,6 +160,24 @@ impl Thumbnails {
         }
     }
 
+    /// Lets go of a thumbnail (its `.jpg` and its `.png`) that was written
+    /// again or for the first time (`picto:thumbnail-changed`), so the next
+    /// frame that wants it reads the new file, as the Electron grid's
+    /// pipeline invalidates it.
+    pub fn forget(&mut self, jpeg: &Path, cx: &mut App) {
+        for resource in [
+            Resource::Path(jpeg.into()),
+            Resource::Path(png_for(jpeg).into()),
+        ] {
+            if let Some(item) = self.entries.remove(&resource)
+                && let Some(Ok(image)) = item.get()
+            {
+                cx.drop_image(image, None);
+            }
+            self.recent.retain(|kept| *kept != resource);
+        }
+    }
+
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
         crate::stats::thumbnail_read();
         let item = ImageCacheItem::new(resource, cx);

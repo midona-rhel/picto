@@ -74,8 +74,14 @@ working: the library thread borrows the application's own `Library`
   `Change`. The session itself does what the Electron runtime stores do:
   `sidebar`, `folders`, `smart_folders`, `tags` and `duplicates` read the
   destination list and counts again (`sidebarSettle.ts`); `library` refreshes
-  the inspector when the shown item is named and drops the saved grids that
-  Back would restore; `subscriptions` and `tasks` read whether subscriptions
+  the inspector when the shown item is named, drops the saved grids that
+  Back would restore, and reads the shown grid again in place
+  (`gridSettle.ts`, `requestReconcile`): coalesced, spaced by three times
+  the last refresh's time between 40 ms and a second, held while the grid
+  has a press, rubber band or drag going, a page is on its way or the
+  destination changes, keeping the selection by item and the topmost
+  visible item where it was on screen; `tasks` reads the import tasks
+  (`taskSettle.ts`); `subscriptions` and `tasks` read whether subscriptions
   run (`Change::Activity`), every 1.5 s while one does. The Duplicates screen
   reads its queue again on `duplicates`, and the Subscriptions screen its list
   on `subscriptions` (after 250 ms of quiet) and `tasks`.
@@ -750,6 +756,47 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   titlebar view menu's layout and sort panel inline and its display panel
   inside "Display" (the same `shell::view_menu` panels), saved to the
   destination's view as production saves them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
+- Importing (`filesController.ts`, `GridScreen.tsx`'s drop handler), into
+  the grid's destination (the Inbox's lifecycle when the Inbox is open, else
+  the library's, and the open folder): files and folders dragged from Finder
+  onto the window, which shows `.dropOverlay` over the grid's area (the
+  primary ring and tint, "Drop files to import", "into current folder" in a
+  folder) while they are over it, and imports them wherever they are let
+  go, except while the viewer, Quick Look or a screen shows or in a
+  media-matches destination; Import Files... and Import Folder... (the
+  empty grid's menu, the empty states' buttons, the File menu, ⌘I and ⇧⌘I),
+  which open the system's chooser; the sidebar's Import Folder... (top
+  level) and Import Folder Here...; and Paste Import (the empty grid's menu
+  when the clipboard holds files or a picture, and ⌘V in the grid outside
+  the Trash, smart folders, Recently Viewed and media matches), which writes
+  a copied picture to `<temp>/picto-clipboard-imports/` and has the import
+  delete it once taken. One folder opens `FolderImportModal` (Preserve folder
+  structure, Include subfolders, Include folders without media, Watch this
+  folder, with `imports.folder.analyze`'s depth warning); several files under
+  `multiFileImportBehavior: ask` ask "Import as Collection?". Everything goes
+  through `imports.enqueue`. While an import is open, another is refused
+  and the open one comes forward; the import rows and buttons are disabled.
+- The task dialog and task bar (`TaskDialog.tsx`, `imports/`): an import
+  takes the foreground with its title, phase, rate, progress (a share that
+  moves over 250 ms, or the sweeping segment while files are found), counts,
+  time left, Pause or Resume and Stop…; Stop and Close ask whether to keep
+  or remove what was imported (pausing meanwhile); Minimize or Escape send
+  it to the task bar above the bottom edge between the rails, whose row
+  shows the task's glyph on its tone, the title, progress, "done / total ·
+  time left", Pause or Resume and Show; an ended import shows its result,
+  "Show N failed" with the files and their errors, and Done. The list is read
+  on `tasks` changes (150 ms coalesced) and every second while one works; a
+  task left running when the app closed takes the foreground when it
+  resumes.
+- Thumbnails an import is still waiting for: a tile whose thumbnail file
+  does not exist asks the application to render it
+  (`media.render_thumbnail_now`, as the media protocol does on a miss), and
+  every `picto:thumbnail-changed` makes the grid read that thumbnail again.
+  What the media worker cannot make is drawn here as the Electron main
+  process draws it (`grid/rendered.rs`): a PDF's, DjVu's or comic archive's
+  first page within 800 points at two pixels a point, and a Flash movie
+  five seconds in, muted, written beside the library's thumbnails as
+  `<hash>.png`, only in a marked disposable copy.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 - Flash's controls (`FlashControls.tsx`): play or pause, stop (the movie
@@ -931,11 +978,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   session, not the Electron query order, for shift ranges.
 - Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
-  empty state). The Import buttons are drawn with a `TODO`. The audio tile's
+  empty state). The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: Import Folder (Here)... and the Export submenu's
-  three rows (`TODO`s); watching a directory (the
+- Not in the sidebar yet: the Export submenu's three rows (`TODO`s);
+  watching a directory (the
   watch is stored, the watcher is a `TODO`, and the dialog does not check the
   folder's structure). The activity
   button's tooltip opens below it, not to its right as `position="right"`
@@ -1033,8 +1080,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   cover dialog that frames the square), Find Items with This Media (an
   ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
   Group (the collection editor), Group when the selection needs the group
-  organizer, Batch Rename, Auto Tag, Import Files, Import Folder and Paste
-  Import, and Set as Thumbnail. "Add Tags", "Add to Folder" and "New Smart
+  organizer, Batch Rename, Auto Tag, and Set as Thumbnail. "Add Tags", "Add to Folder" and "New Smart
   Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
   `NewSmartFolder`, which open the Add Tags and Folders dialogs (the
   inspector's pickers from the viewer's menu) and the smart-folder editor.
@@ -1061,9 +1107,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   cover is cropped once per session, so a cover changed elsewhere meanwhile
   shows the old one. A library with an icon but no cover shows the books
   glyph, not its icon.
-- No import/export, cloud, localization or site login. The grid shown is
-  not read again when background work (an import, a subscription run)
-  changes it; going to another destination and back does.
+- No export, cloud, localization or site login.
+- Imports: errors (a refused or failed import, a blocked one, a failed task
+  control) are written to standard error, as there is no notification host
+  yet (`TODO`). Picto Packs are not imported (a dropped pack is refused with
+  a `TODO`), and the File menu has no Import Picto Pack. The file chooser
+  takes every type (GPUI's prompt has no type filter), and its "Import
+  files" title is the macOS prompt button. A drag from a browser is not
+  handled: GPUI delivers only file paths, so the in-memory files and links
+  production materializes (`picto:drop:materialize`) do not arrive. One
+  dropped path is a folder when it is a directory: production takes any one
+  path without a media extension for a folder, which sends a single Flash,
+  EPUB or audio file to the folder dialog, where it cannot be imported.
+  The task dialog fades in over 200 ms but does not grow from 96%, and its
+  rows' and buttons' focus rings are not drawn. Text, Markdown, JSON, RTF,
+  EPUB, Word and PowerPoint files get no thumbnail of their own (production
+  draws one in a hidden window, `documentThumbnailService.mjs`), so they
+  show the torn page. A refresh in place reads as many items as were
+  loaded; a selected item that new items push past them is no longer
+  selected (production keeps an explicit selection by id). Paste Import,
+  the file and folder choosers and the empty states' buttons have not been
+  used with the pointer (they open system windows); the drop, the folder
+  dialog, the collection question, the task dialog and bar have been played
+  off-screen and compared with the reference.
 - Viewer: the breadcrumb belongs to the collection editor, which does not
   exist yet. No
   transparency checkerboard (off by default in Picto), no per-image zoom
@@ -1071,7 +1137,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
-  reasons in `keymap::NOT_YET`: Import, Export and Export As, Paste Import,
+  reasons in `keymap::NOT_YET`: Export and Export As,
   Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
   which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
   Remove from Group, Toggle Grayscale, the layout and tile-label keys,
@@ -1090,8 +1156,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   frame). While a rail or dialog fades out it still takes the pointer, where
   production sets `pointer-events: none`. Still to port with the features
   they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
-  no notification host yet), the task and progress dialogs, the inbox review
-  controls,
+  no notification host yet), the inbox review controls,
   a subscription's run progress fading in, the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
   and the spinner loops.
@@ -1184,7 +1249,10 @@ the rest is state that differed and JPEG noise in the captures.
 `PICTO_GPUI_POINTER=<file or FIFO>` replays input written to that file
 (`move X Y`, `drag X Y` with the button held, `down X Y [clicks]`,
 `up X Y [clicks]`, `rdown X Y`, `rup X Y`, `scroll X Y DISTANCE`, in window
-points; `key <keystroke>` and `type <text>`), so hover, pressed, tooltip,
+points; `key <keystroke>` and `type <text>`; `dragfiles X Y PATH...`, files
+from Finder over the window, `drop X Y PATH...`, the same let go there,
+which imports them, and `dragexit`, the platform's file-drop events; paths
+cannot contain spaces), so hover, pressed, tooltip,
 menu, rubber-band, keyboard and navigation states can be checked without
 taking the real pointer. GPUI stops painting a window that is fully covered;
 `PICTO_GPUI_BACKGROUND=1` opens the window without taking keyboard focus and
@@ -1204,6 +1272,12 @@ PICTO_GPUI_COPY=/tmp/picto-gpui-library.XXXXXX/Name.library \
 PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
+
+The reference takes `dragfiles`, `drop` and `dragexit` too, through the
+browser's drag events (`Input.dispatchDragEvent`), so a drop imports into
+the reference's own copy. Its CSS animations do not run while its window
+is hidden; a script that shoots a dialog first adds a style that sets
+their durations to 0 through `js`.
 
 `reference.sh /path/to/Name.library [n]` starts the Electron app as an
 isolated reference: a development build from this checkout in its
@@ -1306,6 +1380,11 @@ One model, separate views, shared components:
   control, empty state, the titlebar drag region, the filter bar's field and
   buttons, segmented glyph controls (the match rule and the sort
   direction), the colour editor and the date picker. Views compose these.
+- `imports/` starts imports (drops, choosers, paste) through the
+  application's queue, asks what an import needs (the folder dialog, the
+  collection question), and shows the foreground tasks (the task dialog and
+  task bar); `shell/import.rs` is the window's side (the drop and its
+  overlay, the menu rows and keys).
 - `screens/` holds the destinations that are screens rather than a grid.
   A screen can hand the toolbar controls to show in the grid's place.
 - `settings/` is the settings model the app reads, the shortcut registry, and

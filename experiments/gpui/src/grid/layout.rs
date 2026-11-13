@@ -261,13 +261,17 @@ fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
 
 /// `resolveGridScrollAnchor`: where to scroll once the layout changes so
 /// the topmost visible tile stays where it was on screen. A selected tile in
-/// view is preferred; the items are the same before and after.
+/// view is preferred. The anchor is followed by its item, so the items may
+/// have changed too (a refresh in place): `moved` says where a previous
+/// tile's item is now, if it still is (`Some` when the items are the same).
+/// `selected` are positions in the previous tiles.
 pub fn scroll_anchor(
     previous: &[Tile],
     next: &[Tile],
     selected: &std::collections::BTreeSet<usize>,
     scroll_top: f32,
     viewport: f32,
+    moved: impl Fn(usize) -> Option<usize>,
 ) -> Option<f32> {
     let bottom = scroll_top + viewport;
     let topmost = |only_selected: bool| {
@@ -285,7 +289,7 @@ pub fn scroll_anchor(
         .then(|| topmost(true))
         .flatten()
         .or_else(|| topmost(false))?;
-    let next = next.get(anchor)?;
+    let next = next.get(moved(anchor)?)?;
     Some((next.y - (top - scroll_top)).max(0.))
 }
 
@@ -405,16 +409,41 @@ mod tests {
         // Scrolled 150px: tile 1 (top 120) is the topmost in view, 30px above
         // the viewport; it stays 30px above it.
         assert_eq!(
-            scroll_anchor(&previous, &next, &none, 150., 200.),
+            scroll_anchor(&previous, &next, &none, 150., 200., Some),
             Some(230.)
         );
         // A selected tile in view is preferred.
         let selected = [2].into_iter().collect();
         assert_eq!(
-            scroll_anchor(&previous, &next, &selected, 150., 200.),
+            scroll_anchor(&previous, &next, &selected, 150., 200., Some),
             Some(310.)
         );
         // Nothing laid out before: nothing to keep.
-        assert_eq!(scroll_anchor(&[], &next, &none, 0., 200.), None);
+        assert_eq!(scroll_anchor(&[], &next, &none, 0., 200., Some), None);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_topmost_item_where_it_was_by_following_it() {
+        let tile = |y: f32| Tile {
+            x: 0.,
+            y,
+            w: 100.,
+            h: 100.,
+        };
+        // Items 0..3 at 0, 110, 220; two new items arrive above them, so the
+        // old item 1 (topmost in view at 150) is now the fourth tile.
+        let previous = [tile(0.), tile(110.), tile(220.)];
+        let next = [tile(0.), tile(110.), tile(220.), tile(330.), tile(440.)];
+        let none = std::collections::BTreeSet::new();
+        assert_eq!(
+            scroll_anchor(&previous, &next, &none, 150., 200., |index| Some(index + 2)),
+            // It was 40px above the viewport's top, and stays so.
+            Some(370.)
+        );
+        // An anchor that is gone keeps nothing.
+        assert_eq!(
+            scroll_anchor(&previous, &next, &none, 150., 200., |_| None),
+            None
+        );
     }
 }

@@ -6,13 +6,17 @@
 //   move X Y | down X Y [clicks] | up X Y [clicks] | drag X Y | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
 //   shot <name> | size W H | js <expression> | reload | window <n>
+//   dragfiles X Y PATH... | drop X Y PATH... | dragexit
 //
 // `size` sets the viewport in points (pictures are twice that), `js` prints
 // an expression's value, and `reload` loads the window again so that a
 // script starts where a freshly opened app does (the GPUI test opens the
 // app anew each run and ignores the line). `window <n>` sends what follows
 // to the app's nth window: 0 is the main one, the others are numbered in the
-// order they opened during the script. The app must be a development build started with
+// order they opened during the script. `dragfiles` brings files from the
+// system over the window through the browser's own drag events, `drop` also
+// drops them there (which imports them into the reference's copy), and
+// `dragexit` cancels the drag. The app must be a development build started with
 // its automation switches on a disposable library copy; see the README.
 //
 //   node reference.mjs steps.txt outdir            (PICTO_REFERENCE_PORT, default 9222)
@@ -139,6 +143,15 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'rup') await mouse('mouseReleased', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'scroll')
     await mouse('mouseWheel', numbers[0], numbers[1], 'none', 0, { deltaX: 0, deltaY: -numbers[2] });
+  // Files from the system dragged over the window and dropped on it, through
+  // the browser's own drag events, so the page receives them as Finder's do.
+  else if (kind === 'dragfiles' || kind === 'drop') {
+    const data = { items: [], files: rest.slice(2), dragOperationsMask: 1 };
+    const at = { x: numbers[0], y: numbers[1], data };
+    await send('Input.dispatchDragEvent', { type: 'dragEnter', ...at });
+    await send('Input.dispatchDragEvent', { type: 'dragOver', ...at });
+    if (kind === 'drop') await send('Input.dispatchDragEvent', { type: 'drop', ...at });
+  } else if (kind === 'dragexit') await send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data: { items: [], dragOperationsMask: 1 } });
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);

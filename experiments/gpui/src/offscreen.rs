@@ -5,7 +5,9 @@
 //!     PICTO_GPUI_OUT=/tmp/shots cargo test -- --ignored plays_a_script
 //!
 //! The copy is one `run.sh` made. A script line is a playback line (see
-//! `pointer.rs`), `wait <milliseconds>`, `shot <name>`, which saves
+//! `pointer.rs`; `dragfiles`, `drop` and `dragexit` bring files from the
+//! system over the window and drop them, as Finder does, which imports
+//! them into the copy), `wait <milliseconds>`, `shot <name>`, which saves
 //! `<name>.png`, or `window <n>`, which sends what follows to the app's nth
 //! window (0 is the main one; Settings and a detail window come after it in
 //! the order they opened). `PICTO_GPUI_WINDOW=1213x865` sets the main

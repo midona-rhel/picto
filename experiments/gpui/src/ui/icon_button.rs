@@ -57,6 +57,10 @@ pub enum Look {
     /// end of a source row, ruled off on its left, its glyph at half
     /// strength until hovered over the control surface.
     UrlAction,
+    /// `TaskDialog.module.css` `.iconButton`: 26px, the secondary text
+    /// colour, turning to the primary one over the hover surface, with no
+    /// transition.
+    Task,
 }
 
 impl Look {
@@ -70,7 +74,7 @@ impl Look {
             Look::Pin => (motion::PIN_BUTTON, motion::EASE),
             Look::Condition => (motion::CONDITION_BUTTON, motion::EASE),
             Look::TagAdd => (motion::TAG_ADD_BUTTON, motion::EASE_DEFAULT),
-            Look::Filter | Look::ChipAdd | Look::UrlAction => {
+            Look::Filter | Look::ChipAdd | Look::UrlAction | Look::Task => {
                 (Duration::ZERO, motion::EASE_DEFAULT)
             }
         }
@@ -208,6 +212,17 @@ impl Look {
                 fill: theme.surface_hover(),
                 fill_hover: theme.surface_active(),
                 fill_press: theme.surface_active(),
+                glyph_color: theme.text_secondary(),
+                ..base
+            },
+            Look::Task => Paint {
+                width: 26.,
+                height: 26.,
+                radius: theme::RADIUS_MD,
+                glyph: 15.,
+                fill: clear(theme.surface_hover()),
+                fill_hover: theme.surface_hover(),
+                fill_press: theme.surface_hover(),
                 glyph_color: theme.text_secondary(),
                 ..base
             },

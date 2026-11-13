@@ -5,6 +5,7 @@ mod cover;
 mod covered;
 mod demo;
 mod grid;
+mod imports;
 mod inspector;
 mod keymap;
 mod motion;
@@ -41,6 +42,15 @@ pub fn set_app_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Settings…", settings::OpenSettings),
                 MenuItem::action("Quit", Quit),
+            ],
+            disabled: false,
+        },
+        // Production's File menu rows that this app performs.
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("Import Files…", keymap::ImportFiles),
+                MenuItem::action("Import Folder…", keymap::ImportFolder),
             ],
             disabled: false,
         },
@@ -104,6 +114,7 @@ fn prepare(cx: &mut App) {
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    imports::bind(cx);
     viewer::document::bind(cx);
     // The registry's shortcuts, at their defaults until the
     // settings are read and applied.

@@ -328,15 +328,7 @@ impl Shell {
             )
         );
         // `hasClipboardImport`: files or an image on the clipboard.
-        let clipboard_import = can_import
-            && cx.read_from_clipboard().is_some_and(|item| {
-                item.entries().iter().any(|entry| {
-                    matches!(
-                        entry,
-                        ClipboardEntry::ExternalPaths(_) | ClipboardEntry::Image(_)
-                    )
-                })
-            });
+        let clipboard_import = can_import && super::import::can_paste(cx);
         let description = Description {
             scope: Some(scope_kind),
             handlers: Handlers {
@@ -348,6 +340,7 @@ impl Shell {
                 sort_contents: folder.is_some(),
                 ..Default::default()
             },
+            import_blocked: crate::imports::blocked(cx).is_some(),
             ..Default::default()
         };
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
@@ -839,10 +832,9 @@ impl Shell {
                 self.dispatch(Box::new(crate::keymap::NewSmartFolder), window, cx);
                 return;
             }
-            Action::ImportFiles | Action::ImportFolder | Action::PasteImport => {
-                // TODO: choose files or a folder, or take the clipboard's,
-                // and import them into this destination.
-            }
+            Action::ImportFiles => self.import(super::import::Import::Files, window, cx),
+            Action::ImportFolder => self.import(super::import::Import::Folder, window, cx),
+            Action::PasteImport => self.import(super::import::Import::Paste, window, cx),
             Action::FlashPlay | Action::FlashStop | Action::FlashMute => {
                 use crate::viewer::flash::Flash;
                 let control: Box<dyn Fn(&mut Flash)> = match action {

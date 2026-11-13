@@ -15,6 +15,7 @@ pub struct Confirm {
     title: SharedString,
     message: SharedString,
     confirm_label: SharedString,
+    cancel_label: SharedString,
     danger: bool,
     busy: bool,
     priority: Option<usize>,
@@ -39,6 +40,7 @@ pub fn confirm(
         title: title.into(),
         message: message.into(),
         confirm_label: confirm_label.into(),
+        cancel_label: "Cancel".into(),
         danger: false,
         busy: false,
         priority: None,
@@ -54,6 +56,11 @@ impl Confirm {
     /// The confirming button in the negative colour (`danger`).
     pub fn danger(mut self, danger: bool) -> Self {
         self.danger = danger;
+        self
+    }
+    /// The cancelling button's label (`cancelLabel`), "Cancel" unless set.
+    pub fn cancel_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.cancel_label = label.into();
         self
     }
     /// Both buttons disabled while the confirmed work is running.
@@ -114,7 +121,7 @@ impl RenderOnce for Confirm {
             )
             .footer(
                 action_button("confirm-cancel", Look::Standard)
-                    .label("Cancel")
+                    .label(self.cancel_label)
                     .disabled(self.busy)
                     .on_click(move |_, window, cx| {
                         if let Some(cancel) = &cancel {

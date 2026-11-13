@@ -54,7 +54,10 @@ actions!(
         FolderAutoTags,
         AddTags,
         AddToFolders,
-        AddToFolder
+        AddToFolder,
+        ImportFiles,
+        ImportFolder,
+        PasteImport
     ]
 );
 
@@ -156,6 +159,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.openDefaultApp" => vec![to!(Grid, OpenDefaultApp)],
         "file.revealInFolder" => vec![to!(Grid, RevealInFinder)],
         "file.openNewWindow" => vec![to!(Grid, shell::OpenInNewWindow)],
+        // An application menu accelerator in production, so the whole
+        // window's.
+        "file.import" => vec![to!(App, ImportFiles)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
@@ -167,6 +173,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "edit.deselectAll" => vec![to!(App, shell::ClosePreview)],
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
+        "edit.pasteImport" => vec![to!(Grid, PasteImport)],
         // Inbox.
         "inbox.accept" => vec![to!(Grid, AcceptInbox)],
         "inbox.reject" => vec![to!(Grid, RejectInbox)],
@@ -257,7 +264,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    ("file.import", "no import"),
     ("file.export", "no export"),
     ("file.exportAs", "no export"),
     (
@@ -272,7 +278,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
-    ("edit.pasteImport", "no import"),
     ("group.removeMembers", "no group surface"),
     ("view.grayscale", "the grid has no grayscale mode"),
     ("view.slideshow", "deferred in production"),

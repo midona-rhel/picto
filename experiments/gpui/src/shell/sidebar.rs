@@ -676,6 +676,7 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
         menu::Entry::Separator,
         menu::item("import-here", "Import Folder Here...")
             .icon("menu-folder-plus")
+            .disabled(crate::imports::blocked(cx).is_some())
             .into(),
         menu::item("attach-watch", "Attach Watched Folder...")
             .icon("menu-watch-folder")
@@ -1775,6 +1776,7 @@ impl Sidebar {
                     .into(),
                 menu::item("import-folder", "Import Folder...")
                     .icon("menu-folder-plus")
+                    .disabled(crate::imports::blocked(cx).is_some())
                     .into(),
             ],
             Section::SmartFolders => vec![
@@ -1865,8 +1867,9 @@ impl Sidebar {
                 "new-folder" => self.create_folder(None, window, cx),
                 "new-group" => self.create_group(None, window, cx),
                 "new-smart-folder" => self.new_smart_folder(None, window, cx),
-                // TODO: "Import Folder..." chooses a folder and imports it
-                // into the library; import is not built yet.
+                // `chooseAndImportFolder({ kind: 'all' })`: the library's
+                // top level.
+                "import-folder" => import_folder(None, window, cx),
                 _ => {}
             },
             Target::Node(node) => self.choose_for_node(node, action, value, window, cx),
@@ -2085,9 +2088,12 @@ impl Sidebar {
                     );
                 }
             }
-            // TODO: "Import Folder Here..." chooses a folder on disk and
-            // imports it into this folder; import is not built yet. "Export"
-            // waits for export.
+            "import-here" => {
+                if let Some(id) = folder_id(node) {
+                    import_folder(Some(id), window, cx);
+                }
+            }
+            // TODO: the "Export" submenu's rows wait for export.
             _ => {}
         }
     }
@@ -2747,5 +2753,19 @@ mod tests {
             expandable(&entries, &ids, Section::SmartFolders),
             ["smart:4"]
         );
+    }
+}
+
+/// "Import Folder..." and "Import Folder Here...": the folder chooser, then
+/// the folder dialog, into `folder` or the library's top level.
+fn import_folder(folder: Option<picto_library::FolderId>, window: &mut Window, cx: &mut App) {
+    if let Some(imports) = crate::imports::get(cx) {
+        imports.update(cx, |imports, cx| {
+            imports.choose_folder(
+                crate::imports::plan::Destination::folder(folder),
+                window,
+                cx,
+            )
+        });
     }
 }

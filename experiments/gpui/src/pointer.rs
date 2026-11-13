@@ -12,11 +12,19 @@
 //!     key space
 //!     key cmd-shift-j
 //!     type some text
+//!     dragfiles 600 400 /path/one.png /path/two
+//!     drop 600 400 /path/one.png /path/two
+//!     dragexit
 //!
 //! Coordinates are window points. A fourth number is the click count for
 //! `down` and `up`, and the distance in points for `scroll`. `key` takes a
 //! keystroke as GPUI writes them and `type` the text to enter in the focused
-//! field. Nothing is read when the variable is unset.
+//! field. `dragfiles` brings files from the system over the window at a
+//! point, as a drag from Finder does (the platform's file-drop entered and
+//! pending events), `drop` also lets them go there (submit, then exited),
+//! and `dragexit` takes them out of the window again; the paths are
+//! separated by spaces, so a path cannot hold one. Nothing is read when the
+//! variable is unset.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
@@ -25,6 +33,8 @@ use std::time::Duration;
 /// One line of playback.
 pub enum Line {
     Input(PlatformInput),
+    /// Several events in a row, as the platform sends them for one gesture.
+    Inputs(Vec<PlatformInput>),
     /// Pressed as though typed: bindings first, then the focused text field.
     Keys(Vec<Keystroke>),
 }
@@ -35,6 +45,11 @@ impl Line {
         match self {
             Line::Input(event) => {
                 window.dispatch_event(event, cx);
+            }
+            Line::Inputs(events) => {
+                for event in events {
+                    window.dispatch_event(event, cx);
+                }
             }
             Line::Keys(keys) => {
                 for key in keys {
@@ -79,9 +94,34 @@ pub fn parse(line: &str) -> Option<Line> {
                 .collect();
             return Some(Line::Keys(keys));
         }
+        "dragexit" => return Some(Line::Input(PlatformInput::FileDrop(FileDropEvent::Exited))),
+        "dragfiles" | "drop" => return file_drop(kind == "drop", rest).map(Line::Inputs),
         _ => {}
     }
     pointer(line).map(Line::Input)
+}
+
+/// Files from the system over the window at a point (`dragfiles`), and let
+/// go there (`drop`): the events a drag from Finder makes.
+fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
+    let mut parts = rest.split_whitespace();
+    let position = point(
+        px(parts.next()?.parse().ok()?),
+        px(parts.next()?.parse().ok()?),
+    );
+    let paths = ExternalPaths(parts.map(std::path::PathBuf::from).collect());
+    if paths.paths().is_empty() {
+        return None;
+    }
+    let mut events = vec![
+        PlatformInput::FileDrop(FileDropEvent::Entered { position, paths }),
+        PlatformInput::FileDrop(FileDropEvent::Pending { position }),
+    ];
+    if submit {
+        events.push(PlatformInput::FileDrop(FileDropEvent::Submit { position }));
+        events.push(PlatformInput::FileDrop(FileDropEvent::Exited));
+    }
+    Some(events)
 }
 
 fn pointer(line: &str) -> Option<PlatformInput> {

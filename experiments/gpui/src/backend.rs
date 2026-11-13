@@ -70,7 +70,10 @@ pub type Job = Box<dyn FnOnce(&Library) + Send>;
 pub enum Request {
     Job(Job),
     /// Generation, scope, filter, cursor, and whether to shuffle.
-    Query(u64, ItemScope, FilterExpr, Option<String>, bool),
+    /// A page of a destination: the query's generation, its scope and
+    /// filter, the cursor to continue from, whether to shuffle, and how many
+    /// items at most.
+    Query(u64, ItemScope, FilterExpr, Option<String>, bool, usize),
 }
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
@@ -250,7 +253,7 @@ pub fn start(
                         job(library);
                         continue;
                     }
-                    Request::Query(generation, scope, filter, cursor, shuffle) => {
+                    Request::Query(generation, scope, filter, cursor, shuffle, limit) => {
                         let append = cursor.is_some();
                         // The scope's saved view decides the sort, exactly as it
                         // does for the Electron grid reading the same rows.
@@ -308,7 +311,7 @@ pub fn start(
                                     },
                                 };
                                 library
-                                    .query(&query, &PageRequest { limit: 500, cursor })
+                                    .query(&query, &PageRequest { limit, cursor })
                                     .map(|page| {
                                         Reply::Page(
                                             generation,
