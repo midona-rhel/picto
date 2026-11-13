@@ -161,8 +161,15 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    /// Shows the section with this id (`picto:settings:navigate`).
+    pub(super) fn show_panel(&mut self, id: &str, cx: &mut Context<Self>) {
+        if let Some(index) = PANELS.iter().position(|panel| panel.id == id) {
+            self.choose(index, cx);
+        }
+    }
+
     /// Discards the draft and closes the window (`handleClose`).
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update(cx, |model, _| model.begin());
         let saved = self.model.read(cx).saved.app.color_scheme.clone();
         theme::show(&saved, cx);

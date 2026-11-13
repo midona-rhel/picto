@@ -43,6 +43,9 @@ next run. Data the application keeps outside a library (AI models) goes to
 
 `PICTO_GPUI_COPY_ONLY=1 run.sh …` makes the copy, prints its path and stops;
 the checks below use it. Delete `/tmp/picto-gpui-library.*` when done.
+`PICTO_GPUI_DEMOS=1 run.sh …` adds a Media Examples menu that opens the
+bundled samples of each viewer's formats; production has no such menu, so it
+is hidden otherwise.
 
 The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
 
@@ -409,6 +412,21 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   inspector lists, Export and Auto Tag. Its left edge drags between 260 and
   550px and, under the pointer or while dragged, grows to 2px in the text
   colour.
+- The application menu (`app_menu.rs`, from `electron/windows/menu.mjs` on
+  macOS): Picto, Library, File, Edit, Organize, View, Window and Help with
+  production's rows, titles (counted ones included: "Move 3 to Trash"),
+  order, separators and keys. Keys from the shortcut registry follow the
+  preset and Settings' rebinding. The selection's rows are enabled by
+  production's rules (`menuContext`: selection, single file, destination,
+  Inbox and Trash, running imports) and perform what its renderer does
+  (`shell/menu_commands.rs`); Cut, Copy, Paste, Select All, Undo and Redo go
+  to a focused text field first. Close Window (⌘W) closes Settings (dropping
+  its draft) or a detail window and hides the main window, which the Dock
+  icon brings back; Minimize, Zoom, Toggle Full Screen (not Settings, as in
+  production), Hide, Hide Others, Show All, Bring All to Front and the
+  window list (AppKit's, for a menu titled Window). About Picto opens
+  Settings on About. Organize ▸ Tags opens the Tags screen, which
+  production's row does not (its shell has no `tags` destination).
 - The Settings window (`Settings.tsx`), opened by the titlebar's Settings
   button, ⌘, and the app menu, as production opens it: a separate 900×650
   window, no smaller, with the traffic lights hidden in favour of its own
@@ -915,8 +933,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   - Every other type, Word and PowerPoint included by decision: its
     thumbnail, "Preview is not available for <type>." and Open with Default
     App.
-  - Media Examples has a sample of each (PDF, DjVu, CBZ, EPUB, text,
-    Markdown, JSON, RTF, a font, JPEG XL) next to SVG and Flash.
+  - The Media Examples menu (with `PICTO_GPUI_DEMOS=1`) has a sample of
+    each (PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, a font, JPEG XL)
+    next to SVG and Flash.
 - Animated GIFs and animated WebP play in the viewer (GPUI's image element
   animates a multi-frame image that has an id); the grid keeps the still
   thumbnail, as production does.
@@ -1226,16 +1245,38 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
-  reasons in `keymap::NOT_YET`: Export and Export As,
-  Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
+  reasons in `keymap::NOT_YET`: Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
   which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
   Remove from Group, Toggle Grayscale, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
   are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
-  itself. The application menu's accelerators that also work while a text
-  field has the keyboard in production (⌘1–⌘4, ⌃R, ⌘⌥C) do not here.
+  itself. Export and Export As are bound to the export actions, which
+  nothing handles yet.
+- Application menu: rows whose feature is missing are present and disabled:
+  Library Manager, New Library, Open Library and Recent Libraries (only the
+  open library is listed; opening real libraries awaits a decision), Import
+  Picto Pack, the three Export rows (until the export area handles
+  `keymap::ExportOriginals`, `ExportAs`, `ExportPictoPack`), Check for
+  Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
+  outside a text field copies nothing (production's ⌘C copies files), and
+  Undo and Redo do nothing while a text field has the keyboard (fields keep
+  no history). A row is enabled by whether its action has a handler where
+  the keyboard is, so the selection's rows are disabled while Settings or a
+  detail window is in front, where production's stay enabled and do
+  nothing; Set Rating's submenu title stays enabled (AppKit enables a row
+  with a submenu), its rows are not. A key the window leaves alone reaches
+  the menu, as in production, so ⌘1–⌘4, ⌃R or ⌥⌘C act while a text field
+  has the keyboard; the rows on ⌘⌫ and ⇧⌘⌫ ignore it there, leaving the
+  field its editing key. Close Window hides the main window rather than
+  closing it, so the window keeps its state when it comes back; production
+  makes a fresh one. App-wide zoom (production's ⌘= / ⌘− / ⌘0 outside the
+  viewer, a CSS `zoom` on the page) is not ported: every size here is in
+  pixels, and GPUI scales only `rem` units. The real menu bar has not been
+  seen: AppKit adds its own rows (Edit's Dictation and Emoji & Symbols,
+  View's or Window's Enter Full Screen, the Window menu's tiling rows), and
+  the bold application menu title is the process's name.
 - Motion: GPUI cannot scale an element's contents, so where production
   scales a panel (menus, the library popover, dialogs, tooltips) the panel's
   surface, border and shadow are drawn in the scaled rectangle about the

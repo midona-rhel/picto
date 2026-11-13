@@ -306,3 +306,34 @@ pub fn open(cx: &mut App) {
     let handle = window::open(model, cx);
     cx.global_mut::<SettingsGlobal>().window = handle;
 }
+
+/// Opens the Settings window on one of its sections, or turns the open
+/// window to it (`openSettingsWindow(panel)`); About's rows open `about`.
+pub fn open_at(panel: &str, cx: &mut App) {
+    open(cx);
+    if let Some(handle) = cx
+        .try_global::<SettingsGlobal>()
+        .and_then(|settings| settings.window)
+    {
+        let _ = handle.update(cx, |settings, _, cx| settings.show_panel(panel, cx));
+    }
+}
+
+/// Whether `window` is the Settings window.
+pub fn is_window(window: AnyWindowHandle, cx: &App) -> bool {
+    cx.try_global::<SettingsGlobal>()
+        .and_then(|settings| settings.window)
+        .is_some_and(|handle| AnyWindowHandle::from(handle) == window)
+}
+
+/// Closes `window` as its close button does, dropping the draft, if it is
+/// the Settings window. Returns whether it was.
+pub fn close_window(window: AnyWindowHandle, cx: &mut App) -> bool {
+    if !is_window(window, cx) {
+        return false;
+    }
+    if let Some(handle) = window.downcast::<window::SettingsWindow>() {
+        let _ = handle.update(cx, |settings, window, cx| settings.close(window, cx));
+    }
+    true
+}

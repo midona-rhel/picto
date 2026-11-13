@@ -12,7 +12,8 @@
 //! window (0 is the main one; Settings and a detail window come after it in
 //! the order they opened), or `pace <milliseconds>`, how long the app runs
 //! after each input line (200 unless set), for pictures taken soon after
-//! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
+//! one, or `action <name>` (`action app_menu::Accept`, `action
+//! app_menu::SetRating 3`), which chooses an application menu row. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -105,6 +106,15 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200));
+        } else if let Some(name) = line.strip_prefix("action ") {
+            // An application menu row chosen: its action, sent to where the
+            // keyboard is, as AppKit sends it.
+            let action = cx
+                .update(|cx| crate::app_menu::named(name.trim(), cx))
+                .unwrap_or_else(|| panic!("no action {name}"));
+            cx.update_window(window, |_, window, cx| window.dispatch_action(action, cx))
+                .unwrap();
+            settle(&mut cx, window, pace);
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {

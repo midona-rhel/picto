@@ -7,6 +7,7 @@ mod import;
 mod item_menu;
 pub(crate) use item_menu::media_link;
 pub mod library;
+mod menu_commands;
 mod review;
 mod shortcuts;
 pub mod sidebar;
@@ -269,7 +270,19 @@ impl Shell {
                     this.open_view_menu(event.0, window, cx)
                 },
             ),
+            // The application menu follows the selection, the destination
+            // and whether imports may start.
+            cx.subscribe(&session, |this, _, change: &Change, cx| {
+                if matches!(
+                    change,
+                    Change::Selection | Change::Results | Change::Navigation | Change::Viewer
+                ) {
+                    this.sync_menu(cx);
+                }
+            }),
+            cx.observe(&imports, |this, _, cx| this.sync_menu(cx)),
         ]);
+        crate::app_menu::set_main_window(window.window_handle(), cx);
         // A screen's titlebar controls take the grid's place in the toolbar.
         let controls = duplicates.read(cx).toolbar();
         let tag_controls = tags.read(cx).toolbar();
@@ -976,6 +989,8 @@ impl Render for Shell {
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);
+        // The application menu's rows that act on the window's content.
+        root = self.menu_actions(root, cx);
         root = self.file_drop(root, cx);
 
         root = root.children(self.menu.layer(window, cx));
