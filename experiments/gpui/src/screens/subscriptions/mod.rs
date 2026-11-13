@@ -7,13 +7,19 @@ mod detail;
 mod format;
 mod home;
 
+use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
 use crate::ui::menu::{self, Menu};
 use crate::ui::text_input::{Committed, TextInput};
 use gpui::*;
-use std::{cell::Cell, collections::HashSet, rc::Rc};
+use std::{
+    cell::Cell,
+    collections::HashSet,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 actions!(subscriptions, [Open, Deselect]);
 
@@ -26,6 +32,69 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("enter", Open, context),
         KeyBinding::new("escape", Deselect, context),
     ]);
+}
+
+/// `subscriptionsSettle.ts`: a change to the subscriptions is read after
+/// 250 ms of quiet, and progress for 5 s after a run is started even before
+/// it shows as running.
+const INVALIDATION_DEBOUNCE: Duration = Duration::from_millis(250);
+const RUN_GRACE: Duration = Duration::from_secs(5);
+
+/// What a run or hold control asks the application to do
+/// (`subscriptionsController`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Command {
+    /// Run Now.
+    Run,
+    /// Pause the run in progress.
+    Pause,
+    /// Resume a paused run, or retry a failed one.
+    Resume,
+    /// Stop the run, keeping the posts already added.
+    Stop,
+    /// Put future runs on hold, or release them.
+    Hold(bool),
+}
+
+impl Command {
+    /// The run control: Pause while running, Resume or Retry while a run
+    /// waits, else Run Now.
+    pub fn primary(active: bool, running: bool) -> Self {
+        match (active, running) {
+            (true, true) => Command::Pause,
+            (true, false) => Command::Resume,
+            (false, _) => Command::Run,
+        }
+    }
+
+    /// The hold control: Stop while a run is active, else hold or release.
+    pub fn hold(active: bool, held: bool) -> Self {
+        if active {
+            Command::Stop
+        } else {
+            Command::Hold(!held)
+        }
+    }
+
+    /// The command name and arguments of `core/src/ipc.rs`.
+    pub fn request(self, subscription_id: i64) -> (&'static str, serde_json::Value) {
+        let id = serde_json::json!({ "subscription_id": subscription_id });
+        match self {
+            Command::Run => ("subscriptions.run", id),
+            Command::Pause => ("subscriptions.run.pause", id),
+            Command::Resume => ("subscriptions.run.resume", id),
+            Command::Stop => ("subscriptions.cancel", id),
+            Command::Hold(paused) => (
+                "subscriptions.hold",
+                serde_json::json!({ "subscription_id": subscription_id, "paused": paused }),
+            ),
+        }
+    }
+
+    /// Whether it may start a run, after which progress is followed at once.
+    fn starts(self) -> bool {
+        matches!(self, Command::Run | Command::Resume)
+    }
 }
 
 /// The tabs of a subscription's data plane.
@@ -79,6 +148,14 @@ pub struct SubscriptionsScreen {
     home_scroll: ScrollHandle,
     rail_scroll: ScrollHandle,
     table_scroll: ScrollHandle,
+    /// Subscriptions with a command on its way; their controls wait.
+    acting: HashSet<i64>,
+    /// Until when progress is read although nothing shows as running yet.
+    grace_until: Option<Instant>,
+    /// The next progress read while a run is going.
+    poll: Option<Task<()>>,
+    /// The read after a burst of changes has settled.
+    invalidation: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -106,6 +183,25 @@ impl SubscriptionsScreen {
                 this.renaming = None;
                 window.focus(&this.focus, cx);
                 cx.notify();
+            }),
+            // What the runners and other edits change, read again as the
+            // renderer's settle store does: the list after a quiet 250 ms,
+            // progress at once.
+            cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
+                let BackendEvent::Changed(changed) = event else {
+                    return;
+                };
+                if !this.shown {
+                    return;
+                }
+                if crate::application::touches(changed, "subscriptions") {
+                    this.invalidation = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(INVALIDATION_DEBOUNCE).await;
+                        let _ = this.update(cx, |this, cx| this.reload(cx));
+                    }));
+                } else if crate::application::touches(changed, "tasks") {
+                    this.load(cx);
+                }
             }),
         ];
         let mut screen = Self {
@@ -135,6 +231,10 @@ impl SubscriptionsScreen {
             home_scroll: ScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             table_scroll: ScrollHandle::new(),
+            acting: HashSet::new(),
+            grace_until: None,
+            poll: None,
+            invalidation: None,
             _subscriptions: subscriptions,
         };
         // Read the list at once, so it is there before the screen is opened.
@@ -170,10 +270,117 @@ impl SubscriptionsScreen {
                     Err(error) => this.error = Some(error),
                 }
                 this.name_place(cx);
+                this.follow_runs(cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Reads the list again, and the open subscription's runs and issues.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        self.load(cx);
+        if let Some(id) = self.place_seen {
+            self.load_detail(id, cx);
+        }
+    }
+
+    /// Reads progress again in 1.5 s while a run is going (or was just
+    /// started) and the screen shows.
+    fn follow_runs(&mut self, cx: &mut Context<Self>) {
+        let running = self
+            .list
+            .iter()
+            .flatten()
+            .any(|subscription| format::running(subscription));
+        let starting = self.grace_until.is_some_and(|until| Instant::now() < until);
+        if !self.shown || !(running || starting) {
+            self.poll = None;
+            return;
+        }
+        if self.poll.is_none() {
+            self.poll = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(crate::session::SUBSCRIPTION_POLL)
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.poll = None;
+                    this.reload(cx);
+                });
+            }));
+        }
+    }
+
+    /// Sends `command` for each of `ids`, then reads what changed. The
+    /// controls of a subscription wait while its command is on its way.
+    fn perform(&mut self, ids: Vec<i64>, command: impl Fn(i64) -> Command, cx: &mut Context<Self>) {
+        let mut answers = Vec::new();
+        let mut starts = false;
+        for id in ids {
+            if !self.acting.insert(id) {
+                continue;
+            }
+            let command = command(id);
+            starts |= command.starts();
+            let (name, args) = command.request(id);
+            answers.push((id, self.session.read(cx).dispatch(name, args)));
+        }
+        if answers.is_empty() {
+            return;
+        }
+        if starts {
+            self.grace_until = Some(Instant::now() + RUN_GRACE);
+        }
+        cx.spawn(async move |this, cx| {
+            let mut settled = Vec::new();
+            for (id, answer) in answers {
+                settled.push((id, answer.await));
+            }
+            let _ = this.update(cx, |this, cx| {
+                for (id, result) in settled {
+                    this.acting.remove(&id);
+                    if let Ok(Err(error)) = result {
+                        // TODO: show it as an error toast, once the
+                        // prototype has toasts.
+                        eprintln!("picto: subscription {id}: {error}");
+                        this.error = Some(error);
+                    }
+                }
+                this.session
+                    .update(cx, |session, cx| session.refresh_activity(cx));
+                this.reload(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The run control of one subscription.
+    fn run_control(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(command) = self.subscription(id).map(|subscription| {
+            Command::primary(
+                subscription.active_run_id.is_some(),
+                format::running(subscription),
+            )
+        }) else {
+            return;
+        };
+        self.perform(vec![id], |_| command, cx);
+    }
+
+    /// The hold or stop control of one subscription.
+    fn hold_control(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(command) = self.subscription(id).map(|subscription| {
+            Command::hold(subscription.active_run_id.is_some(), subscription.paused)
+        }) else {
+            return;
+        };
+        self.perform(vec![id], |_| command, cx);
+    }
+
+    fn subscription(&self, id: i64) -> Option<&data::Subscription> {
+        self.list.as_ref()?.iter().find(|entry| entry.id == id)
     }
 
     /// Reads the open subscription's runs and issues.
@@ -409,8 +616,7 @@ impl SubscriptionsScreen {
                 let active = subscription.active_run_id.is_some();
                 let running = format::running(subscription);
                 let paused = subscription.run_status.as_deref() == Some("paused");
-                // TODO: run, pause, resume, stop and hold through the
-                // subscription runner.
+                let acting = self.acting.contains(&subscription.id);
                 let (run_label, run_icon) = match (active, running) {
                     (true, true) => ("Pause", "menu-player-pause"),
                     (true, false) if paused => ("Resume", "menu-player-play"),
@@ -427,11 +633,15 @@ impl SubscriptionsScreen {
                 vec![
                     menu::item("run", run_label)
                         .icon(run_icon)
-                        .disabled(true)
+                        .disabled(
+                            acting
+                                || (!active
+                                    && (subscription.paused || subscription.queries.is_empty())),
+                        )
                         .into(),
                     menu::item("hold", hold_label)
                         .icon(hold_icon)
-                        .disabled(true)
+                        .disabled(acting)
                         .into(),
                     menu::Entry::Separator,
                     menu::item("rename", "Rename").icon("menu-rename").into(),
@@ -463,19 +673,16 @@ impl SubscriptionsScreen {
             }
             several => {
                 let total = several.len();
-                // TODO: the bulk actions, through the subscription runner.
+                // TODO: Schedule and Delete for several at once.
                 vec![
-                    menu::item("run", format!("Run {total} Now"))
+                    menu::item("run-all", format!("Run {total} Now"))
                         .icon("menu-player-play")
-                        .disabled(true)
                         .into(),
-                    menu::item("hold", format!("Hold {total}"))
+                    menu::item("hold-all", format!("Hold {total}"))
                         .icon("menu-hand-stop")
-                        .disabled(true)
                         .into(),
-                    menu::item("release", format!("Release Hold for {total}"))
+                    menu::item("release-all", format!("Release Hold for {total}"))
                         .icon("menu-player-play")
-                        .disabled(true)
                         .into(),
                     menu::item("schedule", "Schedule")
                         .icon("menu-clock")
@@ -495,6 +702,16 @@ impl SubscriptionsScreen {
             Some(
                 cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
                     let menu::Event::Chosen(action) = event;
+                    let targets = this.menu_targets.clone();
+                    match (*action, targets.as_slice()) {
+                        ("run", [id]) => this.run_control(*id, cx),
+                        ("hold", [id]) => this.hold_control(*id, cx),
+                        // `handleBulk*`: each subscription on its own.
+                        ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
+                        ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
+                        ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
+                        _ => {}
+                    }
                     if *action == "rename"
                         && let [id] = this.menu_targets.as_slice()
                     {
@@ -675,4 +892,36 @@ fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
     .top_0()
     .left_0()
     .size_full()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Command;
+
+    #[test]
+    fn controls_send_the_commands_the_electron_screen_sends() {
+        assert_eq!(Command::primary(false, false), Command::Run);
+        assert_eq!(Command::primary(true, true), Command::Pause);
+        assert_eq!(Command::primary(true, false), Command::Resume);
+        assert_eq!(Command::hold(true, false), Command::Stop);
+        assert_eq!(Command::hold(false, false), Command::Hold(true));
+        assert_eq!(Command::hold(false, true), Command::Hold(false));
+        assert_eq!(
+            Command::Run.request(4),
+            (
+                "subscriptions.run",
+                serde_json::json!({ "subscription_id": 4 })
+            )
+        );
+        assert_eq!(Command::Pause.request(4).0, "subscriptions.run.pause");
+        assert_eq!(Command::Resume.request(4).0, "subscriptions.run.resume");
+        assert_eq!(Command::Stop.request(4).0, "subscriptions.cancel");
+        assert_eq!(
+            Command::Hold(false).request(4),
+            (
+                "subscriptions.hold",
+                serde_json::json!({ "subscription_id": 4, "paused": false })
+            )
+        );
+    }
 }

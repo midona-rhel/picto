@@ -588,25 +588,27 @@ impl Render for DetailWindow {
         if self.toolbar.on() || self.toolbar.animating() {
             pane = pane.child(self.toolbar(window, cx));
         }
-        div()
-            .key_context("DetailWindow")
-            .size_full()
-            .bg(theme.background())
-            .text_color(theme.text())
-            .font_family(theme::FONT_UI)
-            .text(theme::TEXT_MD)
-            .line_height(px(theme::LINE_HEIGHT))
-            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.wake(cx)))
-            .on_action(cx.listener(|_, _: &CloseWindow, window, _| window.remove_window()))
-            .on_action(
-                cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| {
-                    this.toggle_on_top(window, cx)
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)),
-            )
-            .child(pane)
+        let media = self.surface.read(cx).player().is_some();
+        let surface = self.surface.downgrade();
+        let window_root = div().key_context(super::video::key_context("DetailWindow", media));
+        super::video::on_actions(window_root, move |cx| {
+            surface
+                .upgrade()
+                .and_then(|surface| surface.read(cx).player())
+        })
+        .size_full()
+        .bg(theme.background())
+        .text_color(theme.text())
+        .font_family(theme::FONT_UI)
+        .text(theme::TEXT_MD)
+        .line_height(px(theme::LINE_HEIGHT))
+        .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.wake(cx)))
+        .on_action(cx.listener(|_, _: &CloseWindow, window, _| window.remove_window()))
+        .on_action(
+            cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| this.toggle_on_top(window, cx)),
+        )
+        .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
+        .child(pane)
     }
 }
 

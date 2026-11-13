@@ -1,10 +1,12 @@
 //! The media area of the viewer (`MediaView.tsx`): full-bleed, the previous
 //! item kept until the next one's thumbnail has decoded, the original laid
 //! over the thumbnail once decoded (`ImageCrossfadeFrame`). Images zoom and
-//! pan (`useImageZoom.ts`) and show the navigator while they overflow; Flash
-//! plays through Ruffle and fills the pane. What each item gets is decided by
-//! [`document::kind::renderer_kind`]: JPEG XL decodes onto the image camera,
-//! and documents, fonts and unviewable types show a [`Document`].
+//! pan (`useImageZoom.ts`) and show the navigator while they overflow, and
+//! animated ones play; Flash plays through Ruffle and fills the pane; video
+//! and audio play in the media player (`video/`). What each item gets is
+//! decided by [`document::kind::renderer_kind`]: JPEG XL decodes onto the
+//! image camera, and documents, fonts and unviewable types show a
+//! [`Document`].
 use super::camera::{self, Camera, Glide, Size};
 use super::document::{self, Document, kind::RendererKind};
 use crate::{motion, theme};
@@ -62,6 +64,8 @@ enum Mode {
     /// A document viewer of its own (`DetailMediaRenderer`'s documents,
     /// fonts and the unsupported view).
     Document,
+    /// Video and audio, in the media player.
+    Media,
     /// No renderer yet: the thumbnail, fitted, with a note.
     Other,
 }
@@ -102,6 +106,7 @@ pub struct MediaSurface {
     document_zoom: (bool, f32),
     /// The item's name, which the font viewer shows as its title.
     display_name: SharedString,
+    player: Option<Entity<super::video::VideoPlayer>>,
     opened: String,
     error: Option<String>,
     bounds: Bounds<Pixels>,
@@ -129,6 +134,12 @@ impl MediaSurface {
         self.flash_task = None;
         self.document = None;
         self._document_zoom = None;
+        self.player = None;
+    }
+
+    /// The media player, while a video or audio item is shown.
+    pub fn player(&self) -> Option<Entity<super::video::VideoPlayer>> {
+        self.player.clone()
     }
 
     /// Whether the shown item has zoom controls: images and PDF pages do,
@@ -205,9 +216,9 @@ impl MediaSurface {
     }
 
     /// Shows Flash's controls, and hides them once the pointer has rested
-    /// for [`media_controls::HIDE_DELAY`].
+    /// for [`super::flash_controls::HIDE_DELAY`].
     fn reveal_flash_controls(&mut self, cx: &mut Context<Self>) {
-        use crate::ui::media_controls;
+        use super::flash_controls as media_controls;
         if self.flash.is_none() {
             return;
         }
@@ -491,10 +502,14 @@ impl MediaSurface {
         mime: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.opened == key && (mime != "application/x-shockwave-flash" || self.flash.is_some()) {
+        let media = super::video::kind_of(mime);
+        if self.opened == key
+            && (mime != "application/x-shockwave-flash" || self.flash.is_some())
+            && (media.is_none() || self.player.is_some())
+        {
             return;
         }
-        self.show(key.clone(), thumbnail, natural, None, cx);
+        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
         self.opened = key.clone();
         self.error = None;
         self.stop();
@@ -502,6 +517,7 @@ impl MediaSurface {
         let mode = match kind {
             RendererKind::Flash => Mode::Flash,
             RendererKind::Image | RendererKind::JpegXl => Mode::Image,
+            RendererKind::Video | RendererKind::Audio if media.is_some() => Mode::Media,
             kind if kind.is_document() => Mode::Document,
             _ => Mode::Other,
         };
@@ -562,6 +578,19 @@ impl MediaSurface {
                 self.document = Some(document);
                 self.document_zoom_changed(cx);
                 cx.notify();
+            }
+            Mode::Media => {
+                let kind = media.unwrap_or(super::video::model::Kind::Video);
+                let settings = crate::settings::current(cx);
+                let options = super::video::model::Options::for_item(
+                    kind,
+                    settings.video_auto_play,
+                    settings.video_loop,
+                );
+                let mime = mime.to_owned();
+                self.player = Some(cx.new(|cx| {
+                    super::video::VideoPlayer::new(kind, path, &mime, options, Some(thumbnail), cx)
+                }));
             }
             Mode::Other => {
                 self.error = Some(format!("Native preview is not implemented for {mime}"));
@@ -681,8 +710,13 @@ impl MediaSurface {
     /// the camera's place and scale.
     fn image_layers(&self, image: Size) -> Vec<AnyElement> {
         let (left, top, width, height) = self.camera.image_rect(image, self.pane());
+        let key = self.shown.clone();
         let place = |source: Arc<RenderImage>| {
+            // An image with several frames (GIF, animated WebP) animates only
+            // with an id, which keeps its frame between draws.
+            let id = ElementId::Name(format!("viewer-image-{key}").into());
             img(source)
+                .id(id)
                 .absolute()
                 .left(px(left))
                 .top(px(top))
@@ -1011,6 +1045,11 @@ impl Render for MediaSurface {
             }
         } else if let Some(document) = self.document() {
             surface = surface.child(document.element(self.thumbnail.clone(), cx));
+        } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
+            // The player shows the thumbnail until its first picture.
+            let poster = self.thumbnail.clone();
+            player.update(cx, |player, cx| player.set_poster(poster, cx));
+            surface = surface.child(div().absolute().inset_0().child(player));
         } else {
             if let Some(thumbnail) = &self.thumbnail {
                 surface = surface.child(

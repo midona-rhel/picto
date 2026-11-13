@@ -95,12 +95,13 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(
-        database: PathBuf,
-        blobs: PathBuf,
+        root: PathBuf,
+        application: std::sync::Arc<crate::application::Application>,
+        events: std::sync::mpsc::Receiver<crate::application::Event>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|cx| Session::new(database, blobs, cx));
+        let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
@@ -171,6 +172,11 @@ impl Shell {
                     this._menu = None;
                     this.show_menu(event.0.clone(), window, cx)
                 },
+            ),
+            cx.subscribe_in(
+                &sidebar,
+                window,
+                |this, _, _: &sidebar::EmptyTrash, window, cx| this.empty_trash(window, cx),
             ),
         ];
         let duplicates = cx.new(|cx| {
@@ -580,8 +586,8 @@ impl Render for Shell {
                         .items_center()
                         .justify_end()
                         .child(
-                            // TODO: while pinned, the inspector keeps showing
-                            // the item it had instead of following the selection.
+                            // While pinned, the inspector keeps showing what
+                            // it had instead of following the selection.
                             ui::icon_button(
                                 "pin-inspector",
                                 if self.inspector_pinned {
@@ -599,6 +605,9 @@ impl Render for Shell {
                             }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.inspector_pinned = !this.inspector_pinned;
+                                let pinned = this.inspector_pinned;
+                                this.inspector
+                                    .update(cx, |inspector, cx| inspector.set_pinned(pinned, cx));
                                 cx.notify();
                             })),
                         ),
@@ -777,6 +786,9 @@ impl Render for Shell {
         }
         root = root.children(self.menu.clone());
         root = root.children(self.confirmation(window, cx));
+        // The inspector's tag and folder pickers float over everything.
+        let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
+        root = root.child(tag_picker).child(folder_picker);
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.

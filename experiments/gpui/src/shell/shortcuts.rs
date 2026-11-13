@@ -184,15 +184,14 @@ impl Shell {
     /// `file.delete`, as `gridRemovalAction` reads it: in a folder the key
     /// belongs to Remove from Folder, in the Trash it deletes permanently,
     /// elsewhere it moves the selection to the Trash.
-    fn delete_items(&mut self, cx: &mut Context<Self>) {
+    fn delete_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let kind = self.scope_kind(cx);
         let count = self.session.read(cx).selection.len();
         if (kind.folder.is_some() && !kind.trash) || count == 0 {
             cx.propagate();
         } else if kind.trash {
-            // TODO: delete the selection permanently, after the confirmation
-            // production shows. This prototype borrows the library's files
-            // and must never delete them, so the key does nothing here.
+            // Permanently, after the confirmation the menu row shows.
+            self.act_on_selection(crate::grid::menu::Action::DeletePermanently, window, cx);
         } else {
             self.session.update(cx, |session, cx| {
                 session.move_selection_to(Lifecycle::Trash, cx)
@@ -229,7 +228,7 @@ impl Shell {
 
     /// `inbox.reject` (`rejectTarget`): to the Trash, or deleted, as the
     /// Inbox & Deleting setting says.
-    fn reject(&mut self, cx: &mut Context<Self>) {
+    fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.scope_kind(cx).inbox || self.session.read(cx).selection.is_empty() {
             cx.propagate();
         } else if settings::current(cx).reject_action == "trash" {
@@ -237,9 +236,9 @@ impl Shell {
                 session.move_selection_to(Lifecycle::Trash, cx)
             });
         } else {
-            // TODO: delete the rejected items, after production's
-            // confirmation. This prototype must never delete library files,
-            // so with "Delete" chosen the key does nothing.
+            // Deleted, asking first only when it cannot be undone, as the
+            // menu's Reject row does.
+            self.act_on_selection(crate::grid::menu::Action::Reject, window, cx);
         }
     }
 
@@ -296,21 +295,20 @@ impl Shell {
 
     /// `organize.addTag`, `organize.addFolder` and `file.addToFolder`: the
     /// pickers for the selection.
-    fn pick(&mut self, picker: Picker, cx: &mut Context<Self>) {
+    ///
+    /// Production opens its `TagSelectModal` and `FolderPickerModal` dialogs
+    /// here; this opens the inspector's pickers instead, docked 80px below
+    /// the inspector's top, or centred while it is hidden.
+    fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
         if self.session.read(cx).selection.is_empty() {
             cx.propagate();
             return;
         }
-        match picker {
-            // TODO: open the tag picker (`TagSelectModal`) for the selection.
-            Picker::Tags => {}
-            // TODO: open the folder picker (`FolderPickerModal`) for the
-            // selection.
-            Picker::Folders => {}
-            // TODO: open "Add to Folder..." (`addSelectionToFolder`) for the
-            // selection.
-            Picker::AddToFolder => {}
-        }
+        let visible = !self.inspector_collapsed;
+        self.inspector.update(cx, |inspector, cx| match picker {
+            Picker::Tags => inspector.add_tags(visible, window, cx),
+            Picker::Folders | Picker::AddToFolder => inspector.add_to_folder(visible, window, cx),
+        });
     }
 
     /// Wires the registry's actions on the window's root.
@@ -355,7 +353,7 @@ impl Shell {
         .on_action(cx.listener(|this, _: &Rate3, _, cx| this.rate(3, cx)))
         .on_action(cx.listener(|this, _: &Rate4, _, cx| this.rate(4, cx)))
         .on_action(cx.listener(|this, _: &Rate5, _, cx| this.rate(5, cx)))
-        .on_action(cx.listener(|this, _: &DeleteItems, _, cx| this.delete_items(cx)))
+        .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
         .on_action(cx.listener(|this, _: &RemoveFromFolder, _, cx| this.remove_from_folder(cx)))
         .on_action(cx.listener(|this, _: &RestoreItems, _, cx| {
             let trash = this.scope_kind(cx).trash;
@@ -365,7 +363,7 @@ impl Shell {
             let inbox = this.scope_kind(cx).inbox;
             this.move_in(inbox, Lifecycle::Active, cx)
         }))
-        .on_action(cx.listener(|this, _: &RejectInbox, _, cx| this.reject(cx)))
+        .on_action(cx.listener(|this, _: &RejectInbox, window, cx| this.reject(window, cx)))
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar
                 .update(cx, |sidebar, cx| sidebar.new_folder(window, cx));
@@ -378,9 +376,15 @@ impl Shell {
                 cx.propagate();
             }
         }))
-        .on_action(cx.listener(|this, _: &AddTags, _, cx| this.pick(Picker::Tags, cx)))
-        .on_action(cx.listener(|this, _: &AddToFolders, _, cx| this.pick(Picker::Folders, cx)))
-        .on_action(cx.listener(|this, _: &AddToFolder, _, cx| this.pick(Picker::AddToFolder, cx)))
+        .on_action(cx.listener(|this, _: &AddTags, window, cx| this.pick(Picker::Tags, window, cx)))
+        .on_action(
+            cx.listener(|this, _: &AddToFolders, window, cx| {
+                this.pick(Picker::Folders, window, cx)
+            }),
+        )
+        .on_action(cx.listener(|this, _: &AddToFolder, window, cx| {
+            this.pick(Picker::AddToFolder, window, cx)
+        }))
     }
 }
 

@@ -9,9 +9,12 @@
 //!     rup 320 24
 //!     down 320 24 2
 //!     scroll 600 400 -900
+//!     key space
+//!     key cmd-shift-j
 //!
 //! Coordinates are window points. A fourth number is the click count for
-//! `down` and `up`, and the distance in points for `scroll`. Nothing is read when the variable is unset.
+//! `down` and `up`, and the distance in points for `scroll`. `key` takes a
+//! keystroke as GPUI writes them. Nothing is read when the variable is unset.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
@@ -20,6 +23,15 @@ use std::time::Duration;
 fn parse(line: &str) -> Option<PlatformInput> {
     let mut parts = line.split_whitespace();
     let kind = parts.next()?;
+    if kind == "key" {
+        // A playback line lives for the whole run; GPUI parses static text.
+        let keystroke = Keystroke::parse(String::leak(parts.next()?.to_string())).ok()?;
+        return Some(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke,
+            is_held: false,
+            prefer_character_input: false,
+        }));
+    }
     let position = point(
         px(parts.next()?.parse().ok()?),
         px(parts.next()?.parse().ok()?),

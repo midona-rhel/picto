@@ -71,6 +71,9 @@ pub enum Scope {
     /// A detail window (`DetailWindow`'s), which has the viewer's keys but
     /// closes only on Escape.
     DetailWindow,
+    /// The media player while a viewer that shows it has the keyboard
+    /// (`VideoPlayer`'s, which wins over the viewer's own).
+    Media,
 }
 
 /// What has the keyboard instead of the window's own shortcuts.
@@ -86,6 +89,7 @@ impl Scope {
             Scope::Viewer => "Viewer && !Flash",
             Scope::Duplicates => "Duplicates",
             Scope::DetailWindow => "DetailWindow && !Flash",
+            Scope::Media => "Media && !Flash",
         };
         Some(format!("{within} && {OWNERS}"))
     }
@@ -216,9 +220,23 @@ pub fn targets(id: &str) -> Vec<Target> {
         // Duplicates.
         "dup.keepBoth" => vec![to!(Duplicates, duplicates::KeepBoth)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
+        "dup.keepLeft" => vec![to!(Duplicates, duplicates::KeepLeft)],
+        "dup.keepRight" => vec![to!(Duplicates, duplicates::KeepRight)],
+        "dup.smartMerge" => vec![to!(Duplicates, duplicates::SmartMerge)],
         "dup.fitToWindow" => vec![to!(Duplicates, duplicates::FitPair)],
         "dup.prevPair" => vec![to!(Duplicates, duplicates::PreviousPair)],
         "dup.nextPair" => vec![to!(Duplicates, duplicates::NextPair)],
+        // Video.
+        "video.togglePlay" => vec![to!(Media, viewer::video::TogglePlay)],
+        "video.seekBackward" => vec![to!(Media, viewer::video::SeekBackward)],
+        "video.seekForward" => vec![to!(Media, viewer::video::SeekForward)],
+        "video.volumeUp" => vec![to!(Media, viewer::video::VolumeUp)],
+        "video.volumeDown" => vec![to!(Media, viewer::video::VolumeDown)],
+        "video.toggleMute" => vec![to!(Media, viewer::video::ToggleMute)],
+        "video.toggleLoop" => vec![to!(Media, viewer::video::ToggleLoop)],
+        "video.rateIncrease" => vec![to!(Media, viewer::video::RateIncrease)],
+        "video.rateDecrease" => vec![to!(Media, viewer::video::RateDecrease)],
+        "video.rateReset" => vec![to!(Media, viewer::video::RateReset)],
         _ => Vec::new(),
     }
 }
@@ -259,28 +277,9 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("view.toggleTileName", "deferred in production"),
     ("view.toggleTileMetadata", "deferred in production"),
     ("view.toggleLogs", "no log window"),
-    ("video.togglePlay", "no video player"),
-    ("video.seekBackward", "no video player"),
-    ("video.seekForward", "no video player"),
-    ("video.volumeUp", "no video player"),
-    ("video.volumeDown", "no video player"),
-    ("video.toggleMute", "no video player"),
-    ("video.toggleLoop", "no video player"),
-    ("video.rateIncrease", "no video player"),
-    ("video.rateDecrease", "no video player"),
-    ("video.rateReset", "no video player"),
-    ("video.fullscreen", "no video player"),
     (
-        "dup.smartMerge",
-        "merging frees a file for deletion, which the prototype must never cause",
-    ),
-    (
-        "dup.keepLeft",
-        "merging frees a file for deletion, which the prototype must never cause",
-    ),
-    (
-        "dup.keepRight",
-        "merging frees a file for deletion, which the prototype must never cause",
+        "video.fullscreen",
+        "the shell cannot yet give the player the whole window",
     ),
 ];
 
@@ -671,7 +670,11 @@ mod tests {
                 ("3".to_owned(), Scope::Viewer)
             ]
         );
-        assert!(bound(KeyboardPreset::Us, &none, "video.togglePlay").is_empty());
+        assert_eq!(
+            bound(KeyboardPreset::Us, &none, "video.togglePlay"),
+            [("k".to_owned(), Scope::Media)]
+        );
+        assert!(bound(KeyboardPreset::Us, &none, "video.fullscreen").is_empty());
     }
 
     #[test]

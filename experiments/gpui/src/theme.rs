@@ -279,6 +279,10 @@ pub const DANGER: u32 = 0xef8b8b;
 pub const SUCCESS: u32 = 0x5fb56b;
 /// The subscription tables' warm failure text (`.qFailureText`).
 pub const FAILURE_TEXT: u32 = 0xf0ad91;
+/// Smart merge's survivor ring (`.mediaCard::after`): a green tint at 8%
+/// and a 1px ring at 50% of `rgb(72, 199, 116)`.
+pub const MERGE_SURVIVOR_FILL: u32 = 0x48c77414;
+pub const MERGE_SURVIVOR_RING: u32 = 0x48c77480;
 
 /// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
 /// same in every theme.
@@ -304,6 +308,38 @@ pub const NAVIGATOR_SHADE: u32 = 0x00000094;
 pub const QUICK_LOOK_GLYPH: u32 = 0xf8f9fb;
 /// The detail window's toolbar: `rgba(0, 0, 0, 0.55)` (`DetailWindow.module.css`).
 pub const DETAIL_TOOLBAR_BACKGROUND: u32 = 0x0000008c;
+
+// The media player's controls are fixed white on black, not themed
+// (`VideoPlayer.module.css`); alpha rounded to the nearest byte.
+/// `.root`: `#000` behind video.
+pub const MEDIA_BACKGROUND: u32 = 0x000000ff;
+/// `.controls`: `linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent)`.
+pub const MEDIA_CONTROLS_SHADE: u32 = 0x00000099;
+/// `.icBtn` glyph `rgba(255,255,255,0.8)`, hovered or active `0.95`.
+pub const MEDIA_GLYPH: u32 = 0xffffffcc;
+pub const MEDIA_GLYPH_STRONG: u32 = 0xfffffff2;
+/// `.icBtn:hover` `rgba(255,255,255,0.15)`, `:active` `0.25`.
+pub const MEDIA_BUTTON_HOVER: u32 = 0xffffff26;
+pub const MEDIA_BUTTON_ACTIVE: u32 = 0xffffff40;
+/// `.timeDisplay`, `.volumePercent`, `.rateMenuItem`: `rgba(255,255,255,0.7)`.
+pub const MEDIA_TEXT: u32 = 0xffffffb3;
+/// `.separator` and `.progressBuffered`: `rgba(255,255,255,0.2)`;
+/// `.waveformBase` the same.
+pub const MEDIA_FAINT: u32 = 0xffffff33;
+/// `.progressTrack` and `.volumeTrack`: `rgba(255,255,255,0.15)`.
+pub const MEDIA_TRACK: u32 = 0xffffff26;
+/// `.progressFill`, `.volumeFill`, `.waveformImage`, `.waveformCursor`:
+/// `rgba(255,255,255,0.95)`.
+pub const MEDIA_FILL: u32 = 0xfffffff2;
+/// `.progressHoverTime` and `.volumePopup`: `rgba(0,0,0,0.8)`.
+pub const MEDIA_POPUP: u32 = 0x000000cc;
+/// `.rateMenu`: `rgba(0,0,0,0.9)`.
+pub const MEDIA_MENU: u32 = 0x000000e6;
+/// `.volumePopup` and `.rateMenu` border: `rgba(255,255,255,0.1)`; a rate
+/// row's hover the same.
+pub const MEDIA_POPUP_BORDER: u32 = 0xffffff1a;
+/// `.volumeHud`: `rgba(0,0,0,0.7)`.
+pub const MEDIA_HUD: u32 = 0x000000b3;
 /// `.marquee` in `CanvasGrid.module.css`: the rubber band's fill,
 /// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
 pub const MARQUEE_FILL: u32 = 0x339af01f;

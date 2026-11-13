@@ -30,10 +30,6 @@ pub(super) struct ItemMenus {
     /// The tags "Copy Tags" took, for "Paste Tags" (production keeps them on
     /// the window, beside the JSON it writes to the clipboard).
     tag_clipboard: Vec<String>,
-    /// The folder the selection was last added to, for "Add to “…”".
-    // TODO: production remembers the folders the folder picker used
-    // (`readRecentFolderIds`); set this once that picker exists.
-    last_folder: Option<FolderId>,
     confirm: Option<Confirmation>,
 }
 
@@ -67,6 +63,17 @@ impl Target {
             root_ids: self.ids(),
         }
     }
+}
+
+/// A permanent delete that was confirmed, and what to ask if it must be
+/// confirmed again.
+#[derive(Clone)]
+struct Deletion {
+    selection: SelectionTarget,
+    /// Rejected from the Inbox rather than deleted from the Trash.
+    reject: bool,
+    title: String,
+    label: &'static str,
 }
 
 /// A question asked before an edit (`ConfirmModal`).
@@ -560,7 +567,8 @@ impl Shell {
     }
 
     fn last_folder_name(&self, cx: &App) -> Option<String> {
-        let folder = self.items.last_folder?;
+        // "Add to “…”" is the folder used last (`readRecentFolderIds`).
+        let folder = *self.session.read(cx).recent_folders.first()?;
         self.session
             .read(cx)
             .nav
@@ -714,7 +722,10 @@ impl Shell {
                 return;
             }
             Action::AddToLastFolder => {
-                if let Some(folder) = self.items.last_folder {
+                let last = self.session.read(cx).recent_folders.first().copied();
+                if let Some(folder) = last {
+                    self.session
+                        .update(cx, |session, _| session.record_folder_use(folder));
                     let selection = target.selection();
                     self.edit(
                         Box::new(move |library| library.add_to_folder(&selection, folder)),
@@ -1166,7 +1177,7 @@ impl Shell {
     ///
     /// Only a marked disposable copy of a library is changed this way. The
     /// library keeps the files of an undoable delete until it leaves the
-    /// history, and hands back the files a larger delete frees.
+    /// history; the application removes the files a larger delete frees.
     fn request_permanent_delete(
         &mut self,
         target: Target,
@@ -1174,38 +1185,68 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selection = target.selection();
+        self.request_deletion(target.selection(), reject, false, window, cx);
+    }
+
+    /// The sidebar's Empty Trash: everything in the Trash, after the same
+    /// confirmation, titled "Empty Trash" with "Delete All".
+    pub(super) fn empty_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selection = SelectionTarget::Query {
+            query: picto_library::query::RootQuery {
+                scope: ItemScope::Trash,
+                view: Default::default(),
+            },
+            excluded_root_ids: Vec::new(),
+        };
+        self.request_deletion(selection, false, true, window, cx);
+    }
+
+    fn request_deletion(
+        &mut self,
+        selection: SelectionTarget,
+        reject: bool,
+        empty_trash: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let undo_limit = crate::settings::current(cx).undo_delete_limit;
+        let read = selection.clone();
         self.library(
-            Box::new(move |library| library.selection_summary(&selection)),
+            Box::new(move |library| library.selection_summary(&read)),
             move |this, summary, window, cx| {
                 let count = summary.selected_count;
+                if count == 0 {
+                    return;
+                }
                 let undoable = undo_limit > 0 && summary.media_count <= undo_limit as u128;
-                let title = if count == 1 {
-                    "Delete permanently?".to_owned()
+                let (title, label) = if empty_trash {
+                    ("Empty Trash".to_owned(), "Delete All")
+                } else if count == 1 {
+                    ("Delete permanently?".to_owned(), "Delete Permanently")
                 } else {
-                    format!("Delete {} items permanently?", grouped(count))
+                    (
+                        format!("Delete {} items permanently?", grouped(count)),
+                        "Delete Permanently",
+                    )
+                };
+                let delete = Deletion {
+                    selection: selection.clone(),
+                    reject,
+                    title,
+                    label,
                 };
                 if reject && undoable {
-                    this.delete_permanently(target, reject, undoable, title, window, cx);
+                    this.delete_permanently(delete, undoable, window, cx);
                     return;
                 }
                 let message = permanent_delete_message(Some(summary.media_count), undo_limit);
-                let ask_title = title.clone();
                 this.ask(
-                    ask_title,
+                    delete.title.clone(),
                     message,
-                    "Delete Permanently",
+                    label,
                     true,
                     Rc::new(move |this, window, cx| {
-                        this.delete_permanently(
-                            target.clone(),
-                            reject,
-                            undoable,
-                            title.clone(),
-                            window,
-                            cx,
-                        )
+                        this.delete_permanently(delete.clone(), undoable, window, cx)
                     }),
                     window,
                     cx,
@@ -1218,10 +1259,8 @@ impl Shell {
 
     fn delete_permanently(
         &mut self,
-        target: Target,
-        reject: bool,
+        delete: Deletion,
         require_undoable: bool,
-        title: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1230,7 +1269,7 @@ impl Shell {
             return;
         }
         let undo_limit = crate::settings::current(cx).undo_delete_limit.max(0) as usize;
-        let selection = target.selection();
+        let (selection, reject) = (delete.selection.clone(), delete.reject);
         self.session
             .update(cx, |session, cx| session.close_viewer(cx));
         let answer = self.session.read(cx).run(move |library| {
@@ -1239,9 +1278,9 @@ impl Shell {
             } else {
                 library.permanently_delete(&selection, now_ms(), undo_limit, require_undoable)
             };
-            // The freed files are left where they are.
-            // TODO: remove the files a delete that cannot be undone frees
-            // (`clean_pending_blobs`), once the app owns its blob store.
+            // The files a delete that cannot be undone frees are removed from
+            // the copy's blobs by the application's media worker
+            // (`drain_blob_cleanup`), as in production.
             deleted.map(|_| ())
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -1254,19 +1293,12 @@ impl Shell {
                 // drop the promise of undo silently; ask again.
                 Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
                     this.ask(
-                        title.clone(),
+                        delete.title.clone(),
                         "This delete can no longer be undone. Delete permanently anyway?",
-                        "Delete Permanently",
+                        delete.label,
                         true,
                         Rc::new(move |this, window, cx| {
-                            this.delete_permanently(
-                                target.clone(),
-                                reject,
-                                false,
-                                title.clone(),
-                                window,
-                                cx,
-                            )
+                            this.delete_permanently(delete.clone(), false, window, cx)
                         }),
                         window,
                         cx,

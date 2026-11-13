@@ -231,74 +231,81 @@ impl Render for QuickLook {
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, window, cx| this.step(delta, window, cx)))
         };
-        div()
+        let media = self.surface.read(cx).player().is_some();
+        let surface = self.surface.downgrade();
+        let quick_look = div()
             .id("quick-look")
             .track_focus(&self.focus)
-            .key_context("Viewer")
-            .occlude()
-            .absolute()
-            .inset_0()
-            .bg(theme.background())
-            // Space, Enter and Escape: the viewer's close keys.
-            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
-            .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
-            .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
-            .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
-                this.surface.update(cx, |surface, cx| surface.fit(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.actual_size(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(true, cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(false, cx));
-            }))
-            .map(|pane| super::document::handle_actions(pane, &self.surface))
-            // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
-            // on a right-click, and the rating and copy shortcuts.
-            .child(frame.child(self.surface.clone()))
-            .child(
-                div()
-                    .absolute()
-                    .top(px(CLOSE_INSET))
-                    .right(px(CLOSE_INSET))
-                    .child(
-                        strip::strip_button(
-                            "quick-look-close",
-                            "toolbar-close",
-                            ui::tip("Close").shortcut("view.quicklook", cx),
-                        )
-                        .width(CLOSE_SIZE)
-                        .glyph(rgb(theme::QUICK_LOOK_GLYPH))
-                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                    ),
-            )
-            .child(
-                strip::strip()
-                    .child(step(
-                        "quick-look-previous",
-                        "toolbar-chevron-left",
-                        "Previous",
-                        "view.prevImage",
-                        -1,
-                        index > 0,
-                        cx,
-                    ))
-                    .child(strip::counter(index + 1, total, cx))
-                    .child(step(
-                        "quick-look-next",
-                        "toolbar-chevron-right",
-                        "Next",
-                        "view.nextImage",
-                        1,
-                        index + 1 < total,
-                        cx,
-                    )),
-            )
+            .key_context(super::video::key_context("Viewer", media));
+        super::video::on_actions(quick_look, move |cx| {
+            surface
+                .upgrade()
+                .and_then(|surface| surface.read(cx).player())
+        })
+        .occlude()
+        .absolute()
+        .inset_0()
+        .bg(theme.background())
+        // Space, Enter and Escape: the viewer's close keys.
+        .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+        .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
+        .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
+        .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
+            this.surface.update(cx, |surface, cx| surface.fit(cx));
+        }))
+        .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
+            this.surface
+                .update(cx, |surface, cx| surface.actual_size(cx));
+        }))
+        .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+            this.surface
+                .update(cx, |surface, cx| surface.step_zoom(true, cx));
+        }))
+        .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+            this.surface
+                .update(cx, |surface, cx| surface.step_zoom(false, cx));
+        }))
+        .map(|pane| super::document::handle_actions(pane, &self.surface))
+        // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
+        // on a right-click, and the rating and copy shortcuts.
+        .child(frame.child(self.surface.clone()))
+        .child(
+            div()
+                .absolute()
+                .top(px(CLOSE_INSET))
+                .right(px(CLOSE_INSET))
+                .child(
+                    strip::strip_button(
+                        "quick-look-close",
+                        "toolbar-close",
+                        ui::tip("Close").shortcut("view.quicklook", cx),
+                    )
+                    .width(CLOSE_SIZE)
+                    .glyph(rgb(theme::QUICK_LOOK_GLYPH))
+                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                ),
+        )
+        .child(
+            strip::strip()
+                .child(step(
+                    "quick-look-previous",
+                    "toolbar-chevron-left",
+                    "Previous",
+                    "view.prevImage",
+                    -1,
+                    index > 0,
+                    cx,
+                ))
+                .child(strip::counter(index + 1, total, cx))
+                .child(step(
+                    "quick-look-next",
+                    "toolbar-chevron-right",
+                    "Next",
+                    "view.nextImage",
+                    1,
+                    index + 1 < total,
+                    cx,
+                )),
+        )
     }
 }

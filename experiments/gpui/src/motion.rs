@@ -109,6 +109,8 @@ pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
 /// `.followCover`: a subscription card's border on hover, on `ease`.
 pub const CARD_HOVER: Duration = Duration::from_millis(120);
+/// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
+pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
 pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
 
@@ -128,6 +130,14 @@ pub const ROW_HOVER: Duration = Duration::from_millis(100);
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
+/// `fieldExpand`: an inspector field opening over what follows.
+pub const FIELD_EXPAND: Duration = Duration::from_millis(100);
+/// `OverlayShell`'s `.pinBtn`: its overlay under the pointer.
+pub const PIN_BUTTON: Duration = Duration::from_millis(120);
+/// `TagSelectPanel.module.css` `.sidebar`: the tag picker's group rail
+/// fading in (150 ms) and out (100 ms).
+pub const PICKER_RAIL_IN: Duration = Duration::from_millis(150);
+pub const PICKER_RAIL_OUT: Duration = Duration::from_millis(100);
 /// `GlassInput`: a dialog field's border on focus.
 pub const FIELD_BORDER: Duration = Duration::from_millis(120);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.
@@ -150,6 +160,16 @@ pub const MODAL_DROP: f32 = 4.;
 
 /// `ScrollToTopButton`: its rise and fade wait this long before starting.
 pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
+
+/// `.controls` in `VideoPlayer.module.css`: the media controls fade in and
+/// out over 300 ms (`ease`).
+pub const MEDIA_CONTROLS_FADE: Duration = Duration::from_millis(300);
+/// `.progressTrack`: the scrubber thickens under the pointer over 100 ms.
+pub const MEDIA_SCRUBBER_EXPAND: Duration = Duration::from_millis(100);
+/// `volumeHudFadeIn`: the volume display fades in over 150 ms.
+pub const MEDIA_VOLUME_HUD_IN: Duration = Duration::from_millis(150);
+/// `VolumePanel`: the volume slider stays 300 ms after the pointer leaves.
+pub const MEDIA_VOLUME_PANEL_GRACE: Duration = Duration::from_millis(300);
 
 /// Where a fade that set off from `from` toward 0 or 1 has got to.
 fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
