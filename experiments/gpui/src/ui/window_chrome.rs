@@ -185,6 +185,7 @@ pub(crate) mod appkit {
                 return;
             }
             let layer = send_id(view, selector(c"layer"));
+
             let (animation_class, timing_class, number_class, string_class) = (
                 objc_getClass(c"CABasicAnimation".as_ptr()),
                 objc_getClass(c"CAMediaTimingFunction".as_ptr()),

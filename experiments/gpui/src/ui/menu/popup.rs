@@ -184,7 +184,10 @@ impl Menu {
             let opened = cx
                 .open_window(options, move |window, cx| {
                     without_system_shadow(window);
-                    pop_in(window, pop);
+                    pop_in(window, None);
+                    // The scale starts with the first frame the window
+                    // shows; begun now, it would be over before then.
+                    window.on_next_frame(move |window, _| pop_in(window, pop));
                     window.focus(&focus, cx);
                     view
                 })
