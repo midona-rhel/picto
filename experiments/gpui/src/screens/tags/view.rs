@@ -506,11 +506,14 @@ impl TagsScreen {
 
         let entity = cx.entity().downgrade();
         let measure = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.bounds != bounds {
                         this.bounds = bounds;
                         cx.notify();
+                        // A notification made while a frame is being drawn
+                        // does not by itself bring another frame.
+                        window.request_animation_frame();
                     }
                 });
             },

@@ -509,7 +509,11 @@ impl Render for GroupReader {
             window.request_animation_frame();
         }
         self.watch(cx);
-        let places = self.places();
+        // Until the pane has been measured there is no column width to
+        // shape the frames by: nothing is drawn, rather than every member
+        // squashed into the minimum height.
+        let measured = self.viewport.width > px(0.);
+        let places = if measured { self.places() } else { Vec::new() };
         let frames: Vec<AnyElement> = places
             .iter()
             .enumerate()
@@ -517,11 +521,14 @@ impl Render for GroupReader {
             .collect();
         let entity = cx.entity().downgrade();
         let measure = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.viewport != bounds.size {
                         this.viewport = bounds.size;
                         cx.notify();
+                        // A notification made while a frame is being drawn
+                        // does not by itself bring another frame.
+                        window.request_animation_frame();
                     }
                 });
             },
