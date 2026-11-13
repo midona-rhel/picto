@@ -37,6 +37,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 # version it builds, so no second copy is compiled.
 rusqlite = "0.40"
 unicode-segmentation = "1"
+# Word boundaries as the browser finds them, with the dictionaries for
+# Chinese, Japanese and Thai; the same build gpui already uses.
+icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 anyhow = "1"
 serde_json = "1"
 futures = "0.3"

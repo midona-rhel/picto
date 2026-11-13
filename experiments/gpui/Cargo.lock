@@ -6529,6 +6529,7 @@ dependencies = [
  "gpui-pre-apple",
  "gpui-pre-platform",
  "hayro",
+ "icu_segmenter",
  "image 0.25.10",
  "jxl-oxide",
  "lyon_tessellation",
