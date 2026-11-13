@@ -4,6 +4,7 @@ use crate::{motion, theme};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type MenuHandler = Box<dyn Fn(&Point<Pixels>, &mut Window, &mut App) + 'static>;
 
 /// The label colour for a chip of this colour (`tagTextColors` in
 /// `TagChip.tsx`): a pale tint of the chip's hue, or the primary text colour
@@ -52,6 +53,7 @@ pub struct Chip {
     label: SharedString,
     color: u32,
     on_remove: Option<ClickHandler>,
+    on_menu: Option<MenuHandler>,
 }
 
 pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, color: u32) -> Chip {
@@ -61,6 +63,7 @@ pub fn chip(id: impl Into<ElementId>, label: impl Into<SharedString>, color: u32
         label: label.into(),
         color,
         on_remove: None,
+        on_menu: None,
     }
 }
 
@@ -75,6 +78,14 @@ impl Chip {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_remove = Some(Box::new(handler));
+        self
+    }
+    /// A right-click on the chip, with where it was, for its context menu.
+    pub fn on_menu(
+        mut self,
+        handler: impl Fn(&Point<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_menu = Some(Box::new(handler));
         self
     }
 }
@@ -136,6 +147,12 @@ impl RenderOnce for Chip {
                     .map(|namespace| div().child(format!("{namespace}:"))),
             )
             .child(label);
+        if let Some(handler) = self.on_menu {
+            chip = chip.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                cx.stop_propagation();
+                handler(&event.position, window, cx);
+            });
+        }
         if let Some(handler) = self.on_remove {
             let remove = div()
                 .id("remove")

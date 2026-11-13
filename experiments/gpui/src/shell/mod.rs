@@ -40,7 +40,9 @@ actions!(
         Redo,
         Quit,
         DemoSvg,
-        DemoFlash
+        DemoFlash,
+        AddTags,
+        AddToFolder
     ]
 );
 
@@ -379,6 +381,16 @@ impl Shell {
         window.focus(&self.focus, cx);
     }
 
+    /// Whether T and F (`organize.addTag`, `organize.addFolder`) apply: items
+    /// are selected or open. Gives whether the inspector is showing, which
+    /// the picker docks beside.
+    fn organize_target(&self, cx: &App) -> Option<bool> {
+        let session = self.session.read(cx);
+        let chosen = session.viewer || !session.selection.is_empty();
+        let shown = !self.inspector_collapsed && (session.screen().is_none() || session.viewer);
+        chosen.then_some(shown)
+    }
+
     /// Moves the selection; with shift held, extends it instead.
     fn move_selection(&mut self, action: nav::Move, window: &Window, cx: &mut Context<Self>) {
         let extend = window.modifiers().shift;
@@ -548,8 +560,8 @@ impl Render for Shell {
                         .items_center()
                         .justify_end()
                         .child(
-                            // TODO: while pinned, the inspector keeps showing
-                            // the item it had instead of following the selection.
+                            // While pinned, the inspector keeps showing what
+                            // it had instead of following the selection.
                             ui::icon_button(
                                 "pin-inspector",
                                 if self.inspector_pinned {
@@ -567,6 +579,9 @@ impl Render for Shell {
                             }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.inspector_pinned = !this.inspector_pinned;
+                                let pinned = this.inspector_pinned;
+                                this.inspector
+                                    .update(cx, |inspector, cx| inspector.set_pinned(pinned, cx));
                                 cx.notify();
                             })),
                         ),
@@ -686,6 +701,19 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|this, _: &TogglePanels, _, cx| this.toggle_rails(true, true, cx)),
             )
+            .on_action(cx.listener(|this, _: &AddTags, window, cx| {
+                if let Some(visible) = this.organize_target(cx) {
+                    this.inspector
+                        .update(cx, |inspector, cx| inspector.add_tags(visible, window, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &AddToFolder, window, cx| {
+                if let Some(visible) = this.organize_target(cx) {
+                    this.inspector.update(cx, |inspector, cx| {
+                        inspector.add_to_folder(visible, window, cx)
+                    });
+                }
+            }))
             .on_action(cx.listener(|this, _: &Undo, _, cx| this.session.read(cx).undo()))
             .on_action(cx.listener(|this, _: &Redo, _, cx| this.session.read(cx).redo()))
             .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
@@ -714,6 +742,9 @@ impl Render for Shell {
             }
         }
         root = root.children(self.menu.clone());
+        // The inspector's tag and folder pickers float over everything.
+        let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
+        root = root.child(tag_picker).child(folder_picker);
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.

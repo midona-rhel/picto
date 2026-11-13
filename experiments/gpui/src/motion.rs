@@ -120,6 +120,14 @@ pub const ROW_HOVER: Duration = Duration::from_millis(100);
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
+/// `fieldExpand`: an inspector field opening over what follows.
+pub const FIELD_EXPAND: Duration = Duration::from_millis(100);
+/// `OverlayShell`'s `.pinBtn`: its overlay under the pointer.
+pub const PIN_BUTTON: Duration = Duration::from_millis(120);
+/// `TagSelectPanel.module.css` `.sidebar`: the tag picker's group rail
+/// fading in (150 ms) and out (100 ms).
+pub const PICKER_RAIL_IN: Duration = Duration::from_millis(150);
+pub const PICKER_RAIL_OUT: Duration = Duration::from_millis(100);
 /// `GlassInput`: a dialog field's border on focus.
 pub const FIELD_BORDER: Duration = Duration::from_millis(120);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.

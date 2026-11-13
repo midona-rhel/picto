@@ -143,6 +143,9 @@ pub struct Session {
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
+    /// The selected items and the one shown, to select again by id once a
+    /// [`Session::refresh_results`] page is in.
+    reselect: Option<(Vec<RootId>, Option<RootId>)>,
 }
 
 impl EventEmitter<Change> for Session {}
@@ -211,6 +214,7 @@ impl Session {
             library_cover,
             fixtures,
             place_label: None,
+            reselect: None,
         }
     }
 
@@ -308,6 +312,29 @@ impl Session {
 
     /// Fetches the current destination again, after an edit made elsewhere.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.saved.clear();
+        self.query(false, cx);
+    }
+
+    /// Fetches the current destination again after an edit that may change
+    /// what it holds, keeping the selection (by item) and the scroll, as the
+    /// Electron grid refreshes in place.
+    pub fn refresh_results(&mut self, cx: &mut Context<Self>) {
+        if self
+            .nav
+            .get(self.scope)
+            .is_none_or(|entry| entry.screen.is_some())
+        {
+            return;
+        }
+        let ids = self
+            .selection
+            .iter()
+            .filter_map(|index| self.items.get(*index))
+            .map(|item| item.root_id)
+            .collect();
+        self.reselect = Some((ids, self.selected_item().map(|item| item.root_id)));
+        self.restore_scroll = Some(self.grid_scroll);
         self.saved.clear();
         self.query(false, cx);
     }
@@ -413,6 +440,7 @@ impl Session {
 
     pub fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
         if text != self.search_text {
+            self.reselect = None;
             self.search_text = text;
             self.query(false, cx);
         }
@@ -420,6 +448,7 @@ impl Session {
 
     /// Narrows the current destination, or clears the narrowing.
     pub fn set_filter(&mut self, filter: Option<FilterExpr>, cx: &mut Context<Self>) {
+        self.reselect = None;
         self.filter = filter;
         self.close_viewer(cx);
         self.query(false, cx);
@@ -532,6 +561,26 @@ impl Session {
         } else {
             self.items = page.items;
             self.results_epoch += 1;
+            if let Some((ids, focus)) = self.reselect.take() {
+                // A refresh in place: the same items stay selected.
+                let positions = self
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (item.root_id, index))
+                    .collect::<HashMap<_, _>>();
+                self.selection = ids
+                    .iter()
+                    .filter_map(|id| positions.get(id).copied())
+                    .collect();
+                self.anchor = None;
+                let focus = focus
+                    .and_then(|id| positions.get(&id).copied())
+                    .or_else(|| self.selection.iter().next_back().copied());
+                self.focus_on(focus, cx);
+                cx.emit(Change::Results);
+                return;
+            }
             // A new result set opens with nothing selected.
             self.forget_selection();
             self.displayed = self.scope;
@@ -664,6 +713,7 @@ impl Session {
     }
 
     fn open(&mut self, index: usize, saved: Option<SavedGrid>, cx: &mut Context<Self>) {
+        self.reselect = None;
         self.save_grid();
         self.scope = index;
         self.pending_page = None;
@@ -980,14 +1030,6 @@ impl Session {
 
     pub fn set_notes(&self, id: RootId, notes: String) {
         let _ = self.sender.send(Request::Notes(id, notes));
-    }
-
-    pub fn remove_tag(&self, id: RootId, name: String) {
-        let _ = self.sender.send(Request::Untag(id, name));
-    }
-
-    pub fn remove_from_folder(&self, id: RootId, folder: picto_library::FolderId) {
-        let _ = self.sender.send(Request::LeaveFolder(id, folder));
     }
 
     /// Moves the selected items to the trash, or back out of it, and

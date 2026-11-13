@@ -40,6 +40,9 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("shift-down", Down, grid),
         KeyBinding::new("shift-up", Up, grid),
         KeyBinding::new("cmd-a", SelectAll, grid),
+        // organize.addTag and organize.addFolder.
+        KeyBinding::new("t", AddTags, grid),
+        KeyBinding::new("f", AddToFolder, grid),
         KeyBinding::new("home", First, grid),
         KeyBinding::new("end", Last, grid),
         KeyBinding::new("pageup", PageUp, grid),
@@ -108,6 +111,7 @@ fn main() {
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
             ui::modal::bind(cx);
+            ui::overlay_shell::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
             viewer::bind(cx);

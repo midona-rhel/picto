@@ -104,8 +104,8 @@ pub(super) struct ScopeState {
 impl ScopeState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Inspector>) -> Self {
         Self {
-            name: cx.new(|cx| TextInput::field("Name", window, cx)),
-            notes: cx.new(|cx| TextInput::field("Notes", window, cx)),
+            name: cx.new(|cx| TextInput::expanding("Name", window, cx)),
+            notes: cx.new(|cx| TextInput::expanding("Notes", window, cx)),
             view: None,
             records: HashMap::new(),
             asked: None,

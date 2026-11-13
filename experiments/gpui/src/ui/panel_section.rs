@@ -3,6 +3,7 @@ use crate::{motion, theme};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type MenuHandler = Box<dyn Fn(&Point<Pixels>, &mut Window, &mut App) + 'static>;
 
 struct State {
     /// On while the section is open: the chevron's quarter turn and fade
@@ -21,6 +22,7 @@ pub struct PanelSection {
     title: SharedString,
     expanded: bool,
     on_toggle: Option<ClickHandler>,
+    on_menu: Option<MenuHandler>,
     content: Option<AnyElement>,
 }
 
@@ -30,6 +32,7 @@ pub fn panel_section(id: impl Into<ElementId>, title: impl Into<SharedString>) -
         title: title.into(),
         expanded: true,
         on_toggle: None,
+        on_menu: None,
         content: None,
     }
 }
@@ -44,6 +47,15 @@ impl PanelSection {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_toggle = Some(Box::new(handler));
+        self
+    }
+    /// A right-click anywhere in the section (`onContextMenu`), with where
+    /// it was.
+    pub fn on_menu(
+        mut self,
+        handler: impl Fn(&Point<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_menu = Some(Box::new(handler));
         self
     }
     /// What the section shows while open; `None` shows the header alone.
@@ -139,6 +151,12 @@ impl RenderOnce for PanelSection {
                 })
             })
             .child(header);
+        if let Some(handler) = self.on_menu {
+            section = section.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                cx.stop_propagation();
+                handler(&event.position, window, cx);
+            });
+        }
         if let Some(content) = self.content.filter(|_| expanded) {
             section = section.child(div().mt(px(4.)).child(content));
         }
