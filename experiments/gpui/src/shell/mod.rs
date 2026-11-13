@@ -82,6 +82,8 @@ impl Shell {
         window.focus(&focus, cx);
         let grid =
             cx.new(|cx| GridView::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
+        let sidebar =
+            cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
         let subscriptions = vec![
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
@@ -97,9 +99,19 @@ impl Shell {
                     this.open_menu(event.0, window, cx)
                 },
             ),
+            // The sidebar builds its own menus and acts on them; the shell
+            // shows them above everything, as it does the grid's.
+            cx.subscribe_in(
+                &sidebar,
+                window,
+                |this, _, event: &sidebar::ShowMenu, window, cx| {
+                    this._menu = None;
+                    this.show_menu(event.0.clone(), window, cx)
+                },
+            ),
         ];
         Self {
-            sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
+            sidebar,
             toolbar: cx.new(|cx| Toolbar::new(session.clone(), cx)),
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
             viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
@@ -248,6 +260,11 @@ impl Shell {
                     this.run_menu_action(action, window, cx);
                 }),
             );
+        self.show_menu(menu, window, cx);
+    }
+
+    /// Puts a context menu above the window and gives it the keyboard.
+    fn show_menu(&mut self, menu: Entity<Menu>, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&menu.focus_handle(cx), cx);
         self.menu = Some(menu);
         cx.notify();

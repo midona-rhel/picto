@@ -103,6 +103,14 @@ impl Theme {
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
     }
+    /// `--color-primary-NN`
+    pub fn primary_at(&self, percent: f32) -> Rgba {
+        translucent(self.primary, percent)
+    }
+    /// `--color-surface-drop`: `--color-primary-30`, a row taking a drop.
+    pub fn surface_drop(&self) -> Rgba {
+        translucent(self.primary, 30.)
+    }
     /// `::selection`: `--color-primary-30`.
     pub fn selection(&self) -> Rgba {
         translucent(self.primary, 30.)
@@ -291,6 +299,10 @@ pub const SIDEBAR_LIST_PADDING: f32 = 8.;
 pub const SIDEBAR_GLYPH_COLUMN: f32 = 26.;
 /// `--sidebar-disclosure-column`
 pub const SIDEBAR_DISCLOSURE: f32 = 14.;
+/// `Sidebar.module.css` `.renameInput`: the in-place rename field's height
+/// and corner radius.
+pub const SIDEBAR_RENAME_HEIGHT: f32 = 20.;
+pub const SIDEBAR_RENAME_RADIUS: f32 = 3.;
 /// The sidebar's glyph size (`IC` in `Sidebar.tsx`).
 pub const SIDEBAR_ICON: f32 = 19.;
 /// `GRID_TILE_RADIUS`

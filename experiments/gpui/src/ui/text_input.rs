@@ -52,6 +52,8 @@ pub struct TextInput {
     /// When the caret last moved; it shows for 500 ms from then, and blinks.
     blink: std::time::Instant,
     blink_task: Option<gpui::Task<()>>,
+    /// An in-place rename that has not yet been committed or cancelled.
+    renaming: bool,
 }
 
 /// Which of the app's text fields this is, which decides its type. The frame
@@ -64,19 +66,22 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A sidebar row renamed in place (`Sidebar.module.css` `.renameInput`):
+    /// the row's own type, on a line that fits the 20px field.
+    Rename,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
             Kind::Search => crate::theme::FONT_UI,
-            Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
+            Kind::Sidebar | Kind::Inspector | Kind::Rename => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Rename => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +89,7 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Rename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
         }
     }
 }
@@ -91,6 +97,14 @@ impl Kind {
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
 pub struct Committed(pub picto_library::RootId, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
+
+/// How an in-place rename ended: Enter or leaving the field commits the
+/// trimmed text, Escape cancels (`useInlineRename.ts`).
+pub enum Renamed {
+    Commit(String),
+    Cancel,
+}
+impl gpui::EventEmitter<Renamed> for TextInput {}
 
 impl TextInput {
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -693,6 +707,7 @@ impl Render for TextInput {
                 window.blur(cx);
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                this.finish_rename(false, cx);
                 // The sidebar filter empties on Escape; a stored field goes
                 // back to its saved value.
                 this.content = if this.kind == Kind::Sidebar {
@@ -739,6 +754,7 @@ impl TextInput {
             scroll: px(0.),
             blink: std::time::Instant::now(),
             blink_task: None,
+            renaming: false,
         }
     }
     /// The sidebar's tree filter.
@@ -747,6 +763,33 @@ impl TextInput {
         input.placeholder = placeholder.into();
         input.kind = Kind::Sidebar;
         input
+    }
+    /// A sidebar row's in-place rename, holding the current name selected.
+    /// Losing focus commits it.
+    pub fn rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "".into();
+        input.kind = Kind::Rename;
+        input.content = value.to_owned().into();
+        input.original = input.content.clone();
+        input.selected_range = 0..input.content.len();
+        input.renaming = true;
+        cx.on_blur(&input.focus_handle, window, |this, _, cx| {
+            this.finish_rename(true, cx)
+        })
+        .detach();
+        input
+    }
+    /// Ends an in-place rename once: committed, or cancelled.
+    pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.renaming) {
+            return;
+        }
+        cx.emit(if commit {
+            Renamed::Commit(self.content.trim().to_owned())
+        } else {
+            Renamed::Cancel
+        });
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
