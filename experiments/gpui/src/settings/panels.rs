@@ -361,25 +361,6 @@ const ZOOM: [(&str, &str); 7] = [
     ("150", "150%"),
 ];
 
-/// The sidebar rows and sections the Sidebar panel shows or hides, by the
-/// label it gives them. All and Trash always show.
-fn sidebar_flag<'a>(app: &'a mut super::model::AppSettings, name: &str) -> Option<&'a mut bool> {
-    Some(match name {
-        "Uncategorized" => &mut app.show_sidebar_uncategorized,
-        "Untagged" => &mut app.show_sidebar_untagged,
-        "Inbox" => &mut app.show_sidebar_inbox,
-        "Random" => &mut app.show_sidebar_random,
-        "Tag Manager" => &mut app.show_sidebar_tag_manager,
-        "Recently Viewed" => &mut app.show_sidebar_recently_viewed,
-        "Subscriptions" => &mut app.show_sidebar_subscriptions,
-        "Duplicates" => &mut app.show_sidebar_duplicates,
-        "Quick Access" => &mut app.show_sidebar_quick_access,
-        "Smart Folders" => &mut app.show_sidebar_smart_folders,
-        "Folders" => &mut app.show_sidebar_folders,
-        _ => return None,
-    })
-}
-
 /// `THEMES`: the name, stored value and swatch colour of each theme.
 const THEMES: [(&str, &str, Option<u32>); 7] = [
     ("Auto", "auto", None),
@@ -960,51 +941,53 @@ impl SettingsWindow {
         let app = &model.read(cx).draft.app;
         let rename = app.sidebar_double_click_action == "rename";
         let guides = app.show_tree_guides;
-        let mut values = app.clone();
-        let mut shown = |name: &str| sidebar_flag(&mut values, name).is_none_or(|on| *on);
-        let toggled = |index: usize, name: &'static str, on: bool| {
+        let shown = |key: &str| app.sidebar_shows(key);
+        let toggled = |index: usize, name: &'static str, key: &'static str, on: bool| {
             let check = ui::check(("sidebar-shows", index), name, on);
-            if ["All", "Trash"].contains(&name) {
+            if ["system:active", "system:trash"].contains(&key) {
                 check.disabled(true)
             } else {
                 check.on_toggle(edit(model, move |draft| {
-                    if let Some(on) = sidebar_flag(&mut draft.app, name) {
+                    if let Some(on) = draft.app.sidebar_visibility(key) {
                         *on = !*on;
                     }
                 }))
             }
         };
         let mut rows = three_columns();
-        for (index, name) in [
-            "All",
-            "Uncategorized",
-            "Untagged",
-            "Inbox",
-            "Random",
-            "Tag Manager",
-            "Recently Viewed",
-            "Subscriptions",
-            "Duplicates",
-            "Trash",
+        for (index, (name, key)) in [
+            ("All", "system:active"),
+            ("Uncategorized", "system:uncategorized"),
+            ("Untagged", "system:untagged"),
+            ("Inbox", "system:inbox"),
+            ("Random", "system:random"),
+            ("Tag Manager", "system:tag_manager"),
+            ("Recently Viewed", "system:recent_viewed"),
+            ("Subscriptions", "system:subscriptions"),
+            ("Duplicates", "system:duplicates"),
+            ("Trash", "system:trash"),
         ]
         .into_iter()
         .enumerate()
         {
-            rows = rows.child(toggled(index, name, shown(name)));
+            rows = rows.child(toggled(index, name, key, shown(key)));
         }
         let mut section_rows = three_columns();
-        for (index, name) in ["Quick Access", "Smart Folders", "Folders"]
-            .into_iter()
-            .enumerate()
+        for (index, (name, key)) in [
+            ("Quick Access", "section:quick_access"),
+            ("Smart Folders", "section:smart_folders"),
+            ("Folders", "section:folders"),
+        ]
+        .into_iter()
+        .enumerate()
         {
-            section_rows = section_rows.child(toggled(10 + index, name, shown(name)));
+            section_rows = section_rows.child(toggled(10 + index, name, key, shown(key)));
         }
         vec![
             block()
                 .child(
                     card(theme).child(title(theme, "Double Click")).child(
                         three_columns()
-                            // TODO: renaming and folding rows on double-click.
                             .child(
                                 ui::check("double-click-rename", "Rename", rename)
                                     .radio()

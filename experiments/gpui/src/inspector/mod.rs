@@ -56,7 +56,7 @@ enum Rate {
 
 /// A chip's colour and sort order for a tag namespace (`NS_COLORS` in
 /// `TagChip.tsx`, `tagGroupOrder`). General tags come last.
-pub(crate) fn tag_style(namespace: &str) -> (u32, u8) {
+pub fn tag_style(namespace: &str) -> (u32, u8) {
     match namespace {
         "creator" => (0xff6667, 0),
         "studio" => (0xff6667, 10),
@@ -72,7 +72,7 @@ pub(crate) fn tag_style(namespace: &str) -> (u32, u8) {
 }
 
 /// A folder chip without a colour of its own.
-const FOLDER_COLOR: u32 = 0x868e96;
+pub const FOLDER_COLOR: u32 = 0x868e96;
 /// The preview fits this square.
 const PREVIEW: f32 = 200.;
 

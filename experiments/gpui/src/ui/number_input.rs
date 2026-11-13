@@ -42,6 +42,7 @@ pub struct NumberInput {
     value: i64,
     min: i64,
     max: i64,
+    disabled: bool,
     on_commit: Option<CommitHandler>,
 }
 
@@ -51,11 +52,18 @@ pub fn number_input(id: impl Into<ElementId>, value: i64, min: i64, max: i64) ->
         value,
         min,
         max,
+        disabled: false,
         on_commit: None,
     }
 }
 
 impl NumberInput {
+    /// Dims the field to half and its steppers to a fifth, and takes no
+    /// input (`GlassInput:disabled`, `.stepper button:disabled`).
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
     pub fn on_commit(mut self, handler: impl Fn(i64, &mut App) + 'static) -> Self {
         self.on_commit = Some(Rc::new(handler));
         self
@@ -67,9 +75,10 @@ fn stepper(
     icon: &'static str,
     delta: i64,
     state: Entity<State>,
+    disabled: bool,
     window: &mut Window,
     cx: &mut App,
-) -> impl IntoElement {
+) -> AnyElement {
     let theme = theme::theme(cx);
     let hover = window.use_keyed_state(ElementId::from((id, state.entity_id())), cx, |_, _| {
         motion::Fade::default()
@@ -77,8 +86,7 @@ fn stepper(
     if hover.read(cx).animating() {
         window.request_animation_frame();
     }
-    let opacity = 0.5 + 0.5 * hover.read(cx).value_with(motion::EASE);
-    div()
+    let arrow = div()
         .id(id)
         .flex_1()
         .min_h_0()
@@ -86,8 +94,13 @@ fn stepper(
         .items_center()
         .justify_center()
         .rounded(px(2.))
+        .child(super::icon(icon, 11., theme.text()));
+    if disabled {
+        return arrow.opacity(0.2).into_any_element();
+    }
+    let opacity = 0.5 + 0.5 * hover.read(cx).value_with(motion::EASE);
+    arrow
         .opacity(opacity)
-        .child(super::icon(icon, 11., theme.text()))
         .cursor_pointer()
         .on_hover(move |hovered, _, cx| {
             hover.update(cx, |hover, cx| {
@@ -118,6 +131,7 @@ fn stepper(
                 handler(next, cx);
             }
         })
+        .into_any_element()
 }
 
 impl RenderOnce for NumberInput {
@@ -176,7 +190,22 @@ impl RenderOnce for NumberInput {
             .flex_none()
             .flex()
             .items_center()
-            .child(field(self.id.clone(), &input, Look::Number))
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .opacity(if self.disabled { 0.5 } else { 1. })
+                    .child(field(self.id.clone(), &input, Look::Number))
+                    // Disabled, a cover takes the presses the field would.
+                    .children(self.disabled.then(|| {
+                        div()
+                            .id("disabled")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    })),
+            )
             .child(
                 div()
                     .absolute()
@@ -187,8 +216,24 @@ impl RenderOnce for NumberInput {
                     .flex()
                     .flex_col()
                     .gap(px(1.))
-                    .child(stepper("up", "stepper-up", 1, state.clone(), window, cx))
-                    .child(stepper("down", "chevron-down", -1, state, window, cx)),
+                    .child(stepper(
+                        "up",
+                        "chevron-up-2",
+                        1,
+                        state.clone(),
+                        self.disabled,
+                        window,
+                        cx,
+                    ))
+                    .child(stepper(
+                        "down",
+                        "chevron-down-2",
+                        -1,
+                        state,
+                        self.disabled,
+                        window,
+                        cx,
+                    )),
             )
     }
 }

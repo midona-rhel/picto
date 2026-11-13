@@ -137,7 +137,7 @@ impl SettingsWindow {
             None => (registry::display(keys).into(), false),
         };
         let border = if conflict {
-            theme.warning()
+            theme.shortcut_conflict()
         } else if listening.is_some() {
             theme.primary_at(60.)
         } else {

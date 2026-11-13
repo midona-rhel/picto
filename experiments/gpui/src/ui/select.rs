@@ -193,7 +193,7 @@ impl RenderOnce for Select {
                     .items_center()
                     .justify_center()
                     .opacity(0.5)
-                    .child(super::icon("select-selector", 14., theme.text())),
+                    .child(super::icon("selector-2", 14., theme.text())),
             )
             // Records where the button is, for the menu. A move while open
             // (the page scrolled) draws again with the new place.

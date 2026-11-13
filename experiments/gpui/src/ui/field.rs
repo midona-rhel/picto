@@ -20,6 +20,9 @@ pub enum Look {
     /// `GlassInput` as `CompactNumberInput` sizes it, with room on the
     /// right for its stepper.
     Number,
+    /// `.renameInput`: a name edited in place, in a 20px box outlined in the
+    /// primary colour over the app background.
+    Rename,
 }
 
 struct Frame {
@@ -96,6 +99,16 @@ impl Look {
                 focus: motion::STEPPER,
                 left: 8.,
                 right: 25.,
+                drop: 0.,
+            },
+            Look::Rename => Frame {
+                height: 20.,
+                radius: 3.,
+                border: (theme.primary(), theme.primary()),
+                fill: (theme.background(), theme.background()),
+                focus: Duration::ZERO,
+                left: 0.,
+                right: 0.,
                 drop: 0.,
             },
         }

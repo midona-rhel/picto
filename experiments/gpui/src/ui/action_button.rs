@@ -42,6 +42,7 @@ pub struct ActionButton {
     label: Option<SharedString>,
     height: f32,
     width: Option<f32>,
+    full_width: bool,
     padding: f32,
     gap: f32,
     text_size: f32,
@@ -61,6 +62,7 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         label: None,
         height: if settings { 36. } else { theme::ACTION_BUTTON },
         width: None,
+        full_width: false,
         padding: if settings { 16. } else { 20. },
         gap: if settings { 6. } else { 8. },
         text_size: theme::TEXT_MD,
@@ -87,6 +89,17 @@ impl ActionButton {
     }
     pub fn height(mut self, height: f32) -> Self {
         self.height = height;
+        self
+    }
+    /// `.buttonCompact`: the small control height with 16px padding.
+    pub fn compact(mut self) -> Self {
+        self.height = theme::CONTROL_SM;
+        self.padding = 16.;
+        self
+    }
+    /// Fills the width it is given, as a button in a grid track does.
+    pub fn full_width(mut self) -> Self {
+        self.full_width = true;
         self
     }
     /// A fixed width, for a button that shows only its glyph.
@@ -208,6 +221,8 @@ impl RenderOnce for ActionButton {
             .whitespace_nowrap();
         if let Some(width) = self.width {
             button = button.w(px(width));
+        } else if self.full_width {
+            button = button.w_full().min_w_0();
         }
         // `.btn`: `box-shadow: 0 0 0 1px var(--color-black-20)`.
         if !self.look.settings() {

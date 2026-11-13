@@ -27,6 +27,33 @@ pub struct Navigation {
     pub depth: usize,
     pub parent: Option<usize>,
 }
+impl Navigation {
+    /// The id the Electron sidebar gives this destination (`system:inbox`,
+    /// `folder:5`, `smart:3`). It stays the same when the list is rebuilt,
+    /// where a position does not.
+    pub fn id(&self) -> String {
+        match (&self.scope, self.screen, self.random) {
+            (_, Some(Screen::Tags), _) => "system:tag_manager".into(),
+            (_, Some(Screen::Subscriptions), _) => "system:subscriptions".into(),
+            (_, Some(Screen::Duplicates), _) => "system:duplicates".into(),
+            (_, None, true) => "system:random".into(),
+            (ItemScope::All, ..) => "system:active".into(),
+            (ItemScope::Inbox, ..) => "system:inbox".into(),
+            (ItemScope::RecentlyViewed, ..) => "system:recent_viewed".into(),
+            (ItemScope::Uncategorized, ..) => "system:uncategorized".into(),
+            (ItemScope::Untagged, ..) => "system:untagged".into(),
+            (ItemScope::Trash, ..) => "system:trash".into(),
+            (ItemScope::MediaMatches { item_id }, ..) => format!("media:{item_id}"),
+            (ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id }, ..) => {
+                format!("folder:{}", folder_id.0)
+            }
+            (ItemScope::SmartFolder { smart_folder_id }, ..) => {
+                format!("smart:{}", smart_folder_id.0)
+            }
+        }
+    }
+}
+
 /// The destinations that are screens of their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -99,117 +126,124 @@ pub fn text_filter(text: &str) -> FilterExpr {
         })
     }
 }
+/// The sidebar's destinations in the Electron order: the system rows, then
+/// the folder tree, then the smart-folder tree; and the tags. Built when the
+/// library opens, and again after the sidebar edits a folder.
+pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, Vec<TagRecord>)> {
+    let counts = library.sidebar_counts()?;
+    let tags = library.tags()?;
+    let system = |label: &str, icon, count, scope| Navigation {
+        label: label.into(),
+        count,
+        scope,
+        screen: None,
+        random: false,
+        icon: Some(String::from(icon)),
+        tint: None,
+        group: false,
+        depth: 0,
+        parent: None,
+    };
+    let screen = |screen, label: &str, icon, count| Navigation {
+        screen: Some(screen),
+        ..system(label, icon, count, ItemScope::All)
+    };
+    // The order of the Electron sidebar's system rows.
+    let mut nav = vec![
+        system("All", "photo", Some(counts.all), ItemScope::All),
+        system("Inbox", "inbox", Some(counts.inbox), ItemScope::Inbox),
+        system(
+            "Recently Viewed",
+            "clock",
+            Some(counts.recently_viewed),
+            ItemScope::RecentlyViewed,
+        ),
+        system(
+            "Uncategorized",
+            "folder-question",
+            Some(counts.uncategorized),
+            ItemScope::Uncategorized,
+        ),
+        system(
+            "Untagged",
+            "bookmark-question",
+            Some(counts.untagged),
+            ItemScope::Untagged,
+        ),
+        screen(Screen::Tags, "Tags", "bookmark", Some(tags.len() as u64)),
+        Navigation {
+            random: true,
+            ..system("Random", "arrows-shuffle", None, ItemScope::All)
+        },
+        screen(Screen::Subscriptions, "Subscriptions", "download", None),
+        screen(
+            Screen::Duplicates,
+            "Duplicates",
+            "copy",
+            Some(counts.duplicates),
+        ),
+        system("Trash", "trash", Some(counts.trash), ItemScope::Trash),
+    ];
+    let folders = library
+        .folders()?
+        .into_iter()
+        .map(|f| {
+            (
+                f.folder_id.0,
+                f.parent_id.map(|p| p.0),
+                Navigation {
+                    label: f.name,
+                    count: Some(f.count),
+                    scope: ItemScope::FolderTree {
+                        folder_id: f.folder_id,
+                    },
+                    screen: None,
+                    random: false,
+                    icon: f.icon,
+                    tint: f.color.as_deref().and_then(hex_color),
+                    group: false,
+                    depth: 0,
+                    parent: None,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    append_tree(&folders, None, None, &mut nav);
+    let smart = library
+        .smart_folders()?
+        .into_iter()
+        .map(|f| {
+            let group = is_empty_filter(&f.view.filter);
+            (
+                f.smart_folder_id.0,
+                f.parent_id.map(|p| p.0),
+                Navigation {
+                    label: f.name,
+                    count: (!group).then_some(f.count),
+                    scope: ItemScope::SmartFolder {
+                        smart_folder_id: f.smart_folder_id,
+                    },
+                    screen: None,
+                    random: false,
+                    icon: f.icon,
+                    tint: f.color.as_deref().and_then(hex_color),
+                    group,
+                    depth: 0,
+                    parent: None,
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    append_tree(&smart, None, None, &mut nav);
+    Ok((nav, tags))
+}
 pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
     let (tx, requests) = mpsc::channel();
     let (replies, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
             let library = Library::open(database)?;
-            let counts = library.sidebar_counts()?;
-            let tags = library.tags()?;
-            let system = |label: &str, icon, count, scope| Navigation {
-                label: label.into(),
-                count,
-                scope,
-                screen: None,
-                random: false,
-                icon: Some(String::from(icon)),
-                tint: None,
-                group: false,
-                depth: 0,
-                parent: None,
-            };
-            let screen = |screen, label: &str, icon, count| Navigation {
-                screen: Some(screen),
-                ..system(label, icon, count, ItemScope::All)
-            };
-            // The order of the Electron sidebar's system rows.
-            let mut nav = vec![
-                system("All", "photo", Some(counts.all), ItemScope::All),
-                system("Inbox", "inbox", Some(counts.inbox), ItemScope::Inbox),
-                system(
-                    "Recently Viewed",
-                    "clock",
-                    Some(counts.recently_viewed),
-                    ItemScope::RecentlyViewed,
-                ),
-                system(
-                    "Uncategorized",
-                    "folder-question",
-                    Some(counts.uncategorized),
-                    ItemScope::Uncategorized,
-                ),
-                system(
-                    "Untagged",
-                    "bookmark-question",
-                    Some(counts.untagged),
-                    ItemScope::Untagged,
-                ),
-                screen(Screen::Tags, "Tags", "bookmark", Some(tags.len() as u64)),
-                Navigation {
-                    random: true,
-                    ..system("Random", "arrows-shuffle", None, ItemScope::All)
-                },
-                screen(Screen::Subscriptions, "Subscriptions", "download", None),
-                screen(
-                    Screen::Duplicates,
-                    "Duplicates",
-                    "copy",
-                    Some(counts.duplicates),
-                ),
-                system("Trash", "trash", Some(counts.trash), ItemScope::Trash),
-            ];
-            let folders = library
-                .folders()?
-                .into_iter()
-                .map(|f| {
-                    (
-                        f.folder_id.0,
-                        f.parent_id.map(|p| p.0),
-                        Navigation {
-                            label: f.name,
-                            count: Some(f.count),
-                            scope: ItemScope::FolderTree {
-                                folder_id: f.folder_id,
-                            },
-                            screen: None,
-                            random: false,
-                            icon: f.icon,
-                            tint: f.color.as_deref().and_then(hex_color),
-                            group: false,
-                            depth: 0,
-                            parent: None,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            append_tree(&folders, None, None, &mut nav);
-            let smart = library
-                .smart_folders()?
-                .into_iter()
-                .map(|f| {
-                    let group = is_empty_filter(&f.view.filter);
-                    (
-                        f.smart_folder_id.0,
-                        f.parent_id.map(|p| p.0),
-                        Navigation {
-                            label: f.name,
-                            count: (!group).then_some(f.count),
-                            scope: ItemScope::SmartFolder {
-                                smart_folder_id: f.smart_folder_id,
-                            },
-                            screen: None,
-                            random: false,
-                            icon: f.icon,
-                            tint: f.color.as_deref().and_then(hex_color),
-                            group,
-                            depth: 0,
-                            parent: None,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
-            append_tree(&smart, None, None, &mut nav);
+            let (nav, tags) = navigation(&library)?;
             replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
             let seed = now_ms().to_string();

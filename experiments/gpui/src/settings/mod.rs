@@ -116,6 +116,48 @@ impl SettingsModel {
         cx.notify();
     }
 
+    /// Changes a saved setting at once, as the sidebar's own menus do
+    /// (`settingsController.patchSettings`): the app follows it, the fields
+    /// that changed are written to the library (`settings.patch`), and an
+    /// open Settings window's draft takes the same change.
+    pub fn apply_now(&mut self, change: impl Fn(&mut AppSettings), cx: &mut Context<Self>) {
+        let before = self.saved.app.to_json();
+        change(&mut self.saved.app);
+        change(&mut self.draft.app);
+        let after = self.saved.app.to_json();
+        let patch = after
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, value)| before.get(key.as_str()) != Some(*value))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<serde_json::Map<_, _>>();
+        if patch.is_empty() {
+            return;
+        }
+        let written = self.session.read(cx).run(move |library| {
+            library.update_auxiliary_json(
+                "settings.patch",
+                "Change settings",
+                "setting",
+                "application",
+                true,
+                move |stored| Ok(Some(model::patched(stored, &patch).to_string())),
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Err(error)) = written.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.error = Some(error.to_string());
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+        cx.emit(Applied);
+        cx.notify();
+    }
+
     /// Writes the draft to the library (`settings.replace`, then
     /// `settings.view.patch` for the grid defaults and `settings.view.reset`
     /// if asked), then makes it what the app shows. Resolves to whether it

@@ -103,6 +103,10 @@ impl Theme {
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
     }
+    /// `--color-surface-drop`: `--color-primary-30`, a row taking a drop.
+    pub fn surface_drop(&self) -> Rgba {
+        translucent(self.primary, 30.)
+    }
     /// `::selection`: `--color-primary-30`.
     pub fn selection(&self) -> Rgba {
         translucent(self.primary, 30.)
@@ -140,6 +144,15 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--color-footer-surface`: table headers and tab tracks.
+    pub fn footer_surface(&self) -> Rgba {
+        translucent(self.contrast, 3.)
+    }
+    /// `color-mix(in srgb, var(--color-bg-app) 90%, var(--color-text-primary) 10%)`:
+    /// the select button's fill.
+    pub fn select_surface(&self) -> Rgba {
+        mixed(self.text, 10., self.background)
+    }
     /// `--color-primary-NN`
     pub fn primary_at(&self, percent: f32) -> Rgba {
         translucent(self.primary, percent)
@@ -166,14 +179,10 @@ impl Theme {
     pub fn text_disabled(&self) -> Rgba {
         translucent(self.text, 22.)
     }
-    /// `CmSelect`: `color-mix(--color-bg-app 90%, --color-text-primary 10%)`,
-    /// the select button and its menu.
-    pub fn select_surface(&self) -> Rgba {
-        mixed(self.text, 10., self.background)
-    }
-    /// `--color-warning`, which the shortcut field's conflict border falls
-    /// back from to `#FFA500`.
-    pub fn warning(&self) -> Rgba {
+    /// `.shortcutConflict`: `var(--color-warning, #FFA500)`. No theme
+    /// defines `--color-warning`, and this rule's fallback differs from the
+    /// subscription styles' (`WARNING`).
+    pub fn shortcut_conflict(&self) -> Rgba {
         rgb(0xffa500)
     }
 }
@@ -245,6 +254,16 @@ pub fn tabular_figures() -> FontFeatures {
 
 /// A set star in `StarRating.module.css`.
 pub const RATING: u32 = 0xff9f0a;
+
+/// `--color-accent`, which no theme defines: its `#3297ff` fallback.
+pub const ACCENT: u32 = 0x3297ff;
+/// `--color-warning`, `--color-danger` and `--color-success`, which no theme
+/// defines: the fallbacks the subscription styles give them.
+pub const WARNING: u32 = 0xe8a33d;
+pub const DANGER: u32 = 0xef8b8b;
+pub const SUCCESS: u32 = 0x5fb56b;
+/// The subscription tables' warm failure text (`.qFailureText`).
+pub const FAILURE_TEXT: u32 = 0xf0ad91;
 
 /// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
 /// same in every theme.
@@ -324,6 +343,8 @@ pub const TEXT_MD: f32 = 13.;
 pub const TEXT_LG: f32 = 14.;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
+/// `--font-size-title`
+pub const TEXT_TITLE: f32 = 18.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
@@ -368,6 +389,10 @@ pub const SIDEBAR_LIST_PADDING: f32 = 8.;
 pub const SIDEBAR_GLYPH_COLUMN: f32 = 26.;
 /// `--sidebar-disclosure-column`
 pub const SIDEBAR_DISCLOSURE: f32 = 14.;
+/// `Sidebar.module.css` `.renameInput`: the in-place rename field's height
+/// and corner radius.
+pub const SIDEBAR_RENAME_HEIGHT: f32 = 20.;
+pub const SIDEBAR_RENAME_RADIUS: f32 = 3.;
 /// The sidebar's glyph size (`IC` in `Sidebar.tsx`).
 pub const SIDEBAR_ICON: f32 = 19.;
 /// `GRID_TILE_RADIUS`

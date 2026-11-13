@@ -83,6 +83,28 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shows them: the grid glyph, no count, and a click that folds the group
   rather than opening it. Folders and smart folders show the icon and colour
   the user chose, from the icon picker's registry (`assets/Icon*.svg`).
+- Sidebar context menus with the Electron rows in their order: the
+  visibility menu on system rows (which system rows and sections show),
+  Clear Recently Viewed, Trash's Restore All, the Folders and Smart Folders
+  headers' menus, and the folder, smart-folder, group and multi-selection
+  menus. Wired through the library: New Folder (header "+", menus), New
+  Subfolder, New Smart Folder Group and its child groups, each created,
+  revealed and renamed in place; Rename; Duplicate; Delete, which removes
+  folder and smart-folder definitions and never media; Refresh Results; Sort
+  Results by Name; Expand and Collapse for a row, the whole tree or the
+  selection; Clear Recently Viewed and Restore All. After an edit the
+  destination list is read again; places are kept by id, and deleting the
+  open folder falls back to its nearest surviving ancestor, or All.
+- Rename in place (`.renameInput`): a 20px field with a 1px primary border
+  on the app background, the name selected; Enter or leaving it commits,
+  Escape cancels, a right-click commits. The row shows the new name at once.
+  A double-click folds the branch, the Electron default setting.
+- Sidebar multi-selection as `handleRowClick` does it: Cmd toggles a row,
+  Shift adds the shown rows from the last one clicked in the same section,
+  a plain click selects the row alone and opens it. The row states of
+  `SidebarRow.module.css`: selected, context menu open (hover fill and a
+  1px border), keyboard focus, drop target, drop inside and the 2px
+  before/after bars.
 - Hover and pressed states from the Electron styles, with their timings: icon
   buttons (hover, pressed, toggled, disabled), sidebar rows and section
   headers (title pill, chevron, add button), the library switcher's highlight,
@@ -242,12 +264,28 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   in Electron. Below 900 and 620 points the layout tightens and then stacks
   as the container queries do. Loading message after 200 ms, and the empty
   states for an empty queue, a finished review and an error.
+- The Subscriptions screen, read from the library: the grid of 180px cards
+  (cover framed by its stored crop, name, status badge, item and source
+  counts) under a header with the count, any gallery downloads and the
+  Add, Add Gallery and Accounts buttons; click, Cmd-click and Shift-click
+  selection, Escape to clear, double-click or Enter to open, and the single
+  and bulk context menus. An opened subscription is a place: Back returns
+  to the grid and the scope title links back to it. Its workspace has the
+  rail (cover, name, status with the failure as its tooltip, actions, run
+  progress, run counts, last check, schedule, posts per run, destination
+  folders and tags) and the Sources, History and Problems tables, with the
+  sticky header, hover rows and row buttons. Names rename in place, from the
+  card's menu or a double-click on the rail's name, through the library's
+  published write. The reads are the application catalog's own, run through
+  the library's consistent auxiliary read; the list and the query rows use
+  `core/src/subscription_views.sql` and `subscription_query_views.sql`
+  directly.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-- Tags and Subscriptions are sidebar rows without screens.
+- Tags is a sidebar row without a screen.
 - Duplicates: Keep left, Keep right and Smart merge (Z, X, S) are drawn
   disabled, because they merge one item into the other and free the other
   file for deletion from disk, which this prototype must never cause; with
@@ -263,7 +301,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
   belong (theme, zoom, language, the grid's mouse and Space actions, preview,
-  notifications, imports, rejecting, subscriptions, sidebar double-click).
+  notifications, imports, rejecting, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
   localStorage; the app's own key bindings do not follow edited shortcuts.
@@ -276,8 +314,20 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
   reload the model.
+- Subscriptions: running, pausing, holding, stopping, retrying and creating
+  subscriptions, galleries and sources need the source runners, which live
+  in `core`; their buttons and menu rows are drawn with hover states and
+  tooltips but do nothing, and the menu rows are shown disabled. Also not
+  built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
+  dialog, reset and delete confirmations, adding or removing destination
+  folders and tags, the source details and edit windows, the accounts
+  window and login warnings, the gallery progress total, and acknowledging
+  issues when a subscription is opened. Site names and example queries are
+  copied from the source catalog in `core`. Letter spacing on badges and
+  table headers, and the native `title` tooltips of truncated cells, are
+  not drawn.
 - Drawn with their hover states and tooltips but not wired: View
-  options, the section headers' add buttons, the inspector's Add to Folder,
+  options, the inspector's Add to Folder,
   Add Tags, Export (for an item, a selection and a destination),
   source-address list and Pin, and in the library switcher's popover
   choosing another library, Create Library, Open Library and Library Manager
@@ -298,15 +348,30 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot, rename in place,
-  context menus, multi-selection and drag reorder.
+- Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
+  drops from the grid (the rows have the drop looks; nothing drives them),
+  Quick Access, keyboard movement through the rows (the focused look is
+  there; nothing moves focus to a row), the New Folder and New Subfolder
+  shortcuts, and the confirmation before deleting a folder (it deletes at
+  once). Menu rows shown but not performed yet, each
+  with a `TODO`: Add to Quick Access, Move to..., Set Auto Tags..., Import
+  Folder (Here)..., Attach Watched Folder..., Edit Smart Folder..., Edit
+  Rules..., New Smart Folder and New Child Smart Folder (no smart-folder
+  editor), Change Icon, Sort Folders, Sort by and Export (submenus). The
+  visibility rows close the menu when chosen; the
+  colour picker row and Remove Watched Folder are not drawn. Empty Trash is
+  shown disabled. Folded nodes and sections are kept in memory, not persisted.
+  The sidebar's preferences (which system rows and sections show, counts,
+  guides, the double-click action) come from the settings model; its
+  visibility menu writes through it to the library at once, as production
+  patches the settings.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
 - Context menus have no submenus or search row yet, exist only for grid
-  items, and are drawn inside the window, so they cannot extend past its
+  items and the sidebar, and are drawn inside the window, so they cannot extend past its
   edge. "Delete Permanently" is shown disabled: the prototype reads the
   library's files in place and must never delete them.
 - The library popover's glass has no blur, and only its surface scales in;

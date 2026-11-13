@@ -458,20 +458,30 @@ impl AppSettings {
         Value::Object(map)
     }
 
-    /// Whether the sidebar shows the system row with this label
-    /// (`visibleSystemNodes` in `AppShell.tsx`). All and Trash always show.
-    pub fn shows_system_row(&self, label: &str) -> bool {
-        match label {
-            "Inbox" => self.show_sidebar_inbox,
-            "Recently Viewed" => self.show_sidebar_recently_viewed,
-            "Uncategorized" => self.show_sidebar_uncategorized,
-            "Untagged" => self.show_sidebar_untagged,
-            "Tags" => self.show_sidebar_tag_manager,
-            "Random" => self.show_sidebar_random,
-            "Subscriptions" => self.show_sidebar_subscriptions,
-            "Duplicates" => self.show_sidebar_duplicates,
-            _ => true,
-        }
+    /// The setting that shows or hides a sidebar system row or section,
+    /// by the row's node id (`system:inbox`) or the section's key
+    /// (`section:folders`), as `visibleSystemNodes` and the section flags in
+    /// `AppShell.tsx` map them. All and Trash have none: they always show.
+    pub fn sidebar_visibility(&mut self, key: &str) -> Option<&mut bool> {
+        Some(match key {
+            "system:inbox" => &mut self.show_sidebar_inbox,
+            "system:recent_viewed" => &mut self.show_sidebar_recently_viewed,
+            "system:uncategorized" => &mut self.show_sidebar_uncategorized,
+            "system:untagged" => &mut self.show_sidebar_untagged,
+            "system:tag_manager" => &mut self.show_sidebar_tag_manager,
+            "system:random" => &mut self.show_sidebar_random,
+            "system:subscriptions" => &mut self.show_sidebar_subscriptions,
+            "system:duplicates" => &mut self.show_sidebar_duplicates,
+            "section:quick_access" => &mut self.show_sidebar_quick_access,
+            "section:folders" => &mut self.show_sidebar_folders,
+            "section:smart_folders" => &mut self.show_sidebar_smart_folders,
+            _ => return None,
+        })
+    }
+
+    /// Whether the sidebar shows this system row or section.
+    pub fn sidebar_shows(&self, key: &str) -> bool {
+        self.clone().sidebar_visibility(key).is_none_or(|on| *on)
     }
 
     /// The threshold for one confidence row, by its settings key.
@@ -652,10 +662,11 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.show_sidebar_tag_manager = false;
         settings.show_sidebar_inbox = false;
-        assert!(!settings.shows_system_row("Tags"));
-        assert!(!settings.shows_system_row("Inbox"));
-        assert!(settings.shows_system_row("All"));
-        assert!(settings.shows_system_row("Trash"));
+        assert!(!settings.sidebar_shows("system:tag_manager"));
+        assert!(!settings.sidebar_shows("system:inbox"));
+        assert!(settings.sidebar_shows("system:active"));
+        assert!(settings.sidebar_shows("system:trash"));
+        assert!(settings.sidebar_shows("section:folders"));
     }
 
     #[test]

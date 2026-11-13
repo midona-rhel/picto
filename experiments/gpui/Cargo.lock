@@ -4910,6 +4910,7 @@ dependencies = [
  "ruffle_core",
  "ruffle_frontend_utils",
  "ruffle_render_wgpu",
+ "rusqlite",
  "serde_json",
  "smallvec",
  "tempfile",

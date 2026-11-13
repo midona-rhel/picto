@@ -277,7 +277,7 @@ impl SettingsWindow {
             .rounded(px(theme::RADIUS_LG))
             .border_1()
             .border_color(theme.border_secondary())
-            .bg(theme.contrast(3.))
+            .bg(theme.footer_surface())
             .hover(move |style| style.bg(theme.surface_hover()))
             .text_color(theme.text())
             .cursor_pointer()
