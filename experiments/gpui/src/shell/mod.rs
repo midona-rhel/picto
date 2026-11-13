@@ -2,6 +2,7 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+pub mod library;
 pub mod sidebar;
 pub mod toolbar;
 

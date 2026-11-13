@@ -318,6 +318,11 @@ impl Session {
         self.set_filter(Some(filter), cx);
     }
 
+    /// The open library's folder, the one that holds its blobs.
+    pub fn library_root(&self) -> Option<&std::path::Path> {
+        self.blobs.parent()
+    }
+
     /// The library folder's name without its `.library` suffix.
     pub fn library_name(&self) -> Option<String> {
         let name = self.blobs.parent()?.file_name()?.to_string_lossy();

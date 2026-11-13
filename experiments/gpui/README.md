@@ -72,6 +72,17 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   it and goes no further. Its rows are the ones this prototype can perform:
   open with the default app, reveal, copy path and name, rename, move to
   trash, and restore in the Trash.
+- The library switcher opens `LibrarySwitcherPopover` under it: a glass
+  panel 8px below the button, kept inside the window, that grows in from
+  96% over 70 ms, closes on Escape (also from its search field) and on a
+  press outside it and the button, which still reaches what was pressed.
+  While it is open the button keeps its highlight on the active surface
+  with the glyph lit. It lists the libraries the Electron app knows, read
+  (never written) from its `config.json`: pinned first, then the history,
+  missing folders left out, each with its cover, name and folder, the open
+  one ringed and checked. The search field ranks names as `searchRank.ts`
+  does. `ui::popover` is the shared frame and `ui::library_avatar` the cover
+  disc both the button and the rows use.
 - Tooltips as `KbdTooltip` draws them: below the control after 400 ms, with
   the shortcut's keys as badges.
 - Text fields with their focus states: the toolbar search, the sidebar filter
@@ -134,8 +145,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Tags, Subscriptions and Duplicates are sidebar rows without screens.
 - Drawn with their hover states and tooltips but not wired: Settings, View
   options, the section headers' add buttons, the inspector's Add to Folder,
-  Add Tags, Export, source-address list and Pin, and the library switcher.
-  Each has a `TODO` where its action belongs. The Filter button only clears a
+  Add Tags, Export, source-address list and Pin, and in the library
+  switcher's popover choosing another library, Create Library, Open Library
+  and Library Manager (those rows only close the popover). Each has a `TODO`
+  where its action belongs. The Filter button only clears a
   filter the inspector set; there is no filter bar.
 - With nothing selected the inspector is empty; the Electron one describes
   the scope. With several items selected it shows the last one, not the
@@ -154,6 +167,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   items, and are drawn inside the window, so they cannot extend past its
   edge. "Delete Permanently" is shown disabled: the prototype reads the
   library's files in place and must never delete them.
+- The library popover's glass has no blur, and only its surface scales in;
+  its rows appear at full size. A library's folder has no hover title. A
+  cover is cropped once per session, so a cover changed elsewhere meanwhile
+  shows the old one. A library with an icon but no cover shows the books
+  glyph, not its icon.
 - No import/export, subscriptions, cloud, localization or site login.
   The viewer still has its own header instead of the titlebar's viewer
   toolbar.
@@ -189,7 +207,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
 
 The regular tests cover the three layout modes against hand-computed geometry,
 banded visibility against a full scan of 20,000 tiles in every mode, view
-preference fallbacks, grid labels, the reveal timeline, the easing curve
+preference fallbacks, grid labels, popover placement, the known-library
+order and name search, the reveal timeline, the easing curve
 against the sampled bezier, tree ordering and the text-search gates. The
 ignored tests need a real snapshot or a GPU and are run explicitly.
 
@@ -230,12 +249,13 @@ One model, separate views, shared components:
   the viewer. It talks to `backend.rs`, the small adapter to the existing Rust
   owners, and says what kind of thing changed.
 - Each part of the window is its own cached view that repaints only for the
-  changes it shows: `shell/` (the root, the sidebar, the toolbar), `grid/`
+  changes it shows: `shell/` (the root, the sidebar, the library popover, the toolbar), `grid/`
   (the grid view with its layout, saved view, labels, reveal, keyboard
   movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
   presentation).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu, sidebar row, section header, chip, inspector section, action row,
+  tooltip, context menu, popover, library avatar, sidebar row, section
+  header, chip, inspector section, action row,
   field frame and text input, scrollbar, "Return to Top", badge, button, zoom
   control and the titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one
