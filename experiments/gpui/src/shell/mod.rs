@@ -9,7 +9,7 @@ pub mod toolbar;
 use crate::backend::Screen;
 use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
-use crate::session::{Change, Session};
+use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
 use crate::viewer::Viewer;
@@ -67,6 +67,16 @@ pub struct Shell {
     resizing: Option<(Pixels, f32)>,
     /// How far each rail has slid out of view.
     rails: motion::Fades,
+    /// Whether the inspector belonged to what was shown last, and its fade
+    /// when that changes: it fades in and out over 170 ms when a screen
+    /// takes or gives back the window (`data-motion='fade'`), rather than
+    /// sliding as a toggle does.
+    inspector_available: Option<bool>,
+    inspector_presence: motion::Fade,
+    /// Set when the viewer closed by going to another destination: the
+    /// viewer stays in the pane and fades out with it, as `MediaView` does
+    /// inside the fading workspace surface, until the destination replaces it.
+    viewer_exit: bool,
     /// The open context menu. It stays here while it fades out.
     menu: Option<Entity<Menu>>,
     _menu: Option<Subscription>,
@@ -93,7 +103,12 @@ impl Shell {
         let subscriptions = vec![
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
-            cx.subscribe(&session, |_, _, change: &Change, cx| {
+            cx.subscribe(&session, |this, session, change: &Change, cx| {
+                if matches!(change, Change::Viewer) {
+                    let session = session.read(cx);
+                    this.viewer_exit =
+                        !session.viewer && matches!(session.transition, Transition::FadingOut(_));
+                }
                 if matches!(change, Change::Viewer | Change::Navigation) {
                     cx.notify();
                 }
@@ -162,6 +177,9 @@ impl Shell {
                 .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX),
             resizing: None,
             rails: motion::Fades::default(),
+            inspector_available: None,
+            inspector_presence: motion::Fade::at(true),
+            viewer_exit: false,
             menu: None,
             _menu: None,
             _subscriptions: subscriptions,
@@ -441,8 +459,14 @@ impl Render for Shell {
                 session.transition.opacity(),
             )
         });
-        if screen.is_some() && self.session.read(cx).transition.animating() {
+        let transition = self.session.read(cx).transition;
+        if (screen.is_some() || self.viewer_exit) && transition.animating() {
             window.request_animation_frame();
+        }
+        // The viewer that closed by going elsewhere stays until the surface
+        // has faded out.
+        if !matches!(transition, Transition::FadingOut(_)) {
+            self.viewer_exit = false;
         }
         // The rails give up their width at once; only their own slide is animated.
         let left = if self.sidebar_collapsed {
@@ -453,6 +477,18 @@ impl Render for Shell {
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`).
         let inspector_available = screen.is_none() || viewer_open;
+        match self.inspector_available {
+            Some(was) if was != inspector_available => self
+                .inspector_presence
+                .set(inspector_available, motion::INSPECTOR_FADE),
+            Some(_) => {}
+            None => self.inspector_presence = motion::Fade::at(inspector_available),
+        }
+        self.inspector_available = Some(inspector_available);
+        let inspector_shown = self.inspector_presence.value();
+        if self.inspector_presence.animating() {
+            window.request_animation_frame();
+        }
         let inspector_width = if inspector_available {
             self.inspector_width
         } else {
@@ -475,6 +511,13 @@ impl Render for Shell {
             .right(px(right))
             .child(match screen {
                 _ if viewer_open => self.viewer.clone().cached(fill()).into_any_element(),
+                // The viewer left for another destination fades out as the
+                // grid would.
+                _ if self.viewer_exit => div()
+                    .size_full()
+                    .opacity(fade)
+                    .child(self.viewer.clone().cached(fill()))
+                    .into_any_element(),
                 // A screen fades as the grid does when the destination changes.
                 Some(screen) => div()
                     .size_full()
@@ -504,13 +547,17 @@ impl Render for Shell {
         });
         // The inspector rail spans the window's full height, titlebar strip
         // included, and slides as one piece.
-        let inspector = (inspector_available && inspector_hidden < 1.).then(|| {
+        // While it fades out it keeps its width over the content that has
+        // already taken the window's.
+        let inspector = (inspector_shown > 0. && inspector_hidden < 1.).then(|| {
+            let inspector_width = self.inspector_width;
             div()
                 .absolute()
                 .top_0()
                 .bottom_0()
                 .right(px(-inspector_width * inspector_hidden))
                 .w(px(inspector_width))
+                .opacity(inspector_shown)
                 .flex()
                 .flex_col()
                 .bg(theme.rail())

@@ -7,7 +7,7 @@ mod strip;
 pub mod surface;
 pub mod toolbar;
 
-use crate::session::{Change, Session};
+use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
 use gpui::*;
@@ -64,6 +64,9 @@ pub struct Viewer {
     focus: FocusHandle,
     /// Whether the viewer was open at the last change.
     open: bool,
+    /// Closed by going to another destination: the shell keeps the viewer
+    /// in the pane while it fades out, so what it shows stays until then.
+    leaving: bool,
     /// Where the keyboard was before the viewer opened, to give it back.
     return_focus: Option<FocusHandle>,
     /// The "First item" and "Last item" notices, and a count that lets only
@@ -107,13 +110,33 @@ impl Viewer {
                             this.take_keyboard(window, cx);
                             // Each opening starts fitted, as a fresh
                             // `MediaView` does.
-                            let open = this.session.read(cx).viewer;
+                            let (open, fading_out) = {
+                                let session = this.session.read(cx);
+                                (
+                                    session.viewer,
+                                    matches!(session.transition, Transition::FadingOut(_)),
+                                )
+                            };
                             if open && !this.open {
                                 this.surface.update(cx, |surface, _| surface.refit());
                             }
+                            this.leaving = !open && this.open && fading_out;
                             this.open = open;
-                            this.present(cx);
+                            if !this.leaving {
+                                this.present(cx);
+                            }
                             cx.notify();
+                        }
+                        Change::Navigation if this.leaving => {
+                            let fading_out = matches!(
+                                this.session.read(cx).transition,
+                                Transition::FadingOut(_)
+                            );
+                            if !fading_out {
+                                this.leaving = false;
+                                this.present(cx);
+                                cx.notify();
+                            }
                         }
                         Change::Details => {
                             this.present(cx);
@@ -129,6 +152,7 @@ impl Viewer {
             toolbar,
             focus: cx.focus_handle(),
             open: false,
+            leaving: false,
             return_focus: None,
             first: motion::Fade::default(),
             last: motion::Fade::default(),

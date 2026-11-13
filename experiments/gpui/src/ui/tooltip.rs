@@ -52,7 +52,7 @@ impl Tip {
 
 /// A control's tooltip timing, kept between frames: it opens once the pointer
 /// has rested on the control for 400 ms and closes when the pointer leaves,
-/// fading over 150 ms each way.
+/// popping in and out over 150 ms each way.
 #[derive(Default)]
 pub struct Hover {
     hovered: bool,
@@ -94,18 +94,24 @@ impl Hover {
     /// opens. The control must be positioned (`relative` or `absolute`);
     /// `extent` is its height.
     pub fn layer(&self, tip: &Tip, extent: f32, cx: &App) -> Option<AnyElement> {
-        let opacity = self.shown.value();
-        if opacity <= 0. {
+        // Mantine's `pop` on CSS `ease`: the tooltip fades in while growing
+        // from 90% about its centre and rising the last 9px into place.
+        let shown = self.shown.value_with(motion::EASE);
+        if shown <= 0. {
             return None;
         }
+        let (scale, below) = motion::tooltip_pop(shown);
         let theme = theme::theme(cx);
-        let mut bubble = div()
-            .relative()
-            .h(px(24.))
-            .px(px(6.))
-            .flex()
-            .items_center()
-            .gap(px(4.))
+        // GPUI cannot scale the label, so only the bubble's surface, border
+        // and shadow are drawn at the scale, about the bubble's centre; the
+        // label, inside the 6px padding, stays at full size.
+        let inset = relative((1. - scale) / 2.);
+        let surface = div()
+            .absolute()
+            .left(inset)
+            .top(inset)
+            .w(relative(scale))
+            .h(relative(scale))
             .rounded(px(theme::RADIUS_SM))
             .bg(theme.glass())
             .border_1()
@@ -113,12 +119,6 @@ impl Hover {
             .shadow(vec![
                 BoxShadow::new(px(0.), px(2.), rgba(0x0000004d).into()).blur_radius(px(8.)),
             ])
-            .font_family(theme::FONT_UI)
-            .text(theme::TEXT_MD)
-            .font_weight(FontWeight::NORMAL)
-            .text_color(theme.text())
-            .whitespace_nowrap()
-            .opacity(opacity)
             // `--glass-border-top`: the top edge is brighter than the sides.
             .child(
                 div()
@@ -128,7 +128,22 @@ impl Hover {
                     .right(px(3.))
                     .h(px(1.))
                     .bg(theme.glass_border_top()),
-            )
+            );
+        // `padding: 0 6px` inside the 1px border, which the surface draws.
+        let mut bubble = div()
+            .relative()
+            .h(px(24.))
+            .px(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_MD)
+            .font_weight(FontWeight::NORMAL)
+            .text_color(theme.text())
+            .whitespace_nowrap()
+            .opacity(shown)
+            .child(surface)
             .child(tip.label.clone());
         for key in &tip.keys {
             bubble = bubble.child(
@@ -147,7 +162,7 @@ impl Hover {
         }
         let slot = div()
             .absolute()
-            .top(px(extent + motion::TOOLTIP_OFFSET))
+            .top(px(extent + motion::TOOLTIP_OFFSET + below))
             .left(relative(0.5));
         Some(
             slot.child(

@@ -12,8 +12,12 @@ pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
 /// `--ease-scale-in`: popovers and menus growing in.
 pub const EASE_SCALE_IN: CubicBezier = CubicBezier::new(0., 0.89, 0.44, 1.);
-/// `--duration-menu-in`: a popover's scale-in.
+/// `--duration-menu-in`: a popover's and a context menu's scale-in.
 pub const MENU_IN: Duration = Duration::from_millis(70);
+/// `menuIn` and `librarySwitcherIn`: the scale a menu or popover grows from.
+pub const MENU_IN_SCALE: f32 = 0.96;
+/// `menuOut`: the scale a dismissed context menu shrinks to as it fades.
+pub const MENU_OUT_SCALE: f32 = 0.95;
 /// CSS `ease`.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
@@ -120,6 +124,26 @@ pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);
 pub const TOOLTIP_OFFSET: f32 = 6.;
+/// Mantine's `pop` transition, which `KbdTooltip` uses: hidden, the tooltip
+/// is at `scale(.9) translateY(10px)` about its centre.
+pub const TOOLTIP_POP_SCALE: f32 = 0.9;
+pub const TOOLTIP_POP_RISE: f32 = 10.;
+
+/// `inspectorFadeIn` / `inspectorFadeOut`: the inspector rail fades rather
+/// than slides when it becomes available or unavailable (a screen opened
+/// or left), not when it is toggled.
+pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
+
+/// `GlassModal`: `modalIn` and `backdropIn` take 150 ms, `modalOut` and
+/// `backdropOut` 120 ms (`EXIT_MS`, after which the modal unmounts).
+pub const MODAL_IN: Duration = Duration::from_millis(150);
+pub const MODAL_OUT: Duration = Duration::from_millis(120);
+/// `modalIn` / `modalOut`: the panel's scale and drop when hidden.
+pub const MODAL_SCALE: f32 = 0.97;
+pub const MODAL_DROP: f32 = 4.;
+
+/// `ScrollToTopButton`: its rise and fade wait this long before starting.
+pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
 
 /// Where a fade that set off from `from` toward 0 or 1 has got to.
 fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
@@ -141,6 +165,8 @@ pub struct Fade {
     since: std::time::Instant,
     from: f32,
     duration: Duration,
+    /// `transition-delay`: how long the move waits before it starts.
+    delay: Duration,
 }
 
 impl Default for Fade {
@@ -150,6 +176,7 @@ impl Default for Fade {
             since: std::time::Instant::now(),
             from: 0.,
             duration: Duration::ZERO,
+            delay: Duration::ZERO,
         }
     }
 }
@@ -166,12 +193,18 @@ impl Fade {
     /// Moves toward `on` from wherever the fade is now. Setting the state it
     /// is already in changes nothing.
     pub fn set(&mut self, on: bool, duration: Duration) {
+        self.set_after(on, duration, Duration::ZERO);
+    }
+
+    /// The same, starting only after `delay`, as a CSS `transition-delay`.
+    pub fn set_after(&mut self, on: bool, duration: Duration, delay: Duration) {
         if self.on == on {
             return;
         }
         self.from = self.value();
         self.on = on;
         self.since = std::time::Instant::now();
+        self.delay = delay;
         // A transition reversed part-way takes only the time of the distance
         // left to cover, as CSS shortens it.
         let distance = if on { 1. - self.from } else { self.from };
@@ -189,7 +222,8 @@ impl Fade {
         if self.duration.is_zero() {
             return target;
         }
-        self.from + (target - self.from) * curve.ease(progress(self.since.elapsed(), self.duration))
+        let elapsed = self.since.elapsed().saturating_sub(self.delay);
+        self.from + (target - self.from) * curve.ease(progress(elapsed, self.duration))
     }
 
     pub fn on(&self) -> bool {
@@ -197,7 +231,7 @@ impl Fade {
     }
 
     pub fn animating(&self) -> bool {
-        self.since.elapsed() < self.duration
+        self.since.elapsed() < self.delay + self.duration
     }
 }
 
@@ -237,6 +271,53 @@ impl Fades {
             .values()
             .any(|fade| fade.since.elapsed() < fade.duration)
     }
+}
+
+/// Where a rectangle of `w` × `h` is drawn at `scale` about `origin`, as CSS
+/// `transform: scale()` with `transform-origin` places it: its left, top,
+/// width and height, relative to the unscaled rectangle's top-left corner.
+/// `origin` is a fraction of the width and height (0 the left or top edge,
+/// 0.5 the centre, 1 the right or bottom edge).
+///
+/// GPUI cannot scale an element's contents, so a panel that grows or shrinks
+/// draws its frame (surface, border and shadow) in this rectangle and keeps
+/// its contents at full size, clipped to it.
+pub fn scaled_frame(w: f32, h: f32, scale: f32, origin: (f32, f32)) -> (f32, f32, f32, f32) {
+    (
+        origin.0 * w * (1. - scale),
+        origin.1 * h * (1. - scale),
+        w * scale,
+        h * scale,
+    )
+}
+
+/// `menuIn` / `librarySwitcherIn`: the scale `elapsed` after opening, 0.96
+/// growing to 1 over `--duration-menu-in` on `--ease-scale-in`.
+pub fn menu_in(elapsed: Duration) -> f32 {
+    MENU_IN_SCALE + (1. - MENU_IN_SCALE) * EASE_SCALE_IN.ease(progress(elapsed, MENU_IN))
+}
+
+/// `menuOut`: the scale and opacity `elapsed` after dismissal, 1 shrinking
+/// to 0.95 and fading to 0 over 80 ms on `ease-in`.
+pub fn menu_out(elapsed: Duration) -> (f32, f32) {
+    let eased = EASE_IN.ease(progress(elapsed, MENU_OUT));
+    (1. - (1. - MENU_OUT_SCALE) * eased, 1. - eased)
+}
+
+/// Mantine's `pop` at `shown` (0 hidden, 1 shown, already eased): the
+/// tooltip's scale about its centre, and how far below its place it is.
+/// `scale(s) translateY(t)` moves the centre by `s × t`.
+pub fn tooltip_pop(shown: f32) -> (f32, f32) {
+    let scale = TOOLTIP_POP_SCALE + (1. - TOOLTIP_POP_SCALE) * shown;
+    (scale, scale * TOOLTIP_POP_RISE * (1. - shown))
+}
+
+/// `modalIn` / `modalOut` at `shown` (0 hidden, 1 shown, already eased): the
+/// panel's scale about its centre and how far below its place it is
+/// (`scale(0.97) translateY(4px)`, so the centre drops `0.97 × 4`).
+pub fn modal_pop(shown: f32) -> (f32, f32) {
+    let scale = MODAL_SCALE + (1. - MODAL_SCALE) * shown;
+    (scale, scale * MODAL_DROP * (1. - shown))
 }
 
 /// Progress of an animation that began `elapsed` ago, in `0..=1`.
@@ -301,6 +382,60 @@ mod tests {
         fade.set(false, Duration::from_secs(10));
         assert_eq!(fade.since, since);
         assert!(Fade::at(true).value() == 1. && !Fade::at(true).animating());
+    }
+
+    #[test]
+    fn a_scaled_frame_keeps_its_origin_in_place() {
+        // About the top-left corner the corner stays and the far edges move in.
+        assert_eq!(
+            scaled_frame(200., 100., 0.96, (0., 0.)),
+            (0., 0., 192., 96.)
+        );
+        // About the bottom-right corner that corner stays where it was.
+        let (x, y, w, h) = scaled_frame(200., 100., 0.96, (1., 1.));
+        assert!((x + w - 200.).abs() < 1e-4 && (y + h - 100.).abs() < 1e-4);
+        assert!((x - 8.).abs() < 1e-4 && (y - 4.).abs() < 1e-4);
+        // About the centre each side moves in by half the shrink.
+        let (x, y, w, h) = scaled_frame(200., 100., 0.9, (0.5, 0.5));
+        assert!((x - 10.).abs() < 1e-4 && (y - 5.).abs() < 1e-4);
+        assert!((x + w / 2. - 100.).abs() < 1e-4 && (y + h / 2. - 50.).abs() < 1e-4);
+        // At full scale nothing moves.
+        assert_eq!(scaled_frame(200., 100., 1., (1., 0.)), (0., 0., 200., 100.));
+    }
+
+    #[test]
+    fn a_menu_grows_in_then_shrinks_and_fades_out() {
+        assert_eq!(menu_in(Duration::ZERO), MENU_IN_SCALE);
+        assert_eq!(menu_in(MENU_IN), 1.);
+        // `--ease-scale-in` covers most of the way at once.
+        assert!(menu_in(Duration::from_millis(10)) > 0.98);
+        assert_eq!(menu_out(Duration::ZERO), (1., 1.));
+        assert_eq!(menu_out(MENU_OUT), (MENU_OUT_SCALE, 0.));
+        // `ease-in` starts slowly: a quarter of the way, little has changed.
+        let (scale, opacity) = menu_out(MENU_OUT / 4);
+        assert!(opacity > 0.9 && scale > 0.995, "{scale} {opacity}");
+    }
+
+    #[test]
+    fn a_tooltip_pops_up_from_below_and_a_modal_rises() {
+        assert_eq!(tooltip_pop(1.), (1., 0.));
+        let (scale, below) = tooltip_pop(0.);
+        assert_eq!(scale, 0.9);
+        // The 10px translation is scaled with the tooltip.
+        assert!((below - 9.).abs() < 1e-5);
+        assert_eq!(modal_pop(1.), (1., 0.));
+        let (scale, below) = modal_pop(0.);
+        assert_eq!(scale, 0.97);
+        assert!((below - 3.88).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_delayed_fade_waits_before_it_moves() {
+        let mut fade = Fade::default();
+        fade.set_after(true, Duration::from_secs(10), Duration::from_secs(10));
+        // Still inside its delay: nothing has moved, but it counts as animating.
+        assert_eq!(fade.value(), 0.);
+        assert!(fade.animating());
     }
 
     #[test]
