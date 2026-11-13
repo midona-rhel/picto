@@ -4,7 +4,9 @@ mod backend;
 mod cover;
 mod covered;
 mod demo;
+mod desktop;
 mod grid;
+mod history;
 mod imports;
 mod inspector;
 mod keymap;
@@ -160,6 +162,9 @@ fn main() {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             prepare(cx);
+            // The dock badge and the system notifications, for the app
+            // proper only.
+            desktop::enable(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             // Stop the workers and checkpoint the copy before the process
             // ends, as the Electron app closes its library before quitting.

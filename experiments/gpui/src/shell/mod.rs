@@ -119,6 +119,8 @@ pub struct Shell {
     /// The review button a click focused, and whether a key since has
     /// made its focus ring show.
     review_focus: Option<(crate::viewer::review::Decision, bool)>,
+    /// The notifications, drawn above everything.
+    notifications: Entity<ui::notify::Host>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -132,6 +134,7 @@ impl Shell {
     ) -> Self {
         let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
+        crate::desktop::start(&session, cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -323,6 +326,7 @@ impl Shell {
             pending_review: None,
             review_keys: Default::default(),
             review_focus: None,
+            notifications: cx.new(ui::notify::Host::new),
             _subscriptions: subscriptions,
         }
     }
@@ -992,6 +996,8 @@ impl Render for Shell {
         // So are the filter bar's, in their filter mode.
         let (tag_picker, folder_picker) = self.filter_bar.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
+        // The notifications, over every layer (`--layer-notification`).
+        root = root.child(self.notifications.clone());
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim(cx));
         // Keep painting while a rail slides.

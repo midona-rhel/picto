@@ -202,10 +202,11 @@ impl Shell {
             // The next items did not load: stay on the item, unsaved, so
             // the review can be tried again rather than walking backwards.
             self.reviewer.abandon(ticket, id);
-            // TODO: show this as a notification ("Unable to accept item" /
-            // "Unable to reject item"), as production's
-            // `showErrorNotification` does.
-            eprintln!("picto: The next items could not be loaded.");
+            crate::ui::notify::error(
+                review_failure(decision),
+                "The next items could not be loaded.",
+                cx,
+            );
             return;
         }
         // Only while the view is still on the reviewed item.
@@ -293,10 +294,15 @@ impl Shell {
             Decision::Reject => Lifecycle::Trash,
         };
         let answer = self.session.update(cx, |session, cx| {
-            session.set_lifecycle(target, lifecycle, cx)
+            session.edit_reporting(
+                crate::session::Report::failure(review_failure(decision)),
+                move |library| library.set_lifecycle(&target, lifecycle).map(|_| ()),
+                crate::session::Reread::RESULTS,
+                cx,
+            )
         });
         cx.spawn_in(window, async move |this, cx| {
-            // The session reports a failure on the console.
+            // The session reports a failure.
             let committed = matches!(answer.await, Ok(Ok(())));
             let _ = this.update_in(cx, move |this, window, cx| {
                 this.review_saved(ticket, id, committed, window, cx)
@@ -390,6 +396,14 @@ impl Shell {
             })
             .into_any_element(),
         )
+    }
+}
+
+/// `reportFailure`'s title for a review that could not be saved.
+fn review_failure(decision: Decision) -> &'static str {
+    match decision {
+        Decision::Accept => "Unable to accept item",
+        Decision::Reject => "Unable to reject item",
     }
 }
 

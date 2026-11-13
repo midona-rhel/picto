@@ -853,3 +853,17 @@ mod tests {
         assert_eq!(parse_css_color("blue"), None);
     }
 }
+
+// A notification's status glyphs are fixed colours, not themed
+// (`NotificationHost.module.css`); the information glyph takes
+// `--color-primary`.
+/// `.success .statusIcon`
+pub const NOTIFICATION_SUCCESS: u32 = 0x30d159;
+/// `.warning .statusIcon`
+pub const NOTIFICATION_WARNING: u32 = 0xff9f0a;
+/// `.error .statusIcon`
+pub const NOTIFICATION_ERROR: u32 = 0xff453a;
+/// `.notification`'s `top`: below the titlebar.
+pub const NOTIFICATION_TOP: f32 = 76.;
+/// `.notification`'s `height`.
+pub const NOTIFICATION_HEIGHT: f32 = 36.;

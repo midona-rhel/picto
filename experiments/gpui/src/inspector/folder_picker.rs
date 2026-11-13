@@ -696,8 +696,12 @@ impl FolderPicker {
                     this.toggle(folder, cx);
                 }
                 Err(error) => {
-                    // TODO: show this as the notification production shows.
-                    eprintln!("folder picker: {error}");
+                    // `foldersController.create` tells of a folder nested
+                    // too deep; anything else stays on the console.
+                    let message = error.to_string();
+                    if !crate::ui::notify::folder_depth(&message, cx) {
+                        eprintln!("folder picker: {message}");
+                    }
                     if let Some(dialog) = this.create.get_mut() {
                         dialog.content.busy = false;
                     }

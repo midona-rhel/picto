@@ -9,7 +9,7 @@ mod view;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::motion;
-use crate::session::{Change, Reread, Session};
+use crate::session::{Change, Report, Reread, Session};
 use crate::tags::Preferences;
 use crate::ui::{
     menu::{self},
@@ -451,11 +451,24 @@ impl TagsScreen {
         then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.mutate_reporting(Report::default(), work, close_editor, then, cx);
+    }
+
+    /// [`TagsScreen::mutate`] for a change production announces with an
+    /// Undo button (`tagsController`'s deletes).
+    fn mutate_reporting(
+        &mut self,
+        report: Report,
+        work: impl FnOnce(&Library) -> Result<(), String> + Send + 'static,
+        close_editor: bool,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
         self.busy = true;
         self.error = None;
-        let answer = self
-            .session
-            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit_reporting(report, work, Reread::NOTHING, cx)
+        });
         cx.spawn(async move |this, cx| {
             let result = answer
                 .await
@@ -500,11 +513,12 @@ impl TagsScreen {
         let colors = next.colors_json();
         let starred = next.starred.clone();
         crate::settings::model(cx).update(cx, |model, cx| {
-            model.apply_now(
+            model.apply_now_reporting(
                 |app| {
                     app.starred_tags = starred.clone();
                     app.tag_group_colors = colors.clone();
                 },
+                Some("Unable to save tag preferences"),
                 cx,
             )
         });
@@ -560,7 +574,8 @@ impl TagsScreen {
     }
 
     fn delete_tag(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
-        self.mutate(
+        self.mutate_reporting(
+            Report::announce("tags.delete"),
             move |library| {
                 library
                     .delete_tag(tag_id, crate::now_ms())
@@ -601,7 +616,8 @@ impl TagsScreen {
 
     fn delete_group(&mut self, group: TagNamespaceRecord, cx: &mut Context<Self>) {
         let id = group.namespace_id;
-        self.mutate(
+        self.mutate_reporting(
+            Report::announce("tags.group.delete"),
             move |library| {
                 library
                     .delete_tag_namespace(id)
@@ -641,7 +657,8 @@ impl TagsScreen {
     }
 
     fn delete_unused(&mut self, cx: &mut Context<Self>) {
-        self.mutate(
+        self.mutate_reporting(
+            Report::announce("tags.delete_unused"),
             |library| {
                 library
                     .delete_unused_tags()

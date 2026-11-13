@@ -121,6 +121,18 @@ impl SettingsModel {
     /// that changed are written to the library (`settings.patch`), and an
     /// open Settings window's draft takes the same change.
     pub fn apply_now(&mut self, change: impl Fn(&mut AppSettings), cx: &mut Context<Self>) {
+        self.apply_now_reporting(change, None, cx);
+    }
+
+    /// [`SettingsModel::apply_now`], showing a failed write as an error
+    /// notification titled `failure`, as production's own callers do
+    /// ("Unable to update Quick Access").
+    pub fn apply_now_reporting(
+        &mut self,
+        change: impl Fn(&mut AppSettings),
+        failure: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
         let before = self.saved.app.to_json();
         change(&mut self.saved.app);
         change(&mut self.draft.app);
@@ -148,6 +160,9 @@ impl SettingsModel {
         cx.spawn(async move |this, cx| {
             if let Ok(Err(error)) = written.await {
                 let _ = this.update(cx, |this, cx| {
+                    if let Some(title) = failure {
+                        crate::ui::notify::error(title, error.to_string(), cx);
+                    }
                     this.error = Some(error.to_string());
                     cx.notify();
                 });
@@ -270,6 +285,15 @@ pub fn init(session: Entity<Session>, cx: &mut App) {
         };
         crate::keymap::install(preset, &overrides, cx);
         crate::theme::show(&scheme, cx);
+        // `configureNotificationPopups`: which notifications pop up.
+        let (enabled, tones) = {
+            let app = &model.read(cx).saved.app;
+            (
+                app.notification_popups_enabled,
+                app.notification_popup_tones.clone(),
+            )
+        };
+        crate::ui::notify::configure(enabled, tones, cx);
     })
     .detach();
     cx.set_global(SettingsGlobal {

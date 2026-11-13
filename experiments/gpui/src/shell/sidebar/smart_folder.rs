@@ -5,7 +5,7 @@
 //! saved after each change, 100 ms later, so the grid shows what they match,
 //! and Cancel writes the rules it opened with back.
 use super::rules::{self, Group, Rule, ValueType};
-use crate::session::{Reread, Session};
+use crate::session::{Report, Reread, Session};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::color_editor::{ColorCommitted, ColorEditor};
@@ -99,7 +99,6 @@ pub struct SmartFolderEditor {
     ready: bool,
     /// The library's tags, to resolve the names the rules hold.
     tags: Rc<Vec<TagRecord>>,
-    error: Option<String>,
     presence: Presence,
     focus: FocusHandle,
     /// The icon picker's popover, and the trigger it opens under.
@@ -200,7 +199,6 @@ impl SmartFolderEditor {
             groups: Vec::new(),
             ready: false,
             tags: Rc::new(Vec::new()),
-            error: None,
             presence: Presence::new(),
             focus,
             icon_picker: None,
@@ -393,7 +391,8 @@ impl SmartFolderEditor {
                 return;
             };
             let _ = session.update(cx, |session, cx| {
-                session.edit(
+                session.edit_reporting(
+                    Report::failure("Could not preview smart folder rules"),
                     move |library| library.update_smart_folder(id, input),
                     Reread::RESULTS_ONLY,
                     cx,
@@ -433,9 +432,11 @@ impl SmartFolderEditor {
                 match result {
                     Ok(Ok(_)) => this.presence.close(),
                     // The previewed rules are still saved, so the dialog stays.
-                    Ok(Err(error)) => {
-                        this.error = Some(format!("Could not restore smart folder rules: {error}"))
-                    }
+                    Ok(Err(error)) => ui::notify::error(
+                        "Could not restore smart folder rules",
+                        error.to_string(),
+                        cx,
+                    ),
                     Err(_) => {}
                 }
                 cx.notify();
@@ -453,8 +454,7 @@ impl SmartFolderEditor {
         let input = match self.input(cx) {
             Ok(input) => input,
             Err(error) => {
-                self.error = Some(format!("Could not save smart folder: {error}"));
-                cx.notify();
+                ui::notify::error("Could not save smart folder", error, cx);
                 return;
             }
         };
@@ -490,7 +490,7 @@ impl SmartFolderEditor {
                         this.presence.close();
                     }
                     Err(error) => {
-                        this.error = Some(format!("Could not save smart folder: {error}"))
+                        ui::notify::error("Could not save smart folder", error.to_string(), cx)
                     }
                 }
                 cx.notify();
@@ -1306,9 +1306,6 @@ impl Render for SmartFolderEditor {
             .flex_col()
             .text_color(theme.text_secondary())
             .text(theme::TEXT_MD);
-        if let Some(error) = &self.error {
-            form = form.child(ui::modal::error_banner(theme, error.clone()).mb(px(12.)));
-        }
         if self.shows_details() {
             let editor = cx.entity().downgrade();
             form = form

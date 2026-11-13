@@ -12,7 +12,9 @@
 //! window (0 is the main one; Settings and a detail window come after it in
 //! the order they opened), or `pace <milliseconds>`, how long the app runs
 //! after each input line (200 unless set), for pictures taken soon after
-//! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
+//! one, or `notify <tone> <title> | <message>`, which shows a notification
+//! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button).
+//! `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -105,6 +107,8 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200));
+        } else if let Some(rest) = line.strip_prefix("notify ") {
+            notify_line(&mut cx, rest);
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {
@@ -118,4 +122,22 @@ fn plays_a_script() {
         }
     }
     closing.close();
+}
+
+/// `notify <tone> <title> | <message>`: shows a notification as the app
+/// would, to photograph it.
+fn notify_line(cx: &mut HeadlessAppContext, line: &str) {
+    use crate::ui::notify::{self, Options, Tone};
+    let (tone, text) = line.split_once(' ').unwrap_or((line, ""));
+    let (title, message) = text.split_once(" | ").unwrap_or((text, ""));
+    let (tone, action) = match tone.strip_suffix('+') {
+        Some(tone) => (tone, true),
+        None => (tone, false),
+    };
+    let tone = Tone::from_name(tone).expect("notify error|warning|info|success");
+    let mut options = Options::new(title.to_owned(), message.to_owned());
+    if action {
+        options = options.action("Redo", |_, _| {});
+    }
+    cx.update(|cx| notify::show(tone, options, cx));
 }

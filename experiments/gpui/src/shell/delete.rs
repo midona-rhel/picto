@@ -194,7 +194,14 @@ impl Shell {
             self.session
                 .update(cx, |session, cx| session.close_viewer(cx));
         }
+        // `deleteTarget` announces what it deleted, with Undo.
+        let command = if reject {
+            "items.reject"
+        } else {
+            "items.delete"
+        };
         let answer = self.session.read(cx).run(move |library| {
+            let before = crate::history::newest(library);
             let deleted = if reject {
                 library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
             } else {
@@ -208,14 +215,17 @@ impl Shell {
             // The files a delete that cannot be undone frees are removed from
             // the copy's blobs by the application's media worker
             // (`drain_blob_cleanup`), as in production.
-            deleted.map(|_| ())
+            deleted.map(|_| crate::history::announced(library, command, before))
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update_in(cx, move |this, window, cx| match result {
-                Ok(()) => {
+                Ok(announced) => {
+                    if let Some(entry) = &announced {
+                        crate::history::announce(entry, this.session.clone(), cx);
+                    }
                     this.session
                         .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
                     if let Some(done) = &delete.done {
@@ -239,7 +249,7 @@ impl Shell {
                     );
                 }
                 Err(error) => {
-                    eprintln!("picto: {error}");
+                    crate::ui::notify::error("Delete Permanently", error.to_string(), cx);
                     if let Some(done) = &delete.done {
                         done(this, false, window, cx);
                     }

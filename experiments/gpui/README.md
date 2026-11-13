@@ -960,10 +960,30 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   stretching), and the visualizer reads the samples being played through a
   port of the Web Audio analyser.
 
+- Notifications (`ui/notify.rs`, `NotificationHost`): one at a time,
+  centred 76 points down, above every layer; a new one replaces the one
+  shown, each leaves after four seconds or on its close button, appearing
+  at once and rising 48 points while it fades over 400 ms. Error, warning,
+  information and success tones with production's glyphs and colours, an
+  optional underlined button, and Settings › Notifications deciding which
+  pop up. `ui::notify::error(title, message, cx)` and its siblings work
+  from any `cx`. Failures production reports are reported with its words
+  (`Session::edit_reporting` and `session::Report` give an edit its
+  failure title or its announcement); Undo and Redo say what they did
+  ("Undone — Moved 3 items to Trash", with Redo), and the broad changes
+  production announces (deleted folders, smart folders, items, tags,
+  rejected items, grouping) say so with an Undo button (`history.rs`).
+  `desktop.rs`: the dock badge shows the Inbox count, and "Subscriptions
+  finished" is a system notification when a batch of runs ends (macOS;
+  it needs the app to run from a bundle, and follows the pop-up switch and
+  the Information tone, which production's does not). On Windows and Linux
+  both do nothing yet: they would need the taskbar overlay icon and a
+  toast under an AppUserModelID, and the Unity launcher entry and
+  `org.freedesktop.Notifications` over D-Bus.
+
 ## Not yet equivalent to Picto
 
-- Inbox review: a failed save or a next page that cannot load is reported
-  on the console, not in a notification. A review key held down is told
+- Inbox review: a review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
   action no repeat flag (the off-screen test sends no key releases, so it
   sees the same review key twice in a row as held). The press is taken at
@@ -972,15 +992,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   grid's results are read again from the first page, so a review that
   advanced past the first page loses its place.
 
-- Tags screen: a failed save of the tag
-  preferences is held as the settings model's error, not shown as a toast; the editor's
+- Tags screen: the editor's
   name field is dimmed while an edit runs but still takes typing; Undo does
   not reach tag edits; tag and group changes made elsewhere show when the
   screen is opened again, not live.
-- Duplicates: errors, the scan's result ("Found N new review pairs") and
-  "Smart merge needs a choice" are not shown, as there are no toasts yet (an
-  ambiguous Smart merge leaves the pair on screen); a failed read shows only
-  in the empty state. The progress bar's position over a shown pair is a
+- Duplicates: the progress bar's position over a shown pair is a
   2px row above the cards (the Electron `.scanProgress` class has no rule).
   The Smart merge ring follows the pointer only, not keyboard focus. No context menu on the
   candidates (Open with Default App, Open in New Window). The difference
@@ -997,14 +1013,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   share (production starts from the details of the item last shown). The
   pickers' layout, counts, folded rail, pin and recent folders last for the
   session (production keeps some in localStorage). Not drawn: the create
-  row's sticky position, the 60 ms row highlight transitions, and an error
-  notification when an edit fails (it is
-  printed).
+  row's sticky position and the 60 ms row highlight transitions.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
   belong (language, the grid's wheel action, image rendering
-  and the transparency grid, notifications,
-  imports, subscriptions).
+  and the transparency grid, imports, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
   localStorage.
@@ -1020,8 +1033,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
   reload the model.
-- Subscriptions: no run has been started from this app yet; failures and completions are not announced (no toasts or
-  system notifications). Creating subscriptions, galleries and sources, and
+- Subscriptions: no run has been started from this app yet. A run's own
+  pop-ups (`subscriptionsSettle.ts`: "Subscription paused", "Query
+  completed", "Subscription completed", the gallery results) are not
+  ported; the batch's system notification is (see Notifications). Creating subscriptions, galleries and sources, and
   the per-source Run, Hold, Group, Edit and Delete, are drawn but not
   performed. Also not built: the cover dialog, reset and delete
   confirmations (their menu rows are drawn and do nothing yet), adding or
@@ -1084,8 +1099,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   sits on the pointer as `Sidebar.tsx` means it to. The smart-folder
   editor's notes text area does not scroll past its three lines or show
   the resize grip, the file types are the
-  six built-in choices rather than the accepted formats, and a failed save
-  or preview shows in the dialog rather than as a notification. The icon picker shows the sidebar's
+  six built-in choices rather than the accepted formats. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
   tiles light at once rather than over 50 ms. Dragging items out of the
   window and reordering a folder's items by dragging are not built. Folded
@@ -1175,8 +1189,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   inspector's pickers from the viewer's menu) and the smart-folder editor.
   "Open in New Window" opens the item alone in a detail window.
   "Add to “…”" appears once a folder has been used (the folder picker and
-  this row record it; for the session only). Errors go to the
-  console, not to notifications. Edits that change what the destination
+  this row record it; for the session only). Edits that change what the destination
   holds (Remove from Folder, Sort by, Group, Ungroup, the lifecycle rows,
   deletes) fetch the grid again, which clears the selection; after a rating
   or tags pasted on several items the inspector's selection summary is not
@@ -1197,9 +1210,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shows the old one. A library with an icon but no cover shows the books
   glyph, not its icon.
 - No export, cloud, localization or site login.
-- Imports: errors (a refused or failed import, a blocked one, a failed task
-  control) are written to standard error, as there is no notification host
-  yet (`TODO`). Picto Packs are not imported (a dropped pack is refused with
+- Imports: Picto Packs are not imported (a dropped pack is refused with
   a `TODO`), and the File menu has no Import Picto Pack. The file chooser
   takes every type (GPUI's prompt has no type filter), and its "Import
   files" title is the macOS prompt button. A drag from a browser is not
@@ -1244,9 +1255,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   (a dialog clips only once its height has been measured, from its second
   frame). While a rail or dialog fades out it still takes the pointer, where
   production sets `pointer-events: none`. Still to port with the features
-  they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
-  no notification host yet),
-  a subscription's run progress fading in, the 250 ms
+  they belong to: a subscription's run progress fading in, the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
   and the spinner loops.
 - Context menus shown as pop-up windows (the default on macOS) are not

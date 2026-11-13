@@ -716,7 +716,12 @@ impl Session {
             let _ = session.update(cx, |this: &mut Self, cx| {
                 this.subscriptions.busy = false;
                 if let Ok(Err(error)) = result {
-                    eprintln!("picto: {error}");
+                    let title = if paused {
+                        "Could not pause subscriptions"
+                    } else {
+                        "Could not resume subscriptions"
+                    };
+                    crate::ui::notify::error(title, error, cx);
                 }
                 cx.emit(Change::Activity);
                 this.refresh_activity(cx);
@@ -1905,34 +1910,65 @@ impl Session {
     /// went through. Hands back the edit's answer once the reads are asked
     /// for, so a view's own follow-up comes after them. What was shown stays
     /// until each read arrives. The sidebar's destinations and counts follow
-    /// the library's change events by themselves.
+    /// the library's change events by themselves. Production tells the user
+    /// of a failed edit only where the call says so; such a call uses
+    /// [`Session::edit_reporting`].
     pub fn edit<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
         &mut self,
         work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
         reread: Reread,
         cx: &mut Context<Self>,
     ) -> futures::channel::oneshot::Receiver<Result<T, E>> {
+        self.edit_reporting(Report::default(), work, reread, cx)
+    }
+
+    /// [`Session::edit`], telling the user what `report` says: a failure as
+    /// an error notification with its title, and a broad change as the
+    /// notification with Undo that production announces it with.
+    pub fn edit_reporting<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
+        &mut self,
+        report: Report,
+        work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
+        reread: Reread,
+        cx: &mut Context<Self>,
+    ) -> futures::channel::oneshot::Receiver<Result<T, E>> {
         let (answer, receiver) = futures::channel::oneshot::channel();
+        let announce = report.announce;
         let job = self.run(move |library| {
+            let before = announce.map(|_| crate::history::newest(library));
             let result = work(library);
+            let announced = match (announce, &result) {
+                (Some(command), Ok(_)) => {
+                    crate::history::announced(library, command, before.flatten())
+                }
+                _ => None,
+            };
             let navigation = reread
                 .navigation
                 .then(|| backend::navigation(library).ok())
                 .flatten();
-            (result, navigation)
+            (result, navigation, announced)
         });
         cx.spawn(async move |session, cx| {
-            let Ok((result, navigation)) = job.await else {
+            let Ok((result, navigation, announced)) = job.await else {
                 return;
             };
             let _ = session.update(cx, |this, cx| {
                 if let Some((nav, tags)) = navigation {
                     this.replace_navigation(nav, tags, cx);
                 }
-                // TODO: show a failure as a notification, as production's
-                // `showErrorNotification` does.
                 if let Err(error) = &result {
-                    eprintln!("picto: {error}");
+                    let message = error.to_string();
+                    match &report.failure {
+                        Some(title) if report.shows(&message) => {
+                            crate::ui::notify::error(title.clone(), message, cx)
+                        }
+                        // Production leaves it to the console.
+                        _ => eprintln!("picto: {message}"),
+                    }
+                }
+                if let Some(entry) = &announced {
+                    crate::history::announce(entry, cx.entity(), cx);
                 }
                 this.reread(reread, cx);
             });
@@ -2025,14 +2061,88 @@ impl Session {
     /// that item as it is now.
     pub fn undo(&mut self, cx: &mut Context<Self>) {
         if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.undo(), Reread::DETAILS, cx);
+            self.step_history_entry(true, cx);
         }
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
         if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.redo(), Reread::DETAILS, cx);
+            self.step_history_entry(false, cx);
         }
+    }
+
+    /// `historyRuntime.perform`: undoes or redoes the library's newest
+    /// change, and says what it did ("Undone — …") or why it could not
+    /// ("Could not undo").
+    pub fn step_history_entry(&mut self, undo: bool, cx: &mut Context<Self>) {
+        let failure = if undo {
+            "Could not undo"
+        } else {
+            "Could not redo"
+        };
+        let answer = self.edit_reporting(
+            Report::failure(failure),
+            move |library| crate::history::step(library, undo),
+            Reread::DETAILS,
+            cx,
+        );
+        cx.spawn(async move |session, cx| {
+            if let Ok(Ok(stepped)) = answer.await {
+                let _ = session.update(cx, |_, cx| {
+                    crate::history::show_step(&stepped, undo, cx.entity(), cx)
+                });
+            }
+        })
+        .detach();
+    }
+}
+
+/// What [`Session::edit_reporting`] tells the user about an edit, as the
+/// production call it stands for does.
+#[derive(Clone, Default)]
+pub struct Report {
+    /// The title of the error notification a failure shows.
+    pub failure: Option<SharedString>,
+    /// Only a folder nested too deep is reported (`warnOnFolderDepth`),
+    /// as the warning every error about it becomes.
+    pub folder_depth: bool,
+    /// The history command a broad change records, which is announced with
+    /// an Undo button (`announceUndoableMutation`).
+    pub announce: Option<&'static str>,
+}
+
+impl Report {
+    pub fn failure(title: impl Into<SharedString>) -> Self {
+        Self {
+            failure: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn folder_depth() -> Self {
+        Self {
+            failure: Some("Folder depth limit".into()),
+            folder_depth: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn announce(command: &'static str) -> Self {
+        Self {
+            announce: Some(command),
+            ..Self::default()
+        }
+    }
+
+    /// Whether a failure with `message` is shown.
+    fn shows(&self, message: &str) -> bool {
+        self.failure.is_some()
+            && (!self.folder_depth || message.contains(crate::ui::notify::FOLDER_DEPTH_LIMIT))
+    }
+
+    pub fn and_announce(mut self, command: &'static str) -> Self {
+        self.announce = Some(command);
+        self
     }
 }
 

@@ -4,7 +4,7 @@
 //! (`dragState.ts`, `dragController.executeDrop`).
 use super::{Sidebar, folder_id, smart_folder_id, tree};
 use crate::grid::drag::{self, DragEvent, ItemDrag};
-use crate::session::Reread;
+use crate::session::{Report, Reread};
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
@@ -288,7 +288,8 @@ impl Sidebar {
                 .iter()
                 .filter_map(|id| folder_id(id))
                 .collect::<Vec<_>>();
-            self.edit(
+            self.edit_as(
+                Report::failure("Could not move folder"),
                 move |library| move_folders(library, &moving, parent, &ordered),
                 |_, (), _, _| {},
                 window,
@@ -306,7 +307,8 @@ impl Sidebar {
                 .iter()
                 .filter_map(|id| smart_folder_id(id))
                 .collect::<Vec<_>>();
-            self.edit(
+            self.edit_as(
+                Report::failure("Could not move smart folder"),
                 move |library| move_smart_folders(library, &moving, parent, &ordered),
                 |_, (), _, _| {},
                 window,

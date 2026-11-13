@@ -713,9 +713,9 @@ impl TagPicker {
                             this.request(cx);
                             cx.emit(Event::Renamed);
                         }
-                        // TODO: show this as the notification production
-                        // shows ("Unable to move tag").
-                        Err(error) => eprintln!("tag picker: {error}"),
+                        Err(error) => {
+                            crate::ui::notify::error("Unable to move tag", error.to_string(), cx)
+                        }
                     });
                 })
                 .detach();
