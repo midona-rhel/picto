@@ -318,6 +318,17 @@ impl MediaSurface {
         self.mode == Mode::Image && self.image_size().is_some()
     }
 
+    /// Whether a host shows the zoom (percentage, actual size, fit): an
+    /// image once its size is known, or a document the viewer zooms itself
+    /// (`supportsZoom` with `usesRendererZoom` in `DetailWindow.tsx`).
+    pub fn shows_zoom(&self) -> bool {
+        match self.mode {
+            Mode::Image => self.has_image(),
+            Mode::Document => self.document_zoom.0,
+            _ => false,
+        }
+    }
+
     /// The camera a newly shown image opens with.
     fn opening(&self, image: Size, pane: Size) -> Camera {
         if self.options.opens_actual {
@@ -341,6 +352,8 @@ impl MediaSurface {
             self.document_zoom = (document.zoomable(cx), document.percent(cx));
         }
         cx.emit(Event::Zoom);
+        // The detail window observes the surface for its percentage.
+        cx.notify();
     }
 
     /// Runs a control on the playing movie, and shows the controls again
