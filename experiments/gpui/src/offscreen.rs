@@ -13,6 +13,9 @@
 //! the order they opened), or `pace <milliseconds>`, how long the app runs
 //! after each input line (200 unless set), for pictures taken soon after
 //! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
+//! `PICTO_GPUI_STATE=<folder>` keeps what the script arranges (rail widths,
+//! folds, filters, shortcuts…) in that folder and starts from what it holds;
+//! without it every run starts from the defaults and keeps nothing.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -117,5 +120,8 @@ fn plays_a_script() {
             settle(&mut cx, window, pace);
         }
     }
+    // What the script arranged is kept, as when the app quits, so a second
+    // run with the same `PICTO_GPUI_STATE` starts from it.
+    cx.update(crate::state::flush);
     closing.close();
 }

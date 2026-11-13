@@ -5,6 +5,7 @@
 mod delete;
 mod import;
 mod item_menu;
+mod rails;
 pub(crate) use item_menu::media_link;
 pub mod library;
 mod review;
@@ -77,10 +78,11 @@ pub struct Shell {
     sidebar_collapsed: bool,
     inspector_collapsed: bool,
     inspector_pinned: bool,
-    /// The inspector rail's width, which its left edge drags.
+    /// The rails' widths, which their inner edges drag.
+    sidebar_width: f32,
     inspector_width: f32,
-    /// A drag of that edge: where the pointer started, and the width then.
-    resizing: Option<(Pixels, f32)>,
+    /// A drag of one of those edges.
+    resizing: Option<rails::Resize>,
     /// How far each rail has slid out of view.
     rails: motion::Fades,
     /// Whether the inspector belonged to what was shown last, and its fade
@@ -252,6 +254,15 @@ impl Shell {
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
         let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
         let mut subscriptions = subscriptions;
+        // The rails as the user left them.
+        let kept = crate::state::get(cx).clone();
+        let mut rails = motion::Fades::default();
+        rails.set(("sidebar", 0), kept.sidebar_collapsed, Default::default());
+        rails.set(
+            ("inspector", 0),
+            kept.inspector_collapsed,
+            Default::default(),
+        );
         subscriptions.extend([
             // The bar's height belongs to the layout here.
             cx.observe(&filter_bar, |_, _, cx| cx.notify()),
@@ -296,18 +307,19 @@ impl Shell {
             grid,
             session,
             focus: focus.clone(),
-            sidebar_collapsed: false,
-            inspector_collapsed: false,
+            sidebar_collapsed: kept.sidebar_collapsed,
+            inspector_collapsed: kept.inspector_collapsed,
             inspector_pinned: false,
-            // `PICTO_GPUI_INSPECTOR=272` opens at a stored width, to compare
-            // against an Electron window whose inspector was resized.
+            sidebar_width: kept.sidebar_width,
+            // `PICTO_GPUI_INSPECTOR=272` opens at that width whatever was
+            // kept, to compare against an Electron window whose inspector
+            // was resized.
             inspector_width: std::env::var("PICTO_GPUI_INSPECTOR")
                 .ok()
                 .and_then(|width| width.parse().ok())
-                .unwrap_or(theme::INSPECTOR_WIDTH)
-                .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX),
+                .map_or(kept.inspector_width, crate::state::inspector_width),
             resizing: None,
-            rails: motion::Fades::default(),
+            rails,
             inspector_available: None,
             inspector_presence: motion::Fade::at(true),
             viewer_exit: false,
@@ -404,6 +416,37 @@ impl Shell {
                 motion::INSPECTOR_SLIDE,
             );
         }
+        let (sidebar, inspector) = (self.sidebar_collapsed, self.inspector_collapsed);
+        crate::state::update(cx, |state| {
+            state.sidebar_collapsed = sidebar;
+            state.inspector_collapsed = inspector;
+        });
+        cx.notify();
+    }
+
+    /// Starts dragging a rail's edge.
+    fn start_resize(&mut self, rail: rails::Rail, x: Pixels) {
+        let width = match rail {
+            rails::Rail::Sidebar => self.sidebar_width,
+            rails::Rail::Inspector => self.inspector_width,
+        };
+        self.resizing = Some(rails::Resize {
+            rail,
+            from: f32::from(x),
+            width,
+        });
+    }
+
+    /// Ends a drag of a rail's edge and keeps the width it left.
+    fn end_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing.take().is_none() {
+            return;
+        }
+        let (sidebar, inspector) = (self.sidebar_width, self.inspector_width);
+        crate::state::update(cx, |state| {
+            state.sidebar_width = sidebar;
+            state.inspector_width = inspector;
+        });
         cx.notify();
     }
 
@@ -528,7 +571,7 @@ impl Shell {
     fn titlebar_left(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         ui::drag_region("titlebar-left", window, cx)
-            .w(px(theme::SIDEBAR_WIDTH))
+            .w(px(self.sidebar_width))
             .flex_none()
             .h_full()
             .pl(px(74.))
@@ -593,10 +636,11 @@ impl Render for Shell {
             self.viewer_exit = false;
         }
         // The rails give up their width at once; only their own slide is animated.
+        let sidebar_width = self.sidebar_width;
         let left = if self.sidebar_collapsed {
             0.
         } else {
-            theme::SIDEBAR_WIDTH
+            sidebar_width
         };
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`).
@@ -670,7 +714,7 @@ impl Render for Shell {
                     .child(
                         div()
                             .flex_none()
-                            .ml(px(theme::SIDEBAR_WIDTH - left))
+                            .ml(px(sidebar_width - left))
                             .mr(px(inspector_width - right))
                             .child(self.filter_bar.clone()),
                     )
@@ -689,24 +733,53 @@ impl Render for Shell {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .left(px(-theme::SIDEBAR_WIDTH * sidebar_hidden))
-                .w(px(theme::SIDEBAR_WIDTH))
+                .left(px(-sidebar_width * sidebar_hidden))
+                .w(px(sidebar_width))
                 .child(self.sidebar.clone().cached(fill()))
         });
         // The inspector rail spans the window's full height, titlebar strip
         // included, and slides as one piece.
         // While it fades out it keeps its width over the content that has
         // already taken the window's.
-        let edge_fade =
-            window.use_keyed_state("inspector-resize-edge", cx, |_, _| motion::Fade::default());
-        let edge = if self.resizing.is_some() {
-            1.
-        } else {
-            edge_fade.read(cx).value()
+        let dragging = |rail| self.resizing.is_some_and(|resize| resize.rail == rail);
+        let edge_listeners = |edge: Stateful<Div>, rail, cx: &mut Context<Self>| {
+            edge.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.start_resize(rail, event.position.x);
+                    cx.stop_propagation();
+                }),
+            )
+            // The edge lies over the window's own release listener while
+            // the pointer is on it.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_resize(cx)),
+            )
         };
-        if edge_fade.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        // The sidebar's edge spans the window's height, titlebar included,
+        // its right side on the sidebar's divider.
+        let sidebar_edge = (!self.sidebar_collapsed).then(|| {
+            let edge = rails::edge(
+                rails::Rail::Sidebar,
+                dragging(rails::Rail::Sidebar),
+                window,
+                cx,
+            )
+            .left(px(sidebar_width - 5.));
+            edge_listeners(edge, rails::Rail::Sidebar, cx)
+        });
+        let inspector_edge = edge_listeners(
+            rails::edge(
+                rails::Rail::Inspector,
+                dragging(rails::Rail::Inspector),
+                window,
+                cx,
+            )
+            .left_0(),
+            rails::Rail::Inspector,
+            cx,
+        );
         let inspector = (inspector_shown > 0. && inspector_hidden < 1.).then(|| {
             let inspector_width = self.inspector_width;
             div()
@@ -760,52 +833,9 @@ impl Render for Shell {
                         .min_h_0()
                         .child(self.inspector.clone().cached(fill())),
                 )
-                // The rail's edge is its resize handle (`.inspectorResizeHandle`):
-                // 5px wide over the content, so it takes no width itself.
-                // Under the pointer or while dragging, its 1px border grows
-                // to 2px in the text colour over 200 ms (production's
-                // `--color-primary-70` is undefined there, so the border takes
-                // `currentColor`), and goes back 100 ms after the pointer leaves.
-                .child(
-                    div()
-                        .id("inspector-resize")
-                        .occlude()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(5.))
-                        .cursor(CursorStyle::ResizeColumn)
-                        .border_l(px(1. + edge))
-                        .border_color(theme::blend(theme.border_secondary(), theme.text(), edge))
-                        .on_hover(move |hovered, _, cx| {
-                            edge_fade.update(cx, |fade, cx| {
-                                let delay = if *hovered {
-                                    std::time::Duration::ZERO
-                                } else {
-                                    motion::RESIZE_EDGE_DELAY
-                                };
-                                fade.set_after(*hovered, motion::NORMAL, delay);
-                                cx.notify();
-                            })
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                this.resizing = Some((event.position.x, this.inspector_width));
-                                cx.stop_propagation();
-                            }),
-                        )
-                        // The handle lies over the window's own release
-                        // listener while the pointer is on it.
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.resizing = None;
-                                cx.notify();
-                            }),
-                        ),
-                )
+                // The rail's edge is its resize handle: 5px wide over the
+                // content, so it takes no width itself.
+                .child(inspector_edge)
         });
         let titlebar = div()
             .h(px(theme::TITLEBAR_HEIGHT))
@@ -855,23 +885,23 @@ impl Render for Shell {
                 "Browser"
             })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if let Some((from, width)) = this.resizing {
+                if let Some(resize) = this.resizing {
                     // A release the window did not see ends the drag.
                     if event.pressed_button != Some(MouseButton::Left) {
-                        this.resizing = None;
-                        cx.notify();
+                        this.end_resize(cx);
                         return;
                     }
-                    let wanted = width + f32::from(from - event.position.x);
-                    this.inspector_width = wanted
-                        .round()
-                        .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX);
+                    let width = resize.width_at(f32::from(event.position.x));
+                    match resize.rail {
+                        rails::Rail::Sidebar => this.sidebar_width = width,
+                        rails::Rail::Inspector => this.inspector_width = width,
+                    }
                     cx.notify();
                 }
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.resizing = None),
+                cx.listener(|this, _, _, cx| this.end_resize(cx)),
             )
             // A review key reviews once per press, not per repeat.
             .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| this.review_keys.released()))
@@ -965,6 +995,7 @@ impl Render for Shell {
             .map(|root| crate::viewer::document::demos::handle(root, &self.session))
             .child(titlebar)
             .child(body)
+            .children(sidebar_edge)
             .children(inspector);
         // Quick Look covers the whole window, titlebar and rails included,
         // below the context menus (`--layer-overlay`).

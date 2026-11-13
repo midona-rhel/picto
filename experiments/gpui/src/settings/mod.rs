@@ -23,24 +23,89 @@ pub struct Settings {
     pub app: AppSettings,
     /// The library's `view_pref` row `grid:defaults`.
     pub grid: GridDefaults,
-    // TODO: production keeps these four in the renderer's localStorage
+    // Production keeps these four in the renderer's localStorage
     // (`picto-keyboard-preset`, `picto:locale`, `picto:audio-visualization`,
-    // `picto-shortcut-overrides`); persist them once the app has storage of
-    // its own. Until then they last for the session.
+    // `picto-shortcut-overrides`): per machine, so they are kept in the
+    // app's own state (`crate::state`), not in the library.
     pub keyboard: KeyboardPreset,
     pub locale: &'static str,
     pub audio_visualization: &'static str,
     pub shortcuts: Overrides,
 }
 
+/// The languages Settings offers (`SUPPORTED_LOCALES`).
+const LOCALES: [&str; 8] = ["en", "de", "es", "pt", "fr", "zh-CN", "ja", "fi"];
+/// `AUDIO_VISUALIZATION_OPTIONS`.
+const VISUALIZATIONS: [&str; 4] = ["none", "spectrum", "oscilloscope", "orbit"];
+
 impl Settings {
-    fn new() -> Self {
+    /// The settings before the library's are read: those kept per machine
+    /// from the app's state, the rest at their defaults.
+    fn new(cx: &App) -> Self {
+        let (keyboard, shortcuts) = keyboard(cx);
+        let state = crate::state::get(cx);
         Self {
-            locale: "en",
-            audio_visualization: "spectrum",
+            keyboard,
+            shortcuts,
+            locale: LOCALES
+                .into_iter()
+                .find(|locale| *locale == state.locale)
+                .unwrap_or("en"),
+            audio_visualization: VISUALIZATIONS
+                .into_iter()
+                .find(|mode| *mode == state.audio_visualization)
+                .unwrap_or("spectrum"),
             ..Self::default()
         }
     }
+
+    /// Keeps what belongs to the machine in the app's state.
+    fn keep(&self, cx: &mut App) {
+        let overrides = self
+            .shortcuts
+            .iter()
+            .map(|(id, binding)| {
+                (
+                    (*id).to_owned(),
+                    crate::state::Binding {
+                        keys: binding.keys.clone(),
+                        keys2: binding.keys2.clone(),
+                    },
+                )
+            })
+            .collect();
+        let (preset, locale, mode) = (self.keyboard.value(), self.locale, self.audio_visualization);
+        crate::state::update(cx, |state| {
+            state.keyboard_preset = preset.into();
+            state.shortcut_overrides = overrides;
+            state.locale = locale.into();
+            state.audio_visualization = mode.into();
+        });
+    }
+}
+
+/// The keyboard preset and rebound shortcuts the app's state keeps
+/// (`loadOverrides`: bindings of shortcuts that no longer exist are dropped).
+pub fn keyboard(cx: &App) -> (KeyboardPreset, Overrides) {
+    let state = crate::state::get(cx);
+    let overrides = state
+        .shortcut_overrides
+        .iter()
+        .filter_map(|(id, binding)| {
+            let def = registry::SHORTCUT_DEFS.iter().find(|def| def.id == id)?;
+            Some((
+                def.id,
+                registry::Override {
+                    keys: binding.keys.clone(),
+                    keys2: binding.keys2.clone(),
+                },
+            ))
+        })
+        .collect();
+    (
+        KeyboardPreset::from_value(&state.keyboard_preset),
+        overrides,
+    )
 }
 
 /// The settings as applied, and the draft the window edits.
@@ -94,8 +159,8 @@ impl SettingsModel {
         .detach();
         Self {
             session,
-            saved: Settings::new(),
-            draft: Settings::new(),
+            saved: Settings::new(cx),
+            draft: Settings::new(cx),
             reset_views: false,
             saving: false,
             in_flight: false,
@@ -260,14 +325,13 @@ pub fn init(session: Entity<Session>, cx: &mut App) {
     // Applied shortcut edits and keyboard presets rebind the keys at once,
     // and every window takes the applied theme.
     cx.subscribe(&model, |model, _: &Applied, cx| {
-        let (preset, overrides, scheme) = {
-            let saved = &model.read(cx).saved;
-            (
-                saved.keyboard,
-                saved.shortcuts.clone(),
-                saved.app.color_scheme.clone(),
-            )
-        };
+        let saved = model.read(cx).saved.clone();
+        saved.keep(cx);
+        let (preset, overrides, scheme) = (
+            saved.keyboard,
+            saved.shortcuts.clone(),
+            saved.app.color_scheme.clone(),
+        );
         crate::keymap::install(preset, &overrides, cx);
         crate::theme::show(&scheme, cx);
     })

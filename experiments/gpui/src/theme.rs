@@ -747,8 +747,11 @@ pub const ICON_BUTTON: f32 = 24.;
 pub const WINDOW_RADIUS: f32 = 10.;
 /// `--titlebar-height`
 pub const TITLEBAR_HEIGHT: f32 = 48.;
-/// `--sidebar-width`
+/// `--sidebar-width` (`SIDEBAR_DEFAULT_WIDTH`) and the limits its edge drags
+/// between (`SIDEBAR_MIN_WIDTH`, `SIDEBAR_MAX_WIDTH`).
 pub const SIDEBAR_WIDTH: f32 = 300.;
+pub const SIDEBAR_MIN: f32 = 220.;
+pub const SIDEBAR_MAX: f32 = 500.;
 /// `INSPECTOR_DEFAULT_WIDTH` and the limits its edge drags between.
 pub const INSPECTOR_WIDTH: f32 = 320.;
 pub const INSPECTOR_MIN: f32 = 260.;

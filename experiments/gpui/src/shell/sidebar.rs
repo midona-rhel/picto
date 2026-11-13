@@ -242,8 +242,8 @@ pub struct Sidebar {
     /// Where the keyboard goes back to when a rename ends.
     home: FocusHandle,
     /// Folded nodes and sections, by id, in the shape of the Electron
-    /// sidebar's `picto-sidebar-collapsed` set.
-    // TODO: persist across launches, as `usePersistedSet` does.
+    /// sidebar's `picto-sidebar-collapsed` set, kept across launches in the
+    /// app's state as `usePersistedSet` keeps it.
     collapsed: HashSet<String>,
     /// Rows chosen with Cmd or Shift, by id.
     selection: HashSet<String>,
@@ -347,7 +347,7 @@ impl Sidebar {
             thumbnails,
             filter,
             home,
-            collapsed: HashSet::new(),
+            collapsed: crate::state::get(cx).folded.iter().cloned().collect(),
             selection: HashSet::new(),
             last_clicked: None,
             rendered: Default::default(),
@@ -384,7 +384,7 @@ impl Sidebar {
 impl Sidebar {
     /// Opens a node's section and the branches above it
     /// (`pendingSidebarRevealNodeId`).
-    fn reveal(&mut self, node: &str, cx: &App) {
+    fn reveal(&mut self, node: &str, cx: &mut Context<Self>) {
         if let Some(section) = Section::of_node(node) {
             self.collapsed.remove(section.id());
         }
@@ -404,6 +404,14 @@ impl Sidebar {
         for ancestor in ancestors {
             self.collapsed.remove(&ancestor);
         }
+        self.keep_folds(cx);
+    }
+
+    /// Keeps the folded sections and nodes in the app's state.
+    fn keep_folds(&self, cx: &mut App) {
+        let mut folded = self.collapsed.iter().cloned().collect::<Vec<_>>();
+        folded.sort();
+        crate::state::update(cx, |state| state.folded = folded);
     }
 
     // ── Rows ────────────────────────────────────────────────────────
@@ -421,6 +429,7 @@ impl Sidebar {
         if !self.collapsed.remove(id) {
             self.collapsed.insert(id.to_owned());
         }
+        self.keep_folds(cx);
         cx.notify();
     }
 
@@ -433,6 +442,7 @@ impl Sidebar {
                 self.collapsed.insert(id.clone());
             }
         }
+        self.keep_folds(cx);
         cx.notify();
     }
 
