@@ -5,11 +5,12 @@
 //! backdrop is gone so the rest of the window stays usable.
 //!
 //! Also the panel's own small controls (`OverlayShell.module.css`): the
-//! header buttons, the compact view tabs, the check box and the key hints.
+//! header buttons, the compact view tabs and the key hints. Its check box is
+//! [`super::check::check_box`]'s compact size.
 use super::text_input;
-use super::tooltip::{self, Tip};
+use super::tooltip::Tip;
+use crate::theme;
 use crate::theme::Text as _;
-use crate::{motion, theme};
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -259,15 +260,6 @@ impl RenderOnce for OverlayShell {
         let left = self.geometry.left(self.width);
         let (width, height) = (self.width, self.height);
 
-        // `.panel`'s glass edges: the bottom's colour all round, the sides
-        // and top laid over it, as `ui::modal` draws them.
-        let over = |alpha: f32| Rgba {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a: alpha,
-        };
-        let edge = || div().absolute().inset_0().rounded(px(theme::RADIUS_LG));
         let separator = |top: bool| {
             let line = div()
                 .absolute()
@@ -294,8 +286,8 @@ impl RenderOnce for OverlayShell {
             drag.clone(),
             self.geometry,
         );
-        let mut panel = div()
-            .id(self.id.clone())
+        // `.panel`: the glass, with its edges.
+        let mut panel = super::glass_panel(self.id.clone(), theme::RADIUS_LG, cx)
             .occlude()
             .relative()
             .w(px(width))
@@ -303,9 +295,6 @@ impl RenderOnce for OverlayShell {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
             .text_color(theme.text())
@@ -401,10 +390,6 @@ impl RenderOnce for OverlayShell {
                     cx.stop_propagation();
                 });
         }
-        panel = panel
-            .child(edge().border_1().border_color(over(0.10)))
-            .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))
-            .child(edge().border_t_1().border_color(over(0.1667)));
 
         // The drag follows the pointer anywhere in the window.
         let on_move = self.on_move.clone();
@@ -474,166 +459,31 @@ impl RenderOnce for OverlayShell {
 }
 
 /// `.pinBtn`: a 24px header button whose overlay shows under the pointer
-/// over 120 ms, with its tooltip. `active` shows it switched on.
+/// over 120 ms, with its tooltip.
 pub fn header_button(
     id: impl Into<ElementId>,
     icon: &'static str,
     tip: Tip,
-    window: &mut Window,
-    cx: &mut App,
-) -> Stateful<Div> {
-    let id = id.into();
-    let theme = theme::theme(cx);
-    let fade = window.use_keyed_state(id.clone(), cx, |_, _| motion::Fade::default());
-    let hover = fade.read(cx).value_with(motion::EASE);
-    if fade.read(cx).animating() {
-        window.request_animation_frame();
-    }
-    let button = div()
-        .id(id.clone())
-        .size(px(theme::ICON_BUTTON))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme::RADIUS_CONTROL))
-        .bg(theme::blend(
-            gpui::transparent_black().into(),
-            theme.subtle_overlay(),
-            hover,
-        ))
-        .cursor_pointer()
-        .child(super::icon(icon, 14., theme.text()))
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-    let hovered = fade.clone();
-    let hint = window.use_keyed_state(
-        ElementId::NamedChild(std::sync::Arc::new(id), "tip".into()),
-        cx,
-        |_, _| tooltip::Hover::default(),
-    );
-    if hint.read(cx).animating() {
-        window.request_animation_frame();
-    }
-    let layer = hint.read(cx).layer(&tip, theme::ICON_BUTTON, cx);
-    button
-        .relative()
-        .on_hover(move |on, _, cx| {
-            hovered.update(cx, |fade, cx| {
-                fade.set(*on, motion::PIN_BUTTON);
-                cx.notify();
-            });
-            hint.update(cx, |hint, cx| hint.set(*on, cx));
-        })
-        .children(layer)
+) -> super::icon_button::IconButton {
+    super::icon_button(id, icon)
+        .look(super::icon_button::Look::Pin)
+        .tip(tip)
 }
 
-/// `.viewTabs`: icon tabs on a control-surface track, the chosen one on the
-/// active surface, each with its tooltip.
+/// `.viewTabs`: the shared segmented control's view-tab look, with a
+/// tooltip on each tab.
 pub fn view_tabs(
     id: impl Into<ElementId>,
     tabs: &[(&'static str, &'static str)],
     selected: usize,
     on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
-    window: &mut Window,
-    cx: &mut App,
-) -> Stateful<Div> {
-    let id = id.into();
-    let theme = theme::theme(cx);
-    let on_select = Rc::new(on_select);
-    let mut track = div()
-        .id(id.clone())
-        .flex()
-        .items_center()
-        .p(px(2.))
-        .rounded(px(theme::RADIUS_MD))
-        .bg(theme.control_surface())
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-    for (index, (icon, label)) in tabs.iter().enumerate() {
-        let on_select = on_select.clone();
-        let tab = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(id.clone()),
-                format!("tab-{index}").into(),
-            ))
-            .w(px(28.))
-            .h(px(24.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(theme::RADIUS_SM))
-            .bg(if index == selected {
-                theme.surface_active()
-            } else {
-                gpui::transparent_black().into()
-            })
-            .cursor_pointer()
-            .child(super::icon(*icon, 14., theme.text()))
-            .on_click(move |_, window, cx| on_select(index, window, cx));
-        track = track.child(tooltip::attach(
-            tab,
-            ElementId::NamedChild(
-                std::sync::Arc::new(id.clone()),
-                format!("tip-{index}").into(),
-            ),
-            Tip::new(*label),
-            24.,
-            window,
-            cx,
-        ));
-    }
-    track
-}
-
-/// How `.checkBox` is filled.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mark {
-    Empty,
-    /// `.checkBoxChecked`: the primary text colour with the app background's
-    /// tick.
-    Checked,
-    /// `FolderTree`'s `.checkSelected`: the primary colour with a white tick.
-    Selected,
-    /// `.checkBoxFilterChecked`: a filter includes it; the primary colour
-    /// with a white tick and no ring.
-    Included,
-    /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
-    /// a white cross.
-    Excluded,
-}
-
-/// `.checkBox`: 14px, the control surface ringed by the pressed overlay
-/// until it is filled.
-pub fn check_box(mark: Mark, cx: &App) -> Div {
-    let theme = theme::theme(cx);
-    let base = div()
-        .size(px(14.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme::RADIUS_SM))
-        .border_1();
-    match mark {
-        Mark::Empty => base
-            .bg(theme.control_surface())
-            .border_color(theme.pressed_overlay()),
-        Mark::Checked => base
-            .bg(theme.text())
-            .border_color(gpui::transparent_black())
-            .child(super::icon("picker-check", 10., theme.background())),
-        Mark::Selected => base
-            .bg(theme.primary())
-            .border_color(rgba(theme::BLACK_10))
-            .child(super::icon("picker-check", 10., theme.on_primary())),
-        Mark::Included => base
-            .bg(theme.primary())
-            .border_color(gpui::transparent_black())
-            .child(super::icon("picker-check", 10., theme.on_primary())),
-        Mark::Excluded => base
-            .bg(theme.negative())
-            .border_color(gpui::transparent_black())
-            .child(super::icon("x", 10., theme.on_primary())),
-    }
+) -> super::segmented::Segmented {
+    let segments = tabs
+        .iter()
+        .map(|(icon, label)| super::segmented::segment(*icon, *label))
+        .collect();
+    super::segmented::segmented(id, super::segmented::Look::View, segments, Some(selected))
+        .on_select(on_select)
 }
 
 /// `.kbd`: one key, in the monospace caption on the subtle overlay.

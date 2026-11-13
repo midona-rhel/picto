@@ -408,8 +408,6 @@ impl Render for SettingsWindow {
             .child(ui::window_chrome::close_button(
                 "settings-close",
                 cx.listener(|this, _, window, cx| this.close(window, cx)),
-                window,
-                cx,
             ));
         let body = if !searching && panel.id == "shortcuts" {
             div()
@@ -547,7 +545,7 @@ impl Render for SettingsWindow {
             .child(sidebar)
             .child(content);
         if cfg!(target_os = "macos") {
-            root = root.child(ui::window_chrome::rim());
+            root = root.child(ui::window_chrome::rim(cx));
         }
         root
     }

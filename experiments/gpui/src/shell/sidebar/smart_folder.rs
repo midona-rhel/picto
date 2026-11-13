@@ -689,9 +689,8 @@ fn condition_button(
     plus: bool,
     tip: &'static str,
     enabled: bool,
-    window: &mut Window,
     cx: &mut App,
-) -> Stateful<Div> {
+) -> ui::icon_button::IconButton {
     let theme = theme::theme(cx);
     let line = || div().absolute().rounded(px(1.)).bg(theme.text());
     let mut glyph = div()
@@ -702,37 +701,11 @@ fn condition_button(
     if plus {
         glyph = glyph.child(line().left(px(4.)).top_0().w(px(1.)).h(px(9.)));
     }
-    let id = id.into();
-    let button = div()
-        .id(id.clone())
-        .size(px(24.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(3.))
-        .border_1()
-        .border_color(theme.text_at(15.))
-        .bg(theme.text_at(5.))
-        .child(glyph);
-    if !enabled {
-        return button.opacity(0.3);
-    }
-    ui::tooltip::attach(
-        button
-            .cursor_pointer()
-            .hover(move |style| {
-                style
-                    .bg(theme.text_at(10.))
-                    .border_color(theme.text_at(20.))
-            })
-            .active(move |style| style.bg(theme.text_at(15.))),
-        ElementId::NamedChild(std::sync::Arc::new(id), "tip".into()),
-        ui::tip(tip),
-        24.,
-        window,
-        cx,
-    )
+    ui::icon_button(id, "")
+        .look(ui::icon_button::Look::Condition)
+        .glyph_element(glyph)
+        .disabled(!enabled)
+        .tip(ui::tip(tip))
 }
 
 impl SmartFolderEditor {
@@ -743,7 +716,6 @@ impl SmartFolderEditor {
         row: &RuleRow,
         can_add: bool,
         can_remove: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = theme::theme(cx);
@@ -902,11 +874,13 @@ impl SmartFolderEditor {
                 .into_any_element(),
             ValueType::Text => text_field(&row.value, "text").into_any_element(),
         };
-        let remove = condition_button(key("remove"), false, "Remove rule", can_remove, window, cx)
-            .when(can_remove, |button| {
+        let remove = condition_button(key("remove"), false, "Remove rule", can_remove, cx).when(
+            can_remove,
+            |button| {
                 button
                     .on_click(cx.listener(move |this, _, _, cx| this.remove_rule(group, index, cx)))
-            });
+            },
+        );
         let add = condition_button(
             key("add"),
             true,
@@ -916,7 +890,6 @@ impl SmartFolderEditor {
                 "Maximum 10 rules"
             },
             can_add,
-            window,
             cx,
         )
         .when(can_add, |button| {
@@ -939,13 +912,7 @@ impl SmartFolderEditor {
             .into_any_element()
     }
 
-    fn group_element(
-        &self,
-        index: usize,
-        group: &GroupRows,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn group_element(&self, index: usize, group: &GroupRows, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let can_add = self.rule_count() < rules::MAX_RULES;
         let can_remove_group = self.groups.len() > 1;
@@ -958,7 +925,6 @@ impl SmartFolderEditor {
                 row,
                 can_add,
                 group.rules.len() > 1,
-                window,
                 cx,
             ));
         }
@@ -1001,7 +967,6 @@ impl SmartFolderEditor {
             false,
             "Remove group",
             can_remove_group,
-            window,
             cx,
         )
         .when(can_remove_group, |button| {
@@ -1016,7 +981,6 @@ impl SmartFolderEditor {
                 "Maximum 10 rules"
             },
             can_add,
-            window,
             cx,
         )
         .when(can_add, |button| {
@@ -1124,7 +1088,6 @@ impl SmartFolderEditor {
     /// over a backdrop that closes it.
     fn icon_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picker = self.icon_picker.clone()?;
-        let theme = theme::theme(cx);
         let trigger = self.icon_trigger.get();
         let viewport = window.viewport_size();
         let top = (trigger.bottom() + px(4.))
@@ -1147,20 +1110,16 @@ impl SmartFolderEditor {
                             }),
                         )
                         .child(
-                            div()
-                                .id("icon-picker-popover")
+                            ui::glass_panel("icon-picker-popover", theme::RADIUS_LG, cx)
                                 .absolute()
                                 .left(left)
                                 .top(top)
                                 .w(px(260.))
                                 .h(px(308.))
-                                .p(px(4.))
+                                // `.pickerPopover`'s 4px padding inside its
+                                // 1px glass border.
+                                .p(px(5.))
                                 .overflow_hidden()
-                                .rounded(px(theme::RADIUS_LG))
-                                .bg(theme.glass())
-                                .border_t_1()
-                                .border_color(theme.glass_border_top())
-                                .shadow(theme::panel_shadow())
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .child(picker),
                         ),
@@ -1255,7 +1214,7 @@ impl Render for SmartFolderEditor {
         if self.shows_rules() {
             let mut conditions = div().flex().flex_col().gap(px(12.));
             for (index, group) in self.groups.iter().enumerate() {
-                conditions = conditions.child(self.group_element(index, group, window, cx));
+                conditions = conditions.child(self.group_element(index, group, cx));
             }
             form = form.child(section(!self.shows_details()).child(conditions));
         }

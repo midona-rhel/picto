@@ -230,25 +230,24 @@ impl MediaSurface {
     }
 
     /// Shows Flash's controls, and hides them once the pointer has rested
-    /// for [`super::flash_controls::HIDE_DELAY`].
+    /// as long as the media player's do.
     fn reveal_flash_controls(&mut self, cx: &mut Context<Self>) {
-        use super::flash_controls as media_controls;
         if self.flash.is_none() {
             return;
         }
         // Already up, only the timer restarts, without a repaint for every
         // pointer move.
         let hidden = !self.flash_controls.on();
-        self.flash_controls.set(true, media_controls::FADE);
+        self.flash_controls.set(true, motion::MEDIA_CONTROLS_FADE);
         self.flash_reveal += 1;
         let reveal = self.flash_reveal;
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(media_controls::HIDE_DELAY)
+                .timer(super::video::model::CONTROLS_HIDE_DELAY)
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.flash_reveal == reveal {
-                    this.flash_controls.set(false, media_controls::FADE);
+                    this.flash_controls.set(false, motion::MEDIA_CONTROLS_FADE);
                     cx.notify();
                 }
             });
@@ -1114,6 +1113,7 @@ impl Render for MediaSurface {
                 // first frame has arrived.
                 self.full.is_some() && self.full_key == self.key,
                 self.flash_controls.value_with(motion::EASE),
+                self.flash_controls.on(),
             ));
         }
         if let Some(flash) = &self.flash

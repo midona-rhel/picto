@@ -159,43 +159,20 @@ impl RenderOnce for Popover {
             self.on_dismiss,
         );
         let control = self.control;
-        // `.floatingGlassSurface::after`: the glass, its 25% top, 15% side
-        // and 10% bottom border, and the panel shadow. GPUI cannot scale the
-        // panel's contents, so the opening scale is carried by this surface
-        // alone, grown from the top-left corner as `transform-origin` puts it.
-        // One border has one colour: the bottom's goes all the way round and
-        // the sides and top are laid over it.
-        let edge = || div().absolute().inset_0().rounded(px(theme::RADIUS_LG));
-        let over = |alpha: f32| Rgba {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a: alpha,
-        };
-        let bottom = theme.glass_border_bottom().a;
-        // 1 − (1 − bottom)(1 − a) = wanted.
-        let laid_over = |wanted: f32| 1. - (1. - wanted) / (1. - bottom);
-        let surface = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .w(relative(scale))
-            .h(relative(scale))
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
-            .child(edge().border_1().border_color(theme.glass_border_bottom()))
-            .child(
-                edge()
-                    .border_l_1()
-                    .border_r_1()
-                    .border_color(over(laid_over(theme.glass_border().a))),
-            )
-            .child(
-                edge()
-                    .border_t_1()
-                    .border_color(over(laid_over(theme.glass_border_top().a))),
-            );
+        // `.floatingGlassSurface::after`: the glass with its edges, behind
+        // the rows. GPUI cannot scale the panel's contents, so the opening
+        // scale is carried by this surface alone, grown from the top-left
+        // corner as `transform-origin` puts it.
+        let surface = super::glass_panel(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "surface".into()),
+            theme::RADIUS_LG,
+            cx,
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(relative(scale))
+        .h(relative(scale));
         let panel = div()
             .id(self.id)
             .occlude()

@@ -404,14 +404,14 @@ impl SubscriptionsScreen {
                     // subscription's run is.
                     .child(
                         ui::small_button(("gallery-toggle", job.id as usize), icon)
-                            .size(26., theme::RADIUS_SM)
+                            .size(26.)
                             .tip(ui::tip(tip))
                             .disabled(acting)
                             .on_click(cx.listener(move |this, _, _, cx| this.run_control(id, cx))),
                     )
                     .child(
                         ui::small_button(("gallery-stop", job.id as usize), "player-stop")
-                            .size(26., theme::RADIUS_SM)
+                            .size(26.)
                             .tip(ui::tip("Stop gallery download"))
                             .disabled(acting)
                             .on_click(cx.listener(move |this, _, _, cx| {

@@ -481,7 +481,7 @@ impl Inspector {
                 &self.selection.notes,
                 Look::Inspector,
             )))
-            .child(self.source(Some(&sources), window, cx));
+            .child(self.source(Some(&sources), cx));
 
         let (entries, tags) = {
             let session = self.session.read(cx);

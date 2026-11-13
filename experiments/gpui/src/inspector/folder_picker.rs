@@ -13,10 +13,11 @@ use crate::theme::Text as _;
 use crate::ui::{
     self,
     action_button::Look as ButtonLook,
+    check::{self, Mark},
     field::Look,
     menu::{self, Menu},
     modal::{Presence, Size},
-    overlay_shell::{self, Geometry, Mark, Nav},
+    overlay_shell::{self, Geometry, Nav},
     text_input::{Submitted, TextInput},
 };
 use gpui::prelude::FluentBuilder as _;
@@ -949,14 +950,14 @@ impl FolderPicker {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(overlay_shell::check_box(
+                    .child(check::check_box(
                         match (excluded, selected, self.filter.is_some()) {
                             (true, _, _) => Mark::Excluded,
                             (false, true, true) => Mark::Included,
                             (false, true, false) => Mark::Selected,
                             (false, false, _) => Mark::Empty,
                         },
-                        cx,
+                        check::Size::Compact,
                     )),
             )
             .child(
@@ -1011,9 +1012,9 @@ impl FolderPicker {
             .cursor_pointer()
             .text(theme::TEXT_MD)
             .text_color(theme.text())
-            .child(overlay_shell::check_box(
+            .child(check::check_box(
                 if chosen { Mark::Checked } else { Mark::Empty },
-                cx,
+                check::Size::Compact,
             ))
             .child(ui::icon("picker-folder", 14., theme.text()).flex_none())
             .child(div().flex_1().min_w_0().truncate().child("Library"))
@@ -1144,8 +1145,6 @@ impl Render for FolderPicker {
                     cx.notify();
                 });
             },
-            window,
-            cx,
         );
 
         let rows = self.visible(cx);

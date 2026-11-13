@@ -897,7 +897,7 @@ impl Render for Shell {
         let (tag_picker, folder_picker) = self.filter_bar.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
         // `.shellMac::after`: the window's rim, over everything.
-        root = root.child(ui::window_chrome::rim());
+        root = root.child(ui::window_chrome::rim(cx));
         // Keep painting while a rail slides.
         if self.rails.animating() {
             window.request_animation_frame();

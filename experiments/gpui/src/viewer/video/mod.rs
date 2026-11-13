@@ -13,6 +13,7 @@ pub mod audio;
 mod avf;
 pub mod backend;
 pub(super) mod button;
+pub(super) mod controls;
 mod dsp;
 mod ffmpeg;
 pub mod model;
@@ -138,12 +139,10 @@ fn report_playback_failure(source: &Path, message: &str, status: &Status) {
     eprintln!("{entry}");
 }
 
-/// The scrubber and volume slider's drags, and the pointer over the
-/// scrubber.
+/// The scrubber's drag.
 #[derive(Clone, Copy, PartialEq)]
 enum Drag {
     Seek,
-    Volume,
 }
 
 pub struct VideoPlayer {
@@ -162,15 +161,12 @@ pub struct VideoPlayer {
     controls_fade: motion::Fade,
     hide_task: Option<Task<()>>,
     drag: Option<Drag>,
-    /// The scrubber's and the volume track's bounds, and where the pointer
-    /// is over the scrubber (a fraction), while it is.
+    /// The scrubber's bounds, and where the pointer is over it (a
+    /// fraction), while it is.
     bar: Bounds<Pixels>,
     bar_hover: Option<f32>,
     bar_fraction: f32,
     bar_expand: motion::Fade,
-    volume_track: Bounds<Pixels>,
-    volume_shown: bool,
-    volume_visit: u64,
     rate_open: bool,
     /// The rate button's container and the open list, for closing the list
     /// on a press outside both.
@@ -258,9 +254,6 @@ impl VideoPlayer {
             bar_hover: None,
             bar_fraction: 0.,
             bar_expand: motion::Fade::default(),
-            volume_track: Bounds::default(),
-            volume_shown: false,
-            volume_visit: 0,
             rate_open: false,
             rate_bounds: Bounds::default(),
             rate_menu_bounds: Bounds::default(),
@@ -432,30 +425,6 @@ impl VideoPlayer {
             });
         })
         .detach();
-    }
-
-    /// `VolumePanel`'s `enter` and `leave`: the slider shows at once and goes
-    /// 300 ms after the pointer leaves, unless it is being dragged.
-    fn hover_volume(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        self.volume_visit += 1;
-        if hovered {
-            self.volume_shown = true;
-            cx.notify();
-        } else if self.drag != Some(Drag::Volume) {
-            let visit = self.volume_visit;
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(motion::MEDIA_VOLUME_PANEL_GRACE)
-                    .await;
-                let _ = this.update(cx, |this: &mut Self, cx| {
-                    if this.volume_visit == visit {
-                        this.volume_shown = false;
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
     }
 
     /// Takes in what the media is doing, and the next picture.
@@ -700,117 +669,22 @@ impl VideoPlayer {
         self.seek(self.bar_fraction as f64 * self.playback.duration);
     }
 
-    fn drag_volume(&mut self, position: Point<Pixels>) {
-        let volume = model::volume_at(
-            f32::from(position.y),
-            f32::from(self.volume_track.origin.y),
-            f32::from(self.volume_track.size.height),
-        );
-        self.set_volume(volume);
-    }
-
-    /// `VolumePanel`: the mute button, and the slider above it while the
-    /// pointer is over either.
-    fn volume_panel(&self, cx: &mut Context<Self>) -> Div {
-        let (volume, muted) = (self.playback.volume, self.playback.muted);
-        let effective = self.playback.effective_volume();
-        let label = if muted { "Unmute" } else { "Mute" };
-        let mut panel = div().relative().flex().items_center().child(
-            div()
-                .id("media-volume-hover")
-                .on_hover(
-                    cx.listener(|this, hovered: &bool, _, cx| this.hover_volume(*hovered, cx)),
-                )
-                .child(
-                    media_button(
-                        "media-mute",
-                        model::volume_icon(volume, muted),
-                        16.,
-                        ui::tip(label).shortcut("video.toggleMute", cx),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_mute();
-                        cx.notify();
-                    })),
-                ),
-        );
-        if self.volume_shown {
-            let entity = cx.entity().downgrade();
-            let popup = div()
-                .id("media-volume-popup")
-                .occlude()
-                .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(4.))
-                .px(px(6.))
-                .py(px(8.))
-                .rounded(px(theme::RADIUS_MD))
-                .bg(rgba(theme::MEDIA_POPUP))
-                .border_1()
-                .border_color(rgba(theme::MEDIA_POPUP_BORDER))
-                .on_hover(
-                    cx.listener(|this, hovered: &bool, _, cx| this.hover_volume(*hovered, cx)),
-                )
-                .child(
-                    div()
-                        .font_family(theme::FONT_MONO)
-                        .text(theme::TEXT_XS)
-                        .text_color(rgba(theme::MEDIA_TEXT))
-                        .child(format!("{}%", (effective * 100.).round() as i32)),
-                )
-                .child(
-                    div()
-                        .id("media-volume-track")
-                        .relative()
-                        .w(px(4.))
-                        .h(px(80.))
-                        .rounded(px(2.))
-                        .bg(rgba(theme::MEDIA_TRACK))
-                        .cursor_pointer()
-                        .child(
-                            canvas(
-                                move |bounds, _, cx| {
-                                    let _ = entity.update(cx, |this, _| this.volume_track = bounds);
-                                },
-                                |_, _, _, _| {},
-                            )
-                            .absolute()
-                            .size_full(),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .bottom_0()
-                                .w_full()
-                                .h(relative(effective))
-                                .rounded(px(2.))
-                                .bg(rgba(theme::MEDIA_FILL)),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.drag = Some(Drag::Volume);
-                                this.drag_volume(event.position);
-                                cx.notify();
-                            }),
-                        ),
-                );
-            // `bottom: 36px; left: 50%; transform: translateX(-50%)`.
-            panel = panel.child(
-                div()
-                    .absolute()
-                    .bottom(px(36.))
-                    .left(relative(0.5))
-                    .w(px(0.))
-                    .flex()
-                    .justify_center()
-                    .child(popup),
-            );
-        }
-        panel
+    /// `VolumePanel`, setting this player's volume.
+    fn volume_panel(&self, cx: &mut Context<Self>) -> controls::VolumePanel {
+        let (change, mute) = (cx.entity().downgrade(), cx.entity().downgrade());
+        controls::volume_panel("media-volume", self.playback.volume, self.playback.muted)
+            .on_change(move |volume, _, cx| {
+                let _ = change.update(cx, |this, cx| {
+                    this.set_volume(volume);
+                    cx.notify();
+                });
+            })
+            .on_mute(move |_, cx| {
+                let _ = mute.update(cx, |this, cx| {
+                    this.toggle_mute();
+                    cx.notify();
+                });
+            })
     }
 
     /// `PlaybackRateMenu`: the rate button and, while open, its list above.
@@ -889,8 +763,9 @@ impl VideoPlayer {
         container
     }
 
-    /// `VideoControls`.
-    fn controls(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// `VideoControls`, at opacity `shown`, taking the pointer while
+    /// `visible`.
+    fn controls(&self, shown: f32, visible: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let playing = self.playback.playing;
         let separator = div()
             .flex_none()
@@ -977,7 +852,7 @@ impl VideoPlayer {
                     ui::tip(if looping { "Loop on" } else { "Loop off" })
                         .shortcut("video.toggleLoop", cx),
                 )
-                .active(looping)
+                .toggled(looping)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.playback.looping = !this.playback.looping;
                     cx.notify();
@@ -995,33 +870,10 @@ impl VideoPlayer {
                 .on_click(cx.listener(|this, _, _, _| this.toggle_fullscreen())),
             );
         }
-        div()
+        controls::controls_bar(shown, visible)
             .id("media-controls")
-            .absolute()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .pt(px(24.))
-            .px(px(12.))
-            .pb(px(10.))
-            .flex()
-            .flex_col()
-            .gap(px(4.))
-            .bg(linear_gradient(
-                0.,
-                linear_color_stop(rgba(theme::MEDIA_CONTROLS_SHADE), 0.),
-                linear_color_stop(rgba(0x00000000), 1.),
-            ))
             .child(self.progress_bar(cx))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(4.))
-                    .child(left)
-                    .child(right),
-            )
+            .child(controls::button_row(left, right))
     }
 
     /// `VolumeHUD`: the glyph and percentage in a dark box at the middle.
@@ -1176,8 +1028,8 @@ impl Render for VideoPlayer {
                 .size_full(),
             );
         }
-        // Drags of the scrubber and the volume slider follow the pointer
-        // anywhere in the window until the button is up; an open rate menu
+        // A drag of the scrubber follows the pointer anywhere in the window
+        // until the button is up; an open rate menu
         // closes on a press anywhere outside it.
         let entity = cx.entity().downgrade();
         let (dragging, rate_open) = (self.drag.is_some(), self.rate_open);
@@ -1190,10 +1042,8 @@ impl Render for VideoPlayer {
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                             if phase == DispatchPhase::Capture {
                                 let _ = player.update(cx, |this, cx| {
-                                    match this.drag {
-                                        Some(Drag::Seek) => this.scrub(event.position),
-                                        Some(Drag::Volume) => this.drag_volume(event.position),
-                                        None => {}
+                                    if this.drag == Some(Drag::Seek) {
+                                        this.scrub(event.position);
                                     }
                                     cx.notify();
                                 });
@@ -1237,10 +1087,9 @@ impl Render for VideoPlayer {
         // `.controlsHidden`: faded out and passing the pointer through.
         let fade = self.controls_fade.value_with(motion::EASE);
         if fade > 0. {
-            let controls = self.controls(cx).opacity(fade);
+            let controls = self.controls(fade, visible, cx);
             root = root.child(if visible {
                 controls
-                    .occlude()
                     .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
             } else {
                 controls

@@ -355,30 +355,26 @@ impl RenderOnce for DatePicker {
                     .child("Clear"),
             );
         let (x, y) = place(bounds.get(), window.viewport_size());
-        let popover = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id.clone()),
-                "calendar".into(),
-            ))
-            .occlude()
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(WIDTH))
-            .p(px(9.))
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .border_1()
-            .border_color(theme.glass_border())
-            .shadow(theme::panel_shadow())
-            .font_family(theme::FONT_UI)
-            .text(theme::TEXT_SM)
-            .text_color(theme.text())
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(header)
-            .child(weekdays)
-            .child(grid)
-            .child(footer);
+        let popover = super::glass_panel(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "calendar".into()),
+            theme::RADIUS_LG,
+            cx,
+        )
+        .occlude()
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .w(px(WIDTH))
+        // `.popover`'s 9px padding inside its 1px glass border.
+        .p(px(10.))
+        .font_family(theme::FONT_UI)
+        .text(theme::TEXT_SM)
+        .text_color(theme.text())
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(header)
+        .child(weekdays)
+        .child(grid)
+        .child(footer);
         // `.backdrop`: a press anywhere else closes the calendar.
         let backdrop = div()
             .id(ElementId::NamedChild(

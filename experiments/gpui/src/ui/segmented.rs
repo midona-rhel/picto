@@ -1,6 +1,6 @@
 //! Small segmented glyph controls on the control surface: the filter
-//! pickers' match rule (`FilterLogicTabs`) and the view menu's sort
-//! direction (`.dirPill`). The pickers' view tabs are `overlay_shell`'s.
+//! pickers' match rule (`FilterLogicTabs`), the view menu's sort direction
+//! (`.dirPill`) and the pickers' view tabs (`OverlayShell`'s `.viewTabs`).
 use super::tooltip::{self, Tip};
 use crate::theme;
 use gpui::*;
@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 type SelectHandler = Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>;
 
-/// Which of the three controls to draw.
+/// Which of the controls to draw.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
     /// `FilterLogicTabs.module.css`: 24px buttons 2px apart, the hovered one
@@ -17,6 +17,9 @@ pub enum Look {
     /// `.dirPill`: 26×24 buttons 1px apart at 40% until chosen, the chosen
     /// one at full strength on `--color-contrast-12`.
     Direction,
+    /// `OverlayShell.module.css` `.viewTabs`: 28×24 tabs side by side, the
+    /// chosen one on the active surface, with no hover of their own.
+    View,
 }
 
 impl Look {
@@ -24,12 +27,14 @@ impl Look {
         match self {
             Look::Logic => (24., 24.),
             Look::Direction => (26., 24.),
+            Look::View => (28., 24.),
         }
     }
     fn gap(self) -> f32 {
         match self {
             Look::Logic => 2.,
             Look::Direction => 1.,
+            Look::View => 0.,
         }
     }
 }
@@ -118,6 +123,14 @@ impl RenderOnce for Segmented {
                         button.bg(theme.surface_active())
                     } else {
                         button.hover(move |style| style.bg(theme.subtle_overlay()))
+                    };
+                    button.child(glyph)
+                }
+                Look::View => {
+                    let button = if chosen {
+                        button.bg(theme.surface_active())
+                    } else {
+                        button
                     };
                     button.child(glyph)
                 }

@@ -107,6 +107,12 @@ pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
 /// `.querySmallBtn`: a row button's opacity and fill, on `ease`.
 pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
+/// `.conditionButton`: a smart folder rule's minus and plus buttons, on
+/// `ease`.
+pub const CONDITION_BUTTON: Duration = Duration::from_millis(120);
+/// `.tagAddBtn`: the "+" after a row of chips brightening, on
+/// `--ease-default`.
+pub const TAG_ADD_BUTTON: Duration = Duration::from_millis(200);
 /// `.followCover`: a subscription card's border on hover, on `ease`.
 pub const CARD_HOVER: Duration = Duration::from_millis(120);
 /// Smart merge's survivor ring fading in and out (`.mediaCard::after`).

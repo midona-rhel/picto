@@ -4,12 +4,112 @@ use gpui::*;
 
 type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
-#[derive(Clone, Copy, PartialEq)]
+/// How a check box is filled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mark {
-    /// A square box with a tick.
-    Checkbox,
-    /// A round button with a white dot.
-    Radio,
+    /// Unticked: the control surface inside a ring.
+    Empty,
+    /// `OverlayShell`'s `.checkBoxChecked`: the primary text colour with the
+    /// app background's tick.
+    Checked,
+    /// The primary colour in a 10% black ring with a white tick: a ticked
+    /// settings check, or `FolderTree`'s `.checkSelected`.
+    Selected,
+    /// `.checkBoxFilterChecked`: a filter includes it; the primary colour
+    /// with a white tick and no ring.
+    Included,
+    /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
+    /// a white cross.
+    Excluded,
+}
+
+/// Which of the two check boxes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Size {
+    /// `OverlayShell.module.css` `.checkBox`: 14px, ringed by the pressed
+    /// overlay until it is filled.
+    Compact,
+    /// `Settings.module.css` `.checkboxItem`'s indicator: 16px, ringed by
+    /// `--color-contrast-30` until it is ticked.
+    Regular,
+}
+
+/// A check box, square or (as a radio button) round.
+#[derive(IntoElement)]
+pub struct CheckBox {
+    mark: Mark,
+    size: Size,
+    round: bool,
+}
+
+pub fn check_box(mark: Mark, size: Size) -> CheckBox {
+    CheckBox {
+        mark,
+        size,
+        round: false,
+    }
+}
+
+impl CheckBox {
+    /// A radio button: round, with a dot for its tick.
+    pub fn round(mut self, round: bool) -> Self {
+        self.round = round;
+        self
+    }
+}
+
+impl RenderOnce for CheckBox {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = theme::theme(cx);
+        let (side, ring, tick, tick_size) = match self.size {
+            Size::Compact => (14., theme.pressed_overlay(), "picker-check", 10.),
+            Size::Regular => (16., theme.contrast(30.), "settings-check", 11.),
+        };
+        let base = div()
+            .relative()
+            .size(px(side))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(if self.round {
+                side / 2.
+            } else {
+                theme::RADIUS_SM
+            }))
+            .border_1();
+        let clear = gpui::transparent_black();
+        let (fill, border, glyph): (Rgba, Hsla, Option<(&'static str, Rgba)>) = match self.mark {
+            Mark::Empty => (theme.control_surface(), ring.into(), None),
+            Mark::Checked => (theme.text(), clear, Some((tick, theme.background()))),
+            Mark::Selected => (
+                theme.primary(),
+                rgba(theme::BLACK_10).into(),
+                Some((tick, theme.on_primary())),
+            ),
+            Mark::Included => (theme.primary(), clear, Some((tick, theme.on_primary()))),
+            Mark::Excluded => (theme.negative(), clear, Some(("x", theme.on_primary()))),
+        };
+        let base = base.bg(fill).border_color(border);
+        match glyph {
+            // `::after { inset: 3px }` inside the border, with a 10% ring.
+            Some((_, color)) if self.round => base.child(
+                div()
+                    .absolute()
+                    .top(px(3.))
+                    .left(px(3.))
+                    .size(px(side - 8.))
+                    .rounded_full()
+                    .bg(color)
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
+                            .spread_radius(px(1.)),
+                    ]),
+            ),
+            Some((name, color)) => base.child(super::icon(name, tick_size, color)),
+            None => base,
+        }
+    }
 }
 
 /// A labelled checkbox or radio row (`.checkboxItem` in
@@ -21,7 +121,8 @@ pub enum Mark {
 pub struct Check {
     id: ElementId,
     label: SharedString,
-    mark: Mark,
+    /// A radio button rather than a checkbox.
+    radio: bool,
     checked: bool,
     disabled: bool,
     on_toggle: Option<ToggleHandler>,
@@ -31,7 +132,7 @@ pub fn check(id: impl Into<ElementId>, label: impl Into<SharedString>, checked: 
     Check {
         id: id.into(),
         label: label.into(),
-        mark: Mark::Checkbox,
+        radio: false,
         checked,
         disabled: false,
         on_toggle: None,
@@ -40,7 +141,7 @@ pub fn check(id: impl Into<ElementId>, label: impl Into<SharedString>, checked: 
 
 impl Check {
     pub fn radio(mut self) -> Self {
-        self.mark = Mark::Radio;
+        self.radio = true;
         self
     }
     pub fn disabled(mut self, disabled: bool) -> Self {
@@ -61,47 +162,17 @@ impl RenderOnce for Check {
         if hover.read(cx).animating() {
             window.request_animation_frame();
         }
-        let radius = match self.mark {
-            Mark::Checkbox => px(4.),
-            Mark::Radio => px(8.),
-        };
-        let mut indicator = div()
-            .relative()
-            .size(px(16.))
-            .flex_none()
-            .mr(px(6.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(radius)
-            .border_1();
-        indicator = if self.checked {
-            indicator.border_color(rgba(0x0000001a)).bg(theme.primary())
-        } else {
-            indicator
-                .border_color(theme.contrast(30.))
-                .bg(theme.control_surface())
-        };
-        if self.checked {
-            indicator = indicator.child(match self.mark {
-                Mark::Checkbox => {
-                    super::icon("settings-check", 11., rgb(0xffffff)).into_any_element()
-                }
-                // `::after { inset: 3px }` inside the border, with a 10% ring.
-                Mark::Radio => div()
-                    .absolute()
-                    .top(px(3.))
-                    .left(px(3.))
-                    .size(px(8.))
-                    .rounded_full()
-                    .bg(rgb(0xffffff))
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into())
-                            .spread_radius(px(1.)),
-                    ])
-                    .into_any_element(),
-            });
-        }
+        let indicator = div().flex_none().mr(px(6.)).child(
+            check_box(
+                if self.checked {
+                    Mark::Selected
+                } else {
+                    Mark::Empty
+                },
+                Size::Regular,
+            )
+            .round(self.radio),
+        );
         let mut row = div()
             .id(self.id)
             .relative()

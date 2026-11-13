@@ -9,8 +9,9 @@ use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::{
     self,
+    check::{self, Mark},
     menu::{self, Menu},
-    overlay_shell::{self, Geometry, Mark, Nav},
+    overlay_shell::{self, Geometry, Nav},
     text_input::TextInput,
 };
 use crate::{grid::format, motion, theme};
@@ -1278,7 +1279,7 @@ impl TagPicker {
             .line_height(px(ROW))
             .bg(fill);
         if self.filter.is_some() {
-            row = row.child(overlay_shell::check_box(
+            row = row.child(check::check_box(
                 if excluded {
                     Mark::Excluded
                 } else if checked {
@@ -1286,7 +1287,7 @@ impl TagPicker {
                 } else {
                     Mark::Empty
                 },
-                cx,
+                check::Size::Compact,
             ));
         }
         row = row.child(mark.opacity(dim)).child(
@@ -1502,7 +1503,7 @@ impl TagPicker {
     }
 
     /// The layout and counts settings (`.settingsPanel`).
-    fn settings_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> [AnyElement; 2] {
+    fn settings_panel(&self, cx: &mut Context<Self>) -> [AnyElement; 2] {
         let theme = theme::theme(cx);
         let layout = self.layout;
         let picked = cx.entity().downgrade();
@@ -1524,8 +1525,6 @@ impl TagPicker {
                     cx.notify();
                 });
             },
-            window,
-            cx,
         );
         let row = || {
             div()
@@ -1540,7 +1539,6 @@ impl TagPicker {
                 .rounded(px(theme::RADIUS_MD))
                 .text_color(theme.text())
         };
-        let edge = || div().absolute().inset_0().rounded(px(theme::RADIUS_LG));
         let backdrop = div()
             .id("picker-settings-backdrop")
             .absolute()
@@ -1549,25 +1547,13 @@ impl TagPicker {
                 this.settings_open = false;
                 cx.notify();
             }));
-        let panel = div()
-            .id("picker-settings")
+        let panel = ui::glass_panel("picker-settings", theme::RADIUS_LG, cx)
             .occlude()
             .absolute()
             .top(px(32.))
             .right(px(32.))
             .w(px(240.))
             .p(px(16.))
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
-            .child(edge().border_1().border_color(theme.glass_border_bottom()))
-            .child(
-                edge()
-                    .border_l_1()
-                    .border_r_1()
-                    .border_color(theme.glass_border()),
-            )
-            .child(edge().border_t_1().border_color(theme.glass_border_top()))
             .child(row().child("Layout").child(tabs))
             .child(
                 row()
@@ -1575,13 +1561,13 @@ impl TagPicker {
                     .cursor_pointer()
                     .hover(move |style| style.bg(theme.surface_hover()))
                     .child("Show counts")
-                    .child(overlay_shell::check_box(
+                    .child(check::check_box(
                         if self.counts {
                             Mark::Checked
                         } else {
                             Mark::Empty
                         },
-                        cx,
+                        check::Size::Compact,
                     ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.counts = !this.counts;
@@ -1647,8 +1633,6 @@ impl Render for TagPicker {
             } else {
                 "Show sidebar"
             }),
-            window,
-            cx,
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.sidebar = !this.sidebar;
@@ -1671,8 +1655,6 @@ impl Render for TagPicker {
             "picker-settings-button",
             "picker-adjustments",
             ui::tip("Tag picker settings"),
-            window,
-            cx,
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.settings_open = !this.settings_open;
@@ -1690,10 +1672,7 @@ impl Render for TagPicker {
             } else {
                 "Pin (keep open)"
             }),
-            window,
-            cx,
         )
-        .ml_auto()
         .on_click(cx.listener(|this, _, _, cx| {
             this.pinned = !this.pinned;
             cx.notify();
@@ -1705,7 +1684,7 @@ impl Render for TagPicker {
             .child(self.rail(cx))
             .child(self.list(window, cx));
         if self.settings_open && self.filter.is_none() {
-            body = body.children(self.settings_panel(window, cx));
+            body = body.children(self.settings_panel(cx));
         }
 
         let mut footer_move = overlay_shell::hint(cx)
@@ -1778,7 +1757,7 @@ impl Render for TagPicker {
             shell = shell
                 .header(toggle_rail)
                 .header(settings)
-                .header(pin)
+                .header(div().ml_auto().flex().child(pin))
                 .child(body);
             if self.sidebar {
                 shell = shell.footer(

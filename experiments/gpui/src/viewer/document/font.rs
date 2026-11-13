@@ -552,21 +552,15 @@ impl Render for FontViewer {
                 .flex()
                 .justify_center()
                 .child(
-                    div()
-                        .id("font-zoom")
+                    ui::glass_panel("font-zoom", theme::RADIUS_MD, cx)
                         .occlude()
                         .w(px(164.))
                         .h(px(32.))
-                        .px(px(4.))
+                        // `.zoom`'s 4px padding inside its 1px glass border.
+                        .px(px(5.))
                         .flex()
                         .items_center()
                         .gap(px(2.))
-                        .rounded(px(theme::RADIUS_MD))
-                        .bg(app.glass())
-                        .border_1()
-                        .border_color(app.glass_border())
-                        .border_t_1()
-                        .shadow(theme::panel_shadow())
                         .child(step("font-smaller", "minus", false, cx))
                         .child(
                             div().flex_1().flex().justify_center().child(

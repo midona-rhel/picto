@@ -483,8 +483,6 @@ impl DetailWindow {
                     .child(ui::window_chrome::close_button(
                         "detail-close",
                         |_, window, _| window.remove_window(),
-                        window,
-                        cx,
                     )),
                 "detail-close-tooltip",
                 ui::tip("Close").shortcut("view.closeDetail", cx),

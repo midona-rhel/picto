@@ -25,24 +25,8 @@ const VIEWPORT_TOP: f32 = 8.;
 const NARROW_PLANE: f32 = 440.;
 
 /// The square add button after a list of chips (`.subscriptionDestinationAdd`).
-fn add_square(id: &'static str, cx: &App) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    div()
-        .id(id)
-        .group(id)
-        .size(px(theme::CONTROL_SM))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme::RADIUS_MD))
-        .bg(theme.surface_hover())
-        .hover(move |style| style.bg(theme.surface_active()))
-        .cursor_pointer()
-        .child(
-            ui::icon("plus", 14., theme.text_secondary())
-                .group_hover(id, move |style| style.text_color(theme.text())),
-        )
+fn add_square(id: &'static str) -> ui::icon_button::IconButton {
+    ui::icon_button(id, "plus").look(ui::icon_button::Look::ChipAdd)
 }
 
 /// One row of a table, with its cells at the given widths.
@@ -370,7 +354,8 @@ impl SubscriptionsScreen {
                     .child(
                         ui::small_button("subscription-more", "dots-vertical")
                             .glyph(16.)
-                            .size(30., theme::RADIUS_MD)
+                            .size(30.)
+                            .radius(theme::RADIUS_MD)
                             .tip(ui::tip("More actions"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let at = bounds.get();
@@ -568,7 +553,7 @@ impl SubscriptionsScreen {
                 ui::action_row("subscription-add-folders", "plus", "Add to folders").glyph(14.),
             ))
         } else {
-            folders.child(add_square("subscription-add-folder", cx))
+            folders.child(add_square("subscription-add-folder"))
         };
         let mut tags = div()
             .min_h(px(26.))
@@ -593,7 +578,7 @@ impl SubscriptionsScreen {
                     .child(ui::action_row("subscription-add-tags", "plus", "Add tags").glyph(14.)),
             )
         } else {
-            tags.child(add_square("subscription-add-tag", cx))
+            tags.child(add_square("subscription-add-tag"))
         };
         div()
             .mx(px(16.))
@@ -918,7 +903,7 @@ impl SubscriptionsScreen {
                 )
                 .child(
                     ui::small_button(("query-group", query_id), "copy-2")
-                        .active(query.group_posts)
+                        .toggled(query.group_posts)
                         .disabled(active)
                         .tip(ui::tip(if query.group_posts {
                             "Group multi-media posts"
