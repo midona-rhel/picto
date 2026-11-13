@@ -25,6 +25,7 @@ pub mod slider;
 mod small_button;
 pub mod status_badge;
 mod tabs;
+pub mod tag_token_input;
 pub mod text_input;
 mod toggle;
 pub mod tooltip;

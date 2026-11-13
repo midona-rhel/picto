@@ -22,6 +22,8 @@ use std::rc::Rc;
 
 mod dialogs;
 mod drag;
+mod rules;
+mod smart_folder;
 mod tree;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -255,6 +257,8 @@ pub struct Sidebar {
     _drags: Option<Subscription>,
     /// The open dialog.
     dialog: Option<dialogs::Layer>,
+    /// The smart-folder editor, while open.
+    smart_editor: Option<(Entity<smart_folder::SmartFolderEditor>, Subscription)>,
     /// The open context menu, whose checks follow what its rows toggle.
     menu: Option<WeakEntity<Menu>>,
     _menu: Vec<Subscription>,
@@ -326,6 +330,7 @@ impl Sidebar {
             swallow_click: false,
             _drags: None,
             dialog: None,
+            smart_editor: None,
             menu: None,
             _menu: Vec::new(),
             scroll: ScrollHandle::new(),
@@ -1225,6 +1230,76 @@ impl Sidebar {
         );
     }
 
+    /// "New Smart Folder" and "New Child Smart Folder": the editor with
+    /// every part, for a folder under `parent`.
+    fn new_smart_folder(
+        &mut self,
+        parent: Option<SmartFolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_smart_editor(
+            smart_folder::Target::Create { parent },
+            smart_folder::Part::All,
+            window,
+            cx,
+        );
+    }
+
+    /// "Edit Smart Folder..." (its details) and "Edit Rules...".
+    fn edit_smart_folder(
+        &mut self,
+        node: &str,
+        rules: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = smart_folder_id(node) else {
+            return;
+        };
+        let answer = self
+            .session
+            .read(cx)
+            .run(move |library| smart_input(library, id));
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(original)) = answer.await else {
+                return;
+            };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.open_smart_editor(
+                    smart_folder::Target::Edit { id, original },
+                    if rules {
+                        smart_folder::Part::Rules
+                    } else {
+                        smart_folder::Part::Details
+                    },
+                    window,
+                    cx,
+                )
+            });
+        })
+        .detach();
+    }
+
+    fn open_smart_editor(
+        &mut self,
+        target: smart_folder::Target,
+        part: smart_folder::Part,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.session.clone();
+        let editor =
+            cx.new(|cx| smart_folder::SmartFolderEditor::new(session, target, part, window, cx));
+        let subscription = cx.subscribe(&editor, |this, _, event: &smart_folder::Event, cx| {
+            let smart_folder::Event::Created(id) = event;
+            this.reveal(&format!("smart:{}", id.0), cx);
+            cx.notify();
+        });
+        self.smart_editor = Some((editor, subscription));
+        cx.notify();
+    }
+
     // ── Rename in place ─────────────────────────────────────────────
 
     /// A new or duplicated node: open its section and branch, then rename it.
@@ -1235,7 +1310,14 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(section) = Section::of_node(&node) {
+        self.reveal(&node, cx);
+        self.start_rename(node, name, window, cx);
+    }
+
+    /// Opens a node's section and the branches above it
+    /// (`pendingSidebarRevealNodeId`).
+    fn reveal(&mut self, node: &str, cx: &App) {
+        if let Some(section) = Section::of_node(node) {
             self.collapsed.remove(section.id());
         }
         let ancestors = {
@@ -1254,7 +1336,6 @@ impl Sidebar {
         for ancestor in ancestors {
             self.collapsed.remove(&ancestor);
         }
-        self.start_rename(node, name, window, cx);
     }
 
     /// `useInlineRename.startRename`: the name selected in a focused field.
@@ -2109,6 +2190,15 @@ impl Render for Sidebar {
         }
         let tree_filter = prefs.show_folders || prefs.show_smart_folders;
         let dialog = self.dialog_layer(window, cx);
+        if self
+            .smart_editor
+            .as_ref()
+            .is_some_and(|(editor, _)| editor.read(cx).finished())
+        {
+            self.smart_editor = None;
+            window.focus(&self.home, cx);
+        }
+        let smart_editor = self.smart_editor.as_ref().map(|(editor, _)| editor.clone());
         // The rail's edge is drawn over the app background, as the shell's
         // border is in the Electron layout, with the rail surface inside it.
         div()
@@ -2175,6 +2265,7 @@ impl Render for Sidebar {
                     })),
             )
             .children(dialog)
+            .children(smart_editor)
             .children(self.drag_capture(cx))
             .children(self.drag_ghost(window, cx))
     }

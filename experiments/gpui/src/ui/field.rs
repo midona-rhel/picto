@@ -18,6 +18,9 @@ pub enum Look {
     TitlebarSearch,
     /// `GlassInput.module.css` `.input`: a text field in a dialog.
     Modal,
+    /// `.input` at the small control height, as a smart-folder rule's
+    /// value field is (`.rule input`).
+    ModalSmall,
     /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
     /// the text with no frame of their own.
     ModalSearch,
@@ -104,6 +107,10 @@ impl Look {
                 left: 24.,
                 right: 24.,
                 drop: 0.,
+            },
+            Look::ModalSmall => Frame {
+                height: theme::CONTROL_SM,
+                ..Look::Modal.frame(theme)
             },
             Look::Modal => Frame {
                 height: theme::CONTROL_LG,

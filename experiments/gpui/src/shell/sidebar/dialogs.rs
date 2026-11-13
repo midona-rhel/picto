@@ -249,19 +249,4 @@ impl Sidebar {
     ) {
     }
     pub(super) fn edit_watch(&mut self, _: FolderId, _: &mut Window, _: &mut Context<Self>) {}
-    pub(super) fn new_smart_folder(
-        &mut self,
-        _: Option<picto_library::SmartFolderId>,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) {
-    }
-    pub(super) fn edit_smart_folder(
-        &mut self,
-        _: &str,
-        _: bool,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) {
-    }
 }

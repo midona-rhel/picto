@@ -95,6 +95,10 @@ impl Theme {
     pub fn border_secondary(&self) -> Rgba {
         translucent(self.contrast, 8.)
     }
+    /// `color-mix(in srgb, var(--color-text-primary) NN%, transparent)`.
+    pub fn text_at(&self, percent: f32) -> Rgba {
+        translucent(self.text, percent)
+    }
     /// `--color-contrast-NN`
     pub fn contrast(&self, percent: f32) -> Rgba {
         translucent(self.contrast, percent)
