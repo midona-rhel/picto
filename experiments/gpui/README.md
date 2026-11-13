@@ -124,10 +124,17 @@ preference fallbacks, grid labels, the reveal timeline, the easing curve
 against the sampled bezier, tree ordering and the text-search gates. The
 ignored tests need a real snapshot or a GPU and are run explicitly.
 
-`pixel_diff.py` (needs Pillow) produces an unscaled overlay, amplified RGB
-difference, threshold mask and numeric report for two equal-size captures.
-Compare equal content, scale, focus and scroll state; do not stretch screenshots
-to conceal layout errors.
+`pixel_diff.py` compares two captures of the same size using only the Python
+standard library, and reports the share of differing pixels for the whole
+image and for each named region, with a side-by-side image and a mask of where
+they differ. Open both windows at the same size (`PICTO_GPUI_WINDOW=WxH`) with
+the same content, scroll, selection and focus; do not stretch a capture to
+make sizes agree. `--shift` moves the candidate first, which tells a uniform
+offset from real differences.
+
+`PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
+often each view repainted, how long the grid took to build a frame, the gap
+between grid frames, and how many thumbnail files were read.
 
 ## Structure
 
