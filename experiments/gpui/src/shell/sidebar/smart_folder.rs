@@ -139,18 +139,16 @@ impl SmartFolderEditor {
         let name = cx.new(|cx| {
             let mut input = TextInput::dialog("Smart Folder Name", cx);
             input.set_text(name, cx);
+            input.caret_at_end(cx);
             input
         });
         let notes = cx.new(|cx| {
-            let mut input = TextInput::dialog("Notes...", cx);
+            let mut input = TextInput::text_area("Notes...", cx);
             input.set_text(notes, cx);
             input
         });
         let subscriptions = vec![
             cx.subscribe_in(&name, window, |this, _, _: &Submitted, window, cx| {
-                this.save(window, cx)
-            }),
-            cx.subscribe_in(&notes, window, |this, _, _: &Submitted, window, cx| {
                 this.save(window, cx)
             }),
             cx.observe(&name, |_, _, cx| cx.notify()),
@@ -1346,13 +1344,15 @@ impl Render for SmartFolderEditor {
                             ),
                     ),
                 )
-                // TODO: notes are a three-row text area (`GlassTextarea`);
-                // the prototype's text field is one line.
-                .child(section(false).child(label("Notes", cx)).child(ui::field(
-                    "smart-folder-notes",
-                    &self.notes,
-                    Look::Modal,
-                )));
+                .child(section(false).child(label("Notes", cx)).child(
+                    // A `<textarea>` sits on its line's baseline, so the
+                    // line's descent (5px at 13px) shows below it.
+                    div().pb(px(5.)).child(ui::field(
+                        "smart-folder-notes",
+                        &self.notes,
+                        Look::TextArea,
+                    )),
+                ));
         }
         if self.shows_rules() {
             let mut conditions = div().flex().flex_col().gap(px(12.));

@@ -542,9 +542,11 @@ impl Render for LibraryPopover {
         let mut rows = div().flex().flex_col();
         if shown.is_empty() {
             rows = rows.child(
+                // `.empty`: 12px on the popover's 1.55 line (18.6px).
                 div()
                     .p(px(16.))
                     .text(theme::TEXT_SM)
+                    .line_height(px(18.6))
                     .text_color(theme.text_tertiary())
                     .flex()
                     .justify_center()

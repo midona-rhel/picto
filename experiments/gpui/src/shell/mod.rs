@@ -649,6 +649,16 @@ impl Render for Shell {
         // included, and slides as one piece.
         // While it fades out it keeps its width over the content that has
         // already taken the window's.
+        let edge_fade =
+            window.use_keyed_state("inspector-resize-edge", cx, |_, _| motion::Fade::default());
+        let edge = if self.resizing.is_some() {
+            1.
+        } else {
+            edge_fade.read(cx).value()
+        };
+        if edge_fade.read(cx).animating() {
+            window.request_animation_frame();
+        }
         let inspector = (inspector_shown > 0. && inspector_hidden < 1.).then(|| {
             let inspector_width = self.inspector_width;
             div()
@@ -661,28 +671,6 @@ impl Render for Shell {
                 .flex()
                 .flex_col()
                 .bg(theme.rail())
-                // The rail's edge is its resize handle (`.inspectorResizeHandle`):
-                // 5px wide over the content, so it takes no width itself.
-                .child(
-                    div()
-                        .id("inspector-resize")
-                        .occlude()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(5.))
-                        .cursor(CursorStyle::ResizeColumn)
-                        .border_l_1()
-                        .border_color(theme.border_secondary())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                                this.resizing = Some((event.position.x, this.inspector_width));
-                                cx.stop_propagation();
-                            }),
-                        ),
-                )
                 .child(
                     ui::drag_region("inspector-titlebar", window, cx)
                         .h(px(theme::TITLEBAR_HEIGHT))
@@ -723,6 +711,52 @@ impl Render for Shell {
                         .flex_1()
                         .min_h_0()
                         .child(self.inspector.clone().cached(fill())),
+                )
+                // The rail's edge is its resize handle (`.inspectorResizeHandle`):
+                // 5px wide over the content, so it takes no width itself.
+                // Under the pointer or while dragging, its 1px border grows
+                // to 2px in the text colour over 200 ms (production's
+                // `--color-primary-70` is undefined there, so the border takes
+                // `currentColor`), and goes back 100 ms after the pointer leaves.
+                .child(
+                    div()
+                        .id("inspector-resize")
+                        .occlude()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(5.))
+                        .cursor(CursorStyle::ResizeColumn)
+                        .border_l(px(1. + edge))
+                        .border_color(theme::blend(theme.border_secondary(), theme.text(), edge))
+                        .on_hover(move |hovered, _, cx| {
+                            edge_fade.update(cx, |fade, cx| {
+                                let delay = if *hovered {
+                                    std::time::Duration::ZERO
+                                } else {
+                                    motion::RESIZE_EDGE_DELAY
+                                };
+                                fade.set_after(*hovered, motion::NORMAL, delay);
+                                cx.notify();
+                            })
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                this.resizing = Some((event.position.x, this.inspector_width));
+                                cx.stop_propagation();
+                            }),
+                        )
+                        // The handle lies over the window's own release
+                        // listener while the pointer is on it.
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.resizing = None;
+                                cx.notify();
+                            }),
+                        ),
                 )
         });
         let titlebar = div()
@@ -774,6 +808,12 @@ impl Render for Shell {
             })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some((from, width)) = this.resizing {
+                    // A release the window did not see ends the drag.
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        this.resizing = None;
+                        cx.notify();
+                        return;
+                    }
                     let wanted = width + f32::from(from - event.position.x);
                     this.inspector_width = wanted
                         .round()

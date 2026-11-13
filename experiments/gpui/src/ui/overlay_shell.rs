@@ -128,6 +128,18 @@ pub fn place_below(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: 
     }
 }
 
+/// `anchorPlacement: 'above'`: the panel's bottom 4px above the anchor,
+/// from its left edge, kept 12px inside the window.
+pub fn place_above(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: f32) -> Geometry {
+    let left = anchor.x.min(viewport.width - width - MARGIN).max(MARGIN);
+    let top = (anchor.y - height - 4.).max(MARGIN);
+    Geometry {
+        right: None,
+        left: left.round(),
+        top: top.round(),
+    }
+}
+
 /// The panel dragged by `delta` from `start`, kept 12px inside the window.
 pub fn dragged(
     start: Geometry,
@@ -170,6 +182,7 @@ pub struct OverlayShell {
     on_close: Handler,
     on_move: Option<MoveHandler>,
     on_nav: Option<NavHandler>,
+    layer: usize,
 }
 
 /// A panel at `geometry`, `width` × `height`. `focus` takes the keyboard
@@ -195,10 +208,17 @@ pub fn overlay_shell(
         on_close: Rc::new(on_close),
         on_move: None,
         on_nav: None,
+        layer: 5,
     }
 }
 
 impl OverlayShell {
+    /// The layer the panel is drawn on: above a dialog (`ui::modal`, 10)
+    /// when a dialog opened it, as the portal that follows the dialog's is.
+    pub fn layer(mut self, layer: usize) -> Self {
+        self.layer = layer;
+        self
+    }
     /// Pinned, the backdrop goes and only Escape closes the panel.
     pub fn pinned(mut self, pinned: bool) -> Self {
         self.pinned = pinned;
@@ -292,6 +312,9 @@ impl RenderOnce for OverlayShell {
             .relative()
             .w(px(width))
             .h(px(height))
+            // The glass edges are drawn over the panel; the 1px each takes
+            // in production's border box is kept clear here.
+            .p(px(1.))
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -454,7 +477,7 @@ impl RenderOnce for OverlayShell {
                 .position(point(px(0.), px(0.)))
                 .child(layer.child(panel)),
         )
-        .with_priority(5)
+        .with_priority(self.layer)
     }
 }
 
@@ -554,8 +577,17 @@ pub fn hint(cx: &App) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Geometry, dragged, place};
+    use super::{Geometry, dragged, place, place_above};
     use gpui::{point, size};
+
+    #[test]
+    fn a_panel_opens_above_its_button_within_the_window() {
+        let geometry = place_above(point(420., 600.), size(1200., 800.), 340., 480.);
+        assert_eq!((geometry.left(340.), geometry.top), (420., 116.));
+        // Too near the top or the right edge, it stays 12px inside.
+        let geometry = place_above(point(1000., 300.), size(1200., 800.), 340., 480.);
+        assert_eq!((geometry.left(340.), geometry.top), (848., 12.));
+    }
 
     #[test]
     fn a_panel_opens_left_of_the_inspector_at_its_button() {

@@ -149,6 +149,8 @@ impl RenderOnce for DatePicker {
             .flex()
             .items_center()
             .gap(px(7.))
+            // `font-variant-numeric: tabular-nums`
+            .font_features(theme::tabular_figures())
             .overflow_hidden()
             .rounded(px(theme::RADIUS_MD))
             .border_1()

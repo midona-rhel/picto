@@ -11,15 +11,18 @@ actions!(
     [FocusNext, FocusPrevious, OpenFocused, LeaveRows, EnterRows]
 );
 
+/// The rows, but not a rename field open in one: its keys are its own.
+const ROWS: &str = "SidebarRows && !TextInput";
+
 pub fn bind(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("down", FocusNext, Some("SidebarRows")),
-        KeyBinding::new("tab", FocusNext, Some("SidebarRows")),
-        KeyBinding::new("up", FocusPrevious, Some("SidebarRows")),
-        KeyBinding::new("shift-tab", FocusPrevious, Some("SidebarRows")),
-        KeyBinding::new("enter", OpenFocused, Some("SidebarRows")),
-        KeyBinding::new("space", OpenFocused, Some("SidebarRows")),
-        KeyBinding::new("escape", LeaveRows, Some("SidebarRows")),
+        KeyBinding::new("down", FocusNext, Some(ROWS)),
+        KeyBinding::new("tab", FocusNext, Some(ROWS)),
+        KeyBinding::new("up", FocusPrevious, Some(ROWS)),
+        KeyBinding::new("shift-tab", FocusPrevious, Some(ROWS)),
+        KeyBinding::new("enter", OpenFocused, Some(ROWS)),
+        KeyBinding::new("space", OpenFocused, Some(ROWS)),
+        KeyBinding::new("escape", LeaveRows, Some(ROWS)),
         KeyBinding::new("down", EnterRows, Some("SidebarFilter")),
         KeyBinding::new("tab", EnterRows, Some("SidebarFilter")),
     ]);

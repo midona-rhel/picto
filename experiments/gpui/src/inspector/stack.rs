@@ -27,6 +27,20 @@ pub enum Pose {
 }
 
 impl Pose {
+    /// The resting turn, clockwise.
+    pub fn degrees(self) -> f32 {
+        match self {
+            Pose::Base => 0.,
+            Pose::Left => -5.,
+            Pose::Right => 5.,
+        }
+    }
+
+    /// The resting scale.
+    pub fn scale(self) -> f32 {
+        if self == Pose::Base { 1. } else { TURNED_SCALE }
+    }
+
     fn nth(sequence: usize) -> Self {
         match sequence {
             0 => Pose::Base,

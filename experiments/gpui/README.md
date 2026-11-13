@@ -242,8 +242,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `queryModel.ts` does and reads it back, tested both ways. While rules are
   edited the folder is saved 100 ms after each change so the grid follows;
   Cancel writes the rules it opened with back. Enter saves.
-- Set Auto Tags (`FolderAutoTagsModal`): the tags all chosen folders share,
-  saved at each change through `set_folder_auto_tags`. Auto-Import Folder
+- Set Auto Tags (`FolderAutoTagsModal`): the tags all chosen folders share
+  in `TagAssignmentControl` (the label, the tags as chips with their remove
+  buttons, and "Add tags" or the square add button), which opens the tag
+  picker above it, over the dialog; each change is saved at once through
+  `set_folder_auto_tags`. Auto-Import Folder
   (`FolderWatchModal`): the directory from the system's folder chooser,
   Enable Watch, Watch Subfolders, Import Status, Remove Watch, stored with
   `set_folder_watch` or `clear_folder_watch`.
@@ -355,12 +358,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   then fades out. Changing destination follows `WorkspaceSurface.tsx`: 170 ms
   fade-out on `--ease-default`, hidden until the first page is ready, 170 ms
   fade-in; clicks during the fade-out retarget it.
-- Inspector for the selected item: fitted preview with its format badge,
-  colour palette (a click opens the filter bar with that colour in its
-  colour filter), name,
+- Inspector for the selected item: preview at the thumbnail's own size
+  (at most 200px) with its format badge, colour palette (a click opens the
+  filter bar with that colour in its colour filter, a right-click its menu of
+  Filter by color and the seven Copy rows, its tooltip says "Copied!" for
+  1.5 s after a copy), name,
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
-  inspector lists. Its left edge drags between 260 and 550px.
+  inspector lists, Export and Auto Tag. Its left edge drags between 260 and
+  550px and, under the pointer or while dragged, grows to 2px in the text
+  colour.
 - The Settings window (`Settings.tsx`), opened by the titlebar's Settings
   button, ⌘, and the app menu, as production opens it: a separate 900×650
   window, no smaller, with the traffic lights hidden in favour of its own
@@ -479,7 +486,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shared dialog.
 - Inspector with several items selected, from the library's selection
   summary: the stacked preview of the last six covers chosen with its
-  shade, the turned cards' scale and the enter and exit motion, "N items
+  shade, the turned cards turned and scaled, the enter and exit motion, "N items
   selected", the shared notes and sources, folder and tag chips shared by
   all (removing one removes it from every item), a shared rating that rates
   all of them, and Media and Size.
@@ -913,31 +920,37 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Random hides the direction pill. The bar, the tag picker in its filter
   mode, the colour editor and the view menu have been seen drawn off-screen;
   the calendar, the range editors and saved filters have not.
-- Inspector: the stacked preview's cards cannot turn (GPUI rotates only
-  SVGs), so they lie straight; the folder card's radial light is a vertical
-  gradient. Auto Tag,
-  the subfolder scope, the summary spinners and the 250 ms switch to the
-  loading skeleton are not ported, and a selection's covers follow the order
-  items were chosen in this session, not the Electron query-selection order
-  for ranges and Select All.
+- Inspector: a turned stack card is drawn into a bitmap of its own off the
+  drawing thread (`inspector/turned.rs`); it lies straight until that is
+  ready, and while it enters it grows and fades but keeps its resting turn
+  instead of turning from 10 to 5 degrees. The folder card's radial light is
+  a vertical gradient. Auto Tag is drawn (dimmed when nothing in it is an
+  image) but the AI tagger it opens is a `TODO`. The subfolder scope, the
+  summary spinners and the 250 ms switch to the loading skeleton are not
+  ported, and a selection's covers follow the order items were chosen in this
+  session, not the Electron query order, for shift ranges.
 - Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: Import Folder (Here)... and Export
-  (`TODO`s); watching a directory (the
+- Not in the sidebar yet: Import Folder (Here)... and the Export submenu's
+  three rows (`TODO`s); watching a directory (the
   watch is stored, the watcher is a `TODO`, and the dialog does not check the
   folder's structure). The activity
   button's tooltip opens below it, not to its right as `position="right"`
   puts it. Tab from the grid
   toggles the panels as in production, so the rows are entered from the
-  tree filter; section headers are not in the keyboard order. The smart-folder
-  editor's notes are one line rather than a three-row text area, the file types are the
+  tree filter; section headers are not in the keyboard order. In production
+  Down in the tree filter does nothing and Tab leaves it for the grid, so
+  this row keyboard has no Electron counterpart; whether to keep it is open.
+  Production's folder drag ghost is drawn 48px below the pointer (its
+  `position: fixed` is measured from the rail below the titlebar); here it
+  sits on the pointer as `Sidebar.tsx` means it to. The smart-folder
+  editor's notes text area does not scroll past its three lines or show
+  the resize grip, the file types are the
   six built-in choices rather than the accepted formats, and a failed save
-  or preview shows in the dialog rather than as a notification. Set Auto
-  Tags edits the tags with the tag token input, not production's tag
-  assignment control and tag picker. The icon picker shows the sidebar's
+  or preview shows in the dialog rather than as a notification. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
   tiles light at once rather than over 50 ms. Dragging items out of the
   window and reordering a folder's items by dragging are not built. Folded

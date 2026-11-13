@@ -508,6 +508,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
         };
         match entry {
             Entry::Separator => {
+                // After any row, a swatch row or a view included.
                 if rows.last().is_some_and(|row| *row != Row::Separator) {
                     rows.push(Row::Separator);
                 }
@@ -2328,16 +2329,24 @@ mod tests {
             clean(&entries, None),
             vec![Row::Entry(top(1)), Row::Separator, Row::Entry(top(4))]
         );
-        // A row that is not an item (a panel or swatches) keeps the
-        // separator after it, as the view menu's panels have one between.
+    }
+
+    #[test]
+    fn a_swatch_row_keeps_the_separator_after_it() {
         let entries: Vec<Entry> = vec![
-            swatches("colour", Vec::new(), None).into(),
+            item("a", "A").into(),
+            swatches("color", Vec::new(), None).into(),
             Entry::Separator,
             item("b", "B").into(),
         ];
         assert_eq!(
             clean(&entries, None),
-            vec![Row::Swatches(top(0)), Row::Separator, Row::Entry(top(2))]
+            vec![
+                Row::Entry(top(0)),
+                Row::Swatches(top(1)),
+                Row::Separator,
+                Row::Entry(top(3))
+            ]
         );
     }
 
