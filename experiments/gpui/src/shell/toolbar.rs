@@ -56,7 +56,16 @@ impl Toolbar {
             cx.subscribe(
                 &session,
                 |this, session, change: &Change, cx| match change {
-                    Change::Navigation => cx.notify(),
+                    Change::Navigation => {
+                        // A destination opens without a search; the field
+                        // empties with it.
+                        if session.read(cx).search_text().is_empty()
+                            && !this.search.read(cx).is_empty()
+                        {
+                            this.search.update(cx, |search, cx| search.clear(cx));
+                        }
+                        cx.notify()
+                    }
                     Change::Viewer => {
                         let session = session.read(cx);
                         this.viewer_exit =

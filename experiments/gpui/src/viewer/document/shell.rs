@@ -7,7 +7,7 @@ use crate::{theme, ui};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
-type MeasureHandler = Box<dyn Fn(Bounds<Pixels>, &mut App) + 'static>;
+type MeasureHandler = Box<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
 /// `.viewport`'s padding around the page.
 pub const VIEWPORT_PADDING: f32 = 24.;
@@ -62,8 +62,13 @@ impl DocumentShell {
         self
     }
 
-    /// Reports the viewport's bounds, padding included, every frame.
-    pub fn on_measure(mut self, handler: impl Fn(Bounds<Pixels>, &mut App) + 'static) -> Self {
+    /// Reports the viewport's bounds, padding included, every frame, while
+    /// the frame is being drawn: a handler that changes what is drawn must
+    /// ask for another frame (`Window::request_animation_frame`).
+    pub fn on_measure(
+        mut self,
+        handler: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_measure = Some(Box::new(handler));
         self
     }
@@ -76,9 +81,12 @@ impl RenderOnce for DocumentShell {
         let can_next = self.count > 0 && self.page < self.count && self.on_next.is_some();
 
         let measure = self.on_measure.map(|measure| {
-            canvas(move |bounds, _, cx| measure(bounds, cx), |_, _, _, _| {})
-                .absolute()
-                .size_full()
+            canvas(
+                move |bounds, window, cx| measure(bounds, window, cx),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
         });
         let body: AnyElement = match self.error {
             // `.message`: 12px on a 1.5 line, centred in the viewport.

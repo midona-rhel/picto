@@ -253,7 +253,7 @@ impl Render for ReaderViewer {
             .on_next(move |_, cx| {
                 let _ = next.update(cx, |this, cx| this.next_page(cx));
             })
-            .on_measure(move |bounds, cx| {
+            .on_measure(move |bounds, window, cx| {
                 let available = (
                     (f32::from(bounds.size.width) - 2. * VIEWPORT_PADDING).max(0.),
                     (f32::from(bounds.size.height) - 2. * VIEWPORT_PADDING).max(0.),
@@ -262,28 +262,25 @@ impl Render for ReaderViewer {
                     if this.available != available {
                         this.available = available;
                         cx.notify();
+                        // Notified while drawing: ask for the frame too.
+                        window.request_animation_frame();
                     }
                 });
             })
     }
 }
 
-/// The vertical margins a block takes, top and bottom, in pixels, by the
-/// browser's defaults and the page's rules.
-pub fn margins(block: &Block, font_size: f32) -> (f32, f32) {
-    match block {
-        // `margin: 1.4em 0 0.55em` in the heading's own size.
-        Block::Heading(level, _) => {
+/// The vertical margins a block takes, top and bottom, in pixels. The
+/// app's stylesheet starts with `* { margin: 0; padding: 0 }`, so only the
+/// text page's heading rule gives a block any: `margin: 1.4em 0 0.55em` in
+/// the heading's own size. A book's headings have none.
+pub fn margins(block: &Block, font_size: f32, style: PageStyle) -> (f32, f32) {
+    match (block, style) {
+        (Block::Heading(level, _), PageStyle::Text) => {
             let size = heading_size(*level, font_size);
             (1.4 * size, 0.55 * size)
         }
-        Block::Paragraph(_)
-        | Block::Preformatted(_)
-        | Block::Quote(_)
-        | Block::List { .. }
-        | Block::Table(_) => (font_size, font_size),
-        Block::Rule => (0.5 * font_size, 0.5 * font_size),
-        Block::Picture(_) => (0., 0.),
+        _ => (0., 0.),
     }
 }
 
@@ -303,16 +300,16 @@ pub fn heading_size(level: u8, font_size: f32) -> f32 {
 /// Spacing between blocks as collapsed margins: the larger of the two
 /// margins that meet. The page's first heading of level 1 or 2 has no top
 /// margin (`h1:first-child`).
-pub fn spacing(blocks: &[Block], font_size: f32) -> Vec<(f32, f32)> {
+pub fn spacing(blocks: &[Block], font_size: f32, style: PageStyle) -> Vec<(f32, f32)> {
     blocks
         .iter()
         .enumerate()
         .map(|(index, block)| {
-            let (top, bottom) = margins(block, font_size);
+            let (top, bottom) = margins(block, font_size, style);
             let above = match index {
                 0 if matches!(block, Block::Heading(1 | 2, _)) => 0.,
                 0 => top,
-                _ => top.max(margins(&blocks[index - 1], font_size).1),
+                _ => top.max(margins(&blocks[index - 1], font_size, style).1),
             };
             let below = if index + 1 == blocks.len() {
                 bottom
@@ -351,7 +348,7 @@ fn blocks_view(blocks: &[Block], style: PageStyle) -> Vec<AnyElement> {
             .collect();
     }
     let font_size = style.font_size();
-    let spaces = spacing(blocks, font_size);
+    let spaces = spacing(blocks, font_size, style);
     blocks
         .iter()
         .zip(spaces)
@@ -369,32 +366,44 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
     match block {
         Block::Heading(level, inline) => {
             let size = heading_size(*level, font_size);
+            // The text page's headings are on a 1.25 line; a book's keep
+            // the page's 1.65.
+            let line = match style {
+                PageStyle::Text => 1.25,
+                PageStyle::Book => 1.65,
+            };
             div()
                 .text_size(px(size))
-                .line_height(px((size * 1.25).round()))
+                .line_height(px((size * line).round()))
                 .font_weight(FontWeight::BOLD)
-                .child(styled_text(inline))
+                .child(styled_text(inline, style))
                 .into_any_element()
         }
-        Block::Paragraph(inline) => div().child(styled_text(inline)).into_any_element(),
-        Block::Preformatted(text) => div()
-            .px(px(0.3 * font_size))
-            .py(px(0.12 * font_size))
-            .rounded(px(theme::RADIUS_SM))
-            .bg(rgb(theme::DOCUMENT_CODE))
-            .font_family(theme::FONT_MONO)
-            .child(expand_tabs(text))
-            .into_any_element(),
+        Block::Paragraph(inline) => div().child(styled_text(inline, style)).into_any_element(),
+        // `<pre><code>`: the text page's `code` rule tints the code as wide
+        // as its text, not the page; a book has no such rule.
+        Block::Preformatted(text) => {
+            let code = div().font_family(theme::FONT_MONO).child(expand_tabs(text));
+            let code = match style {
+                PageStyle::Text => code
+                    .px(px(0.3 * font_size))
+                    .py(px(0.12 * font_size))
+                    .rounded(px(theme::RADIUS_SM))
+                    .bg(rgb(theme::DOCUMENT_CODE)),
+                PageStyle::Book => code,
+            };
+            div().flex().child(code).into_any_element()
+        }
         // The text page's `blockquote` rule: 16px in behind a 3px rule,
-        // greyed. A book has no rule of its own, so the browser's 40px
-        // margins on either side apply.
+        // greyed. A book's quote has no rule, and the reset takes the
+        // browser's 40px margins away.
         Block::Quote(inner) => match style {
             PageStyle::Text => div()
                 .pl(px(16.))
                 .border_l(px(3.))
                 .border_color(rgb(theme::DOCUMENT_QUOTE_RULE))
                 .text_color(rgb(theme::DOCUMENT_QUOTE)),
-            PageStyle::Book => div().mx(px(40.)),
+            PageStyle::Book => div(),
         }
         .flex()
         .flex_col()
@@ -408,39 +417,48 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
                     Some(start) => format!("{}.", start + index as u64),
                     None => "•".to_owned(),
                 };
-                // `padding-left: 40px`, the marker outside the item's box.
+                // The reset leaves a list no padding: the items are as wide
+                // as the page's text and the marker hangs outside, left of
+                // the item's box.
                 div()
+                    .relative()
                     .flex()
+                    .flex_col()
                     .child(
                         div()
-                            .w(px(40.))
-                            .flex_none()
-                            .flex()
-                            .justify_end()
+                            .absolute()
+                            .top_0()
+                            .right(relative(1.))
                             .pr(px(6.))
+                            .whitespace_nowrap()
                             .child(marker),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            // A tight list's paragraphs carry no margins.
-                            .children(item.iter().map(|block| block_view(block, style, font_size))),
-                    )
+                    .children(item.iter().map(|block| block_view(block, style, font_size)))
             }))
             .into_any_element(),
-        Block::Table(rows) => div()
-            .flex()
-            .flex_col()
-            .children(rows.iter().map(|row| {
-                div().flex().children(
-                    row.iter()
-                        .map(|cell| div().flex_1().min_w_0().p(px(1.)).child(styled_text(cell))),
-                )
-            }))
-            .into_any_element(),
+        // A table as the browser lays one out once the reset has taken its
+        // cells' padding: each column as wide as its widest cell, 2px of
+        // border spacing around and between them. Laid out column by
+        // column, so the columns line up; a row is one line high.
+        Block::Table(rows) => {
+            let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+            div()
+                .flex()
+                .p(px(2.))
+                .gap(px(2.))
+                .children((0..columns).map(|column| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .children(rows.iter().map(|row| {
+                            div()
+                                .whitespace_nowrap()
+                                .children(row.get(column).map(|cell| styled_text(cell, style)))
+                        }))
+                }))
+                .into_any_element()
+        }
         Block::Rule => div()
             .h(px(2.))
             .border_t_1()
@@ -456,12 +474,13 @@ fn block_view(block: &Block, style: PageStyle, font_size: f32) -> AnyElement {
 }
 
 /// Inline styles as text highlights: bold, italic, struck, links in the
-/// link colour and underlined, code in the monospace face on its tint.
-fn styled_text(inline: &Inline) -> StyledText {
+/// link colour and underlined, code in the monospace face, on its tint on
+/// the text page (a book has no `code` rule).
+fn styled_text(inline: &Inline, style: PageStyle) -> StyledText {
     let highlights: Vec<_> = inline
         .marks
         .iter()
-        .map(|(range, marks)| (range.clone(), highlight(*marks)))
+        .map(|(range, marks)| (range.clone(), highlight(*marks, style)))
         .collect();
     let code: Vec<_> = inline
         .marks
@@ -474,7 +493,7 @@ fn styled_text(inline: &Inline) -> StyledText {
         .with_font_family_overrides(code)
 }
 
-fn highlight(marks: Marks) -> HighlightStyle {
+fn highlight(marks: Marks, page: PageStyle) -> HighlightStyle {
     let mut style = HighlightStyle::default();
     if marks.bold {
         style.font_weight = Some(FontWeight::BOLD);
@@ -497,7 +516,7 @@ fn highlight(marks: Marks) -> HighlightStyle {
             wavy: false,
         });
     }
-    if marks.code {
+    if marks.code && page == PageStyle::Text {
         style.background_color = Some(rgb(theme::DOCUMENT_CODE).into());
     }
     style
@@ -532,7 +551,7 @@ pub fn expand_tabs(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, Inline, expand_tabs, spacing};
+    use super::{Block, Inline, PageStyle, expand_tabs, spacing};
 
     #[test]
     fn tabs_run_to_the_next_stop() {
@@ -546,12 +565,23 @@ mod tests {
             Block::Paragraph(Inline::plain("one")),
             Block::Paragraph(Inline::plain("two")),
         ];
-        let spaces = spacing(&blocks, 14.);
+        let spaces = spacing(&blocks, 14., PageStyle::Text);
         // The first heading sits on the padding; the paragraph after it is
-        // the larger of 0.55 × 28 and 14 below it; paragraphs are 14 apart
-        // and the last keeps its bottom margin.
+        // the heading's 0.55 × 28 below it; paragraphs have no margins of
+        // their own (the stylesheet's reset).
         assert_eq!(spaces[0], (0., 0.));
         assert!((spaces[1].0 - 15.4).abs() < 1e-4 && spaces[1].1 == 0.);
-        assert_eq!(spaces[2], (14., 14.));
+        assert_eq!(spaces[2], (0., 0.));
+    }
+
+    #[test]
+    fn a_book_has_no_margins() {
+        let blocks = [
+            Block::Paragraph(Inline::plain("one")),
+            Block::Heading(2, Inline::plain("Two")),
+            Block::Paragraph(Inline::plain("three")),
+        ];
+        let spaces = spacing(&blocks, 16., PageStyle::Book);
+        assert!(spaces.iter().all(|space| *space == (0., 0.)));
     }
 }

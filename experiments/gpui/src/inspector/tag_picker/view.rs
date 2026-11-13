@@ -488,6 +488,7 @@ impl TagPicker {
                         Layout::Grid
                     };
                     this.focus_index = None;
+                    this.keep_layout(cx);
                     cx.notify();
                 });
             },
@@ -537,6 +538,7 @@ impl TagPicker {
                     ))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.counts = !this.counts;
+                        this.keep_layout(cx);
                         cx.notify();
                     })),
             );
