@@ -58,6 +58,9 @@ pub struct Options {
     /// A collection member in the reader (`GroupDeferredRenderer`): video
     /// and audio wait to be played, do not loop and start with sound.
     pub member: bool,
+    /// `showTransparencyGrid`: a checkerboard behind images, which shows
+    /// through their transparent parts.
+    pub transparency_grid: bool,
 }
 
 impl Default for Options {
@@ -68,6 +71,7 @@ impl Default for Options {
             scroll_pans: false,
             follows_resize: false,
             member: false,
+            transparency_grid: false,
         }
     }
 }
@@ -947,10 +951,27 @@ impl MediaSurface {
                 .into_any_element()
         };
         let full = self.full.clone().filter(|_| self.full_key == self.shown);
-        match full {
-            Some(full) => vec![place(full)],
-            None => self.thumbnail.clone().map(place).into_iter().collect(),
+        let mut layers = Vec::new();
+        if self.options.transparency_grid {
+            let scale = self.camera.scale;
+            layers.push(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_checkerboard(bounds, scale, window),
+                )
+                .absolute()
+                .left(px(left))
+                .top(px(top))
+                .w(px(width))
+                .h(px(height))
+                .into_any_element(),
+            );
         }
+        match full {
+            Some(full) => layers.push(place(full)),
+            None => layers.extend(self.thumbnail.clone().map(place)),
+        }
+        layers
     }
 
     /// `.navigator`: the thumbnail in a 120px square at the bottom right,
@@ -1376,5 +1397,44 @@ impl MediaSurface {
         let y =
             (f32::from(position.y - self.bounds.origin.y) - (height - 720. * scale) / 2.) / scale;
         (x as f64, y as f64)
+    }
+}
+
+/// Paints `.transparencyGrid` over `bounds`, the image's place, with
+/// squares 8 image pixels wide at `scale`. Squares too small to tell apart
+/// are painted as the even grey they blend into.
+fn paint_checkerboard(bounds: Bounds<Pixels>, scale: f32, window: &mut Window) {
+    let visible = window.content_mask().bounds.intersect(&bounds);
+    if visible.size.width <= px(0.) || visible.size.height <= px(0.) {
+        return;
+    }
+    let rect = |bounds: Bounds<Pixels>| {
+        (
+            f32::from(bounds.origin.x),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        )
+    };
+    let side = 8. * scale;
+    let (_, _, width, height) = rect(visible);
+    if width * height / (side * side) > 40_000. {
+        let light = rgb(theme::TRANSPARENCY_GRID_LIGHT);
+        let dark = rgb(theme::TRANSPARENCY_GRID_DARK);
+        let blend = Rgba {
+            r: (light.r + dark.r) / 2.,
+            g: (light.g + dark.g) / 2.,
+            b: (light.b + dark.b) / 2.,
+            a: 1.,
+        };
+        window.paint_quad(fill(visible, blend));
+        return;
+    }
+    window.paint_quad(fill(visible, rgb(theme::TRANSPARENCY_GRID_LIGHT)));
+    for (x, y, w, h) in camera::checker_squares(rect(bounds), rect(visible), side) {
+        window.paint_quad(fill(
+            Bounds::new(point(px(x), px(y)), size(px(w), px(h))),
+            rgb(theme::TRANSPARENCY_GRID_DARK),
+        ));
     }
 }

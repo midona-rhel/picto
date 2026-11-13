@@ -340,8 +340,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   ↑/↓ to the ends of a one-line field); the text's ends (⌘↑/↓); paragraphs
   (⌥↑/↓, ⌃A/E, ⌃K with its kill buffer and ⌃Y); the Emacs keys
   (⌃F/B/N/P/D/H/T/O); Undo and Redo of the field's own edits on the
-  registry's keys, typing gathered into runs, passing on to the library's
-  Undo when the field has nothing to take back; double-click a word,
+  registry's keys, typing gathered into runs, never reaching the library's
+  Undo, as in production; double-click a word,
   triple-click the line, drags by word or line that scroll past the edge;
   a secondary click selects the word; pasted line breaks become spaces in a
   one-line field; Chromium's selection on wrapped rows, and the caret at the
@@ -1363,18 +1363,13 @@ element (`shell/rails.rs`).
   are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
-  itself. Export and Export As are bound to the export actions, which
-  nothing handles yet.
+  itself.
 - Application menu: rows whose feature is missing are present and disabled:
   Library Manager, New Library, Open Library and Recent Libraries (only the
-  open library is listed; opening real libraries awaits a decision), Import
-  Picto Pack, the three Export rows (until the export area handles
-  `keymap::ExportOriginals`, `ExportAs`, `ExportPictoPack`), Check for
-  Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
-  outside a text field copies nothing (production's ⌘C copies files), and
-  Undo and Redo do nothing while a text field has the keyboard (fields keep
-  no history). A row is enabled by whether its action has a handler where
-  the keyboard is, so the selection's rows are disabled while Settings or a
+  open library is listed; opening real libraries awaits a decision), Check
+  for Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
+  outside a text field copies nothing (production's ⌘C copies files). A
+  row is enabled by whether its action has a handler where the keyboard is, so the selection's rows are disabled while Settings or a
   detail window is in front, where production's stay enabled and do
   nothing; Set Rating's submenu title stays enabled (AppKit enables a row
   with a submenu), its rows are not. A key the window leaves alone reaches

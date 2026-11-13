@@ -1798,6 +1798,43 @@ impl Render for GridView {
                 .size_full(),
             );
         }
+        // Settings › Controls "Mouse wheel: Zoom" (`onGridWheel`): the wheel
+        // over the tiles changes the tile size instead of scrolling. The
+        // setting is read when the wheel turns, so a change applies at once.
+        if scrolls {
+            let entity = cx.entity().downgrade();
+            root = root.child(
+                canvas(
+                    |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                    move |_, hitbox, window, _| {
+                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Capture
+                                || !hitbox.is_hovered_at(event.position, window)
+                                || crate::settings::current(cx).grid_wheel_action != "zoom"
+                            {
+                                return;
+                            }
+                            // The browser's `deltaY` is positive scrolling
+                            // down; GPUI's is the other way round.
+                            let delta_y =
+                                -f32::from(event.delta.pixel_delta(window.line_height()).y);
+                            cx.stop_propagation();
+                            let _ = entity.update(cx, |this, cx| {
+                                this.session.update(cx, |session, cx| {
+                                    if let Some(size) = nav::wheel_zoom(session.tile, delta_y) {
+                                        session.set_tile(size, cx);
+                                    }
+                                })
+                            });
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+        }
         if self.dragging
             && let Some(items) = drag::model(cx).read(cx).items.clone()
         {

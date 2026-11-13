@@ -73,9 +73,34 @@ pub fn scroll_into_view(
     }
 }
 
+/// `onGridWheel` with the Controls setting "Mouse wheel: Zoom": the tile
+/// size one wheel event moves to, 25 larger scrolling up and 25 smaller
+/// scrolling down, within 150 to 900. `delta_y` is the browser's `deltaY`
+/// (positive scrolling down); `None` when there is nothing to change.
+pub fn wheel_zoom(current: f32, delta_y: f32) -> Option<f32> {
+    if delta_y == 0. {
+        return None;
+    }
+    let step = if delta_y < 0. { 25. } else { -25. };
+    let next = (current + step).clamp(150., 900.);
+    (next != current).then_some(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wheel_zooms_by_25_within_150_and_900() {
+        assert_eq!(wheel_zoom(220., -3.), Some(245.));
+        assert_eq!(wheel_zoom(220., 3.), Some(195.));
+        assert_eq!(wheel_zoom(220., 0.), None);
+        assert_eq!(wheel_zoom(890., -1.), Some(900.));
+        assert_eq!(wheel_zoom(900., -1.), None);
+        assert_eq!(wheel_zoom(150., 1.), None);
+        // A size outside the range is brought into it.
+        assert_eq!(wheel_zoom(100., 1.), Some(150.));
+    }
 
     #[test]
     fn steps_stop_at_the_ends() {

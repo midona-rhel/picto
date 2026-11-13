@@ -226,10 +226,11 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
         scroll_pans: settings.viewer_trackpad_gestures,
         follows_resize,
         member: false,
+        transparency_grid: settings.show_transparency_grid,
     }
     // TODO: `imageRendering: pixelated` draws images with nearest-neighbour
-    // sampling and `showTransparencyGrid` draws the checkerboard behind
-    // them; GPUI's image element has neither yet.
+    // sampling; GPUI's image element samples linearly only, and nearest
+    // sampling needs a sampler choice in the vendored renderers.
 }
 
 /// `useRecordMediaView`: opening an item records it for Recently Viewed.
