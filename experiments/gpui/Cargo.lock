@@ -6558,6 +6558,7 @@ dependencies = [
  "ruffle_render_wgpu",
  "rusqlite",
  "rustfft 6.4.1",
+ "same-file",
  "serde_json",
  "smallvec",
  "symphonia",

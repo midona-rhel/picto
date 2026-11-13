@@ -109,22 +109,13 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
     }
     // The same database file reached another way (a hard link) is the real
     // library, whatever the folder is called.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let identity = |path: &Path| {
-            std::fs::metadata(path)
-                .ok()
-                .map(|meta| (meta.dev(), meta.ino()))
-        };
-        let copy = identity(&root.join("library.sqlite"));
-        if copy.is_some() && copy == identity(&source.join("library.sqlite")) {
-            return Err(format!(
-                "{} shares its database with {}; it is not opened",
-                root.display(),
-                source.display()
-            ));
-        }
+    let (copy, real) = (root.join("library.sqlite"), source.join("library.sqlite"));
+    if same_file::is_same_file(&copy, &real).unwrap_or(false) {
+        return Err(format!(
+            "{} shares its database with {}; it is not opened",
+            root.display(),
+            source.display()
+        ));
     }
     Ok(root)
 }

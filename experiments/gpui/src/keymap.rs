@@ -493,16 +493,27 @@ mod tests {
     use crate::settings::registry::{KeyboardPreset, Override, Overrides, SHORTCUT_DEFS, conflict};
     use gpui::{Keystroke, Modifiers, OperatingSystem};
 
+    /// A keystroke written for the Mac, as this platform spells `Mod`.
+    fn spelled(written: &str) -> String {
+        if cfg!(target_os = "macos") {
+            written.to_owned()
+        } else {
+            written.replace("cmd-", "ctrl-")
+        }
+    }
+
     fn parsed(keys: &str) -> Keystroke {
         let written = keystroke(keys).unwrap_or_else(|| panic!("{keys} has no keystroke"));
         Keystroke::parse_with_os(&written, OperatingSystem::Mac)
             .unwrap_or_else(|error| panic!("{keys} as {written}: {error}"))
     }
 
-    fn modifiers(command: bool, control: bool, alt: bool, shift: bool) -> Modifiers {
+    /// `Mod` is Command on the Mac and Control elsewhere.
+    fn modifiers(mod_key: bool, control: bool, alt: bool, shift: bool) -> Modifiers {
+        let mac = cfg!(target_os = "macos");
         Modifiers {
-            platform: command,
-            control,
+            platform: mod_key && mac,
+            control: control || (mod_key && !mac),
             alt,
             shift,
             function: false,
@@ -629,7 +640,7 @@ mod tests {
             ("F5", "f5", "f5", Modifiers::none()),
         ];
         for (keys, written, key, expected) in cases {
-            assert_eq!(keystroke(keys).as_deref(), Some(*written), "{keys}");
+            assert_eq!(keystroke(keys), Some(spelled(written)), "{keys}");
             let stroke = parsed(keys);
             assert_eq!(stroke.key, *key, "{keys}");
             assert_eq!(stroke.modifiers, *expected, "{keys}");
@@ -653,7 +664,7 @@ mod tests {
             bound(KeyboardPreset::Us, &none, "nav.back"),
             [
                 ("alt-left".to_owned(), Scope::App),
-                ("cmd-[".to_owned(), Scope::App)
+                (spelled("cmd-["), Scope::App)
             ]
         );
         assert_eq!(
@@ -714,7 +725,7 @@ mod tests {
         );
         assert_eq!(
             bound(KeyboardPreset::Us, &overrides, "nav.back"),
-            [("cmd-shift-b".to_owned(), Scope::App)]
+            [(spelled("cmd-shift-b"), Scope::App)]
         );
         // The new keys now conflict with nothing; the old ones are free.
         assert_eq!(
@@ -735,11 +746,11 @@ mod tests {
         let none = Overrides::new();
         assert_eq!(
             bound(KeyboardPreset::Us, &none, "file.delete"),
-            [("cmd-backspace".to_owned(), Scope::Grid)]
+            [(spelled("cmd-backspace"), Scope::Grid)]
         );
         assert_eq!(
             bound(KeyboardPreset::Us, &none, "file.removeFromFolder"),
-            [("cmd-backspace".to_owned(), Scope::Grid)]
+            [(spelled("cmd-backspace"), Scope::Grid)]
         );
     }
 

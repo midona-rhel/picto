@@ -4,6 +4,13 @@ use super::{
     Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Playback, Row, ScopeKind,
     Status, Surface, empty_menu, preview_menu, tile_menu, viewer_menu,
 };
+
+/// The row that shows the file in the system's file manager.
+const REVEAL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else {
+    "Show in Explorer"
+};
 use crate::settings::registry;
 use picto_library::ContentSortField;
 
@@ -656,7 +663,7 @@ fn one_picture_in_all_has_every_row_in_order() {
         [
             "Open with Default App",
             "Open With Other...",
-            "Reveal in Finder",
+            REVEAL,
             "Open in New Window",
             "-",
             "Layout >",
@@ -712,7 +719,7 @@ fn one_picture_in_all_has_every_row_in_order() {
     );
     let shortcuts: Vec<_> = [
         "Open with Default App",
-        "Reveal in Finder",
+        REVEAL,
         "Open in New Window",
         "Grayscale",
         "Add to Folder",
@@ -813,7 +820,7 @@ fn the_preview_opens_the_file_or_makes_it_the_cover() {
         labels(&preview_menu(&d, &shortcut)),
         [
             "Open with Default App",
-            "Reveal in Finder",
+            REVEAL,
             "Open in New Window",
             "Set as Library Cover"
         ]
