@@ -64,19 +64,22 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A plain field in the UI font at 13px: dialog inputs and the Tags
+    /// screen's search. Enter submits it; Escape is left to what holds it.
+    Plain,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Plain => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Plain => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +87,7 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Plain => crate::theme::LINE_HEIGHT,
         }
     }
 }
@@ -91,6 +95,9 @@ impl Kind {
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
 pub struct Committed(pub picto_library::RootId, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
+/// Enter was pressed in a [`Kind::Plain`] field.
+pub struct Submitted;
+impl gpui::EventEmitter<Submitted> for TextInput {}
 
 impl TextInput {
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -689,10 +696,19 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|this, _: &Commit, window, cx| {
+                if this.kind == Kind::Plain {
+                    cx.emit(Submitted);
+                    return;
+                }
                 this.commit(cx);
                 window.blur(cx);
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                // A dialog or screen decides what Escape does in its field.
+                if this.kind == Kind::Plain {
+                    cx.propagate();
+                    return;
+                }
                 // The sidebar filter empties on Escape; a stored field goes
                 // back to its saved value.
                 this.content = if this.kind == Kind::Sidebar {
@@ -747,6 +763,19 @@ impl TextInput {
         input.placeholder = placeholder.into();
         input.kind = Kind::Sidebar;
         input
+    }
+    /// A [`Kind::Plain`] field.
+    pub fn plain(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Plain;
+        input
+    }
+    /// Replaces the text, with the caret at its end.
+    pub fn set_text(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.content = value.into();
+        self.selected_range = self.content.len()..self.content.len();
+        cx.notify();
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();

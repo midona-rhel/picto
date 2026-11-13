@@ -16,6 +16,16 @@ pub const MENU_ROW: Duration = Duration::from_millis(30);
 pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
+/// CSS `ease-out`.
+pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
+/// `GlassModal`: `modalIn` and `backdropIn`.
+pub const MODAL_IN: Duration = Duration::from_millis(150);
+/// `GlassModal`: `EXIT_MS`, `modalOut` and `backdropOut`.
+pub const MODAL_OUT: Duration = Duration::from_millis(120);
+/// `ContextMenu`: a submenu closes this long after the pointer leaves its row.
+pub const SUBMENU_CLOSE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Copy, Debug)]
 pub struct CubicBezier {
@@ -71,6 +81,8 @@ pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 pub const NORMAL: Duration = Duration::from_millis(200);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
+/// `GlassInput`: a dialog field's border on focus.
+pub const FIELD_BORDER: Duration = Duration::from_millis(120);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);

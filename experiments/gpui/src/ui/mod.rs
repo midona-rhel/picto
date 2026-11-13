@@ -1,10 +1,12 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
 //! Electron frontend. Views compose these and style nothing themselves.
+mod action_button;
 mod action_row;
 mod chip;
 pub mod field;
 mod icon_button;
 pub mod menu;
+pub mod modal;
 mod panel_section;
 mod scroll_to_top;
 pub mod scrollbar;
@@ -14,10 +16,12 @@ pub mod text_input;
 pub mod tooltip;
 pub mod zoom;
 
+pub use action_button::{Variant, action_button};
 pub use action_row::action_row;
 pub use chip::chip;
 pub use field::field;
 pub use icon_button::icon_button;
+pub use modal::modal;
 pub use panel_section::panel_section;
 pub use scroll_to_top::scroll_to_top;
 pub use scrollbar::scrollbar;

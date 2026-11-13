@@ -118,12 +118,40 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Space/Enter/double-click preview, Escape back, previous/next item, and
   navigation through members of a collection. Thumbnail-first preview with
   asynchronous full decode; stale loads are fenced.
+- The Tags screen (`TagManagerScreen.tsx`): the 184px rail of All, General,
+  Starred, the groups in their preset order and colours with their counts,
+  "Create tag group" and "Delete Unused"; the tags of the chosen group in
+  letter sections (or one "Matches" section while searching), as many
+  columns as fit, with the group's dot, the star, the count and the section
+  rules. Pages of 500 load as the list nears what is loaded, with shimmering
+  placeholders for the rest. Changing group fades the list out over 100 ms
+  and the new one in over 140 ms. The titlebar shows the tag search in place
+  of the grid's controls; the library ranks the matches.
+- The Tags screen's actions, through the library: rename (or merge into a
+  tag of that name), merge into a chosen tag, delete, move to or out of a
+  group, create, rename, recolour and delete groups, delete unused tags, star
+  and unstar (kept in the library's application settings with the group
+  colours), copy a tag's name, and "Filter Items with This Tag", which opens
+  All filtered to the tag as a step of history.
+- Dialogs as `GlassModal` draws them (`ui::modal`): backdrop, glass panel,
+  title bar with its close button, body and footer, the 150 ms fade and rise
+  in and 120 ms fade out, Escape and a click on the backdrop to close. The
+  tag editor, merge picker, group dialogs and confirmations use it, with the
+  shared action button (`actionButton.module.css`) and dialog fields.
+- Context menus have submenus (open on hover, close 150 ms after the pointer
+  leaves, arrow keys), a row of colour swatches, and the search field long
+  menus get, which also finds submenu rows.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-- Tags, Subscriptions and Duplicates are sidebar rows without screens.
+- Subscriptions and Duplicates are sidebar rows without screens.
+- Tags screen: ⌘F does not move to its search; a failed save of the tag
+  preferences shows in the screen's error banner, not as a toast; the editor's
+  name field is dimmed while an edit runs but still takes typing; Undo does
+  not reach tag edits; tag and group changes made elsewhere show when the
+  screen is opened again, not live.
 - Drawn with their hover states and tooltips but not wired: Settings, View
   options, the section headers' add buttons, the inspector's Add to Folder,
   Add Tags, Export, source-address list and Pin, and the library switcher.
@@ -143,14 +171,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
-- Context menus have no submenus or search row yet, exist only for grid
-  items, and are drawn inside the window, so they cannot extend past its
-  edge. "Delete Permanently" is shown disabled: the prototype reads the
-  library's files in place and must never delete them.
+- Context menus exist only for grid items and the Tags screen, and are
+  drawn inside the window, so they cannot extend past its edge. "Delete
+  Permanently" is shown disabled: the prototype reads the library's files in
+  place and must never delete them.
 - No import/export, subscriptions, cloud, localization or site login.
   The viewer still has its own header instead of the titlebar's viewer
   toolbar.
-- Motion still to port: modal enter/exit, the inspector's fade when entering
+- Motion still to port: the dialogs' and menus' scale (they fade and move
+  but cannot scale), the inspector's fade when entering
   the grid from the viewer, toasts, the viewer's
   thumbnail-to-original crossfade and its zoom and pan tween, smooth paging,
   progress and spinner loops. A scope change does not yet restore the previous
@@ -181,6 +210,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
 ```
 
 The regular tests cover the three layout modes against hand-computed geometry,
+the Tags screen's sections, rows, ordering, search ranking, shimmer and stored
+preferences, menu search and submenu placement, the dialogs' timing,
 banded visibility against a full scan of 20,000 tiles in every mode, view
 preference fallbacks, grid labels, the reveal timeline, the easing curve
 against the sampled bezier, tree ordering and the text-search gates. The
@@ -225,10 +256,11 @@ One model, separate views, shared components:
 - Each part of the window is its own cached view that repaints only for the
   changes it shows: `shell/` (the root, the sidebar, the toolbar), `grid/`
   (the grid view with its layout, saved view, labels, reveal, keyboard
-  movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
-  presentation).
+  movement and thumbnail cache), `inspector.rs`, `viewer/` (image and Flash
+  presentation) and `screens/` (destinations that are not a grid, such as
+  `screens/tags/`).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu, sidebar row, section header, chip, inspector section, action row,
+  tooltip, context menu, dialog, action button, sidebar row, section header, chip, inspector section, action row,
   field frame and text input, scrollbar, "Return to Top", badge, button, zoom
   control and the titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one

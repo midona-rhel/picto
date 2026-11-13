@@ -140,7 +140,32 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--color-subtle-overlay`: `--color-contrast-10`.
+    pub fn subtle_overlay(&self) -> Rgba {
+        translucent(self.contrast, 10.)
+    }
+    /// `--color-pressed-overlay`: `--color-contrast-20`.
+    pub fn pressed_overlay(&self) -> Rgba {
+        translucent(self.contrast, 20.)
+    }
+    /// `--color-footer-surface`: a modal's footer.
+    pub fn footer_surface(&self) -> Rgba {
+        translucent(self.contrast, 3.)
+    }
+    /// `--color-primary-NN`
+    pub fn primary_at(&self, percent: f32) -> Rgba {
+        translucent(self.primary, percent)
+    }
 }
+
+/// `--color-black-20`: the ring around an action button.
+pub const BLACK_20: u32 = 0x00000033;
+/// `.btnDanger`'s label colour.
+pub const DANGER_TEXT: u32 = 0xff9aa4;
+/// The error banner's text (`TagManagerScreen.module.css` `.error`).
+pub const ERROR_TEXT: u32 = 0xffb4b4;
+/// `GlassModal` `.backdrop`: black at 55%.
+pub const MODAL_BACKDROP: u32 = 0x0000008c;
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
 /// transition passes through it (interpolated with alpha premultiplied).
@@ -249,6 +274,12 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-lg`
+pub const TEXT_LG: f32 = 14.;
+/// `--line-height-md`
+pub const LINE_HEIGHT_MD: f32 = 20.;
+/// `--action-button-height`
+pub const ACTION_BUTTON: f32 = 30.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`

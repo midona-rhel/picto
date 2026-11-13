@@ -128,7 +128,7 @@ impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
-        let (opacity, animating, back, forward, filtered) = {
+        let (opacity, animating, back, forward, filtered, screen) = {
             let session = self.session.read(cx);
             (
                 session.transition.opacity(),
@@ -136,6 +136,7 @@ impl Render for Toolbar {
                 session.can_step_history(-1),
                 session.can_step_history(1),
                 session.filter.is_some(),
+                session.screen(),
             )
         };
         // The scope title fades with the grid.
@@ -157,7 +158,7 @@ impl Render for Toolbar {
                 }))
         };
         let background = theme.background();
-        ui::drag_region("toolbar", window, cx)
+        let bar = ui::drag_region("toolbar", window, cx)
             .relative()
             .size_full()
             // 8px either side from the titlebar, and 8 more on the right
@@ -182,62 +183,70 @@ impl Render for Toolbar {
                 forward,
                 ui::tip("Forward").keys(&["⌥", "→"]),
                 cx,
-            ))
-            .child(
-                // The zoom is centred in the space between the history
-                // buttons and the right-hand controls. It has the app
-                // background, with a short fade on its left, so a long
-                // scope title disappears under it.
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .relative()
-                            .occlude()
-                            .bg(background)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .bottom_0()
-                                    .right(relative(1.))
-                                    .w(px(20.))
-                                    .bg(linear_gradient(
-                                        90.,
-                                        linear_color_stop(clear(background), 0.),
-                                        linear_color_stop(background, 1.),
-                                    )),
-                            )
-                            .child(self.zoom.clone()),
-                    ),
-            )
-            // TODO: open the view menu at the button's left edge, 4px below it.
-            .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
-            .child(div().w(px(4.)).flex_none())
-            .child(
-                // TODO: this opens the filter bar. Until that exists, a
-                // press clears the filter the inspector set.
-                ui::icon_button("filter-library", "toolbar-filter")
-                    .tip(ui::tip("Filter library"))
-                    .toggled(filtered)
-                    .badge(filtered as usize)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.session
-                            .update(cx, |session, cx| session.set_filter(None, cx));
-                    })),
-            )
-            .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
-                ui::field("search", &self.search, Look::Search).icon(
-                    "search",
-                    14.,
-                    8.,
-                    theme.text_tertiary(),
+            ));
+        // A screen with controls of its own shows them instead of the grid's.
+        let screen_controls = match screen {
+            Some(crate::backend::Screen::Tags) => crate::screens::tags::toolbar(cx),
+            _ => None,
+        };
+        if let Some(controls) = screen_controls {
+            return bar.child(div().flex_1()).child(controls);
+        }
+        bar.child(
+            // The zoom is centred in the space between the history
+            // buttons and the right-hand controls. It has the app
+            // background, with a short fade on its left, so a long
+            // scope title disappears under it.
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .relative()
+                        .occlude()
+                        .bg(background)
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .right(relative(1.))
+                                .w(px(20.))
+                                .bg(linear_gradient(
+                                    90.,
+                                    linear_color_stop(clear(background), 0.),
+                                    linear_color_stop(background, 1.),
+                                )),
+                        )
+                        .child(self.zoom.clone()),
                 ),
-            ))
+        )
+        // TODO: open the view menu at the button's left edge, 4px below it.
+        .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
+        .child(div().w(px(4.)).flex_none())
+        .child(
+            // TODO: this opens the filter bar. Until that exists, a
+            // press clears the filter the inspector set.
+            ui::icon_button("filter-library", "toolbar-filter")
+                .tip(ui::tip("Filter library"))
+                .toggled(filtered)
+                .badge(filtered as usize)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.session
+                        .update(cx, |session, cx| session.set_filter(None, cx));
+                })),
+        )
+        .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
+            ui::field("search", &self.search, Look::Search).icon(
+                "search",
+                14.,
+                8.,
+                theme.text_tertiary(),
+            ),
+        ))
     }
 }

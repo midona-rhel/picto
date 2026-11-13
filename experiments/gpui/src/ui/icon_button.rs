@@ -24,6 +24,8 @@ pub struct IconButton {
     id: ElementId,
     icon: &'static str,
     glyph: f32,
+    /// The button's square size, 24px unless a caller sets its own.
+    size: f32,
     disabled: bool,
     toggled: bool,
     badge: Option<usize>,
@@ -36,6 +38,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: &'static str) -> IconButton {
         id: id.into(),
         icon,
         glyph: 16.,
+        size: theme::ICON_BUTTON,
         disabled: false,
         toggled: false,
         badge: None,
@@ -53,6 +56,12 @@ impl IconButton {
     /// The glyph's size, for the few buttons whose artwork is not 16px.
     pub fn glyph(mut self, size: f32) -> Self {
         self.glyph = size;
+        self
+    }
+
+    /// The button's square size, for the few that are not 24px.
+    pub fn size(mut self, size: f32) -> Self {
+        self.size = size;
         self
     }
 
@@ -133,7 +142,7 @@ impl RenderOnce for IconButton {
             .id(self.id)
             .occlude()
             .relative()
-            .size(px(theme::ICON_BUTTON))
+            .size(px(self.size))
             .flex_none()
             .flex()
             .items_center()
@@ -176,7 +185,7 @@ impl RenderOnce for IconButton {
             return button;
         }
         if let Some(tip) = &self.tip {
-            button = button.children(hint.read(cx).layer(tip, theme::ICON_BUTTON, cx));
+            button = button.children(hint.read(cx).layer(tip, self.size, cx));
         }
         let (entered, down, up, out) = (state.clone(), state.clone(), state.clone(), state);
         let release = |state: &Entity<State>, cx: &mut App| {
