@@ -2,6 +2,7 @@
 //! times and counts, as `subscriptionUtils.ts` and the components word them.
 use super::data::{Query, Run, Subscription};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use picto_core::subscriptions::sites::{SITES, SiteEntry};
 
 pub use crate::ui::status_badge::Tone;
 
@@ -174,72 +175,39 @@ pub fn is_gallery_job(subscription: &Subscription) -> bool {
     subscription.queries.len() == 1 && subscription.queries[0].site_id == "ehentai"
 }
 
-/// The sources the application offers, by id: their display names and
-/// example queries. These mirror the source catalog (`sources.list`), which
-/// lives with the source runners rather than in the library.
-const SITES: &[(&str, &str, &str)] = &[
-    ("pixiv", "Pixiv", "風景"),
-    ("pixivuser", "Pixiv (user)", "12345"),
-    ("gelbooru", "Gelbooru", "1girl solo"),
-    ("rule34", "Rule34.xxx", "1girl solo"),
-    ("danbooru", "Danbooru", "1girl solo"),
-    ("hentaifoundry", "Hentai Foundry", "username"),
-    ("deviantart", "DeviantArt", "username"),
-    ("twitter", "Twitter / X", "username"),
-    ("newgrounds", "Newgrounds", "username"),
-    ("furaffinity", "Fur Affinity", "username"),
-    ("patreon", "Patreon", "creator-slug"),
-    ("fanbox", "pixivFANBOX", "creator-slug"),
-    (
-        "subscribestar",
-        "SubscribeStar",
-        "https://www.subscribestar.com/creator-slug",
-    ),
-    ("onlyfans", "OnlyFans", "creator-name"),
-    ("yandere", "Yande.re", "landscape"),
-    ("safebooru", "Safebooru", "1girl solo"),
-    ("e621", "e621", "canine solo"),
-    (
-        "ehentai",
-        "E-Hentai",
-        "https://e-hentai.org/g/12345/67890abcde/",
-    ),
-    (
-        "pawchive",
-        "Pawchive",
-        "https://pawchive.pw/patreon/user/12345",
-    ),
-];
+/// The sources the screen offers (`getSubscriptionSites`): the source
+/// catalog the application answers `sources.list` with, less the sources the
+/// interface leaves out.
+pub fn sites() -> impl Iterator<Item = &'static SiteEntry> {
+    /// `REMOVED_SITE_IDS`
+    const REMOVED: [&str; 1] = ["tumblr"];
+    SITES.iter().filter(|site| !REMOVED.contains(&site.id))
+}
+
+/// The catalog's entry for a source.
+pub fn site(site_id: &str) -> Option<&'static SiteEntry> {
+    sites().find(|site| site.id == site_id)
+}
 
 /// `getSiteLabel`: the source's name, or its id when it is not offered.
 pub fn site_label(site_id: &str) -> String {
-    SITES
-        .iter()
-        .find(|(id, _, _)| *id == site_id)
-        .map_or_else(|| site_id.to_owned(), |(_, name, _)| (*name).to_owned())
+    site(site_id).map_or_else(|| site_id.to_owned(), |site| site.name.to_owned())
 }
 
-/// The sources a query can be added for, by id and name, sorted by name;
-/// galleries are added elsewhere.
-pub fn query_sites() -> Vec<(&'static str, &'static str)> {
-    let mut sites = SITES
-        .iter()
-        .filter(|(id, _, _)| *id != "ehentai")
-        .map(|(id, name, _)| (*id, *name))
-        .collect::<Vec<_>>();
-    sites.sort_by_key(|(_, name)| name.to_lowercase());
+/// The sources sorted by name, as the edit dialog lists them.
+pub fn sites_by_name() -> Vec<&'static SiteEntry> {
+    let mut sites = sites().collect::<Vec<_>>();
+    sites.sort_by_key(|site| site.name.to_lowercase());
     sites
 }
 
-/// The source the add-query bar starts on: the first by name, galleries
-/// aside, by id, and its example query.
-pub fn first_query_site() -> (&'static str, &'static str) {
-    SITES
-        .iter()
-        .filter(|(id, _, _)| *id != "ehentai")
-        .min_by_key(|(_, name, _)| name.to_lowercase())
-        .map(|(id, _, example)| (*id, *example))
-        .unwrap_or(("", ""))
+/// The sources a query can be added for (`AddQueryBar`), sorted by name;
+/// galleries are added elsewhere.
+pub fn query_sites() -> Vec<&'static SiteEntry> {
+    sites_by_name()
+        .into_iter()
+        .filter(|site| site.id != "ehentai")
+        .collect()
 }
 
 /// `getSubscriptionRunTarget`: the posts a run means to settle, the per-run
@@ -271,6 +239,88 @@ pub fn last_check(subscription: &Subscription) -> Option<&str> {
         })
         .flatten()
         .max()
+}
+
+/// A source's own last check: its newest success or failure.
+pub fn query_last_check(query: &Query) -> Option<&str> {
+    [
+        query.last_success_at.as_deref(),
+        query.last_failure_at.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+/// The source details' State: on hold, failed, caught up, or still reading
+/// its history for the first time.
+pub fn query_state(query: &Query) -> &'static str {
+    if query.paused {
+        "Paused"
+    } else if query.last_failure_message.is_some() {
+        "Failed"
+    } else if query.initial_run_complete {
+        "Ready"
+    } else {
+        "Initial sync"
+    }
+}
+
+/// A site's stored login, as `auth.credentials.list` and
+/// `auth.health.list` report it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Login {
+    pub site: String,
+    /// The last check's status, when it has been checked.
+    pub health: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// `getQueryAuthState`, for the chip a source shows when its site needs a
+/// login before it can run: the chip's text, or `None` when nothing blocks.
+pub fn auth_warning(site_id: &str, logins: &[Login], health: &[Login]) -> Option<String> {
+    let site = site(site_id)?;
+    let owner = site.credential_owner_site_id;
+    let missing = !logins.iter().any(|login| login.site == owner);
+    let checked = health.iter().find(|login| login.site == owner);
+    let status = checked
+        .and_then(|login| login.health.as_deref())
+        .unwrap_or_default()
+        .to_lowercase();
+    let broken = matches!(
+        status.as_str(),
+        "unauthorized" | "expired" | "error" | "missing"
+    );
+    if !(broken || (site.auth_strictly_required && missing)) {
+        return None;
+    }
+    Some(if missing {
+        "Sign in required".to_owned()
+    } else {
+        checked
+            .and_then(|login| login.last_error.as_deref())
+            .map(str::trim)
+            .filter(|error| !error.is_empty())
+            .unwrap_or("Sign in again")
+            .to_owned()
+    })
+}
+
+/// The gallery service an address belongs to, as the Add Gallery dialog
+/// follows what is typed: `exhentai` or `ehentai`.
+pub fn gallery_service(url: &str) -> Option<&'static str> {
+    let url = url.trim().to_lowercase();
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    if rest.starts_with("exhentai.org/") {
+        Some("exhentai")
+    } else if rest.starts_with("e-hentai.org/") {
+        Some("ehentai")
+    } else {
+        None
+    }
 }
 
 /// The query whose failure is the latest, for the warning's explanation.
@@ -477,8 +527,9 @@ pub fn tracks(width: f32, gap: f32, tracks: &[Track]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Query, Run, Subscription, Tone, Track, card_meta, card_status, date_time, describe_failure,
-        detail_status, first_query_site, relative_time, run_status, run_target, site_label, tracks,
+        Login, Query, Run, Subscription, Tone, Track, auth_warning, card_meta, card_status,
+        date_time, describe_failure, detail_status, gallery_service, query_sites, query_state,
+        relative_time, run_status, run_target, site_label, tracks,
     };
     use chrono::{Duration, Local, TimeZone};
 
@@ -612,7 +663,15 @@ mod tests {
         assert_eq!(describe_failure(None, None), None);
         assert_eq!(site_label("furaffinity"), "Fur Affinity");
         assert_eq!(site_label("unknown"), "unknown");
-        assert_eq!(first_query_site(), ("danbooru", "1girl solo"));
+        // The add-query bar starts on the first by name, galleries aside;
+        // sources the interface leaves out are not offered.
+        let first = query_sites()[0];
+        assert_eq!((first.id, first.example_query), ("danbooru", "1girl solo"));
+        assert!(
+            query_sites()
+                .iter()
+                .all(|site| !["ehentai", "tumblr"].contains(&site.id))
+        );
     }
 
     #[test]
@@ -654,5 +713,75 @@ mod tests {
             &[Track::Flex(100., 1.), Track::Between(82., 110.)],
         );
         assert_eq!(bounded, vec![680., 110.]);
+    }
+
+    #[test]
+    fn a_source_needs_a_login_only_when_its_site_cannot_run_without_one() {
+        let login = |site: &str, health: Option<&str>, error: Option<&str>| Login {
+            site: site.into(),
+            health: health.map(Into::into),
+            last_error: error.map(Into::into),
+        };
+        // Pixiv cannot run without a login; e621 can.
+        assert_eq!(
+            auth_warning("pixiv", &[], &[]),
+            Some("Sign in required".to_owned())
+        );
+        assert_eq!(auth_warning("e621", &[], &[]), None);
+        // Pixiv (user) logs in through Pixiv.
+        let saved = [login("pixiv", None, None)];
+        assert_eq!(auth_warning("pixivuser", &saved, &[]), None);
+        assert_eq!(
+            auth_warning(
+                "pixivuser",
+                &saved,
+                &[login("pixiv", Some("Expired"), Some(" Token expired "))]
+            ),
+            Some("Token expired".to_owned())
+        );
+        assert_eq!(
+            auth_warning(
+                "e621",
+                &[login("e621", None, None)],
+                &[login("e621", Some("error"), None)]
+            ),
+            Some("Sign in again".to_owned())
+        );
+        // A status the rule does not name is no warning.
+        assert_eq!(
+            auth_warning(
+                "newgrounds",
+                &[login("newgrounds", None, None)],
+                &[login("newgrounds", Some("invalid"), Some("403"))]
+            ),
+            None
+        );
+        assert_eq!(auth_warning("unknown", &[], &[]), None);
+    }
+
+    #[test]
+    fn a_gallery_address_names_its_service() {
+        assert_eq!(
+            gallery_service(" https://exhentai.org/g/1/2/"),
+            Some("exhentai")
+        );
+        assert_eq!(
+            gallery_service("http://www.E-Hentai.org/g/1/2/"),
+            Some("ehentai")
+        );
+        assert_eq!(gallery_service("https://e-hentai.org"), None);
+        assert_eq!(gallery_service("e-hentai.org/g/1/2/"), None);
+    }
+
+    #[test]
+    fn a_source_states_where_it_is() {
+        let mut query = Query::default();
+        assert_eq!(query_state(&query), "Initial sync");
+        query.initial_run_complete = true;
+        assert_eq!(query_state(&query), "Ready");
+        query.last_failure_message = Some("403".into());
+        assert_eq!(query_state(&query), "Failed");
+        query.paused = true;
+        assert_eq!(query_state(&query), "Paused");
     }
 }

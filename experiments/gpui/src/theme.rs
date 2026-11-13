@@ -125,6 +125,15 @@ impl Theme {
         // 3% over 3%: 1 - 0.97².
         mixed(self.contrast, 5.91, self.background)
     }
+    /// `--color-surface-1`: the rail surface, or a 6% contrast wash in the
+    /// light themes.
+    pub fn surface_1(&self) -> Rgba {
+        if self.light {
+            translucent(self.contrast, 6.)
+        } else {
+            self.rail()
+        }
+    }
     /// `--color-surface-2`, placeholders.
     pub fn surface_2(&self) -> Rgba {
         mixed(self.contrast, 5., self.background)

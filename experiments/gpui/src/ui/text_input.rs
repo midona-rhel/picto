@@ -140,9 +140,6 @@ pub enum Kind {
     Form,
     /// A number, at 12px and against the right edge (`CompactNumberInput`).
     Number,
-    /// A name edited in place, in the UI font at the size of the text it
-    /// replaces.
-    Rename(f32),
     /// A sidebar row renamed in place (`Sidebar.module.css` `.renameInput`):
     /// the row's own type, on a line that fits the 20px field.
     SidebarRename,
@@ -166,7 +163,6 @@ impl Kind {
             | Kind::Form
             | Kind::Number
             | Kind::Popover
-            | Kind::Rename(_)
             | Kind::Menu
             | Kind::Compact
             | Kind::Area => crate::theme::FONT_UI,
@@ -184,7 +180,6 @@ impl Kind {
             | Kind::SidebarRename
             | Kind::Menu
             | Kind::Area => crate::theme::TEXT_MD,
-            Kind::Rename(size) => size,
         }
     }
     fn line_height(self) -> f32 {
@@ -193,7 +188,6 @@ impl Kind {
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
             Kind::Form | Kind::Number => self.size() + 2.,
-            Kind::Rename(size) => size + 2.,
             Kind::SidebarRename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
             Kind::Popover => 48.,
             Kind::Menu => 36.,
@@ -1387,7 +1381,7 @@ impl TextInput {
         input.kind = Kind::Number;
         input
     }
-    pub fn set_placeholder(&mut self, placeholder: &'static str) {
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
     }
     /// Puts the caret after the text, where a browser's focus leaves it.
@@ -1433,21 +1427,6 @@ impl TextInput {
     /// The scroll of the expanded field's area.
     pub fn area(&self) -> &gpui::ScrollHandle {
         &self.area
-    }
-    /// A name edited in place: it commits when it loses focus, as the
-    /// inspector's fields do.
-    pub fn rename(size: f32, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::field("", window, cx);
-        input.kind = Kind::Rename(size);
-        input
-    }
-    /// Sets the size of a name edited in place, to match the text it
-    /// replaces.
-    pub fn set_rename_size(&mut self, size: f32, cx: &mut Context<Self>) {
-        if matches!(self.kind, Kind::Rename(_)) && self.kind != Kind::Rename(size) {
-            self.kind = Kind::Rename(size);
-            cx.notify();
-        }
     }
     pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {

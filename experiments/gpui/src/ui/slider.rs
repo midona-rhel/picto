@@ -17,6 +17,9 @@ pub struct Slider {
     step: f64,
     width: f32,
     filled: bool,
+    /// `GlassModal.module.css` `.rangeInput`: a 4px track and a 14px thumb
+    /// in the primary colour.
+    glass: bool,
     on_change: Option<ChangeHandler>,
 }
 
@@ -29,6 +32,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         step,
         width: WIDTH,
         filled: false,
+        glass: false,
         on_change: None,
     }
 }
@@ -47,6 +51,13 @@ impl Slider {
         self
     }
 
+    /// A dialog's range (`modalStyles.rangeInput`): a 4px track in the
+    /// primary border colour and a 14px thumb in the primary colour.
+    pub fn glass(mut self) -> Self {
+        self.glass = true;
+        self
+    }
+
     /// Called with each new value while the thumb moves.
     pub fn on_change(mut self, handler: impl Fn(f64, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -56,12 +67,13 @@ impl Slider {
 
 const WIDTH: f32 = 200.;
 const THUMB: f32 = 12.;
+const GLASS_THUMB: f32 = 14.;
 
 /// The value at `x` pixels along the track, snapped to the step. The thumb's
 /// centre travels from half a thumb in at each end, as Chromium draws it.
-fn value_along(x: f32, width: f32, min: f64, max: f64, step: f64) -> f64 {
-    let travel = width - THUMB;
-    let along = ((x - THUMB / 2.) / travel).clamp(0., 1.) as f64;
+fn value_along(x: f32, width: f32, thumb: f32, min: f64, max: f64, step: f64) -> f64 {
+    let travel = width - thumb;
+    let along = ((x - thumb / 2.) / travel).clamp(0., 1.) as f64;
     let raw = min + along * (max - min);
     let snapped = min + ((raw - min) / step).round() * step;
     snapped.clamp(min, max)
@@ -81,12 +93,17 @@ impl RenderOnce for Slider {
         let (min, max, step, value) = (self.min, self.max, self.step, self.value);
         let handler = self.on_change;
         let width = self.width;
+        let (thumb, track) = if self.glass {
+            (GLASS_THUMB, 4.)
+        } else {
+            (THUMB, 3.)
+        };
         div()
             .id(self.id)
             .occlude()
             .relative()
             .w(px(width))
-            .h(px(THUMB))
+            .h(px(thumb))
             .flex_none()
             .cursor_pointer()
             .child(
@@ -94,8 +111,8 @@ impl RenderOnce for Slider {
                     .absolute()
                     .left_0()
                     .right_0()
-                    .top(px((THUMB - 3.) / 2.))
-                    .h(px(3.))
+                    .top(px((thumb - track) / 2.))
+                    .h(px(track))
                     .rounded(px(2.))
                     .bg(theme.border())
                     // The filled part runs to the thumb's place along the
@@ -117,10 +134,14 @@ impl RenderOnce for Slider {
                 div()
                     .absolute()
                     .top_0()
-                    .left(px((width - THUMB) * along))
-                    .size(px(THUMB))
+                    .left(px((width - thumb) * along))
+                    .size(px(thumb))
                     .rounded_full()
-                    .bg(theme.text())
+                    .bg(if self.glass {
+                        theme.primary()
+                    } else {
+                        theme.text()
+                    })
                     .when(self.filled, |thumb| {
                         thumb.border_1().border_color(theme.border()).shadow(vec![
                             BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_25).into())
@@ -138,6 +159,7 @@ impl RenderOnce for Slider {
                                 let next = value_along(
                                     f32::from(x - bounds.left()),
                                     width,
+                                    thumb,
                                     min,
                                     max,
                                     step,
@@ -182,10 +204,10 @@ impl RenderOnce for Slider {
 
 #[cfg(test)]
 mod tests {
-    use super::{WIDTH, value_along};
+    use super::{THUMB, WIDTH, value_along};
 
     fn value_at(x: f32, min: f64, max: f64, step: f64) -> f64 {
-        value_along(x, WIDTH, min, max, step)
+        value_along(x, WIDTH, THUMB, min, max, step)
     }
 
     #[test]

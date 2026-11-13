@@ -3,7 +3,7 @@
 //! of tabbed tables: its sources, its runs and its problems.
 use super::data::{self, Detail};
 use super::format::{self, Track};
-use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure};
+use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure, place_of};
 use crate::theme::Text as _;
 use crate::ui::status_badge::Tone;
 use crate::ui::{self, action_button::Look};
@@ -179,40 +179,29 @@ impl SubscriptionsScreen {
                 .border_1()
                 .border_color(theme.border_secondary()),
         );
-        let name = if self.renaming == Some(id) {
+        let name = ui::tooltip::attach(
             div()
-                .w_full()
-                .h(px(24.))
+                .id("subscription-rail-name")
+                .max_w_full()
                 .mb(px(8.))
-                .flex()
-                .items_center()
-                .child(self.rename_field("subscription-rail-rename"))
-                .into_any_element()
-        } else {
-            ui::tooltip::attach(
-                div()
-                    .id("subscription-rail-name")
-                    .max_w_full()
-                    .mb(px(8.))
-                    .text(theme::TEXT_XL)
-                    .line_height(px(24.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .truncate()
-                    .text_center()
-                    .child(subscription.name.clone())
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if event.click_count() == 2 {
-                            this.start_rename(id, theme::TEXT_XL, window, cx);
-                        }
-                    })),
-                "subscription-rail-name-tip",
-                ui::tip("Double-click to rename"),
-                24.,
-                window,
-                cx,
-            )
-            .into_any_element()
-        };
+                .text(theme::TEXT_XL)
+                .line_height(px(24.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .truncate()
+                .text_center()
+                .child(subscription.name.clone())
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    if event.click_count() == 2 {
+                        this.open_rename(id, window, cx);
+                    }
+                })),
+            "subscription-rail-name-tip",
+            ui::tip("Double-click to rename"),
+            24.,
+            window,
+            cx,
+        )
+        .into_any_element();
         let identity = div()
             .w_full()
             .min_w_0()
@@ -551,9 +540,12 @@ impl SubscriptionsScreen {
     }
 
     /// Where new files go (`.subscriptionDestination`): the folders and tags
-    /// every downloaded file receives.
-    fn destination(&self, subscription: &data::Subscription, cx: &App) -> Div {
+    /// every downloaded file receives, each removed with its chip's button
+    /// and added through the folder and tag pickers, which open above the
+    /// add buttons.
+    fn destination(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
+        let id = subscription.id;
         let nav = &self.session.read(cx).nav;
         let folder_label = |folder: i64| {
             nav.iter()
@@ -563,29 +555,55 @@ impl SubscriptionsScreen {
                     }
                     _ => false,
                 })
-                .map_or_else(|| format!("Folder {folder}"), |entry| entry.label.clone())
+                .map(|entry| entry.label.clone())
         };
-        // TODO: remove a folder or tag, and add them through the pickers.
         let mut folders = div()
             .min_h(px(26.))
             .flex()
             .flex_wrap()
             .items_center()
             .gap(px(4.));
+        // `selectedFolders`: the folders the library still has.
+        let mut shown = 0;
         for folder in &subscription.folder_ids {
-            folders = folders.child(ui::chip(
-                ("subscription-folder", *folder as usize),
-                folder_label(*folder),
-                crate::inspector::FOLDER_COLOR,
-            ));
+            let Some(label) = folder_label(*folder) else {
+                continue;
+            };
+            shown += 1;
+            let folder = *folder;
+            folders = folders.child(
+                ui::chip(
+                    ("subscription-folder", folder as usize),
+                    label,
+                    crate::inspector::FOLDER_COLOR,
+                )
+                .on_remove(cx.listener(move |this, _, _, cx| this.remove_folder(id, folder, cx))),
+            );
         }
-        folders = if subscription.folder_ids.is_empty() {
-            folders.child(div().w_full().text_color(theme.text_secondary()).child(
-                ui::action_row("subscription-add-folders", "plus", "Add to folders").glyph(14.),
-            ))
+        let add_folder =
+            cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_folders(id, window, cx));
+        folders = if shown == 0 {
+            folders.child(
+                div()
+                    .relative()
+                    .w_full()
+                    .text_color(theme.text_secondary())
+                    .child(place_of(self.add_folder.clone()))
+                    .child(
+                        ui::action_row("subscription-add-folders", "plus", "Add to folders")
+                            .glyph(14.)
+                            .on_click(add_folder),
+                    ),
+            )
         } else {
-            folders.child(add_square("subscription-add-folder"))
+            folders.child(
+                div()
+                    .relative()
+                    .child(place_of(self.add_folder.clone()))
+                    .child(add_square("subscription-add-folder").on_click(add_folder)),
+            )
         };
+        let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
         let mut tags = div()
             .min_h(px(26.))
             .flex()
@@ -594,21 +612,43 @@ impl SubscriptionsScreen {
             .gap(px(4.));
         for (index, tag) in subscription.automatic_tags.iter().enumerate() {
             let (namespace, subtag) = crate::tags::split(tag);
-            tags = tags.child(ui::chip(
-                ("subscription-tag", index),
-                subtag.to_owned(),
-                crate::tags::chip_color(namespace.unwrap_or_default()),
-            ));
+            let namespace = namespace.unwrap_or("general");
+            let removed = tag.clone();
+            tags = tags.child(
+                ui::chip(
+                    ("subscription-tag", index),
+                    subtag.to_owned(),
+                    crate::tags::chip_color(namespace),
+                )
+                .namespace(
+                    (show_prefixes && crate::tags::chip_shows_namespace(namespace))
+                        .then(|| namespace.to_owned().into()),
+                )
+                .on_remove(cx.listener(move |this, _, _, cx| this.remove_tag(id, &removed, cx))),
+            );
         }
+        let add_tag =
+            cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_tags(id, window, cx));
         tags = if subscription.automatic_tags.is_empty() {
             tags.child(
                 div()
+                    .relative()
                     .w_full()
                     .text_color(theme.text_tertiary())
-                    .child(ui::action_row("subscription-add-tags", "plus", "Add tags").glyph(14.)),
+                    .child(place_of(self.add_tag.clone()))
+                    .child(
+                        ui::action_row("subscription-add-tags", "plus", "Add tags")
+                            .glyph(14.)
+                            .on_click(add_tag),
+                    ),
             )
         } else {
-            tags.child(add_square("subscription-add-tag"))
+            tags.child(
+                div()
+                    .relative()
+                    .child(place_of(self.add_tag.clone()))
+                    .child(add_square("subscription-add-tag").on_click(add_tag)),
+            )
         };
         div()
             .mx(px(16.))
@@ -643,6 +683,8 @@ impl SubscriptionsScreen {
                     .flex_col()
                     .gap(px(8.))
                     .text(theme::TEXT_MD)
+                    // `TagAssignmentControl`'s `line-height: var(--line-height-md)`.
+                    .line_height(px(theme::LINE_HEIGHT_MD))
                     .text_color(theme.text())
                     .child("Automatically add tags")
                     .child(tags),
@@ -680,7 +722,7 @@ impl SubscriptionsScreen {
                 Some(detail) => self.problems(detail, window, cx).into_any_element(),
             },
         };
-        let footer = (self.tab == SOURCES).then(|| Self::add_query_bar(cx));
+        let footer = (self.tab == SOURCES).then(|| self.add_query_bar(cx));
         div()
             .relative()
             .flex_1()
@@ -866,9 +908,12 @@ impl SubscriptionsScreen {
         ]));
         let active = subscription.active_run_id.is_some();
         let running = format::running(subscription);
+        // `busy || subscriptionRunning`: the row's buttons wait.
+        let waiting = self.busy() || active;
         let mut rows = Vec::new();
         for query in &subscription.queries {
             let query_id = query.id as usize;
+            let id = query.id;
             let fade =
                 window.use_keyed_state(("subscription-query-hover", query_id), cx, |_, _| {
                     motion::Fade::default()
@@ -898,6 +943,24 @@ impl SubscriptionsScreen {
                     cx,
                 ));
             }
+            // `qAuthChip`: the site needs a login before this source can run.
+            if let Some(warning) =
+                format::auth_warning(&query.site_id, &self.logins, &self.login_health)
+            {
+                name = name.child(
+                    div()
+                        .id(("subscription-query-auth", query_id))
+                        .flex_none()
+                        .max_w(px(140.))
+                        .truncate()
+                        .cursor_pointer()
+                        .text_color(rgb(theme::FAILURE_TEXT))
+                        .child(warning)
+                        // TODO: open the accounts window on this source's
+                        // site, once site logins are built.
+                        .on_click(|_, _, cx| cx.stop_propagation()),
+                );
+            }
             if let Some(message) = query
                 .last_failure_message
                 .clone()
@@ -912,7 +975,6 @@ impl SubscriptionsScreen {
                         .child(message),
                 );
             }
-            // TODO: the source details window on a double-click.
             let name = ui::tooltip::attach(
                 name,
                 ("subscription-query-tip", query_id),
@@ -921,54 +983,74 @@ impl SubscriptionsScreen {
                 window,
                 cx,
             );
-            // TODO: run, group, hold, edit and delete a source, through the
-            // subscription runner and the catalog.
+            let paused = query.paused;
+            let group_posts = query.group_posts;
+            let edited = query.clone();
+            // A double-click on the buttons is theirs, not the row's.
             let actions = div()
+                .id(("subscription-query-actions", query_id))
                 .w_full()
                 .flex()
                 .justify_end()
                 .gap(px(2.))
                 .opacity(hover)
+                .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
                     ui::small_button(("query-run", query_id), "player-play")
-                        .disabled(active)
-                        .tip(ui::tip("Run only this source now")),
+                        .disabled(waiting)
+                        .tip(ui::tip("Run only this source now"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.run_query(id, cx)
+                        })),
                 )
                 .child(
                     ui::small_button(("query-group", query_id), "copy-2")
-                        .toggled(query.group_posts)
-                        .disabled(active)
-                        .tip(ui::tip(if query.group_posts {
+                        .toggled(group_posts)
+                        .disabled(waiting)
+                        .tip(ui::tip(if group_posts {
                             "Group multi-media posts"
                         } else {
                             "Keep post media separate"
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.group_query(id, !group_posts, cx)
                         })),
                 )
                 .child(
                     ui::small_button(
                         ("query-hold", query_id),
-                        if query.paused {
-                            "player-play"
-                        } else {
-                            "hand-stop"
-                        },
+                        if paused { "player-play" } else { "hand-stop" },
                     )
-                    .disabled(active)
-                    .tip(ui::tip(if query.paused {
+                    .disabled(waiting)
+                    .tip(ui::tip(if paused {
                         "Resume this source in future subscription runs"
                     } else {
                         "Put this source on hold until it is resumed"
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.pause_query(id, !paused, cx)
                     })),
                 )
                 .child(
                     ui::small_button(("query-edit", query_id), "pencil")
-                        .disabled(active)
-                        .tip(ui::tip("Edit")),
+                        .disabled(waiting)
+                        .tip(ui::tip("Edit"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.open_edit_query(&edited, cx)
+                        })),
                 )
                 .child(
                     ui::small_button(("query-delete", query_id), "trash-2")
-                        .disabled(active)
-                        .tip(ui::tip("Delete")),
+                        .disabled(waiting)
+                        .tip(ui::tip("Delete"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.confirm_delete_query(id, cx)
+                        })),
                 );
             let source = format::site_label(&query.site_id);
             let row = table_row(cells(vec![
@@ -983,6 +1065,7 @@ impl SubscriptionsScreen {
                 number(query.media, cx),
                 actions.into_any_element(),
             ]));
+            let details = query.clone();
             rows.push(
                 self.body_row(("subscription-query", query_id).into(), row, cx)
                     .on_hover(move |hovered, _, cx| {
@@ -991,6 +1074,11 @@ impl SubscriptionsScreen {
                             cx.notify();
                         })
                     })
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                        if event.click_count() == 2 {
+                            this.open_details(&details, cx);
+                        }
+                    }))
                     .into_any_element(),
             );
         }
@@ -1171,43 +1259,39 @@ impl SubscriptionsScreen {
     }
 
     /// The add-query bar under the sources (`AddQueryBar.tsx`): the source,
-    /// its query, and Add.
-    fn add_query_bar(cx: &App) -> Div {
-        let theme = theme::theme(cx);
-        let (site, example) = format::first_query_site();
+    /// its query, and Add, which Enter also presses.
+    fn add_query_bar(&self, cx: &mut Context<Self>) -> Div {
         let sites = format::query_sites()
             .into_iter()
-            .map(|(id, name)| ui::choice(id, name))
+            .map(|site| ui::choice(site.id, site.name))
             .collect::<Vec<_>>();
-        // TODO: choose the source, type the query with the site's tag
-        // suggestions, and add it to the subscription.
+        let typed = !self.add_query.read(cx).value().trim().is_empty();
+        let view = cx.entity().downgrade();
         div()
             .w_full()
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(ui::select("add-query-site", site, sites).width(140.))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(theme::CONTROL_LG))
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(theme::RADIUS_SM))
-                    .border_1()
-                    .border_color(theme.border())
-                    .bg(theme.control_surface())
-                    .text(theme::TEXT_MD)
-                    .text_color(theme.text_tertiary())
-                    .truncate()
-                    .child(format!("e.g. {example}")),
+                ui::select("add-query-site", self.add_site, sites)
+                    .width(140.)
+                    .on_change(move |site, _, cx| {
+                        let _ = view.update(cx, |this, cx| this.choose_add_site(site, cx));
+                    }),
             )
+            .child(div().flex_1().min_w_0().child(ui::field(
+                "add-query-text",
+                &self.add_query,
+                ui::field::Look::Modal,
+            )))
             .child(
+                // `compact` asks for the small height, but the shared
+                // button's own height and padding win in production's
+                // stylesheet order, so it is the standard button.
                 ui::action_button("add-query", Look::Standard)
                     .label("Add")
-                    .disabled(true),
+                    .disabled(self.busy() || !typed)
+                    .on_click(cx.listener(|this, _, _, cx| this.submit_query(cx))),
             )
     }
 }

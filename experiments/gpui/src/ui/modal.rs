@@ -98,6 +98,11 @@ pub enum Size {
 }
 
 impl Size {
+    /// The width the body's contents get: the panel's inside its border,
+    /// less the body's padding and its scrollbar gutter.
+    pub fn content_width(self) -> f32 {
+        self.width() - 2. * BORDER - 2. * BODY_PADDING - super::scrollbar::GUTTER
+    }
     fn width(self) -> f32 {
         match self {
             Size::Small => 400.,

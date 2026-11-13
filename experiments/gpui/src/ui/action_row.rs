@@ -13,6 +13,7 @@ pub struct ActionRow {
     label: SharedString,
     height: f32,
     disabled: bool,
+    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
 pub fn action_row(
@@ -27,6 +28,7 @@ pub fn action_row(
         label: label.into(),
         height: theme::CONTROL_SM,
         disabled: false,
+        on_click: None,
     }
 }
 
@@ -37,6 +39,13 @@ impl ActionRow {
     }
     pub fn height(mut self, height: f32) -> Self {
         self.height = height;
+        self
+    }
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
         self
     }
     /// `:disabled`: no surface, a quarter strength, and no hover.
@@ -72,6 +81,10 @@ impl RenderOnce for ActionRow {
                 .child(super::icon(self.icon, self.glyph, theme.text()).opacity(0.8))
                 .child(self.label);
         }
+        let row = match self.on_click {
+            Some(handler) => row.on_click(handler),
+            None => row,
+        };
         row.bg(theme::blend(
             theme.surface_hover(),
             theme.surface_active(),

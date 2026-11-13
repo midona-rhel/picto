@@ -697,9 +697,25 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   posts-per-run field save through `subscriptions.schedule` and
   `subscriptions.posts_per_run`. Badges and table headings keep their
   letter spacing (`ui::tracked`, which draws a shaped line glyph by glyph
-  with the spacing CSS adds). Names rename in place, from the
-  card's menu or a double-click on the rail's name, through the library's
-  published write. The reads are the application catalog's own, run through
+  with the spacing CSS adds). Managing subscriptions goes through the
+  application's commands, as `subscriptionsController` sends them: Add
+  (`NewSubscriptionDialog`, made on Settings' default schedule and run
+  limit, then opened), Add Gallery (`subscriptions.gallery.start`, the
+  service following the address typed; a download's progress fills once
+  the site reports its size, and a settled one is cleaned up with
+  `subscriptions.gallery.cleanup`), Rename (`RenameDialog`, from the menu or
+  a double-click on the rail's name), Set Cover Photo… (the candidates 200
+  at a time, then a square dragged and zoomed into place), Reset Sync
+  History… and Delete (one, several, or ⌘⌫ on the selected cards) after
+  their confirmations, destination folders and tags added through the
+  folder and tag pickers and removed with their chips, and the add-query
+  bar and each source's Run, Group, Hold, Edit (`QueryEditModal`), Delete and
+  details (a double-click). A source whose site cannot run without a login
+  shows production's warning. Enter in a dialog's field presses its primary
+  button.
+  With `PICTO_GPUI_HOLD_RUNS` set the screen writes each command it sends
+  to the log and answers runs and gallery downloads itself instead of
+  starting them. The reads are the application catalog's own, run through
   the library's consistent auxiliary read; the list and the query rows use
   `core/src/subscription_views.sql` and `subscription_query_views.sql`
   directly.
@@ -1020,15 +1036,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
   reload the model.
-- Subscriptions: no run has been started from this app yet; failures and completions are not announced (no toasts or
-  system notifications). Creating subscriptions, galleries and sources, and
-  the per-source Run, Hold, Group, Edit and Delete, are drawn but not
-  performed. Also not built: the cover dialog, reset and delete
-  confirmations (their menu rows are drawn and do nothing yet), adding or
-  removing destination folders and tags, the source details and edit
-  windows, the accounts window and login warnings, and the gallery progress
-  total. Site names and example queries are copied from the source catalog
-  in `core`. The native `title` tooltips of truncated cells are not drawn.
+- Subscriptions: no run, source run or gallery download has been started
+  from this app yet (they are checked by the commands they send); failures
+  and completions are not announced (no toasts or system notifications:
+  they go through `show_notification`, which only logs). Not built: the
+  accounts window (Accounts, a login warning's click and Fix login). The
+  cover's crop is drawn from the thumbnail rather than the original. The
+  native `title` tooltips of truncated cells are not drawn.
   A cover saved as a rendered crop shows here; production's media protocol
   serves a thumbnail only for a hash that has an original, so it falls back
   to the download glyph for those covers.

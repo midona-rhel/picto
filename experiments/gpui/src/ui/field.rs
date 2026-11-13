@@ -31,9 +31,6 @@ pub enum Look {
     /// `GlassInput` as `CompactNumberInput` sizes it, with room on the
     /// right for its stepper.
     Number,
-    /// `.renameInput`: a name edited in place, in a 20px box outlined in the
-    /// primary colour over the app background.
-    Rename,
     /// `.rangeEditor input`: the filter bar's 26px number fields.
     Range,
     /// `.hexField input`: a colour's code, with room on the left for its
@@ -44,6 +41,9 @@ pub enum Look {
     /// `GlassInput.module.css` `.textarea`: three lines of text in a dialog,
     /// from 8px below its top edge.
     TextArea,
+    /// `NewSubscriptionDialog.module.css` `.textInput`: a field beside its
+    /// label in a dialog's form row, on a darker well.
+    FormRow,
 }
 
 struct Frame {
@@ -209,15 +209,16 @@ impl Look {
                 right: 8.,
                 drop: 0.,
             },
-            Look::Rename => Frame {
-                height: 20.,
-                radius: 3.,
-                border: (theme.primary(), theme.primary()),
-                fill: (theme.background(), theme.background()),
-                focus: Duration::ZERO,
+            Look::FormRow => Frame {
+                height: theme::CONTROL_MD,
+                radius: theme::RADIUS_MD,
+                border: (theme.border(), theme.primary_at(60.)),
+                fill: (rgba(theme::BLACK_25), rgba(theme::BLACK_25)),
+                // `transition: border-color var(--duration-fast)`.
+                focus: Duration::from_millis(50),
                 curve: motion::EASE_DEFAULT,
-                left: 0.,
-                right: 0.,
+                left: 8.,
+                right: 8.,
                 drop: 0.,
             },
         }
@@ -362,6 +363,14 @@ impl RenderOnce for Field {
                 window.focus(&handle, cx);
             })
             .child(measure);
+        if matches!(
+            self.look,
+            Look::Modal | Look::ModalSmall | Look::TextArea | Look::FormRow
+        ) {
+            // `GlassInput`'s and the form rows' `color: var(--color-text-primary)`,
+            // whatever colour the dialog's body gives its text.
+            field = field.text_color(theme.text());
+        }
         if self.look == Look::Search {
             // `inset 0 1px 0` at 3% contrast: a lit top edge.
             field = field.child(
