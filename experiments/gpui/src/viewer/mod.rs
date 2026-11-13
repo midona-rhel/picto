@@ -12,6 +12,7 @@ mod strip;
 pub mod surface;
 pub mod toolbar;
 pub mod trigger;
+pub mod video;
 
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
@@ -432,10 +433,12 @@ impl Render for Viewer {
             };
             (members, session.member)
         };
-        let mut pane = div()
+        // "Media" while the player shows, for its keys.
+        let media = self.surface.read(cx).player().is_some();
+        let pane = div()
             .id("viewer")
             .track_focus(&self.focus)
-            .key_context("Viewer")
+            .key_context(video::key_context("Viewer", media))
             .relative()
             .size_full()
             .overflow_hidden()
@@ -471,9 +474,15 @@ impl Render for Viewer {
                     });
                 }),
             )
-            .child(self.surface.clone())
-            .child(self.boundary.notice(End::First, cx))
-            .child(self.boundary.notice(End::Last, cx));
+            .child(self.surface.clone());
+        let surface = self.surface.downgrade();
+        let mut pane = video::on_actions(pane, move |cx| {
+            surface
+                .upgrade()
+                .and_then(|surface| surface.read(cx).player())
+        })
+        .child(self.boundary.notice(End::First, cx))
+        .child(self.boundary.notice(End::Last, cx));
         if members > 1 {
             let member_step = |id: &'static str,
                                icon: &'static str,

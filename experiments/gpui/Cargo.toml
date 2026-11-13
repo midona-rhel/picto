@@ -15,6 +15,12 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
+# The AVFoundation frame check needs the process's main thread, which the
+# standard test harness does not give a test.
+[[test]]
+name = "avfoundation_frames"
+harness = false
+
 [dependencies]
 # Weekly crates.io snapshots of upstream GPUI (zed-industries/zed). The official
 # `gpui` crate has not been published since 0.2.2 (October 2025). Pin exactly:
@@ -42,7 +48,24 @@ ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev =
 ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 wgpu = "27.0.1"
+# Audio playback for the media viewer: the audio output Ruffle already uses,
+# and pure-Rust decoders for the audio formats a library holds.
+cpal = "0.16"
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "wav", "pcm", "adpcm", "flac", "ogg", "vorbis", "isomp4", "aac", "aiff"] }
+rustfft = "6"
+# Round caps and joins for the visualizer's strokes; the tessellator GPUI uses.
+lyon_tessellation = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+# Video playback through AVFoundation, presented as CoreVideo pixel buffers
+# by GPUI's `surface` element; the same versions GPUI builds.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSKeyValueObserving"] }
+objc2-core-foundation = "0.3"
+objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
+objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
+objc2-av-foundation = { version = "0.3", features = ["AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVMediaFormat", "AVTime", "AVVideoSettings", "AVVideoComposition", "block2", "objc2-core-media", "objc2-core-video"] }
+block2 = "0.6"
+objc2-quartz-core = { version = "0.3", features = ["CABase"] }
