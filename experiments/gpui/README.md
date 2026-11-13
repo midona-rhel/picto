@@ -365,22 +365,6 @@ One model, separate views, shared components:
   (those rows only close the popover). Each has a `TODO` where its action
   belongs. The Filter button only clears a filter the inspector set; there
   is no filter bar.
-- Inspector: the stacked preview's cards cannot turn (GPUI rotates only
-  SVGs), so they lie straight; the folder card's radial light is a vertical
-  gradient. Overwriting the notes of a selection that already has notes needs
-  the confirmation dialog, so it is refused and the field reverts. Auto Tag,
-  the subfolder scope, the summary spinners and the 250 ms switch to the
-  loading skeleton are not ported, and a selection's covers follow the order
-  items were chosen in this session, not the Electron query-selection order
-  for ranges and Select All.
-- Not in the grid yet: dragging items out or to reorder, middle-click,
-  inline rename, the empty grid's context menu, and the subfolder tiles a
-  folder shows above its items (an empty folder with subfolders shows the
-  empty state). The Import buttons are drawn with a `TODO`. The audio tile's
-  radial gradient is approximated by a linear one and its `brightness(1.5)`
-  is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot, rename in place,
-  context menus, multi-selection and drag reorder.
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
