@@ -23,6 +23,12 @@
 //! script arranges (rail widths, folds, filters, shortcuts…) in that folder
 //! and starts from what it holds; without it every run starts from the
 //! defaults and keeps nothing.
+//!
+//! A system file, folder or save dialog cannot be driven here, so
+//! `answer <path>` answers the next one the app asks for with that path
+//! without opening it, and `answer` alone cancels the next one
+//! (`crate::prompt`). Give it before the line that opens the dialog; the
+//! answers are used in order.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -156,6 +162,10 @@ fn plays_a_script() {
             cx.update_window(window, |_, window, cx| window.dispatch_action(action, cx))
                 .unwrap();
             settle(&mut cx, window, pace, lazy);
+        } else if line == "answer" {
+            crate::prompt::answer_next(None);
+        } else if let Some(path) = line.strip_prefix("answer ") {
+            crate::prompt::answer_next(Some(PathBuf::from(path.trim())));
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {

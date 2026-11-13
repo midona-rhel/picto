@@ -127,15 +127,12 @@ pub(super) fn content_sort_field(value: &str) -> Option<ContentSortField> {
 /// `buildExportContextEntry`: the export submenu of a folder or smart
 /// folder.
 fn export_submenu() -> menu::Entry {
-    // TODO: export the scope's originals to a chosen folder, open the
-    // export dialog, or write a Picto Pack. Export is not built yet, so the
-    // rows choose nothing.
     menu::submenu(
         "Export",
         vec![
-            menu::item("export", "Export Originals...").into(),
-            menu::item("export", "Export As...").into(),
-            menu::item("export", "Export as Picto Pack...").into(),
+            menu::item("export-originals", "Export Originals...").into(),
+            menu::item("export-as", "Export As...").into(),
+            menu::item("export-pack", "Export as Picto Pack...").into(),
         ],
     )
     .icon("menu-file-export")

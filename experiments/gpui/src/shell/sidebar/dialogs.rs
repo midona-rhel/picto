@@ -549,32 +549,11 @@ impl Sidebar {
                                             .flex()
                                             .items_center()
                                             .gap(px(8.))
-                                            .child(
-                                                // A read-only `GlassInput`.
-                                                div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .h(px(theme::CONTROL_LG))
-                                                    .px(px(10.))
-                                                    .flex()
-                                                    .items_center()
-                                                    .rounded(px(theme::RADIUS_SM))
-                                                    .border_1()
-                                                    .border_color(theme.border())
-                                                    .bg(theme.control_surface())
-                                                    .text_color(if path.is_some() {
-                                                        theme.text()
-                                                    } else {
-                                                        theme.text_tertiary()
-                                                    })
-                                                    .child(
-                                                        div().min_w_0().truncate().child(
-                                                            path.clone().unwrap_or(
-                                                                "Select a folder...".into(),
-                                                            ),
-                                                        ),
-                                                    ),
-                                            )
+                                            .child(ui::field::read_only_modal(
+                                                path.clone().map(SharedString::from),
+                                                "Select a folder...",
+                                                cx,
+                                            ))
                                             .child(
                                                 ui::action_button(
                                                     "watch-browse",

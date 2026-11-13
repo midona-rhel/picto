@@ -155,11 +155,7 @@ impl Shell {
                 window.dispatch_action(Box::new(crate::keymap::ImportFolder), cx)
             },
         );
-        // TODO: export the selection (Export Originals…, Export As…,
-        // Export as Picto Pack…): the export area handles
-        // `keymap::ExportOriginals`, `ExportAs` and `ExportPictoPack` on this
-        // root while the selection is not empty (`hasSelection`); until
-        // then those rows show disabled.
+        // The export rows are handled by `export_actions`.
         root = when(
             root,
             menu.can_rename_one(),

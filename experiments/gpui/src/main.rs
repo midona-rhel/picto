@@ -6,6 +6,7 @@ mod cover;
 mod covered;
 mod demo;
 mod desktop;
+mod export;
 mod grid;
 mod history;
 mod imports;
@@ -17,6 +18,7 @@ mod motion;
 #[cfg(all(test, target_os = "macos"))]
 mod offscreen;
 mod pointer;
+mod prompt;
 mod screens;
 mod session;
 mod settings;

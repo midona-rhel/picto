@@ -3,6 +3,7 @@
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
 mod delete;
+mod export;
 mod import;
 mod item_menu;
 mod rails;
@@ -109,6 +110,8 @@ pub struct Shell {
     items: item_menu::ItemMenus,
     /// Imports, their dialogs and the task dialog and bar.
     imports: Entity<crate::imports::Imports>,
+    /// Exports and Picto Packs, and their dialogs.
+    exports: Entity<crate::export::Exports>,
     /// Files dragged from the system over the window, until they are
     /// dropped or leave it.
     file_drag: Option<Vec<PathBuf>>,
@@ -274,6 +277,7 @@ impl Shell {
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
         let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
+        let exports = cx.new(|cx| crate::export::Exports::new(session.clone(), focus.clone(), cx));
         let mut subscriptions = subscriptions;
         // The rails as the user left them.
         let kept = crate::state::get(cx).clone();
@@ -362,6 +366,7 @@ impl Shell {
             _view_panels: Vec::new(),
             items: Default::default(),
             imports,
+            exports,
             file_drag: None,
             reviewer: Default::default(),
             review_flash: None,
@@ -1039,11 +1044,13 @@ impl Render for Shell {
         }
         // Imports in progress, below the menus and dialogs.
         root = root.child(self.imports.clone());
+        root = root.child(self.exports.clone());
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);
         // The application menu's rows that act on the window's content.
         root = self.menu_actions(root, cx);
+        root = self.export_actions(root, cx);
         root = self.file_drop(root, cx);
 
         root = root.children(self.menu.layer(window, cx));

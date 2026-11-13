@@ -250,6 +250,40 @@ pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
         .child(div().h(px(20.)).truncate().child(value.into()))
 }
 
+/// A dialog field that cannot be typed in (`GlassInput readOnly`): the
+/// dialog field's frame at 80% strength, showing a value that something
+/// else chose (a folder from a dialog) or the placeholder until it has one,
+/// ending in an ellipsis when it does not fit.
+pub fn read_only_modal(
+    value: Option<SharedString>,
+    placeholder: impl Into<SharedString>,
+    cx: &App,
+) -> Div {
+    let theme = theme::theme(cx);
+    let frame = Look::Modal.frame(theme);
+    let (text, color) = match value {
+        Some(value) => (value, theme.text()),
+        None => (placeholder.into(), theme.text_tertiary()),
+    };
+    div()
+        .flex_1()
+        .min_w_0()
+        .h(px(frame.height))
+        .pl(px(frame.left))
+        .pr(px(frame.right))
+        .flex()
+        .items_center()
+        .rounded(px(frame.radius))
+        .border_1()
+        .border_color(frame.border.0)
+        .bg(frame.fill.0)
+        .opacity(0.8)
+        .font_family(theme::FONT_UI)
+        .text(theme::TEXT_MD)
+        .text_color(color)
+        .child(div().min_w_0().truncate().child(text))
+}
+
 /// The frame around a text input: its fill and border, how they change on
 /// focus, and the icon and clear button some fields carry. A press anywhere
 /// in the frame focuses the input.

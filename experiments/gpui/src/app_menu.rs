@@ -45,8 +45,6 @@ actions!(
         NewSmartFolder,
         ImportFiles,
         ImportFolder,
-        // TODO: choose a Picto Pack and import it, once its import is built.
-        ImportPictoPack,
         // TODO: check for updates and show the updates dialog
         // (`menu:show-updates`). This app does no network work.
         CheckForUpdates,
@@ -422,25 +420,21 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
             .keys(fixed("Mod+Shift+I", Binding::Shown))
             .enabled(context.import)
             .into(),
-        item("Import Picto Pack...", ImportPictoPack)
+        item("Import Picto Pack...", keymap::ImportPictoPack)
             .enabled(context.import)
-            .todo()
             .into(),
         Separator,
         // The export area handles these on the window root.
         item("Export Originals…", keymap::ExportOriginals)
             .keys(Keys::Registry("file.export"))
             .enabled(has)
-            .todo()
             .into(),
         item("Export As…", keymap::ExportAs)
             .keys(Keys::Registry("file.exportAs"))
             .enabled(has)
-            .todo()
             .into(),
         item("Export as Picto Pack...", keymap::ExportPictoPack)
             .enabled(has)
-            .todo()
             .into(),
         Separator,
         item("Check for Updates…", CheckForUpdates).todo().into(),
@@ -1457,10 +1451,6 @@ mod tests {
                 "Open Library…",
                 "Main",
                 "Clear History",
-                "Import Picto Pack...",
-                "Export Originals…",
-                "Export As…",
-                "Export as Picto Pack...",
                 "Check for Updates…",
                 "Batch Rename…",
                 "Regenerate 2 Thumbnails",

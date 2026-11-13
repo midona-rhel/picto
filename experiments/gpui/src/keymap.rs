@@ -60,7 +60,8 @@ actions!(
         PasteImport,
         ExportOriginals,
         ExportAs,
-        ExportPictoPack
+        ExportPictoPack,
+        ImportPictoPack
     ]
 );
 
@@ -165,8 +166,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         // An application menu accelerator in production, so the whole
         // window's.
         "file.import" => vec![to!(App, ImportFiles)],
-        // Application menu accelerators too. The export area handles the
-        // actions; until it does, the keys and the menu rows do nothing.
+        // Application menu accelerators too.
         "file.export" => vec![to!(App, ExportOriginals)],
         "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.

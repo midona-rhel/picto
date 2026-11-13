@@ -263,9 +263,29 @@ impl Shell {
                 );
             }
             // ── Waiting on other parts of the app ──
+            // ── Exporting ──
             Action::ExportOriginals | Action::ExportAs | Action::ExportPictoPack => {
-                // TODO: export through the application backend (originals to
-                // a chosen folder, the export dialog, a Picto Pack).
+                // The whole selection, loaded or not, when these are it.
+                let session = self.session.read(cx);
+                let selection = target.selection(session);
+                let count = match &selection {
+                    picto_library::selection::SelectionTarget::Explicit { root_ids } => {
+                        root_ids.len() as u64
+                    }
+                    _ => session.selection_count(),
+                };
+                if let Some(exports) = crate::export::get(cx) {
+                    exports.update(cx, |exports, cx| match action {
+                        Action::ExportOriginals => exports.export_originals(selection, cx),
+                        Action::ExportAs => exports.export_as(selection, count, cx),
+                        _ => exports.export_pack(
+                            crate::export::PackSource::Items(selection),
+                            count,
+                            None,
+                            cx,
+                        ),
+                    });
+                }
             }
             Action::SearchByImage(_) => {
                 // TODO: production uploads the original to the engine from a

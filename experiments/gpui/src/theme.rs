@@ -322,6 +322,9 @@ pub const DANGER_TEXT: u32 = 0xff9aa4;
 pub const ERROR_TEXT: u32 = 0xffb4b4;
 /// `GlassModal` `.backdrop`: black at 55%.
 pub const MODAL_BACKDROP: u32 = 0x0000008c;
+/// `PictoPackModal`'s glyph tile: `var(--surface-raised, rgba(255,255,255,.06))`,
+/// whose variable no theme defines, so always the fallback.
+pub const PACK_GLYPH_TILE: u32 = 0xffffff0f;
 
 /// `color` with no alpha: what a CSS transition from `transparent` toward
 /// it starts from, keeping its hue (see [`blend`]).

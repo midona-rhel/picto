@@ -17,6 +17,8 @@ pub struct Slider {
     step: f64,
     width: f32,
     filled: bool,
+    /// `GlassModal.module.css` `.rangeInput`, as wide as its container.
+    dialog: bool,
     on_change: Option<ChangeHandler>,
 }
 
@@ -29,6 +31,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         step,
         width: WIDTH,
         filled: false,
+        dialog: false,
         on_change: None,
     }
 }
@@ -47,6 +50,15 @@ impl Slider {
         self
     }
 
+    /// `.rangeInput` in a dialog (`GlassModal.module.css`): as wide as its
+    /// container, a 4px track at the primary border colour, and a 14px
+    /// thumb in the primary colour that overhangs the track's 4px of
+    /// layout.
+    pub fn dialog(mut self) -> Self {
+        self.dialog = true;
+        self
+    }
+
     /// Called with each new value while the thumb moves.
     pub fn on_change(mut self, handler: impl Fn(f64, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -56,12 +68,15 @@ impl Slider {
 
 const WIDTH: f32 = 200.;
 const THUMB: f32 = 12.;
+/// The dialog look's thumb and track.
+const DIALOG_THUMB: f32 = 14.;
+const DIALOG_TRACK: f32 = 4.;
 
 /// The value at `x` pixels along the track, snapped to the step. The thumb's
 /// centre travels from half a thumb in at each end, as Chromium draws it.
-fn value_along(x: f32, width: f32, min: f64, max: f64, step: f64) -> f64 {
-    let travel = width - THUMB;
-    let along = ((x - THUMB / 2.) / travel).clamp(0., 1.) as f64;
+fn value_along(x: f32, width: f32, thumb: f32, min: f64, max: f64, step: f64) -> f64 {
+    let travel = width - thumb;
+    let along = ((x - thumb / 2.) / travel).clamp(0., 1.) as f64;
     let raw = min + along * (max - min);
     let snapped = min + ((raw - min) / step).round() * step;
     snapped.clamp(min, max)
@@ -81,102 +96,136 @@ impl RenderOnce for Slider {
         let (min, max, step, value) = (self.min, self.max, self.step, self.value);
         let handler = self.on_change;
         let width = self.width;
-        div()
-            .id(self.id)
-            .occlude()
-            .relative()
-            .w(px(width))
-            .h(px(THUMB))
-            .flex_none()
-            .cursor_pointer()
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .top(px((THUMB - 3.) / 2.))
-                    .h(px(3.))
-                    .rounded(px(2.))
-                    .bg(theme.border())
-                    // The filled part runs to the thumb's place along the
-                    // whole track, as `--tolerance-progress` does.
-                    .when(self.filled, |track| {
-                        track.child(
+        let dialog = self.dialog;
+        let root = div().id(self.id).occlude().relative().cursor_pointer();
+        let root = if dialog {
+            // The track's 4px are the element's layout; the thumb hangs
+            // over it, centred, and its travel is the track less a thumb.
+            root.w_full()
+                .h(px(DIALOG_TRACK))
+                .rounded(px(2.))
+                .bg(theme.border())
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right(px(DIALOG_THUMB))
+                        .top(px((DIALOG_TRACK - DIALOG_THUMB) / 2.))
+                        .h(px(DIALOG_THUMB))
+                        .child(
                             div()
                                 .absolute()
-                                .left_0()
                                 .top_0()
-                                .bottom_0()
-                                .w(relative(along))
-                                .rounded(px(2.))
+                                .left(relative(along))
+                                .size(px(DIALOG_THUMB))
+                                .rounded_full()
                                 .bg(theme.primary()),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left(px((width - THUMB) * along))
-                    .size(px(THUMB))
-                    .rounded_full()
-                    .bg(theme.text())
-                    .when(self.filled, |thumb| {
-                        thumb.border_1().border_color(theme.border()).shadow(vec![
-                            BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_25).into())
-                                .blur_radius(px(2.)),
-                        ])
-                    }),
-            )
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let report = {
-                            let handler = handler.clone();
-                            move |x: Pixels, cx: &mut App| {
-                                let next = value_along(
-                                    f32::from(x - bounds.left()),
-                                    width,
-                                    min,
-                                    max,
-                                    step,
-                                );
-                                if let Some(handler) = &handler
-                                    && next != value
-                                {
-                                    handler(next, cx);
-                                }
-                            }
-                        };
-                        let (down, report_down) = (dragging.clone(), report.clone());
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Bubble
-                                && event.button == MouseButton::Left
-                                && bounds.contains(&event.position)
-                            {
-                                down.set(true);
-                                report_down(event.position.x, cx);
-                                cx.stop_propagation();
-                            }
-                        });
-                        let moved = dragging.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture && moved.get() {
-                                report(event.position.x, cx);
-                            }
-                        });
-                        let up = dragging.clone();
-                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
-                            if phase == DispatchPhase::Capture {
-                                up.set(false);
-                            }
-                        });
-                    },
+                        ),
                 )
-                .absolute()
-                .inset_0(),
+        } else {
+            root.w(px(width))
+                .h(px(THUMB))
+                .flex_none()
+                .child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top(px((THUMB - 3.) / 2.))
+                        .h(px(3.))
+                        .rounded(px(2.))
+                        .bg(theme.border())
+                        // The filled part runs to the thumb's place along the
+                        // whole track, as `--tolerance-progress` does.
+                        .when(self.filled, |track| {
+                            track.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(relative(along))
+                                    .rounded(px(2.))
+                                    .bg(theme.primary()),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px((width - THUMB) * along))
+                        .size(px(THUMB))
+                        .rounded_full()
+                        .bg(theme.text())
+                        .when(self.filled, |thumb| {
+                            thumb.border_1().border_color(theme.border()).shadow(vec![
+                                BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_25).into())
+                                    .blur_radius(px(2.)),
+                            ])
+                        }),
+                )
+        };
+        let thumb = if dialog { DIALOG_THUMB } else { THUMB };
+        root.child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let report = {
+                        let handler = handler.clone();
+                        move |x: Pixels, cx: &mut App| {
+                            let next = value_along(
+                                f32::from(x - bounds.left()),
+                                f32::from(bounds.size.width),
+                                thumb,
+                                min,
+                                max,
+                                step,
+                            );
+                            if let Some(handler) = &handler
+                                && next != value
+                            {
+                                handler(next, cx);
+                            }
+                        }
+                    };
+                    let (down, report_down) = (dragging.clone(), report.clone());
+                    window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Bubble
+                            && event.button == MouseButton::Left
+                            && bounds.contains(&event.position)
+                        {
+                            down.set(true);
+                            report_down(event.position.x, cx);
+                            cx.stop_propagation();
+                        }
+                    });
+                    let moved = dragging.clone();
+                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                        if phase == DispatchPhase::Capture && moved.get() {
+                            report(event.position.x, cx);
+                        }
+                    });
+                    let up = dragging.clone();
+                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
+                        if phase == DispatchPhase::Capture {
+                            up.set(false);
+                        }
+                    });
+                },
             )
+            .absolute()
+            .left_0()
+            .right_0()
+            // The dialog's thumb overhangs its track, and takes presses
+            // where it overhangs.
+            .top(px(if dialog {
+                (DIALOG_TRACK - DIALOG_THUMB) / 2.
+            } else {
+                0.
+            }))
+            .h(px(thumb)),
+        )
     }
 }
 
@@ -185,7 +234,7 @@ mod tests {
     use super::{WIDTH, value_along};
 
     fn value_at(x: f32, min: f64, max: f64, step: f64) -> f64 {
-        value_along(x, WIDTH, min, max, step)
+        value_along(x, WIDTH, super::THUMB, min, max, step)
     }
 
     #[test]

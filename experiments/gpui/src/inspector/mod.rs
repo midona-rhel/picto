@@ -32,6 +32,7 @@ use crate::ui::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, RootDetails, RootId, TagRecord};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1228,18 +1229,19 @@ impl Inspector {
             .iter()
             .any(|media| media.facts.mime.starts_with("image/"));
         let auto_tag = self.auto_tag("auto-tag", details.media.len() as u64, images, window, cx);
-        // TODO: Export opens the export dialog for this item.
+        let export = Self::export_row(
+            "export",
+            SelectionTarget::Explicit {
+                root_ids: vec![root.root_id],
+            },
+            details.media.len() as u64,
+            cx,
+        );
         scroller.child(
             panel
                 .child(self.section("Properties", Some(properties.into_any_element()), cx))
                 .when(!details.media.is_empty(), |panel| {
-                    panel.child(
-                        div().mt(px(12.)).child(
-                            ui::action_row("export", "inspector-export", "Export")
-                                .glyph(16.)
-                                .height(theme::CONTROL_MD),
-                        ),
-                    )
+                    panel.child(div().mt(px(12.)).child(export))
                 })
                 .child(auto_tag),
         )
@@ -1247,6 +1249,24 @@ impl Inspector {
 }
 
 impl Inspector {
+    /// `InspectorExportAction`: the Export dialog for `count` items.
+    fn export_row(
+        id: &'static str,
+        target: SelectionTarget,
+        count: u64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        ui::action_row(id, "inspector-export", "Export")
+            .glyph(16.)
+            .height(theme::CONTROL_MD)
+            .on_click(cx.listener(move |_, _, _, cx| {
+                if let Some(exports) = crate::export::get(cx) {
+                    let target = target.clone();
+                    exports.update(cx, |exports, cx| exports.export_as(target, count, cx));
+                }
+            }))
+    }
+
     /// `UnavailableInspectorSkeleton`: the rows a state will have, with
     /// dashes for values, while there is nothing to show yet.
     fn skeleton(

@@ -645,15 +645,15 @@ impl Inspector {
                     cx,
                 ));
         }
-        if count > 0 {
-            // TODO: Export opens the export dialog for the selected items.
-            properties = properties.child(
-                div().mt(px(12.)).child(
-                    ui::action_row("selection-export", "inspector-export", "Export")
-                        .glyph(16.)
-                        .height(theme::CONTROL_MD),
-                ),
-            );
+        // The whole selection, loaded or not.
+        let target = self.session.read(cx).selection_target();
+        if let Some(target) = target.filter(|_| count > 0) {
+            properties = properties.child(div().mt(px(12.)).child(Self::export_row(
+                "selection-export",
+                target,
+                count,
+                cx,
+            )));
         }
         panel = panel.child(self.section("Properties", Some(properties.into_any_element()), cx));
         let taggable = summary
