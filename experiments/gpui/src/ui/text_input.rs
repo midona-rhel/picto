@@ -64,19 +64,21 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A context menu's search row (`.searchInput`).
+    Menu,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Menu => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Menu => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +86,7 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Menu => 36.,
         }
     }
 }
@@ -746,6 +749,14 @@ impl TextInput {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
         input.kind = Kind::Sidebar;
+        input
+    }
+    /// A context menu's search field. The menu takes its Enter, Escape and
+    /// arrows before the field sees them.
+    pub fn menu_search(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "Search...".into();
+        input.kind = Kind::Menu;
         input
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
