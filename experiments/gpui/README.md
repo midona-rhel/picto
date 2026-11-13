@@ -904,8 +904,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
     printed) and RTF on the 816px text page, and EPUB chapters (the spine of
     the package document, one chapter to a page, its pictures decoded) on
     the 760px book page in Georgia, laid out as GPUI text with the page's
-    heading, paragraph, quote, code, list, link and rule styles. Parsing runs
-    off the drawing thread.
+    heading, paragraph, quote, code, list, link and rule styles. As in
+    production, the app stylesheet's `* { margin: 0; padding: 0 }` applies:
+    only the text page's headings have margins, lists hang their markers
+    outside the text, a book's quote is not indented, and a table's columns
+    are as wide as their widest cell (header cells are not bold yet).
+    Parsing runs off the drawing thread.
   - Fonts (TTF, OTF, the first face of a collection, and WOFF, unpacked)
     loaded into GPUI's text system: the title in the font, the Preview,
     Waterfall, Glyphs and Information modes, the five paper colours, and the
@@ -1369,6 +1373,16 @@ PICTO_GPUI_COPY=/tmp/picto-gpui-library.XXXXXX/Name.library \
 PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
+
+It redraws the whole window every tick, which hides a view that changes its
+state while a frame is drawn and waits for a frame nothing asks for (on
+screen it "fixes itself when the mouse moves"). `PICTO_GPUI_LAZY=1`, or a
+`lazy` line in the script (`eager` goes back), draws only when a real
+window would: after something invalidated it outside a draw, or asked for
+the next animation frame (`Window::is_dirty`, a test-support addition to
+the vendored GPUI). Run a script both ways and treat any difference as a
+fault. Video does not play off-screen (AVFoundation needs the main run
+loop), and the tool cannot resize a window.
 
 The reference takes `dragfiles`, `drop` and `dragexit` too, through the
 browser's drag events (`Input.dispatchDragEvent`), so a drop imports into
