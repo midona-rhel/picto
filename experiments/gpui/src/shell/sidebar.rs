@@ -58,6 +58,10 @@ impl Sidebar {
                     cx.notify();
                 }
             }),
+            cx.subscribe(
+                &crate::settings::model(cx),
+                |_, _, _: &crate::settings::Applied, cx| cx.notify(),
+            ),
         ];
         Self {
             session,
@@ -226,6 +230,23 @@ impl Render for Sidebar {
             let session = self.session.read(cx);
             (session.nav.clone(), session.scope)
         };
+        // What the Sidebar settings show: counts, guides, which system rows
+        // and which sections.
+        let (show_counts, show_guides, shown_rows, shown_sections) = {
+            let settings = crate::settings::current(cx);
+            (
+                settings.show_sidebar_counts,
+                settings.show_tree_guides,
+                entries
+                    .iter()
+                    .map(|entry| settings.shows_system_row(&entry.label))
+                    .collect::<Vec<_>>(),
+                [
+                    settings.show_sidebar_folders,
+                    settings.show_sidebar_smart_folders,
+                ],
+            )
+        };
         let section =
             |index: usize| section_of(&entries[index].scope, entries[index].screen.is_some());
         let count_of = |wanted| {
@@ -281,7 +302,7 @@ impl Render for Sidebar {
                 Section::SmartFolders => (ui::tip("New Smart Folder or Group"), "smart-folders"),
             };
             ui::section_header(id, label)
-                .count(count_of(which))
+                .count(if show_counts { count_of(which) } else { 0 })
                 .expanded(!self.folded[slot])
                 .on_toggle(cx.listener(move |this, _, _, cx| {
                     this.folded[slot] = !this.folded[slot];
@@ -304,9 +325,15 @@ impl Render for Sidebar {
         for (index, entry) in entries.iter().enumerate() {
             // Both headers always show, in order, even above an empty section.
             let slot = section(index).map(|which| which as usize);
+            if slot.is_none() && !shown_rows[index] {
+                continue;
+            }
             if let Some(slot) = slot {
+                if !shown_sections[slot] {
+                    continue;
+                }
                 for earlier in 0..=slot {
-                    if !shown[earlier] {
+                    if !shown[earlier] && shown_sections[earlier] {
                         shown[earlier] = true;
                         list = list.child(header(earlier, cx));
                         after_header = true;
@@ -344,7 +371,8 @@ impl Render for Sidebar {
             }
             let mut row = ui::sidebar_row(index, icon, entry.label.clone())
                 .depth(entry.depth)
-                .count(entry.count)
+                .count(entry.count.filter(|_| show_counts))
+                .guides(show_guides)
                 .active(active == index)
                 .disclosure(has_children.then_some(expanded))
                 .branch(Branch {
@@ -367,7 +395,7 @@ impl Render for Sidebar {
             list = list.child(row);
         }
         for slot in 0..SECTIONS.len() {
-            if !shown[slot] {
+            if !shown[slot] && shown_sections[slot] {
                 list = list.child(header(slot, cx));
             }
         }

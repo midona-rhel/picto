@@ -8,6 +8,8 @@ pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.
@@ -69,6 +71,12 @@ pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
+/// A settings row's or check row's highlight (`background 100ms ease`), and
+/// a theme swatch's outline.
+pub const ROW_HOVER: Duration = Duration::from_millis(100);
+/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`), and
+/// `GlassInput`'s border on focus.
+pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.

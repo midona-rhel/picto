@@ -39,6 +39,8 @@ pub struct SidebarRow {
     /// `Some(expanded)` when the row has children.
     disclosure: Option<bool>,
     branch: Branch,
+    /// `showTreeGuides`: whether nested rows draw their guide lines.
+    guides: bool,
     on_click: Option<ClickHandler>,
     on_toggle: Option<ClickHandler>,
 }
@@ -57,6 +59,7 @@ pub fn sidebar_row(
         active: false,
         disclosure: None,
         branch: Branch::default(),
+        guides: true,
         on_click: None,
         on_toggle: None,
     }
@@ -82,6 +85,10 @@ impl SidebarRow {
     }
     pub fn branch(mut self, branch: Branch) -> Self {
         self.branch = branch;
+        self
+    }
+    pub fn guides(mut self, guides: bool) -> Self {
+        self.guides = guides;
         self
     }
     pub fn on_click(
@@ -234,7 +241,7 @@ impl RenderOnce for SidebarRow {
         if interactive {
             row = row.cursor_pointer();
         }
-        if self.depth > 0 {
+        if self.depth > 0 && self.guides {
             row = row.child(guides(
                 self.depth,
                 self.branch,

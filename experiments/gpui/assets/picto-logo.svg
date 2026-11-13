@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Flat application icon artwork for Windows and Linux. -->
+  <defs>
+    <linearGradient id="tile-fade" x1="170" y1="118" x2="854" y2="918" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e2e3e7"/>
+      <stop offset="0.52" stop-color="#cacbd0"/>
+      <stop offset="1" stop-color="#afb2b9"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="224" fill="url(#tile-fade)"/>
+  <g fill="none" stroke="#292a2e" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 630C430 558 332 520 226 534L278 306C364 288 444 326 512 398C580 326 660 288 746 306L798 534C692 520 594 558 512 630Z"/>
+    <path d="M512 398V630"/>
+    <path d="M190 612Q350 604 512 674"/>
+    <path d="M834 612Q674 604 512 674"/>
+    <path d="M178 688H418C460 688 480 716 512 716C544 716 564 688 606 688H846"/>
+    <g stroke-linecap="butt">
+      <path d="M190 612L200 570"/>
+      <path d="M834 612L824 570"/>
+      <path d="M178 688L187 648"/>
+      <path d="M846 688L837 648"/>
+    </g>
+  </g>
+</svg>

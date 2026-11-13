@@ -1,28 +1,41 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
 //! Electron frontend. Views compose these and style nothing themselves.
 mod action_row;
+pub mod button;
+pub mod check;
 mod chip;
 pub mod field;
 mod icon_button;
 pub mod menu;
+pub mod number_input;
 mod panel_section;
 mod scroll_to_top;
 pub mod scrollbar;
 mod section_header;
+pub mod select;
 pub mod sidebar_row;
+pub mod slider;
 pub mod text_input;
+mod toggle;
 pub mod tooltip;
+pub mod window_chrome;
 pub mod zoom;
 
 pub use action_row::action_row;
+pub use button::button;
+pub use check::check;
 pub use chip::chip;
 pub use field::field;
 pub use icon_button::icon_button;
+pub use number_input::number_input;
 pub use panel_section::panel_section;
 pub use scroll_to_top::scroll_to_top;
 pub use scrollbar::scrollbar;
 pub use section_header::section_header;
+pub use select::{choice, select};
 pub use sidebar_row::sidebar_row;
+pub use slider::slider;
+pub use toggle::toggle;
 pub use tooltip::tip;
 
 use crate::theme;
@@ -63,24 +76,6 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
                 window.titlebar_double_click();
             }
         })
-}
-
-/// A plain text push button. It occludes what is behind it, so it works
-/// inside a titlebar strip.
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    div()
-        .id(id.into())
-        .occlude()
-        .h(px(theme::CONTROL_SM))
-        .px(px(12.))
-        .flex()
-        .items_center()
-        .rounded(px(theme::RADIUS_MD))
-        .bg(theme.contrast(8.))
-        .hover(move |style| style.bg(theme.contrast(14.)))
-        .cursor_pointer()
-        .child(label.into())
 }
 
 /// The grid's translucent label chip (`drawBadge` in `primitives.ts`).

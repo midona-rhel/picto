@@ -64,19 +64,23 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A form field at the UI font's 13px: the settings searches.
+    Form,
+    /// A number, at 12px and against the right edge (`CompactNumberInput`).
+    Number,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Form | Kind::Number => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
-            Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Search | Kind::Number => crate::theme::TEXT_SM,
+            Kind::Sidebar | Kind::Inspector | Kind::Form => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +88,7 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Form | Kind::Number => self.size() + 2.,
         }
     }
 }
@@ -564,7 +569,12 @@ impl Element for TextElement {
         // While editing, the text scrolls just far enough to show the caret.
         let cursor_x = line.x_for_index(cursor.min(line.len()));
         let caret_room = bounds.size.width - px(1.);
-        let scroll = if !focused || line.width <= caret_room {
+        let right_aligned = input.kind == Kind::Number;
+        let scroll = if right_aligned && line.width <= caret_room {
+            // Text set against the right edge: a negative scroll moves it
+            // there, and the caret, selection and hit testing follow.
+            line.width - caret_room
+        } else if !focused || line.width <= caret_room {
             px(0.)
         } else {
             previous_scroll
@@ -763,6 +773,27 @@ impl TextInput {
     }
     pub fn value(&self) -> String {
         self.content.to_string()
+    }
+    /// A form field, at the UI font's 13px.
+    pub fn form(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Form;
+        input
+    }
+    /// A number field, set against its right edge.
+    pub fn number(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "".into();
+        input.kind = Kind::Number;
+        input
+    }
+    /// Replaces the text, which Escape then goes back to.
+    pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.original = text.clone().into();
+        self.content = text.into();
+        self.selected_range = 0..0;
+        cx.notify();
     }
     pub fn field(placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);

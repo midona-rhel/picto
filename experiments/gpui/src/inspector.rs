@@ -16,7 +16,7 @@ use std::collections::HashSet;
 
 /// A chip's colour and sort order for a tag namespace (`NS_COLORS` in
 /// `TagChip.tsx`, `tagGroupOrder`). General tags come last.
-fn tag_style(namespace: &str) -> (u32, u8) {
+pub(crate) fn tag_style(namespace: &str) -> (u32, u8) {
     match namespace {
         "creator" => (0xff6667, 0),
         "studio" => (0xff6667, 10),
@@ -31,9 +31,6 @@ fn tag_style(namespace: &str) -> (u32, u8) {
     }
 }
 
-/// The `showTagPrefixes` setting, at its default: a chip shows the tag
-/// without its namespace.
-const SHOW_TAG_PREFIXES: bool = false;
 /// A folder chip without a colour of its own.
 const FOLDER_COLOR: u32 = 0x868e96;
 /// The preview fits this square.
@@ -128,6 +125,10 @@ impl Inspector {
                     Change::Navigation => cx.notify(),
                     _ => {}
                 },
+            ),
+            cx.subscribe(
+                &crate::settings::model(cx),
+                |_, _, _: &crate::settings::Applied, cx| cx.notify(),
             ),
         ];
         Self {
@@ -635,6 +636,8 @@ impl Inspector {
         let mut tags = tags;
         tags.sort_by_key(|tag| (tag_style(&tag.namespace).1, tag.subname.to_lowercase()));
         let tagged = !tags.is_empty();
+        // `showTagPrefixes`: off, a chip shows the tag without its group.
+        let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
         for tag in tags {
             let (color, _) = tag_style(&tag.namespace);
             let general = matches!(tag.namespace.as_str(), "" | "general" | "default");
@@ -649,7 +652,7 @@ impl Inspector {
                     tag.subname.clone(),
                     color,
                 )
-                .namespace((SHOW_TAG_PREFIXES && !general).then(|| tag.namespace.clone().into()))
+                .namespace((show_prefixes && !general).then(|| tag.namespace.clone().into()))
                 .on_remove(cx.listener(move |this, _, _, cx| {
                     this.session.read(cx).remove_tag(id, raw.clone());
                 })),

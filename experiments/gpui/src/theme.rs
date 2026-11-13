@@ -140,6 +140,24 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--color-primary-NN`: the primary colour at a strength.
+    pub fn primary_at(&self, percent: f32) -> Rgba {
+        translucent(self.primary, percent)
+    }
+    /// `--color-text-disabled`
+    pub fn text_disabled(&self) -> Rgba {
+        translucent(self.text, 22.)
+    }
+    /// `CmSelect`: `color-mix(--color-bg-app 90%, --color-text-primary 10%)`,
+    /// the select button and its menu.
+    pub fn select_surface(&self) -> Rgba {
+        mixed(self.text, 10., self.background)
+    }
+    /// `--color-warning`, which the shortcut field's conflict border falls
+    /// back from to `#FFA500`.
+    pub fn warning(&self) -> Rgba {
+        rgb(0xffa500)
+    }
 }
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
@@ -249,6 +267,8 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-lg`
+pub const TEXT_LG: f32 = 14.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
@@ -267,6 +287,8 @@ pub const CONTROL_MD: f32 = 28.;
 pub const CONTROL_LG: f32 = 32.;
 /// `--icon-button-size`
 pub const ICON_BUTTON: f32 = 24.;
+/// `--action-button-height`
+pub const ACTION_BUTTON: f32 = 30.;
 /// The macOS window's corner radius, which its rim follows.
 pub const WINDOW_RADIUS: f32 = 10.;
 /// `--titlebar-height`
