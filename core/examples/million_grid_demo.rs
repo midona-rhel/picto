@@ -66,7 +66,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("ASSETS {}/4096", assets.len());
         }
     }
-    fixture::seed_with_assets(&root.join("library.sqlite"), 1_000_000, &assets)?;
+    // `PICTO_DEMO_ITEMS` makes a smaller library (the default is a million).
+    let items: u32 = std::env::var("PICTO_DEMO_ITEMS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000_000);
+    fixture::seed_with_assets(&root.join("library.sqlite"), items, &assets)?;
+    // Each item's file has a hash of its own; its original and thumbnail are
+    // hard links to the sample asset it reuses, so they take no more room.
+    for id in 1..=items {
+        let asset = &assets[(id as usize - 1) % assets.len()];
+        let hash = fixture::sample_hash(id);
+        for kind in ["f", "t"] {
+            let from = root
+                .join("blobs")
+                .join(kind)
+                .join(&asset.hash[..2])
+                .join(&asset.hash[2..4])
+                .join(format!("{}.jpg", asset.hash));
+            let folder = root.join("blobs").join(kind).join(&hash[..2]).join(&hash[2..4]);
+            std::fs::create_dir_all(&folder)?;
+            std::fs::hard_link(from, folder.join(format!("{hash}.jpg")))?;
+        }
+        if id % 100_000 == 0 {
+            eprintln!("FILES {id}/{items}");
+        }
+    }
     let library = Library::open(root.join("library.sqlite"))?;
     for (label, query) in fixture::queries()
         .into_iter()
@@ -81,10 +106,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             view: query.view,
         })?;
     }
-    assert_eq!(library.counts()?.all, 1_000_000);
+    assert_eq!(library.counts()?.all, u64::from(items));
     library.write_projection_checkpoint()?;
     println!(
-        "READY {} — 1,000,000 active media items, 4,096 reusable JPEG assets, five smart folders",
+        "READY {} — {items} active media items, 4,096 reusable JPEG assets, five smart folders",
         root.display()
     );
     Ok(())

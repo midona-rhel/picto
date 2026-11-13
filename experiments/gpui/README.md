@@ -581,7 +581,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   too. Each id maps to actions in the key context of production's scope:
   `Browser` for the app-wide keys (Back and Forward on both bindings, ⌘1–⌘4
   to All, Inbox, Untagged and Trash, ⌘F into the grid's or the Tags
-  screen's search, the rail toggles, Undo and Redo, New Folder, New
+  screen's search, the rail toggles, Undo and Redo (with or without a
+  selection; the results, the selection and the sidebar are read again
+  after either), New Folder, New
   Subfolder, Rename into the inspector's name field, Copy File Path),
   `Grid` while the grid shows (movement with Shift extending, Select All,
   Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
@@ -905,8 +907,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
     printed) and RTF on the 816px text page, and EPUB chapters (the spine of
     the package document, one chapter to a page, its pictures decoded) on
     the 760px book page in Georgia, laid out as GPUI text with the page's
-    heading, paragraph, quote, code, list, link and rule styles. Parsing runs
-    off the drawing thread.
+    heading, paragraph, quote, code, list, link and rule styles. As in
+    production, the app stylesheet's `* { margin: 0; padding: 0 }` applies:
+    only the text page's headings have margins, lists hang their markers
+    outside the text, a book's quote is not indented, and a table's columns
+    are as wide as their widest cell (header cells are not bold yet).
+    Parsing runs off the drawing thread.
   - Fonts (TTF, OTF, the first face of a collection, and WOFF, unpacked)
     loaded into GPUI's text system: the title in the font, the Preview,
     Waterfall, Glyphs and Information modes, the five paper colours, and the
@@ -1002,6 +1008,12 @@ element (`shell/rails.rs`).
 
 ## Not yet equivalent to Picto
 
+- A whole destination selected names no collection count in the item
+  menu's Ungroup row ("Ungroup Collections..."); production looks the count
+  up. Open With Other offers the system chooser instead of listing the
+  applications (macOS lists them in production).
+- Tab in the Folders dialog leaves the keyboard in the search field;
+  production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a failed save or a next page that cannot load is reported
   on the console, not in a notification. A review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
@@ -1414,6 +1426,16 @@ PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
 
+It redraws the whole window every tick, which hides a view that changes its
+state while a frame is drawn and waits for a frame nothing asks for (on
+screen it "fixes itself when the mouse moves"). `PICTO_GPUI_LAZY=1`, or a
+`lazy` line in the script (`eager` goes back), draws only when a real
+window would: after something invalidated it outside a draw, or asked for
+the next animation frame (`Window::is_dirty`, a test-support addition to
+the vendored GPUI). Run a script both ways and treat any difference as a
+fault. Video does not play off-screen (AVFoundation needs the main run
+loop), and the tool cannot resize a window.
+
 The reference takes `dragfiles`, `drop` and `dragexit` too, through the
 browser's drag events (`Input.dispatchDragEvent`), so a drop imports into
 the reference's own copy. Its CSS animations do not run while its window
@@ -1438,6 +1460,18 @@ rules dialog, the Settings window, a detail window, and the viewer on a JPEG,
 a GIF, a JPEG XL, a `.mov`, a `.webm`, an MP3 and a PDF collection. Timers
 advance with the real clock there, so animations play, but nothing was
 measured.
+
+`PICTO_GPUI_FPS=1` shows a frame meter in the window's bottom-left corner:
+the frames drawn in the last second, the time between the last two, and how
+long the app took to draw one (from the start of the shell's render to the end
+of its paint; the GPU's share is not in it). It reads "idle" once nothing has
+drawn for a second.
+
+`million.sh [items]` makes a synthetic library (a million items by default:
+4,096 generated JPEGs shared among them by hard links, with five smart
+folders) with the repository's `million_grid_demo` example and opens the app
+on it with the meter on, for checking scrolling, resizing and loading at
+scale. It reads no existing library.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap

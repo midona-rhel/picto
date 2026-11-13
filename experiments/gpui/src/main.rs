@@ -8,6 +8,7 @@ mod grid;
 mod imports;
 mod inspector;
 mod keymap;
+mod meter;
 mod motion;
 // Draws through the macOS text system and renderer.
 #[cfg(all(test, target_os = "macos"))]

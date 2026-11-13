@@ -109,6 +109,11 @@ fn mixed(color: u32, percent: f32, base: u32) -> Rgba {
 }
 
 impl Theme {
+    /// Whether this is a light theme (`data-mantine-color-scheme="light"`).
+    pub fn is_light(&self) -> bool {
+        self.light
+    }
+
     /// `--color-bg-app`
     pub fn background(&self) -> Rgba {
         rgb(self.background)

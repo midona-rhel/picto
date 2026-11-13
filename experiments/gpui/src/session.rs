@@ -1486,7 +1486,7 @@ impl Session {
         let saved = self
             .saved
             .remove(&visit.scope)
-            .filter(|saved| saved.search_text == self.search_text && saved.filters == filters);
+            .filter(|saved| saved.search_text.is_empty() && saved.filters == filters);
         self.open(visit.scope, saved, Some(filters), cx);
     }
 
@@ -1584,6 +1584,9 @@ impl Session {
         cx: &mut Context<Self>,
     ) {
         self.save_grid();
+        // Every destination opens without a search (`prepareNavigation`
+        // sets `searchText: ''`), Back and Forward included.
+        self.search_text.clear();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
             self.filters = filters;
@@ -1791,6 +1794,13 @@ impl Session {
             self.anchor = self.end_at(focus);
         }
         self.focus_on(Some(focus), cx);
+    }
+
+    /// Whether the selection reaches past the items chosen one by one (the
+    /// whole destination, or a range), so that only the library knows all
+    /// it holds (production's `query_results` selection).
+    pub fn selects_whole(&self) -> bool {
+        self.selection.query_wide()
     }
 
     /// How many items are selected, loaded or not.
@@ -2100,18 +2110,16 @@ impl Session {
         .detach();
     }
 
-    /// Undoes the library's last edit, while an item is selected, and shows
-    /// that item as it is now.
+    /// Undoes the library's last edit, whatever is selected (`edit.undo` is
+    /// app-wide): an undone move to the trash brings back an item that is no
+    /// longer in the grid, and an undone folder edit changes the sidebar. So
+    /// the results, the selection and the destinations are read again.
     pub fn undo(&mut self, cx: &mut Context<Self>) {
-        if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.undo(), Reread::DETAILS, cx);
-        }
+        let _ = self.edit(|library| library.undo(), Reread::EVERYTHING, cx);
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
-        if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.redo(), Reread::DETAILS, cx);
-        }
+        let _ = self.edit(|library| library.redo(), Reread::EVERYTHING, cx);
     }
 }
 
@@ -2164,6 +2172,11 @@ impl Reread {
     pub const NAVIGATION: Self = Self {
         navigation: true,
         ..Self::NOTHING
+    };
+    /// Whatever an edit could have touched, for undo and redo.
+    pub const EVERYTHING: Self = Self {
+        navigation: true,
+        ..Self::RESULTS
     };
 }
 
