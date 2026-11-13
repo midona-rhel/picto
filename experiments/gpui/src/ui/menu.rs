@@ -138,8 +138,14 @@ impl Item {
         self
     }
     /// The shortcut as the platform writes it, e.g. `⌘⌫`.
-    pub fn shortcut(mut self, shortcut: &'static str) -> Self {
+    pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
         self.shortcut = Some(shortcut.into());
+        self
+    }
+    /// The hint for a registry shortcut as it is bound now (`shortcutHint`),
+    /// so the row follows a rebinding.
+    pub fn shortcut_for(mut self, id: &str, cx: &App) -> Self {
+        self.shortcut = crate::keymap::hint(id, cx);
         self
     }
     /// The one destructive row of a menu, drawn in the negative colour.
@@ -167,8 +173,6 @@ impl Item {
     }
     /// Choosing the row tells the owner and leaves the menu open, so several
     /// toggles can be changed together.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn keep_open(mut self, keep_open: bool) -> Self {
         self.keep_open = keep_open;
         self
@@ -339,6 +343,24 @@ fn place(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
         y = area.bottom() - h - MARGIN;
     }
     (x.max(area.x + MARGIN), y.max(area.y + MARGIN))
+}
+
+/// `placeMenu`'s `transform-origin` for the panel `place` puts there: the
+/// corner at the pointer, or the right or bottom edge where the panel was
+/// moved inward from that edge. Fractions of the width and height.
+fn origin(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
+    (
+        if pointer.0 + w > area.right() - MARGIN {
+            1.
+        } else {
+            0.
+        },
+        if pointer.1 + h > area.bottom() - MARGIN {
+            1.
+        } else {
+            0.
+        },
+    )
 }
 
 /// `SubmenuPanel`'s placement: 4px right of the parent panel and 3px above
@@ -569,7 +591,11 @@ pub struct Menu {
     serial: u64,
     scroll: ScrollHandle,
     focus: FocusHandle,
-    /// Set once dismissed: the menu fades for 80 ms and takes no more input.
+    /// When the root panel was first drawn, where it shows: it grows in
+    /// from then (`menuIn`).
+    shown: Option<Instant>,
+    /// Set once dismissed: the menu shrinks and fades for 80 ms (`menuOut`)
+    /// and takes no more input.
     closing: Option<Instant>,
     /// The value of the row or swatch last chosen.
     chosen: Option<SharedString>,
@@ -635,6 +661,7 @@ impl Menu {
             serial: 0,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
+            shown: None,
             closing: None,
             chosen: None,
             presentation: presentation(),
@@ -667,8 +694,6 @@ impl Menu {
     }
 
     /// Checks or unchecks the row with this action while the menu is open.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn set_checked(&mut self, action: &'static str, checked: bool, cx: &mut Context<Self>) {
         fn visit(entries: &mut [Entry], action: &str, checked: bool) {
             for entry in entries {
@@ -711,13 +736,24 @@ impl Menu {
             .is_some_and(|since| since.elapsed() >= motion::MENU_OUT)
     }
 
-    fn opacity(&self) -> f32 {
-        match self.closing {
-            Some(since) => {
-                1. - motion::EASE_IN.ease(motion::progress(since.elapsed(), motion::MENU_OUT))
-            }
-            None => 1.,
+    /// The root panel's scale and opacity now: growing in once it is first
+    /// drawn, shrinking and fading once dismissed. Submenus have neither
+    /// (`.submenuMenu { animation: none }`): an open one stays as it is until
+    /// the menu is gone.
+    fn root_motion(&self) -> (f32, f32) {
+        match (self.closing, self.shown) {
+            (Some(since), _) => motion::menu_out(since.elapsed()),
+            (None, Some(shown)) => (motion::menu_in(shown.elapsed()), 1.),
+            (None, None) => (motion::MENU_IN_SCALE, 1.),
         }
+    }
+
+    /// Whether the root panel is still growing in.
+    fn entering(&self) -> bool {
+        self.closing.is_none()
+            && self
+                .shown
+                .is_none_or(|shown| shown.elapsed() < motion::MENU_IN)
     }
 
     fn searching(&self) -> bool {
@@ -843,6 +879,12 @@ impl Menu {
             w: self.width,
             h: height.min(area.h - VIEWPORT_INSET),
         }
+    }
+
+    /// The `transform-origin` of the root panel for these rows.
+    fn root_origin(&self, rows: &[Row]) -> (f32, f32) {
+        let (area, pointer) = self.area();
+        origin(pointer, self.width, self.height(rows), area)
     }
 
     /// The open submenu's row, entry and current row.
@@ -1361,23 +1403,38 @@ impl Menu {
             }))
     }
 
-    /// The glass panel at `at` in its window.
-    fn chrome(&self, id: &'static str, at: (f32, f32), w: f32, h: f32, cx: &App) -> Stateful<Div> {
+    /// The glass panel of `w` × `h` at `at` in its window, holding `content`,
+    /// drawn at `scale` about `origin` and at `opacity`. GPUI cannot scale
+    /// the contents, so the panel's surface, border and shadow are drawn in
+    /// the scaled rectangle and the contents stay at full size and in place,
+    /// clipped to it.
+    #[allow(clippy::too_many_arguments)]
+    fn chrome(
+        &self,
+        id: &'static str,
+        at: (f32, f32),
+        w: f32,
+        h: f32,
+        (scale, opacity): (f32, f32),
+        origin: (f32, f32),
+        content: Div,
+        cx: &App,
+    ) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
         div()
             .id(id)
             .occlude()
             .absolute()
-            .left(px(at.0))
-            .top(px(at.1))
-            .w(px(w))
-            .h(px(h))
-            .flex()
-            .flex_col()
+            .left(px(at.0 + dx))
+            .top(px(at.1 + dy))
+            .w(px(scaled_w))
+            .h(px(scaled_h))
+            .overflow_hidden()
             .rounded(px(theme::RADIUS_LG))
             .bg(theme.glass())
             .shadow(theme::panel_shadow())
-            .opacity(self.opacity())
+            .opacity(opacity)
             // A press on the panel itself is not a press outside it.
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             // `--glass-border-side`, drawn inside so it takes no room.
@@ -1388,6 +1445,16 @@ impl Menu {
                     .rounded(px(theme::RADIUS_LG))
                     .border_1()
                     .border_color(theme.glass_border()),
+            )
+            .child(
+                content
+                    .absolute()
+                    .left(px(-dx))
+                    .top(px(-dy))
+                    .w(px(w))
+                    .h(px(h))
+                    .flex()
+                    .flex_col(),
             )
     }
 
@@ -1583,7 +1650,7 @@ impl Menu {
                     .child("No results"),
             );
         }
-        let mut panel = self.chrome("menu", at, rect.w, rect.h, cx);
+        let mut panel = div();
         if let Some(search) = &self.search {
             let mut glyph = theme.text_tertiary();
             glyph.a *= 0.6;
@@ -1611,7 +1678,7 @@ impl Menu {
                     ),
             );
         }
-        panel.child(
+        panel = panel.child(
             div()
                 .id("menu-items")
                 .relative()
@@ -1619,6 +1686,16 @@ impl Menu {
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
                 .child(list),
+        );
+        self.chrome(
+            "menu",
+            at,
+            rect.w,
+            rect.h,
+            self.root_motion(),
+            self.root_origin(rows),
+            panel,
+            cx,
         )
     }
 
@@ -1668,21 +1745,30 @@ impl Menu {
                 _ => element,
             });
         }
-        self.chrome("submenu", at, open.rect.w, open.rect.h, cx)
-            // Reaching the submenu keeps it open.
-            .on_hover(cx.listener(|this, hovered: &bool, _, _| {
-                if *hovered {
-                    this.submenu_grace = None;
-                }
-            }))
-            .child(
-                div()
-                    .id("submenu-items")
-                    .relative()
-                    .h(px(open.rect.h))
-                    .overflow_y_scroll()
-                    .child(list),
-            )
+        let content = div().child(
+            div()
+                .id("submenu-items")
+                .relative()
+                .h(px(open.rect.h))
+                .overflow_y_scroll()
+                .child(list),
+        );
+        self.chrome(
+            "submenu",
+            at,
+            open.rect.w,
+            open.rect.h,
+            (1., 1.),
+            (0., 0.),
+            content,
+            cx,
+        )
+        // Reaching the submenu keeps it open.
+        .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+            if *hovered {
+                this.submenu_grace = None;
+            }
+        }))
     }
 
     /// The owner window's part: the layer that takes the keyboard and
@@ -1706,6 +1792,7 @@ impl Menu {
         let mut layer = self.press_outside(layer, cx);
         match self.presentation {
             Presentation::InWindow => {
+                self.shown.get_or_insert_with(Instant::now);
                 let rows = self.rows();
                 let rect = self.root_rect(&rows);
                 layer = layer.child(self.root_panel(&rows, rect, (rect.x, rect.y), window, cx));
@@ -1760,6 +1847,9 @@ impl Menu {
         let mut root = self.press_outside(root, cx);
         match role {
             Role::Root => {
+                if self.screen.is_some() {
+                    self.shown.get_or_insert_with(Instant::now);
+                }
                 if let Some(screen) = &self.screen {
                     let rows = self.rows();
                     let rect = self.root_rect(&rows);
@@ -1884,6 +1974,7 @@ impl Render for Menu {
     /// windows; which part it draws depends on the window.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.closing.is_some()
+            || self.entering()
             || self.highlights.animating()
             || self.submenu_highlights.animating()
         {
@@ -1963,8 +2054,8 @@ fn without_system_shadow(_: &Window) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        Entry, MARGIN, PADDING, Path, Rect, Row, SEPARATOR, clean, item, items_height, place,
-        place_submenu, row_offset, score, search, step, submenu,
+        Entry, MARGIN, PADDING, Path, Rect, Row, SEPARATOR, clean, item, items_height, origin,
+        place, place_submenu, row_offset, score, search, step, submenu,
     };
 
     fn top(index: usize) -> Path {
@@ -2078,6 +2169,36 @@ mod tests {
         );
         assert_eq!(items_height(&[], true), 2. * PADDING + 30.);
         assert_eq!(row_offset(&rows, 2), PADDING + 26. + 2. + SEPARATOR + 2.);
+    }
+
+    #[test]
+    fn a_menu_grows_from_the_corner_it_was_placed_by() {
+        let area = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1000.,
+            h: 800.,
+        };
+        // Room at the pointer: from the top-left corner, at the pointer.
+        assert_eq!(origin((100., 100.), 270., 300., area), (0., 0.));
+        // Moved in from the right edge: from the right; from the bottom too.
+        assert_eq!(origin((900., 100.), 270., 300., area), (1., 0.));
+        assert_eq!(origin((900., 700.), 270., 300., area), (1., 1.));
+        // Exactly at the margin still fits.
+        assert_eq!(
+            origin(
+                (1000. - 270. - MARGIN, 800. - 300. - MARGIN),
+                270.,
+                300.,
+                area
+            ),
+            (0., 0.)
+        );
+        // The scaled frame then keeps that corner where `place` put it.
+        let (x, y) = place((900., 700.), 270., 300., area);
+        let (dx, dy, w, h) = crate::motion::scaled_frame(270., 300., 0.96, (1., 1.));
+        assert!((x + dx + w - (x + 270.)).abs() < 1e-3);
+        assert!((y + dy + h - (y + 300.)).abs() < 1e-3);
     }
 
     #[test]

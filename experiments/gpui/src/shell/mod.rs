@@ -2,17 +2,23 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+mod item_menu;
 pub mod library;
+mod shortcuts;
 pub mod sidebar;
 pub mod toolbar;
 
 use crate::backend::Screen;
 use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
-use crate::session::{Change, Session};
+use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
-use crate::ui::menu::{self, Menu};
-use crate::viewer::Viewer;
+use crate::ui::menu::Menu;
+use crate::viewer::{
+    Viewer, detail,
+    quick_look::{self, QuickLook},
+    trigger,
+};
 use crate::{motion, screens, theme, ui};
 use gpui::*;
 use sidebar::Sidebar;
@@ -32,6 +38,7 @@ actions!(
         PageDown,
         Preview,
         ClosePreview,
+        OpenInNewWindow,
         SelectAll,
         ToggleSidebar,
         ToggleInspector,
@@ -44,9 +51,6 @@ actions!(
     ]
 );
 
-/// The grid menu's "Set Rating" rows, from no rating to five stars.
-const RATE_ACTIONS: [&str; 6] = ["rate-0", "rate-1", "rate-2", "rate-3", "rate-4", "rate-5"];
-
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -54,6 +58,8 @@ pub struct Shell {
     grid: Entity<GridView>,
     inspector: Entity<Inspector>,
     viewer: Entity<Viewer>,
+    /// Quick Look, drawn over the whole window while it is open.
+    quick_look: Entity<QuickLook>,
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
@@ -67,9 +73,22 @@ pub struct Shell {
     resizing: Option<(Pixels, f32)>,
     /// How far each rail has slid out of view.
     rails: motion::Fades,
+    /// Whether the inspector belonged to what was shown last, and its fade
+    /// when that changes: it fades in and out over 170 ms when a screen
+    /// takes or gives back the window (`data-motion='fade'`), rather than
+    /// sliding as a toggle does.
+    inspector_available: Option<bool>,
+    inspector_presence: motion::Fade,
+    /// Set when the viewer closed by going to another destination: the
+    /// viewer stays in the pane and fades out with it, as `MediaView` does
+    /// inside the fading workspace surface, until the destination replaces it.
+    viewer_exit: bool,
     /// The open context menu. It stays here while it fades out.
     menu: Option<Entity<Menu>>,
     _menu: Option<Subscription>,
+    /// The item menus' state: what the open one acts on, copied tags, and
+    /// the confirmation it may ask.
+    items: item_menu::ItemMenus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -83,7 +102,6 @@ impl Shell {
     ) -> Self {
         let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
-        crate::delete::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -92,10 +110,26 @@ impl Shell {
         let sidebar =
             cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
         let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
+        let inspector =
+            cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx));
+        let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
+            cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, _, event: &grid::Activated, window, cx| {
+                    this.activate(event.index, event.middle, window, cx)
+                },
+            ),
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
-            cx.subscribe(&session, |_, _, change: &Change, cx| {
+            cx.subscribe(&session, |this, session, change: &Change, cx| {
+                if matches!(change, Change::Viewer) {
+                    let session = session.read(cx);
+                    this.viewer_exit =
+                        !session.viewer && matches!(session.transition, Transition::FadingOut(_));
+                }
                 if matches!(change, Change::Viewer | Change::Navigation) {
                     cx.notify();
                 }
@@ -104,7 +138,28 @@ impl Shell {
                 &grid,
                 window,
                 |this, _, event: &grid::MenuRequested, window, cx| {
-                    this.open_menu(event.0, window, cx)
+                    this.open_tile_menu(event.0, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, _, event: &grid::EmptyMenuRequested, window, cx| {
+                    this.open_empty_menu(event.0, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &viewer,
+                window,
+                |this, _, event: &crate::viewer::MenuRequested, window, cx| {
+                    this.open_viewer_menu(event.position, event.flash, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &inspector,
+                window,
+                |this, _, event: &crate::inspector::PreviewMenuRequested, window, cx| {
+                    this.open_preview_menu(event.0, window, cx)
                 },
             ),
             // The sidebar builds its own menus and acts on them; the shell
@@ -116,6 +171,11 @@ impl Shell {
                     this._menu = None;
                     this.show_menu(event.0.clone(), window, cx)
                 },
+            ),
+            cx.subscribe_in(
+                &sidebar,
+                window,
+                |this, _, _: &sidebar::EmptyTrash, window, cx| this.empty_trash(window, cx),
             ),
         ];
         let duplicates = cx.new(|cx| {
@@ -140,8 +200,9 @@ impl Shell {
         Self {
             sidebar,
             toolbar,
-            inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
+            inspector,
             viewer,
+            quick_look,
             tags,
             subscriptions: cx.new(|cx| {
                 screens::subscriptions::SubscriptionsScreen::new(
@@ -167,8 +228,12 @@ impl Shell {
                 .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX),
             resizing: None,
             rails: motion::Fades::default(),
+            inspector_available: None,
+            inspector_presence: motion::Fade::at(true),
+            viewer_exit: false,
             menu: None,
             _menu: None,
+            items: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -195,116 +260,6 @@ impl Shell {
         cx.notify();
     }
 
-    /// Opens the grid's context menu for the selection, at the pointer. The
-    /// rows follow `gridContextMenu.tsx`, for the actions this prototype has.
-    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let (count, trash) = {
-            let session = self.session.read(cx);
-            let trash = session
-                .nav
-                .get(session.displayed)
-                .is_some_and(|entry| entry.label == "Trash");
-            (session.selection.len(), trash)
-        };
-        if count == 0 {
-            return;
-        }
-        let mut entries: Vec<menu::Entry> = Vec::new();
-        if count == 1 {
-            entries.extend([
-                menu::item("open-default", "Open with Default App")
-                    .icon("menu-external-link")
-                    .shortcut("⇧↩")
-                    .into(),
-                menu::item("reveal", "Reveal in Finder")
-                    .icon("menu-brand-finder")
-                    .shortcut("⌘↩")
-                    .into(),
-                menu::Entry::Separator,
-                menu::item("copy-path", "Copy File Path")
-                    .icon("menu-clipboard-copy")
-                    .shortcut("⌘⌥C")
-                    .into(),
-                menu::item("copy-name", "Copy Name")
-                    .icon("menu-clipboard-copy")
-                    .into(),
-                menu::Entry::Separator,
-                menu::item("rename", "Rename")
-                    .icon("menu-rename")
-                    .shortcut("⌃R")
-                    .into(),
-                menu::Entry::Separator,
-            ]);
-            // The library rates one item per request here, so the row is
-            // offered for a single item, with its rating checked.
-            let rating = self
-                .session
-                .read(cx)
-                .selected_details()
-                .map(|details| details.rating);
-            let rows = picto_library::Rating::ALL
-                .iter()
-                .zip(RATE_ACTIONS)
-                .enumerate()
-                .map(|(stars, (value, action))| {
-                    let label = match stars {
-                        0 => "No Rating".to_owned(),
-                        _ => "★".repeat(stars),
-                    };
-                    menu::item(action, label)
-                        .checked(rating == Some(*value))
-                        .into()
-                })
-                .collect();
-            entries.extend([
-                menu::submenu("Set Rating", rows).icon("menu-star").into(),
-                menu::Entry::Separator,
-            ]);
-        }
-        let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
-        if trash {
-            entries.push(
-                menu::item(
-                    "restore",
-                    several("Restore", format!("Restore {count} Items")),
-                )
-                .icon("menu-arrow-back-up")
-                .into(),
-            );
-            // The one destructive row, after a confirmation. The app owns the
-            // copy it runs on, so the files it removes are the copy's.
-            entries.push(
-                menu::item(
-                    "delete",
-                    several("Delete Permanently", format!("Delete {count} Permanently")),
-                )
-                .icon("menu-trash")
-                .shortcut("⌘⌫")
-                .danger(true)
-                .into(),
-            );
-        } else {
-            entries.push(
-                menu::item(
-                    "trash",
-                    several("Move to Trash", format!("Move {count} to Trash")),
-                )
-                .icon("menu-trash")
-                .shortcut("⌘⌫")
-                .into(),
-            );
-        }
-        let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    this.run_menu_action(action, window, cx);
-                }),
-            );
-        self.show_menu(menu, window, cx);
-    }
-
     /// Puts a context menu above the window and gives it the keyboard.
     fn show_menu(&mut self, menu: Entity<Menu>, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&menu.focus_handle(cx), cx);
@@ -324,77 +279,114 @@ impl Shell {
         }
     }
 
-    fn run_menu_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
-        // The file the menu acts on: the shown member of the focused item.
-        let (name, path) = {
-            let session = self.session.read(cx);
-            (
-                session.selected_item().map(|item| item.name.clone()),
-                session
-                    .selected_details()
-                    .and_then(|details| details.media.get(session.member))
-                    .map(|media| media.file_path.clone()),
-            )
+    /// What the grid has open, for deciding what a key or click does.
+    fn trigger_state(&self, cx: &App) -> trigger::State {
+        let session = self.session.read(cx);
+        trigger::State {
+            media_view: session.viewer,
+            quick_look: self.quick_look.read(cx).is_open(),
+            single: session.selection.len() == 1 && session.focus.is_some(),
+        }
+    }
+
+    /// A double- or middle-click on the tile at `index`, under the Controls
+    /// settings (`onTileDoubleClick`, `onTileMiddleClick`).
+    fn activate(
+        &mut self,
+        index: usize,
+        middle: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let collection = self
+            .session
+            .read(cx)
+            .items
+            .get(index)
+            .is_some_and(|item| item.kind == picto_library::RootKind::Collection);
+        let settings = crate::settings::current(cx);
+        let action = if middle {
+            trigger::middle_click(settings.grid_middle_click_action)
+        } else {
+            trigger::double_click(settings.grid_double_click_action, collection)
         };
         match action {
-            "open-default" => {
-                if let Some(path) = path {
-                    cx.open_with_system(std::path::Path::new(&path));
-                }
-            }
-            "reveal" => {
-                if let Some(path) = path {
-                    cx.reveal_path(std::path::Path::new(&path));
-                }
-            }
-            "copy-path" => {
-                if let Some(path) = path {
-                    cx.write_to_clipboard(ClipboardItem::new_string(path));
-                }
-            }
-            "copy-name" => {
-                if let Some(name) = name {
-                    cx.write_to_clipboard(ClipboardItem::new_string(name));
-                }
-            }
-            "rename" => {
-                self.inspector
-                    .update(cx, |inspector, cx| inspector.edit_name(window, cx));
-                return;
-            }
-            rate if RATE_ACTIONS.contains(&rate) => {
-                let stars = RATE_ACTIONS.iter().position(|action| *action == rate);
-                let session = self.session.read(cx);
-                if let (Some(item), Some(stars)) = (session.selected_item(), stars) {
-                    session.rate(item.root_id, picto_library::Rating::ALL[stars]);
-                }
-            }
-            "trash" => self.session.update(cx, |session, cx| {
-                session.move_selection_to(picto_library::Lifecycle::Trash, cx)
-            }),
-            "restore" => self.session.update(cx, |session, cx| {
-                session.move_selection_to(picto_library::Lifecycle::Active, cx)
-            }),
-            "delete" => {
-                let root_ids = self.session.read(cx).selected_ids();
-                if !root_ids.is_empty() {
-                    crate::delete::request(
-                        picto_library::selection::SelectionTarget::Explicit { root_ids },
-                        false,
-                        window,
-                        cx,
-                    );
-                }
-                return;
-            }
-            _ => {}
+            // A middle-click opens the clicked item alone.
+            trigger::Action::OpenWindow => self.open_in_window(vec![index], index, cx),
+            trigger::Action::OpenDefault => self.open_default(index, cx),
+            action => self.perform(action, window, cx),
         }
-        window.focus(&self.focus, cx);
+    }
+
+    /// Carries out what a key asked for.
+    fn perform(&mut self, action: trigger::Action, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            trigger::Action::OpenMediaView => self
+                .session
+                .update(cx, |session, cx| session.open_viewer(cx)),
+            trigger::Action::CloseMediaView => self
+                .session
+                .update(cx, |session, cx| session.close_viewer(cx)),
+            trigger::Action::OpenQuickLook => self
+                .quick_look
+                .update(cx, |quick_look, cx| quick_look.open(window, cx)),
+            trigger::Action::CloseQuickLook => self
+                .quick_look
+                .update(cx, |quick_look, cx| quick_look.close(window, cx)),
+            trigger::Action::ScrollPage => self.grid.update(cx, |grid, cx| grid.scroll_by_page(cx)),
+            trigger::Action::OpenWindow
+            | trigger::Action::OpenDefault
+            | trigger::Action::Nothing => {}
+        }
+    }
+
+    /// `openGridItemInWindow`: opens the item at `start` in a detail window
+    /// that steps through the items at `indices`.
+    fn open_in_window(&mut self, indices: Vec<usize>, start: usize, cx: &mut Context<Self>) {
+        let (entries, at) = {
+            let session = self.session.read(cx);
+            let entries = indices
+                .iter()
+                .filter_map(|index| session.items.get(*index))
+                .map(detail::Entry::from)
+                .collect::<Vec<_>>();
+            let at = indices.iter().position(|index| *index == start);
+            (entries, at)
+        };
+        if let Some(at) = at {
+            detail::open(self.session.clone(), entries, at, cx);
+        }
+    }
+
+    /// `openDefaultAppForHash`: the item's file in the system's application.
+    fn open_default(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .session
+            .read(cx)
+            .items
+            .get(index)
+            .map(|item| item.root_id)
+        else {
+            return;
+        };
+        let read = self.session.read(cx).run(move |library| {
+            library
+                .details(root)
+                .ok()
+                .and_then(|details| details.media.first().map(|media| media.file_path.clone()))
+        });
+        cx.spawn(async move |_, cx| {
+            if let Ok(Some(path)) = read.await {
+                cx.update(|cx| cx.open_with_system(std::path::Path::new(&path)));
+            }
+        })
+        .detach();
     }
 
     /// Moves the selection; with shift held, extends it instead.
     fn move_selection(&mut self, action: nav::Move, window: &Window, cx: &mut Context<Self>) {
-        let extend = window.modifiers().shift;
+        // Quick Look's steps never extend the selection it follows.
+        let extend = window.modifiers().shift && !self.quick_look.read(cx).is_open();
         self.grid
             .update(cx, |grid, cx| grid.move_selection(action, extend, cx));
     }
@@ -429,13 +421,13 @@ impl Shell {
             )
             .child(
                 ui::icon_button("open-settings", "settings")
-                    .tip(ui::tip("Settings").keys(&["⌘", ","]))
+                    .tip(ui::tip("Settings").shortcut("file.settings", cx))
                     .on_click(|_, _, cx| crate::settings::open(cx)),
             )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
                     .glyph(14.)
-                    .tip(ui::tip("Toggle Panels").keys(&["⇥"]))
+                    .tip(ui::tip("Toggle Panels").shortcut("view.toggleBothPanels", cx))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
             )
     }
@@ -445,10 +437,13 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
-        // While a screen shows there is no grid to move the scope change
-        // along, so the shell does.
+        // While a screen shows, or a closed viewer fades out in the grid's
+        // place, there is no grid to move the scope change along, so the
+        // shell does.
+        let exiting = self.viewer_exit;
+        let quick_look_open = self.quick_look.read(cx).is_open();
         let (viewer_open, screen, fade) = self.session.update(cx, |session, cx| {
-            if session.screen().is_some() {
+            if session.screen().is_some() || exiting {
                 session.advance_transition(cx);
             }
             (
@@ -457,8 +452,14 @@ impl Render for Shell {
                 session.transition.opacity(),
             )
         });
-        if screen.is_some() && self.session.read(cx).transition.animating() {
+        let transition = self.session.read(cx).transition;
+        if (screen.is_some() || self.viewer_exit) && transition.animating() {
             window.request_animation_frame();
+        }
+        // The viewer that closed by going elsewhere stays until the surface
+        // has faded out.
+        if !matches!(transition, Transition::FadingOut(_)) {
+            self.viewer_exit = false;
         }
         // The rails give up their width at once; only their own slide is animated.
         let left = if self.sidebar_collapsed {
@@ -469,6 +470,18 @@ impl Render for Shell {
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`).
         let inspector_available = screen.is_none() || viewer_open;
+        match self.inspector_available {
+            Some(was) if was != inspector_available => self
+                .inspector_presence
+                .set(inspector_available, motion::INSPECTOR_FADE),
+            Some(_) => {}
+            None => self.inspector_presence = motion::Fade::at(inspector_available),
+        }
+        self.inspector_available = Some(inspector_available);
+        let inspector_shown = self.inspector_presence.value();
+        if self.inspector_presence.animating() {
+            window.request_animation_frame();
+        }
         let inspector_width = if inspector_available {
             self.inspector_width
         } else {
@@ -491,6 +504,13 @@ impl Render for Shell {
             .right(px(right))
             .child(match screen {
                 _ if viewer_open => self.viewer.clone().cached(fill()).into_any_element(),
+                // The viewer left for another destination fades out as the
+                // grid would.
+                _ if self.viewer_exit => div()
+                    .size_full()
+                    .opacity(fade)
+                    .child(self.viewer.clone().cached(fill()))
+                    .into_any_element(),
                 // A screen fades as the grid does when the destination changes.
                 Some(screen) => div()
                     .size_full()
@@ -520,13 +540,17 @@ impl Render for Shell {
         });
         // The inspector rail spans the window's full height, titlebar strip
         // included, and slides as one piece.
-        let inspector = (inspector_available && inspector_hidden < 1.).then(|| {
+        // While it fades out it keeps its width over the content that has
+        // already taken the window's.
+        let inspector = (inspector_shown > 0. && inspector_hidden < 1.).then(|| {
+            let inspector_width = self.inspector_width;
             div()
                 .absolute()
                 .top_0()
                 .bottom_0()
                 .right(px(-inspector_width * inspector_hidden))
                 .w(px(inspector_width))
+                .opacity(inspector_shown)
                 .flex()
                 .flex_col()
                 .bg(theme.rail())
@@ -631,7 +655,13 @@ impl Render for Shell {
             // CSS `line-height: normal` for the system font.
             .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
-            .key_context("Browser")
+            // `Grid` while the grid itself shows: its shortcuts need it.
+            // Quick Look over the grid has the keyboard instead.
+            .key_context(if screen.is_none() && !viewer_open && !quick_look_open {
+                "Browser Grid"
+            } else {
+                "Browser"
+            })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some((from, width)) = this.resizing {
                     let wanted = width + f32::from(from - event.position.x);
@@ -669,20 +699,36 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &PageDown, window, cx| {
                 this.move_selection(nav::Move::PageDown, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &Preview, _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.toggle_viewer(cx));
+            .on_action(cx.listener(|this, _: &OpenInNewWindow, _, cx| {
+                // `file.openNewWindow`: the shown item, with the rest of the
+                // selection to step through.
+                let (indices, start) = {
+                    let session = this.session.read(cx);
+                    let indices = session.selection.iter().copied().collect::<Vec<_>>();
+                    (indices.clone(), session.focus.or(indices.first().copied()))
+                };
+                if let Some(start) = start {
+                    this.open_in_window(indices, start, cx);
+                }
             }))
+            .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
                 // Escape closes the menu, else the viewer, else deselects.
                 if !this.close_menu(cx) {
-                    this.session.update(cx, |session, cx| {
+                    let handled = this.session.update(cx, |session, cx| {
                         if session.viewer {
-                            session.close_viewer(cx)
+                            session.close_viewer(cx);
+                            true
+                        } else if session.screen().is_none() && !session.selection.is_empty() {
+                            session.clear_selection(cx);
+                            true
                         } else {
-                            session.clear_selection(cx)
+                            false
                         }
                     });
+                    if !handled {
+                        cx.propagate();
+                    }
                 }
                 cx.notify();
             }))
@@ -713,9 +759,14 @@ impl Render for Shell {
             }))
             .child(titlebar)
             .child(body)
-            .children(inspector)
-            // The permanent-delete confirmation, over everything.
-            .child(crate::delete::dialog(cx));
+            .children(inspector);
+        // Quick Look covers the whole window, titlebar and rails included,
+        // below the context menus (`--layer-overlay`).
+        if quick_look_open {
+            root = root.child(self.quick_look.clone());
+        }
+        // The registry's shortcuts that act on the window's content.
+        root = self.shortcut_actions(root, cx);
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.
@@ -729,6 +780,7 @@ impl Render for Shell {
             }
         }
         root = root.children(self.menu.clone());
+        root = root.children(self.confirmation(window, cx));
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.

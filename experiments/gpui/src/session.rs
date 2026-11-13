@@ -197,6 +197,8 @@ pub struct Session {
     search_text: String,
     pub filter: Option<FilterExpr>,
     blobs: PathBuf,
+    /// The disposable copy the application opened.
+    root: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
@@ -279,10 +281,17 @@ impl Session {
             search_text: String::new(),
             filter: None,
             blobs,
+            root,
             library_cover,
             fixtures,
             place_label: None,
         }
+    }
+
+    /// Whether the open library is still a marked disposable copy, which
+    /// edits that cannot be undone require.
+    pub fn disposable(&self) -> bool {
+        crate::application::guard(&self.root).is_ok()
     }
 
     /// The library's blob store.
@@ -1168,14 +1177,6 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.close_viewer(cx)
-        } else {
-            self.open_viewer(cx)
-        }
-    }
-
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self
             .details
@@ -1215,15 +1216,6 @@ impl Session {
 
     pub fn remove_from_folder(&self, id: RootId, folder: picto_library::FolderId) {
         let _ = self.sender.send(Request::LeaveFolder(id, folder));
-    }
-
-    /// The selected items, in the grid's order.
-    pub fn selected_ids(&self) -> Vec<RootId> {
-        self.selection
-            .iter()
-            .filter_map(|index| self.items.get(*index))
-            .map(|item| item.root_id)
-            .collect()
     }
 
     /// Moves the selected items to the trash, or back out of it, and

@@ -20,7 +20,10 @@ pub fn scroll_to_top(
     let visible = -scroll.offset().y >= px(threshold);
     let fade = window.use_keyed_state(id.clone(), cx, |_, _| motion::Fade::at(visible));
     if fade.read(cx).on() != visible {
-        fade.update(cx, |fade, _| fade.set(visible, motion::RETURN_TO_TOP));
+        // `transform 150ms ease-in-out 30ms, opacity 150ms ease-in-out 30ms`.
+        fade.update(cx, |fade, _| {
+            fade.set_after(visible, motion::RETURN_TO_TOP, motion::RETURN_TO_TOP_DELAY)
+        });
     }
     let shown = fade.read(cx).value_with(motion::EASE_IN_OUT);
     if fade.read(cx).animating() {

@@ -130,6 +130,14 @@ impl Inspector {
         }
     }
 
+    /// Reads the selection's summary again after it was edited from outside
+    /// the rail, such as by a rating key.
+    pub fn selection_edited(&mut self, cx: &mut Context<Self>) {
+        if self.wanted(cx) == Mode::Selection {
+            self.read_summary(cx);
+        }
+    }
+
     /// Reads the summary of the current selection (`selection_summary`, as
     /// `getTargetSelectionSummary` does), and shows it if the selection is
     /// still the same when it arrives.

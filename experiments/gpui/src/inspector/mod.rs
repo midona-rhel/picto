@@ -47,6 +47,11 @@ fn wanted(screen: bool, viewer: bool, selected: usize) -> Mode {
     }
 }
 
+/// The preview was right-clicked at this window position.
+pub struct PreviewMenuRequested(pub Point<Pixels>);
+
+impl EventEmitter<PreviewMenuRequested> for Inspector {}
+
 /// Where a click on a star applies its rating.
 #[derive(Clone, Copy)]
 enum Rate {
@@ -404,7 +409,7 @@ impl Inspector {
                     "Add to Folder",
                 )),
                 "add-to-folder-tip",
-                ui::tip("Add to Folder").keys(&["F"]),
+                ui::tip("Add to Folder").shortcut("organize.addFolder", cx),
                 theme::CONTROL_SM,
                 window,
                 cx,
@@ -414,7 +419,7 @@ impl Inspector {
             chips
                 .child(Self::add_button(
                     "add-folder",
-                    ui::tip("Add to Folder").keys(&["F"]),
+                    ui::tip("Add to Folder").shortcut("organize.addFolder", cx),
                     window,
                     cx,
                 ))
@@ -434,7 +439,7 @@ impl Inspector {
                     "Add Tags",
                 )),
                 "add-tags-tip",
-                ui::tip("Add Tags").keys(&["T"]),
+                ui::tip("Add Tags").shortcut("organize.addTag", cx),
                 theme::CONTROL_SM,
                 window,
                 cx,
@@ -444,7 +449,7 @@ impl Inspector {
             chips
                 .child(Self::add_button(
                     "add-tag",
-                    ui::tip("Add Tags").keys(&["T"]),
+                    ui::tip("Add Tags").shortcut("organize.addTag", cx),
                     window,
                     cx,
                 ))
@@ -488,9 +493,16 @@ impl Inspector {
         thumbnail: std::path::PathBuf,
         dimensions: Option<(u32, u32)>,
         label: AnyElement,
+        cx: &mut Context<Self>,
     ) -> Div {
         let (width, height) = fitted(dimensions);
         div()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|_, event: &MouseDownEvent, _, cx| {
+                    cx.emit(PreviewMenuRequested(event.position))
+                }),
+            )
             .h(px(PREVIEW))
             .mb(px(8.))
             .flex()
@@ -847,6 +859,7 @@ impl Inspector {
                 thumbnail,
                 media.facts.width.zip(media.facts.height),
                 label,
+                cx,
             ));
         }
         let palette = cover.map_or(&[][..], |media| &media.facts.palette[..]);

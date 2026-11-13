@@ -51,7 +51,7 @@ pub fn place(anchor: Point<f32>, viewport: Size<f32>, placement: Placement) -> (
 /// The scale a popover is drawn at, `elapsed` after it opened: 0.96 growing
 /// to 1 over `--duration-menu-in` on `--ease-scale-in`.
 pub fn scale(elapsed: std::time::Duration) -> f32 {
-    0.96 + 0.04 * motion::EASE_SCALE_IN.ease(motion::progress(elapsed, motion::MENU_IN))
+    motion::menu_in(elapsed)
 }
 
 /// One showing of a popover: when it opened and where the keyboard was
