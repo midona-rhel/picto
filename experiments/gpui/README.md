@@ -580,7 +580,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   too. Each id maps to actions in the key context of production's scope:
   `Browser` for the app-wide keys (Back and Forward on both bindings, ⌘1–⌘4
   to All, Inbox, Untagged and Trash, ⌘F into the grid's or the Tags
-  screen's search, the rail toggles, Undo and Redo, New Folder, New
+  screen's search, the rail toggles, Undo and Redo (with or without a
+  selection; the results, the selection and the sidebar are read again
+  after either), New Folder, New
   Subfolder, Rename into the inspector's name field, Copy File Path),
   `Grid` while the grid shows (movement with Shift extending, Select All,
   Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
@@ -962,6 +964,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
+- A whole destination selected names no collection count in the item
+  menu's Ungroup row ("Ungroup Collections..."); production looks the count
+  up. Open With Other offers the system chooser instead of listing the
+  applications (macOS lists them in production).
+- Tab in the Folders dialog leaves the keyboard in the search field;
+  production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a failed save or a next page that cannot load is reported
   on the console, not in a notification. A review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
