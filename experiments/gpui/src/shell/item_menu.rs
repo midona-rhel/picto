@@ -30,10 +30,6 @@ pub(super) struct ItemMenus {
     /// The tags "Copy Tags" took, for "Paste Tags" (production keeps them on
     /// the window, beside the JSON it writes to the clipboard).
     tag_clipboard: Vec<String>,
-    /// The folder the selection was last added to, for "Add to “…”".
-    // TODO: production remembers the folders the folder picker used
-    // (`readRecentFolderIds`); set this once that picker exists.
-    last_folder: Option<FolderId>,
     confirm: Option<Confirmation>,
 }
 
@@ -560,7 +556,8 @@ impl Shell {
     }
 
     fn last_folder_name(&self, cx: &App) -> Option<String> {
-        let folder = self.items.last_folder?;
+        // "Add to “…”" is the folder used last (`readRecentFolderIds`).
+        let folder = *self.session.read(cx).recent_folders.first()?;
         self.session
             .read(cx)
             .nav
@@ -714,7 +711,10 @@ impl Shell {
                 return;
             }
             Action::AddToLastFolder => {
-                if let Some(folder) = self.items.last_folder {
+                let last = self.session.read(cx).recent_folders.first().copied();
+                if let Some(folder) = last {
+                    self.session
+                        .update(cx, |session, _| session.record_folder_use(folder));
                     let selection = target.selection();
                     self.edit(
                         Box::new(move |library| library.add_to_folder(&selection, folder)),

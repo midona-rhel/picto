@@ -2,7 +2,7 @@
 //! tags of the chosen group, in letter sections. A tag opens its editor;
 //! tags and groups have context menus; the titlebar holds the search.
 mod dialogs;
-mod model;
+pub mod model;
 
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;

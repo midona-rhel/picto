@@ -249,6 +249,64 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   save through the library's folder owners and rename the sidebar row, Items
   and Size for the whole result, Export for folders and smart folders, and a
   Details section with the search and a folder's auto-tag and watch state.
+- The inspector's tag picker (`TagSelectPanel` in `OverlayShell`), from
+  Add Tags, the "+" after the tag chips, a right-click in the Tags section
+  and T: a 540×480 glass panel docked left of the inspector at the button
+  (80px below the rail's top from the keyboard, centred when the rail is
+  hidden), over a clear backdrop that closes it on a click or right-click,
+  dragged by its header or footer after 5px, Escape to close, a pin that
+  keeps it open without the backdrop. The search asks the library's ranked
+  `tag_page` (at once when empty, 150 ms after typing otherwise, pages of
+  100 loading 200px before the end), the tags the items had on opening list
+  first, each visible name once; a search naming no tag offers Create
+  "name" (in the browsed group). The rail has All, the tag groups in their
+  preset order and colours (hidden with `showTagGroups` off), Selected and
+  Starred with their counts, and folds away (the panel narrows to 340 over
+  200 ms). Rows show the bookmark in the group's colour (filled when on the
+  items), the star for starred tags, the name with the match in bold
+  (without its group unless `showTagPrefixes`), and the count; the settings
+  panel switches grid or list and the counts. A click puts the tag on the
+  item, or on every selected item, or takes it off, at once; the arrows
+  (and ← → in the grid layout), Enter and Tab work as in production. A row's
+  menu has Filter Items with This Tag, Add to or Remove from Starred, Move
+  to Group or Remove from this Group, and Copy Tag.
+- The folder picker (`FolderPickerPanel` with `FolderTree`), from Add to
+  Folder, the "+" after the folder chips, a right-click in the Folders
+  section and F: the folder tree with its guide lines, folding chevrons and
+  parent names, the search (matches with their ancestors, every branch
+  open), the items' folders checked, a click that adds the items to the
+  folder or takes them out, the Recent and Selected views (Tab cycles), the
+  arrows and Enter, and a row's menu with New Subfolder and New Sibling
+  Folder, which ask for a name in a dialog, create the folder and add the
+  items to it.
+- After any of these edits the library is read again: the sidebar's
+  destinations and counts, the tags, the item or the selection's summary,
+  and the grid when its destination's results can change (Untagged, a
+  folder, Uncategorized, a smart folder, a filtered or searched grid), in
+  place, keeping the selection and the scroll.
+- Context menus on the inspector's chips: a tag's Filter Items with This
+  Tag (narrows the grid's destination to it), Add to or Remove from
+  Starred, Copy Tag and Remove Tag; a folder's Open Folder and Remove.
+- The source address field's list (`InspectorSourceField`): the link
+  button, "+N", or a click on an empty field opens it over the field, with
+  each address (open on a click), Edit and Delete with their tooltips, an
+  edit field (Enter or leaving it saves, a blank address deletes it, Escape
+  leaves it), and Add URL; a press outside saves and closes it. Saved
+  through the library's `set_source_urls`, for one item or every selected
+  item.
+- Pin: while pinned, the inspector keeps the item, selection or destination
+  it shows, and its edits still apply to it. Unpinned, a multi-selection is
+  read again at once; anything else stays until the selection or the
+  destination changes, as production's inspector waits for its live target.
+- The name and notes fields expand as `InspectorField` does: focused text
+  that no longer fits its line is drawn over what follows, wrapped, up to
+  240px tall (then it scrolls to keep the caret in view), on the rail colour
+  with its shadow, fading in from 92% over 100 ms. Shift+Enter breaks the
+  line, Enter commits, Escape reverts; the arrows move between lines. This is
+  the shared text input, which takes line breaks when made `expanding`.
+- Overwriting the notes or sources of a selection where some items already
+  have them asks first ("Overwrite notes?", "Overwrite sources?") in the
+  shared dialog.
 - Inspector with several items selected, from the library's selection
   summary: the stacked preview of the last six covers chosen with its
   shade, the turned cards' scale and the enter and exit motion, "N items
@@ -292,8 +350,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
   Open with Default App, Reveal in Finder, ⌘⌫ by scope as
   `gridRemovalAction` decides, Restore in the Trash, Accept and Reject in the
-  Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which reach the
-  shell where the pickers will open), `Viewer` (previous, next, fit, actual
+  Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which open the
+  inspector's tag and folder pickers), `Viewer` (previous, next, fit, actual
   size, zoom, close, ratings for the shown item, in the media view and Quick
   Look), `DetailWindow` (the viewer's keys except that only Escape closes,
   ⇧T and Copy File Path) and `Duplicates`. None of them fires while a text
@@ -445,6 +503,18 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
   not its rounded corners.
+- The pickers: T, F, ⌘⇧J and the grid menu's Add Tags and Add to Folder
+  open the inspector's pickers, where production opens the separate
+  `TagSelectModal` and `FolderPickerModal` dialogs (with a pending selection
+  and Apply), which are not ported. With
+  several items selected, a picker starts from the tags or folders they all
+  share (production starts from the details of the item last shown). The
+  pickers' layout, counts, folded rail, pin and recent folders last for the
+  session (production keeps some in localStorage). Not drawn: the create
+  row's sticky position, the 60 ms row highlight transitions, the panel's
+  backdrop blur, and an error notification when an edit fails (it is
+  printed). The pickers' filter modes (include and exclude, match all or
+  any) belong to the filter bar, which does not exist yet.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
   belong (theme, zoom, language, the grid's wheel action, image rendering
@@ -476,17 +546,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   table headers, and the native `title` tooltips of truncated cells, are
   not drawn.
 - Drawn with their hover states and tooltips but not wired: View
-  options, the inspector's Add to Folder,
-  Add Tags, Export (for an item, a selection and a destination),
-  source-address list and Pin, and in the library switcher's popover
+  options, the inspector's Export (for an item, a selection and a
+  destination), and in the library switcher's popover
   choosing another library, Create Library, Open Library and Library Manager
   (those rows only close the popover). Each has a `TODO` where its action
   belongs. The Filter button only clears a filter the inspector set; there
   is no filter bar.
 - Inspector: the stacked preview's cards cannot turn (GPUI rotates only
   SVGs), so they lie straight; the folder card's radial light is a vertical
-  gradient. Overwriting the notes of a selection that already has notes needs
-  the confirmation dialog, so it is refused and the field reverts. Auto Tag,
+  gradient. Auto Tag,
   the subfolder scope, the summary spinners and the 250 ms switch to the
   loading skeleton are not ported, and a selection's covers follow the order
   items were chosen in this session, not the Electron query-selection order
@@ -562,11 +630,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
   editor), Import Files, Import Folder and Paste Import, Flash's Play,
   Stop and Mute, and Set as Thumbnail. "Add Tags" and "Add to Folder"
-  dispatch the shortcuts' `AddTags` and `AddToFolder`, which wait for the
-  pickers. "Open in New Window" opens the item alone in a detail window.
+  dispatch the shortcuts' `AddTags` and `AddToFolder`, which open the
+  inspector's pickers. "Open in New Window" opens the item alone in a detail window.
   Quick Look and the detail window have no context menu yet.
-  "Add to “…”" appears once a folder has been used, which only the folder
-  picker will record. Show Extension and Show Subfolder Content are saved
+  "Add to “…”" appears once a folder has been used (the folder picker and
+  this row record it; for the session only). Show Extension and Show Subfolder Content are saved
   but the grid does not follow them yet. Delete Permanently leaves the files
   a delete that cannot be undone frees where they are. Errors go to the
   console, not to notifications. Edits that change what the destination
@@ -606,8 +674,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Keep Left, Keep Right and Smart Merge; production's deferred ids are not
   bound either. ⌘⌫ in the Trash (Delete Permanently) and Reject with
   "Delete" chosen are bound but do nothing, so no library file is ever
-  deleted. T, F and ⌘⇧J reach the shell with a `TODO` until the pickers
-  exist; batch rename for several items is a `TODO`. Space scrolls the grid
+  deleted. T, F and ⌘⇧J open the inspector's pickers rather than
+  production's picker dialogs; batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
   itself. The application menu's accelerators that also work while a text
@@ -708,14 +776,15 @@ One model, separate views, shared components:
   changes it shows: `shell/` (the root, the sidebar, the library popover, the
   toolbar), `grid/` (the grid view with its layout, saved view, labels,
   reveal, keyboard movement, rubber band, hover preview, tile artwork,
-  thumbnail cache and originals), `inspector/` (one item, several items, and
-  the destination), `viewer/` (the media surface with its zoom and pan
-  arithmetic in `camera.rs`, Flash, and its three hosts: the media view
-  with the viewer toolbar the titlebar shows, Quick Look and the detail
-  window, with `trigger.rs` deciding which a key or click opens) and
-  `screens/` (the destinations that are screens of their own).
+  thumbnail cache and originals), `inspector/` (one item, several items, the
+  destination, and the tag and folder pickers), `viewer/` (the media surface
+  with its zoom and pan arithmetic in `camera.rs`, Flash, and its three
+  hosts: the media view with the viewer toolbar the titlebar shows, Quick
+  Look and the detail window, with `trigger.rs` deciding which a key or click
+  opens) and `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu (with submenus, search and swatches), dialog, popover, library avatar, sidebar row, section
+  tooltip, context menu (with submenus, search and swatches), dialog, popover, the
+  floating selection panel of the pickers (`overlay_shell`), library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom
