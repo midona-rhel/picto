@@ -173,12 +173,7 @@ impl Inspector {
 
     /// The source field. Without addresses to show (`unavailable`) it holds
     /// a dash and no button.
-    pub(super) fn source(
-        &mut self,
-        urls: Option<&[String]>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(super) fn source(&mut self, urls: Option<&[String]>, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let unavailable = urls.is_none();
         let urls = urls.unwrap_or_default().to_vec();
@@ -303,19 +298,14 @@ impl Inspector {
         field = field.child(action);
         let mut slot = div().relative().mb(px(8.)).child(field);
         if open {
-            slot = slot.child(self.source_list(&urls, window, cx));
+            slot = slot.child(self.source_list(&urls, cx));
         }
         slot
     }
 
     /// `.urlDropdown`: over the field and what follows, leaving the link
     /// button uncovered.
-    fn source_list(
-        &mut self,
-        urls: &[String],
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn source_list(&mut self, urls: &[String], cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let width = f32::from(self.sources.field.get().size.width) - 30.;
         let separator = theme::blend(
@@ -324,38 +314,10 @@ impl Inspector {
             0.55,
         );
         let editing = self.sources.editing;
-        let row_button = |id: (&'static str, usize),
-                          icon: &'static str,
-                          tip: &'static str,
-                          window: &mut Window,
-                          cx: &mut App| {
-            let group = SharedString::from(format!("{}-{}", id.0, id.1));
-            let button = div()
-                .id(id)
-                .group(group.clone())
-                .w(px(31.))
-                .h(px(32.))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_l_1()
-                .border_color(theme.border_secondary())
-                .cursor_pointer()
-                .hover(move |style| style.bg(theme.control_surface()))
-                .child(
-                    ui::icon(icon, 13., theme.text())
-                        .opacity(0.5)
-                        .group_hover(group, |style| style.opacity(1.)),
-                );
-            ui::tooltip::attach(
-                button,
-                (SharedString::from(format!("{}-tip", id.0)), id.1),
-                Tip::new(tip),
-                32.,
-                window,
-                cx,
-            )
+        let row_button = |id: (&'static str, usize), icon: &'static str, tip: &'static str| {
+            ui::icon_button(id, icon)
+                .look(ui::icon_button::Look::UrlAction)
+                .tip(Tip::new(tip))
         };
         let input_row = || {
             div()
@@ -400,32 +362,22 @@ impl Inspector {
             let (edited, kept) = (url.clone(), urls.to_vec());
             row = row
                 .child(
-                    row_button(
-                        ("source-edit", index),
-                        "source-edit",
-                        "Edit URL",
-                        window,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.edit_source(index, edited.clone(), window, cx)
-                    })),
+                    row_button(("source-edit", index), "source-edit", "Edit URL").on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.edit_source(index, edited.clone(), window, cx)
+                        }),
+                    ),
                 )
                 .child(
-                    row_button(
-                        ("source-delete", index),
-                        "source-trash",
-                        "Delete URL",
-                        window,
-                        cx,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.sources.editing == Some(index) {
-                            this.sources.editing = None;
-                        }
-                        this.set_sources(removed(&kept, index), cx);
-                        cx.notify();
-                    })),
+                    row_button(("source-delete", index), "source-trash", "Delete URL").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            if this.sources.editing == Some(index) {
+                                this.sources.editing = None;
+                            }
+                            this.set_sources(removed(&kept, index), cx);
+                            cx.notify();
+                        }),
+                    ),
                 );
             list = list.child(row);
         }
@@ -470,7 +422,7 @@ impl Inspector {
             .border_color(theme.primary())
             .bg(theme.rail())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(4.), rgba(0x0000002e).into()).blur_radius(px(10.)),
+                BoxShadow::new(px(0.), px(4.), rgba(theme::BLACK_18).into()).blur_radius(px(10.)),
             ])
             .font_family(theme::FONT_INSPECTOR)
             .text(theme::TEXT_MD)

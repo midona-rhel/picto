@@ -23,6 +23,65 @@ pub struct ViewPrefs {
     pub sort: ItemSort,
 }
 
+/// `LAYOUT_OPTIONS`: each layout, its `view_mode` value and its label.
+pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
+    (ViewMode::Waterfall, "waterfall", "Waterfall"),
+    (ViewMode::Grid, "grid", "Grid"),
+    (ViewMode::Justified, "justified", "Justified"),
+];
+
+/// `SORT_OPTIONS` of the view panel, in its order: each sort, its
+/// `sort_field` value and its label.
+pub const SORTS: [(SortField, &str, &str); 6] = [
+    (SortField::ImportedAt, "imported_at", "Date Added"),
+    (SortField::CapturedAt, "captured_at", "Date Created"),
+    (SortField::Name, "name", "Name"),
+    (SortField::TotalSize, "total_size", "File Size"),
+    (SortField::Rating, "rating", "Rating"),
+    (SortField::Random, "random", "Random"),
+];
+
+/// A layout's `view_mode` value.
+pub fn mode_value(mode: ViewMode) -> &'static str {
+    LAYOUTS
+        .iter()
+        .find(|(each, _, _)| *each == mode)
+        .map_or("waterfall", |(_, value, _)| value)
+}
+
+/// A sort's `sort_field` value. A folder's own order is not offered.
+pub fn sort_value(field: SortField) -> &'static str {
+    SORTS
+        .iter()
+        .find(|(each, _, _)| *each == field)
+        .map_or("folder_order", |(_, value, _)| value)
+}
+
+/// A sort's label in the view panel.
+pub fn sort_label(field: SortField) -> &'static str {
+    SORTS
+        .iter()
+        .find(|(each, _, _)| *each == field)
+        .map_or("Folder Order", |(_, _, label)| label)
+}
+
+/// A direction's `sort_order` value.
+pub fn direction_value(direction: SortDirection) -> &'static str {
+    match direction {
+        SortDirection::Ascending => "ascending",
+        SortDirection::Descending => "descending",
+    }
+}
+
+/// `hasFixedOrder`: a folder or Recently Viewed keeps its own order, so its
+/// view offers no sort.
+pub fn fixed_order(scope: &ItemScope) -> bool {
+    matches!(
+        scope,
+        ItemScope::Folder { .. } | ItemScope::FolderTree { .. } | ItemScope::RecentlyViewed
+    )
+}
+
 pub fn scope_key(scope: &ItemScope) -> String {
     match scope {
         ItemScope::All | ItemScope::MediaMatches { .. } => "system:active".into(),
@@ -57,14 +116,14 @@ impl ViewPrefs {
         let text = |field: &str| value(field).and_then(Value::as_str);
         let inbox = matches!(scope, ItemScope::Inbox);
         let field = match text("sort_field") {
-            Some("captured_at") => SortField::CapturedAt,
-            Some("name") => SortField::Name,
-            Some("rating") => SortField::Rating,
             // Older builds saved the File Size choice as 'size'.
-            Some("total_size" | "size") => SortField::TotalSize,
-            Some("random") => SortField::Random,
+            Some("size") => SortField::TotalSize,
             Some("folder_order") => SortField::FolderOrder,
-            _ => SortField::ImportedAt,
+            Some(value) => SORTS
+                .iter()
+                .find(|(_, each, _)| *each == value)
+                .map_or(SortField::ImportedAt, |(field, _, _)| *field),
+            None => SortField::ImportedAt,
         };
         let direction = match text("sort_order") {
             Some("ascending") => SortDirection::Ascending,
@@ -75,11 +134,10 @@ impl ViewPrefs {
             None => SortDirection::Descending,
         };
         Self {
-            mode: match text("view_mode") {
-                Some("grid") => ViewMode::Grid,
-                Some("justified") => ViewMode::Justified,
-                _ => ViewMode::Waterfall,
-            },
+            mode: LAYOUTS
+                .iter()
+                .find(|(_, value, _)| Some(*value) == text("view_mode"))
+                .map_or(ViewMode::Waterfall, |(mode, _, _)| *mode),
             target_size: value("target_size").and_then(Value::as_f64).unwrap_or(220.) as f32,
             gap: if text("spacing") == Some("tight") {
                 8.
@@ -104,21 +162,8 @@ impl ViewPrefs {
     /// These preferences as the `view_pref` fields that give them back,
     /// so a patch can be applied on top and resolved again.
     pub fn to_json(&self) -> Value {
-        let sort_field = match self.sort.field {
-            SortField::ImportedAt => "imported_at",
-            SortField::CapturedAt => "captured_at",
-            SortField::Name => "name",
-            SortField::Rating => "rating",
-            SortField::TotalSize => "total_size",
-            SortField::Random => "random",
-            SortField::FolderOrder => "folder_order",
-        };
         serde_json::json!({
-            "view_mode": match self.mode {
-                ViewMode::Waterfall => "waterfall",
-                ViewMode::Grid => "grid",
-                ViewMode::Justified => "justified",
-            },
+            "view_mode": mode_value(self.mode),
             "target_size": self.target_size,
             "spacing": if self.gap == 8. { "tight" } else { "wide" },
             "show_name": self.show_name,
@@ -128,11 +173,8 @@ impl ViewPrefs {
             "show_item_count": self.show_item_count,
             "thumbnail_fit": if self.fit_cover { "cover" } else { "contain" },
             "show_subfolders": self.show_subfolders,
-            "sort_field": sort_field,
-            "sort_order": match self.sort.direction {
-                SortDirection::Ascending => "ascending",
-                SortDirection::Descending => "descending",
-            },
+            "sort_field": sort_value(self.sort.field),
+            "sort_order": direction_value(self.sort.direction),
         })
     }
 
@@ -216,6 +258,37 @@ mod tests {
             },
             saved
         );
+    }
+
+    #[test]
+    fn every_value_reads_back_as_what_wrote_it() {
+        for (mode, value, _) in LAYOUTS {
+            assert_eq!(mode_value(mode), value);
+            let prefs = ViewPrefs::resolve(
+                &ItemScope::All,
+                &json!({}),
+                &json!({ "view_mode": value }),
+                "7",
+            );
+            assert_eq!(prefs.mode, mode);
+        }
+        for field in SORTS
+            .map(|(field, _, _)| field)
+            .into_iter()
+            .chain([SortField::FolderOrder])
+        {
+            let prefs = ViewPrefs::resolve(
+                &ItemScope::All,
+                &json!({}),
+                &json!({ "sort_field": sort_value(field) }),
+                "7",
+            );
+            assert_eq!(prefs.sort.field, field);
+        }
+        assert_eq!(sort_label(SortField::TotalSize), "File Size");
+        assert_eq!(direction_value(SortDirection::Ascending), "ascending");
+        assert!(fixed_order(&ItemScope::RecentlyViewed));
+        assert!(!fixed_order(&ItemScope::Inbox));
     }
 
     #[test]

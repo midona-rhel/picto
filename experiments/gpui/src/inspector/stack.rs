@@ -4,7 +4,7 @@
 //! exit motion.
 use crate::motion;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The stack shows the last six of the sample.
 pub const CARDS: usize = 6;
@@ -16,11 +16,6 @@ const TURNED_SCALE: f32 = 0.93;
 /// stackPreviewLeft`, `stackPreviewRight`).
 const ENTER_FROM: (f32, f32) = (100., 40.);
 const ENTER_SCALE: f32 = 1.2;
-const ENTER_LEFT: Duration = Duration::from_millis(200);
-const ENTER_RIGHT: Duration = Duration::from_millis(250);
-/// A card that leaves fades over 200 ms and is gone at 220 ms.
-const EXIT_FADE: Duration = Duration::from_millis(200);
-const EXIT_REMOVE: Duration = Duration::from_millis(220);
 
 /// A card's resting pose. The first card lies straight; the rest alternate,
 /// turned five degrees one way or the other.
@@ -156,7 +151,7 @@ impl Stack {
     pub fn placed(&mut self, now: Instant) -> Vec<Placed> {
         self.cards.retain(|card| {
             card.exited
-                .is_none_or(|exited| now.duration_since(exited) < EXIT_REMOVE)
+                .is_none_or(|exited| now.duration_since(exited) < motion::STACK_EXIT_REMOVE)
         });
         let mut cards = self.cards.iter().collect::<Vec<_>>();
         // A leaving card goes under every other; the rest stack by age.
@@ -172,9 +167,9 @@ impl Stack {
                 let (mut offset, mut scale, mut opacity) = ((0., 0.), rest, 1.);
                 if let (Some(entered), false) = (card.entered, card.pose == Pose::Base) {
                     let duration = if card.pose == Pose::Left {
-                        ENTER_LEFT
+                        motion::STACK_ENTER_LEFT
                     } else {
-                        ENTER_RIGHT
+                        motion::STACK_ENTER_RIGHT
                     };
                     let progress = motion::EASE_DEFAULT
                         .ease(motion::progress(now.duration_since(entered), duration));
@@ -187,8 +182,10 @@ impl Stack {
                 }
                 if let Some(exited) = card.exited {
                     opacity *= 1.
-                        - motion::EASE_DEFAULT
-                            .ease(motion::progress(now.duration_since(exited), EXIT_FADE));
+                        - motion::EASE_DEFAULT.ease(motion::progress(
+                            now.duration_since(exited),
+                            motion::STACK_EXIT_FADE,
+                        ));
                 }
                 Placed {
                     hash: card.hash.clone(),
@@ -208,7 +205,7 @@ impl Stack {
             let entering = card.pose != Pose::Base
                 && card
                     .entered
-                    .is_some_and(|at| now.duration_since(at) < ENTER_RIGHT);
+                    .is_some_and(|at| now.duration_since(at) < motion::STACK_ENTER_RIGHT);
             let shading = card
                 .shade_at
                 .is_some_and(|at| now.duration_since(at) < motion::NORMAL);

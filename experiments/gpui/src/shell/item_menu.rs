@@ -3,17 +3,15 @@
 //! inspector preview's. The rows come from [`crate::grid::menu`]; this
 //! describes what was right-clicked, as the Electron screens do, and performs
 //! the chosen row through the session and the library.
-use super::Shell;
-use crate::backend;
+use super::{Shell, view_menu};
 use crate::grid::format::grouped;
-use crate::grid::layout::ViewMode;
 use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
-    Surface, Toggle, ViewState,
+    Surface,
 };
+use crate::session::Reread;
 use crate::ui::{self, menu::Menu};
 use gpui::*;
-use picto_library::predicate::{SortDirection, SortField};
 use picto_library::query::{ItemScope, RootSummary};
 use picto_library::selection::SelectionTarget;
 use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
@@ -85,17 +83,6 @@ struct Confirmation {
     run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
 }
 
-/// What an edit changed, and so what is read again after it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Reread {
-    /// The item shown in the inspector.
-    Item,
-    /// That, and the sidebar's destinations with their counts.
-    Destinations,
-    /// That, and the grid's results, which clears the selection.
-    Results,
-}
-
 type Work<T> = Box<dyn FnOnce(&Library) -> picto_library::Result<T> + Send>;
 
 /// `mediaLinkFor`: the link the Electron app serves a file at.
@@ -131,26 +118,6 @@ fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
 
 impl Shell {
     // ── Opening ─────────────────────────────────────────────────
-
-    /// The view panel's choices: the grid's saved view and the rails.
-    fn view_state(&self, cx: &App) -> ViewState {
-        let prefs = &self.session.read(cx).prefs;
-        ViewState {
-            mode: prefs.mode,
-            sort: prefs.sort.field,
-            direction: prefs.sort.direction,
-            show_name: prefs.show_name,
-            show_resolution: prefs.show_resolution,
-            show_extension: prefs.show_extension,
-            show_file_type: prefs.show_extension_label,
-            show_item_count: prefs.show_item_count,
-            compact: prefs.gap < 16.,
-            fit_thumbnails: prefs.fit_cover,
-            show_subfolders: prefs.show_subfolders,
-            sidebar: !self.sidebar_collapsed,
-            inspector: !self.inspector_collapsed,
-        }
-    }
 
     /// The destination the grid shows, as the menu tells destinations apart.
     fn grid_scope(&self, cx: &App) -> (Option<ItemScope>, ScopeKind, Option<FolderId>) {
@@ -212,7 +179,7 @@ impl Shell {
         };
         if let Some(target) = target {
             self.items.target = Some(target);
-            self.run_item_action(action, None, window, cx);
+            self.run_item_action(action, window, cx);
         }
     }
 
@@ -272,8 +239,6 @@ impl Shell {
             } else {
                 OpenWith::None
             },
-            fixed_order: fixed_order(&scope),
-            view: self.view_state(cx),
             handlers: Handlers {
                 open_default: true,
                 open_with_chooser: true,
@@ -360,8 +325,6 @@ impl Shell {
             });
         let description = Description {
             scope: Some(scope_kind),
-            fixed_order: fixed_order(&scope),
-            view: self.view_state(cx),
             handlers: Handlers {
                 new_folder: true,
                 new_smart_folder: true,
@@ -524,10 +487,31 @@ impl Shell {
     ) {
         self.items.actions = rows::actions(&built);
         self.items.target = Some(target);
-        let entries = rows::entries(built);
-        let menu = cx.new(|cx| Menu::new(entries, position, cx).search(search));
+        // The grid's menus hold the view panels, whose selects open over
+        // the window, so those menus draw in it.
+        let mut panels = None;
+        let entries = rows::entries(built, &mut |panel| {
+            panels
+                .get_or_insert_with(|| {
+                    view_menu::Panels::new(
+                        &self.session,
+                        !self.sidebar_collapsed,
+                        !self.inspector_collapsed,
+                        cx,
+                    )
+                })
+                .entry(panel)
+        });
+        let in_window = panels.is_some();
+        let menu = cx.new(|cx| {
+            let menu = Menu::new(entries, position, cx).search(search);
+            if in_window { menu.in_window() } else { menu }
+        });
+        if let Some(panels) = panels {
+            self.watch_view_panels(&menu, panels, cx);
+        }
         self.menu
-            .open(menu, window, cx, |this, menu, key, window, cx| {
+            .open(menu, window, cx, |this, _, key, window, cx| {
                 let action = this
                     .items
                     .actions
@@ -535,7 +519,7 @@ impl Shell {
                     .copied()
                     .find(|action| action.key() == key);
                 if let Some(action) = action {
-                    this.run_item_action(action, Some(menu), window, cx);
+                    this.run_item_action(action, window, cx);
                 }
             });
     }
@@ -555,13 +539,7 @@ impl Shell {
 
     // ── Performing ──────────────────────────────────────────────
 
-    fn run_item_action(
-        &mut self,
-        action: Action,
-        menu: Option<&Entity<Menu>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn run_item_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         let Some(target) = self.items.target.clone() else {
             return;
         };
@@ -678,13 +656,13 @@ impl Shell {
                 // (`ClipboardEntry::ExternalPaths`) is dropped.
             }
             // ── Lifecycle ──
-            Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, window, cx),
-            Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, window, cx),
+            Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
+            Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
                     self.request_permanent_delete(target, true, window, cx);
                 } else {
-                    self.set_lifecycle(Lifecycle::Trash, window, cx);
+                    self.set_lifecycle(Lifecycle::Trash, cx);
                 }
             }
             Action::DeletePermanently => {
@@ -703,8 +681,7 @@ impl Shell {
                     let selection = target.selection();
                     self.edit(
                         Box::new(move |library| library.add_to_folder(&selection, folder)),
-                        Reread::Destinations,
-                        window,
+                        Reread::SELECTION,
                         cx,
                     );
                 }
@@ -728,8 +705,7 @@ impl Shell {
                     let selection = target.selection();
                     self.edit(
                         Box::new(move |library| library.remove_from_folder(&selection, folder)),
-                        Reread::Results,
-                        window,
+                        Reread::RESULTS,
                         cx,
                     );
                 }
@@ -738,15 +714,14 @@ impl Shell {
                 if let (Some(folder), Some(id)) = (target.folder, ids.first().copied()) {
                     self.edit(
                         Box::new(move |library| library.set_folder_cover(folder, id)),
-                        Reread::Destinations,
-                        window,
+                        Reread::SELECTION,
                         cx,
                     );
                 }
             }
             Action::SortContents(field) => {
                 if let Some(folder) = target.folder {
-                    self.sort_folder(folder, field, window, cx);
+                    self.sort_folder(folder, field, cx);
                 }
             }
             // ── Groups ──
@@ -782,8 +757,7 @@ impl Shell {
                     let selection = target.selection();
                     self.edit(
                         Box::new(move |library| library.apply_tags(&selection, &tags, true)),
-                        Reread::Destinations,
-                        window,
+                        Reread::SELECTION,
                         cx,
                     );
                 }
@@ -793,8 +767,7 @@ impl Shell {
                 let selection = target.selection();
                 self.edit(
                     Box::new(move |library| library.set_rating(&selection, rating)),
-                    Reread::Item,
-                    window,
+                    Reread::SELECTION,
                     cx,
                 );
             }
@@ -825,7 +798,8 @@ impl Shell {
                 // the row while it is on.
             }
             Action::NewSmartFolder => {
-                // TODO: open the smart folder editor for a new one.
+                self.dispatch(Box::new(crate::keymap::NewSmartFolder), window, cx);
+                return;
             }
             Action::ImportFiles | Action::ImportFolder | Action::PasteImport => {
                 // TODO: choose files or a folder, or take the clipboard's,
@@ -845,54 +819,6 @@ impl Shell {
             }
             Action::SetAsThumbnail => {
                 // TODO: capture the shown frame and make it the thumbnail.
-            }
-            // ── View ──
-            Action::Layout(mode) => {
-                for (each, _, _) in rows::LAYOUTS {
-                    self.check(menu, Action::Layout(each), each == mode, cx);
-                }
-                self.change_view(
-                    serde_json::json!({ "view_mode": mode_value(mode) }),
-                    false,
-                    cx,
-                );
-                return;
-            }
-            Action::Sort(field) => {
-                for (each, _) in rows::SORTS {
-                    self.check(menu, Action::Sort(each), each == field, cx);
-                }
-                let direction = self.session.read(cx).prefs.sort.direction;
-                self.change_view(
-                    serde_json::json!({
-                        "sort_field": sort_value(field),
-                        "sort_order": direction_value(direction),
-                    }),
-                    true,
-                    cx,
-                );
-                return;
-            }
-            Action::Direction(direction) => {
-                for each in [SortDirection::Ascending, SortDirection::Descending] {
-                    self.check(menu, Action::Direction(each), each == direction, cx);
-                }
-                let field = self.session.read(cx).prefs.sort.field;
-                self.change_view(
-                    serde_json::json!({
-                        "sort_field": sort_value(field),
-                        "sort_order": direction_value(direction),
-                    }),
-                    true,
-                    cx,
-                );
-                return;
-            }
-            Action::Display(toggle) => {
-                let on = !self.view_state(cx).toggled(toggle);
-                self.check(menu, action, on, cx);
-                self.toggle_display(toggle, on, cx);
-                return;
             }
         }
         window.focus(&self.focus, cx);
@@ -934,15 +860,8 @@ impl Shell {
         );
     }
 
-    /// Checks or unchecks a row of the open menu.
-    fn check(&self, menu: Option<&Entity<Menu>>, action: Action, checked: bool, cx: &mut App) {
-        if let Some(menu) = menu {
-            menu.update(cx, |menu, cx| menu.set_checked(action.key(), checked, cx));
-        }
-    }
-
     /// Runs `work` on the library's thread and hands its answer to `then`.
-    /// A failure is reported on the console, as the shell's other edits do.
+    /// A failure is reported as the session's edits report one.
     fn library<T: Send + 'static>(
         &mut self,
         work: Work<T>,
@@ -950,89 +869,35 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = self.session.read(cx).run(work);
+        let answer = self
+            .session
+            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(result) = answer.await else {
-                return;
-            };
-            let _ = this.update_in(cx, move |this, window, cx| match result {
-                Ok(value) => then(this, value, window, cx),
-                // TODO: show this as a notification, as production's
-                // `showErrorNotification` does.
-                Err(error) => eprintln!("picto: {error}"),
-            });
+            if let Ok(Ok(value)) = answer.await {
+                let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
+            }
         })
         .detach();
     }
 
     /// An edit of the selected items, and what to read again afterwards.
-    fn edit<T: Send + 'static>(
-        &mut self,
-        work: Work<T>,
-        reread: Reread,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.library(
-            work,
-            move |this, _, window, cx| this.refresh(reread, window, cx),
-            window,
-            cx,
-        );
-    }
-
-    /// Reads the item shown again, and the destinations (names, counts) and
-    /// the grid's results as far as `reread` says.
-    fn refresh(&mut self, reread: Reread, window: &mut Window, cx: &mut Context<Self>) {
-        self.session.read(cx).refresh_details();
-        self.inspector
-            .update(cx, |inspector, cx| inspector.selection_edited(cx));
-        if reread == Reread::Item {
-            return;
-        }
-        self.library(
-            Box::new(backend::navigation),
-            move |this, (nav, tags), _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.replace_navigation(nav, tags, cx);
-                    if reread == Reread::Results {
-                        session.reload(cx);
-                    }
-                });
-            },
-            window,
-            cx,
-        );
+    fn edit<T: Send + 'static>(&mut self, work: Work<T>, reread: Reread, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(work, reread, cx);
+        });
     }
 
     /// Moves the selected items into or out of the Trash or the Inbox
-    /// through the session, which reloads the grid, then reads the
-    /// destinations' counts again.
-    fn set_lifecycle(&mut self, lifecycle: Lifecycle, window: &mut Window, cx: &mut Context<Self>) {
+    /// through the session, which reads the grid again in place.
+    fn set_lifecycle(&mut self, lifecycle: Lifecycle, cx: &mut Context<Self>) {
         self.session
             .update(cx, |session, cx| session.move_selection_to(lifecycle, cx));
-        self.library(
-            Box::new(backend::navigation),
-            |this, (nav, tags), _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
-            },
-            window,
-            cx,
-        );
     }
 
-    fn sort_folder(
-        &mut self,
-        folder: FolderId,
-        field: ContentSortField,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
         self.edit(
             Box::new(move |library| library.sort_folder_items(folder, field)),
-            Reread::Results,
-            window,
+            Reread::RESULTS,
             cx,
         );
     }
@@ -1091,9 +956,10 @@ impl Shell {
                     Ok(false)
                 }
             }),
-            |this, grouped, window, cx| {
+            |this, grouped, _, cx| {
                 if grouped {
-                    this.refresh(Reread::Results, window, cx);
+                    this.session
+                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
                 }
                 // TODO: otherwise open the group organizer
                 // (`GroupOrganizerModal`) with the selection's groups and
@@ -1126,14 +992,13 @@ impl Shell {
             message,
             "Ungroup",
             false,
-            Rc::new(move |this, window, cx| {
+            Rc::new(move |this, _, cx| {
                 let selection = selection.clone();
                 this.session
                     .update(cx, |session, cx| session.clear_selection(cx));
                 this.edit(
                     Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
-                    Reread::Results,
-                    window,
+                    Reread::RESULTS,
                     cx,
                 );
             }),
@@ -1261,8 +1126,10 @@ impl Shell {
             let Ok(result) = answer.await else {
                 return;
             };
-            let _ = this.update_in(cx, move |this, window, cx| match result {
-                Ok(()) => this.refresh(Reread::Results, window, cx),
+            let _ = this.update_in(cx, move |this, _, cx| match result {
+                Ok(()) => this
+                    .session
+                    .update(cx, |session, cx| session.reread(Reread::RESULTS, cx)),
                 // The library resolved a different selection or limit: never
                 // drop the promise of undo silently; ask again.
                 Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
@@ -1281,53 +1148,6 @@ impl Shell {
             });
         })
         .detach();
-    }
-
-    // ── View ────────────────────────────────────────────────────
-
-    /// Changes the grid's view at once and saves it as the destination's
-    /// own (`saveViewPref`), through the session's one path for it. A new
-    /// sort fetches the results again.
-    fn change_view(&mut self, patch: serde_json::Value, requery: bool, cx: &mut Context<Self>) {
-        self.session
-            .update(cx, |session, cx| session.update_view(patch, requery, cx));
-    }
-
-    fn toggle_display(&mut self, toggle: Toggle, on: bool, cx: &mut Context<Self>) {
-        let (field, value) = match toggle {
-            Toggle::Sidebar => {
-                if on == self.sidebar_collapsed {
-                    self.toggle_rails(true, false, cx);
-                }
-                return;
-            }
-            Toggle::Inspector => {
-                if on == self.inspector_collapsed {
-                    self.toggle_rails(false, true, cx);
-                }
-                return;
-            }
-            Toggle::Name => ("show_name", serde_json::json!(on)),
-            Toggle::Resolution => ("show_resolution", serde_json::json!(on)),
-            Toggle::Extension => ("show_extension", serde_json::json!(on)),
-            Toggle::FileType => ("show_label", serde_json::json!(on)),
-            Toggle::ItemCount => ("show_item_count", serde_json::json!(on)),
-            Toggle::Compact => (
-                "spacing",
-                serde_json::json!(if on { "tight" } else { "wide" }),
-            ),
-            Toggle::FitThumbnails => (
-                "thumbnail_fit",
-                serde_json::json!(if on { "cover" } else { "contain" }),
-            ),
-            Toggle::Subfolders => ("show_subfolders", serde_json::json!(on)),
-        };
-        // Showing a folder's subfolder items or not fetches again.
-        self.change_view(
-            serde_json::json!({ field: value }),
-            toggle == Toggle::Subfolders,
-            cx,
-        );
     }
 
     // ── Confirmation ────────────────────────────────────────────
@@ -1399,41 +1219,6 @@ fn kind(kind: RootKind) -> Kind {
     match kind {
         RootKind::Media => Kind::Media,
         RootKind::Collection => Kind::Collection,
-    }
-}
-
-/// `hasFixedOrder`: a folder or Recently Viewed keeps its own order.
-fn fixed_order(scope: &Option<ItemScope>) -> bool {
-    matches!(
-        scope,
-        Some(ItemScope::Folder { .. } | ItemScope::FolderTree { .. } | ItemScope::RecentlyViewed)
-    )
-}
-
-fn mode_value(mode: ViewMode) -> &'static str {
-    match mode {
-        ViewMode::Waterfall => "waterfall",
-        ViewMode::Grid => "grid",
-        ViewMode::Justified => "justified",
-    }
-}
-
-fn sort_value(field: SortField) -> &'static str {
-    match field {
-        SortField::ImportedAt => "imported_at",
-        SortField::CapturedAt => "captured_at",
-        SortField::Name => "name",
-        SortField::TotalSize => "total_size",
-        SortField::Rating => "rating",
-        SortField::Random => "random",
-        SortField::FolderOrder => "folder_order",
-    }
-}
-
-fn direction_value(direction: SortDirection) -> &'static str {
-    match direction {
-        SortDirection::Ascending => "ascending",
-        SortDirection::Descending => "descending",
     }
 }
 

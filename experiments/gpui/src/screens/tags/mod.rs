@@ -6,7 +6,7 @@ pub mod model;
 
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
-use crate::session::{Change, Session};
+use crate::session::{Change, Reread, Session};
 use crate::tags::Preferences;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -21,7 +21,7 @@ use dialogs::{Dialog, Layer};
 use gpui::{prelude::FluentBuilder as _, *};
 use model::{Row, Rows};
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Tags fetched at a time.
 const PAGE_SIZE: usize = 500;
@@ -29,14 +29,6 @@ const PAGE_SIZE: usize = 500;
 const RAIL_WIDTH: f32 = 184.;
 /// `.titlebarSearch`
 const SEARCH_WIDTH: f32 = 125.;
-/// `.viewLeaving`: the list fades out before another group shows.
-const VIEW_LEAVE: Duration = Duration::from_millis(100);
-/// `.viewEntering`: the new list fades in.
-const VIEW_ENTER: Duration = Duration::from_millis(140);
-/// `.tagListInner`: the rows fade in each time the list is replaced.
-const LIST_FADE: Duration = Duration::from_millis(90);
-/// `tagSkeleton`: one pass of the placeholder shimmer.
-const SHIMMER: Duration = Duration::from_millis(800);
 /// A load near the end of what is loaded starts this many rows early.
 const LOAD_AHEAD: usize = 4;
 
@@ -67,9 +59,9 @@ impl ViewFade {
         };
         match self {
             ViewFade::Idle => 1.,
-            ViewFade::Leaving(since) => 1. - eased(since, VIEW_LEAVE),
+            ViewFade::Leaving(since) => 1. - eased(since, motion::TAG_VIEW_LEAVE),
             ViewFade::Hidden => 0.,
-            ViewFade::Entering(since) => eased(since, VIEW_ENTER),
+            ViewFade::Entering(since) => eased(since, motion::TAG_VIEW_ENTER),
         }
     }
 }
@@ -439,7 +431,7 @@ impl TagsScreen {
     /// Applies the browse waiting on the fade-out, once it has run.
     fn advance_fade(&mut self, cx: &mut Context<Self>) {
         match self.fade {
-            ViewFade::Leaving(since) if since.elapsed() >= VIEW_LEAVE => {
+            ViewFade::Leaving(since) if since.elapsed() >= motion::TAG_VIEW_LEAVE => {
                 self.fade = ViewFade::Hidden;
                 if let Some(browse) = self.pending_browse.take() {
                     // `resetBrowse`
@@ -452,7 +444,7 @@ impl TagsScreen {
                     self.load(cx);
                 }
             }
-            ViewFade::Entering(since) if since.elapsed() >= VIEW_ENTER => {
+            ViewFade::Entering(since) if since.elapsed() >= motion::TAG_VIEW_ENTER => {
                 self.fade = ViewFade::Idle;
             }
             _ => {}
@@ -473,7 +465,9 @@ impl TagsScreen {
     ) {
         self.busy = true;
         self.error = None;
-        let answer = self.session.read(cx).run(work);
+        let answer = self
+            .session
+            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
         cx.spawn(async move |this, cx| {
             let result = answer
                 .await
@@ -1238,8 +1232,8 @@ impl TagsScreen {
     /// `.tagSkeleton`: a placeholder with the moving shimmer.
     fn skeleton(&self, cx: &App) -> AnyElement {
         let theme = theme::theme(cx);
-        let elapsed = self.clock.elapsed().as_secs_f32() % SHIMMER.as_secs_f32();
-        let eased = motion::EASE_IN_OUT.ease(elapsed / SHIMMER.as_secs_f32());
+        let elapsed = self.clock.elapsed().as_secs_f32() % motion::TAG_SHIMMER.as_secs_f32();
+        let eased = motion::EASE_IN_OUT.ease(elapsed / motion::TAG_SHIMMER.as_secs_f32());
         let (bend, values) = model::shimmer(eased);
         let strength = move |value: f32| theme.contrast(3. + 5. * value);
         canvas(
@@ -1321,9 +1315,10 @@ impl TagsScreen {
             .relative()
             .w_full()
             .h(px(model::LIST_TOP + self.rows.total + model::LIST_BOTTOM))
-            .opacity(
-                motion::EASE_DEFAULT.ease(motion::progress(self.list_shown.elapsed(), LIST_FADE)),
-            );
+            .opacity(motion::EASE_DEFAULT.ease(motion::progress(
+                self.list_shown.elapsed(),
+                motion::TAG_LIST_FADE,
+            )));
         for index in visible {
             let start = model::LIST_TOP + self.rows.starts[index];
             let place = |row: Div| {
@@ -1383,7 +1378,7 @@ impl TagsScreen {
             };
             content = content.child(row);
         }
-        if shimmering || self.list_shown.elapsed() < LIST_FADE {
+        if shimmering || self.list_shown.elapsed() < motion::TAG_LIST_FADE {
             window.request_animation_frame();
         }
 

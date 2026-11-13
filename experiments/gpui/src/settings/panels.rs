@@ -5,10 +5,13 @@ use super::model::{NOTIFICATION_TONES, Threshold};
 use super::window::{CloudInfo, SettingsWindow};
 use super::{Settings, SettingsModel};
 use crate::grid::format::grouped;
+use crate::grid::layout::ViewMode;
+use crate::grid::prefs;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look, choice};
 use crate::{motion, theme};
 use gpui::*;
+use picto_library::predicate::{SortDirection, SortField};
 
 /// A section of the window (`PANELS`).
 pub struct PanelDef {
@@ -537,8 +540,8 @@ fn swatch(
         // `linear-gradient(135deg, #f0f0f0 50%, #1a1a1e 50%)`
         None => div().bg(linear_gradient(
             135.,
-            linear_color_stop(rgb(0xf0f0f0), 0.5),
-            linear_color_stop(rgb(0x1a1a1e), 0.5001),
+            linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.0), 0.5),
+            linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.1), 0.5001),
         )),
     };
     // The 1.5px outline sits 1.5px out from the border.
@@ -593,7 +596,7 @@ fn swatch(
             .border_1()
             .border_color(theme.border_secondary())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(2.), rgba(0x0000004d).into()).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
             ])
             .text(theme::TEXT_SM)
             .line_height(px(24.))
@@ -1013,8 +1016,8 @@ impl SettingsWindow {
         let model = &self.model;
         let draft = &model.read(cx).draft;
         let app = &draft.app;
-        // TODO: the viewer's scaling, default zoom, transparency grid, and
-        // video and audio playback follow these once they exist here.
+        // TODO: the viewer's image scaling and transparency grid follow
+        // these once they exist here.
         vec![
             block()
                 .child(
@@ -1108,9 +1111,8 @@ impl SettingsWindow {
         let (app, grid) = (&state.draft.app, &state.draft.grid);
         let resetting = state.reset_views;
         const WIDTH: f32 = 220.;
-        // TODO: the grid's wheel, double-click and middle-click actions
-        // follow these; today they are fixed at the defaults. (Space
-        // follows its setting.)
+        // TODO: the grid's wheel follows its action ("Adjust thumbnail
+        // size"); the setting is not read yet.
         let mouse = {
             let mut content = card(theme).child(title(theme, "Mouse")).child(row(
                 theme,
@@ -1244,12 +1246,12 @@ impl SettingsWindow {
                 "Default layout",
                 ui::select(
                     "layout",
-                    SharedString::from(grid.view_mode.clone().unwrap_or_else(|| "waterfall".into())),
-                    vec![
-                        choice("waterfall", "Waterfall").icon("select-layout-board"),
-                        choice("grid", "Grid").icon("select-border-all"),
-                        choice("justified", "Justified").rotated_icon("select-layout-board"),
-                    ],
+                    SharedString::from(
+                        grid.view_mode
+                            .clone()
+                            .unwrap_or_else(|| prefs::mode_value(ViewMode::Waterfall).into()),
+                    ),
+                    crate::shell::view_menu::layout_choices(),
                 )
                 .on_change(pick(model, |draft, value| draft.grid.view_mode = Some(value.into()))),
             ))
@@ -1289,16 +1291,22 @@ impl SettingsWindow {
                         ui::select(
                             "sort-field",
                             SharedString::from(
-                                grid.sort_field.clone().unwrap_or_else(|| "imported_at".into()),
+                                grid.sort_field
+                                    .clone()
+                                    .unwrap_or_else(|| prefs::sort_value(SortField::ImportedAt).into()),
                             ),
-                            vec![
-                                choice("imported_at", "Date Added"),
-                                choice("captured_at", "Date Created"),
-                                choice("name", "Name"),
-                                choice("rating", "Rating"),
-                                choice("total_size", "File Size"),
-                                choice("random", "Random"),
-                            ],
+                            // `SORT_FIELD_OPTIONS`: Settings lists Rating
+                            // before File Size, unlike the view panel.
+                            [
+                                SortField::ImportedAt,
+                                SortField::CapturedAt,
+                                SortField::Name,
+                                SortField::Rating,
+                                SortField::TotalSize,
+                                SortField::Random,
+                            ]
+                            .map(|field| choice(prefs::sort_value(field), prefs::sort_label(field)))
+                            .to_vec(),
                         )
                         .on_change(pick(model, |draft, value| {
                             draft.grid.sort_field = Some(value.into())
@@ -1319,11 +1327,15 @@ impl SettingsWindow {
                         ui::select(
                             "sort-order",
                             SharedString::from(
-                                grid.sort_order.clone().unwrap_or_else(|| "descending".into()),
+                                grid.sort_order.clone().unwrap_or_else(|| {
+                                    prefs::direction_value(SortDirection::Descending).into()
+                                }),
                             ),
                             vec![
-                                choice("ascending", "Ascending").icon("select-sort-ascending"),
-                                choice("descending", "Descending").icon("select-sort-descending"),
+                                choice(prefs::direction_value(SortDirection::Ascending), "Ascending")
+                                    .icon("select-sort-ascending"),
+                                choice(prefs::direction_value(SortDirection::Descending), "Descending")
+                                    .icon("select-sort-descending"),
                             ],
                         )
                         .on_change(pick(model, |draft, value| {
@@ -1482,7 +1494,6 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // TODO: rejecting from the Inbox, and the undo limit on deletes.
         vec![
             block()
                 .child(

@@ -105,7 +105,7 @@ impl RenderOnce for LibraryAvatar {
             // The disc's own edge, under the cover.
             inset(1., 0., 0., theme.contrast(20.)),
             inset(0., 0., 1., theme.border_secondary()),
-            inset(-1., 2., 0., rgba(0x00000033)),
+            inset(-1., 2., 0., rgba(theme::BLACK_20)),
         ];
         let size = self.size;
         let content = match self.cover {

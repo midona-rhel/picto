@@ -225,25 +225,14 @@ impl Modal {
     }
 }
 
-/// `WindowCloseButton`: 28px with a one-pixel cross.
-fn close_button(on_close: Option<Handler>, cx: &App) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    let mut button = div()
-        .id("modal-close")
-        .size(px(28.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme::RADIUS_CONTROL))
-        .cursor_pointer()
-        .hover(move |style| style.bg(theme.subtle_overlay()))
-        .active(move |style| style.bg(theme.pressed_overlay()))
-        .child(super::icon("modal-close", 16., theme.text()));
-    if let Some(handler) = on_close {
-        button = button.on_click(move |_, window, cx| handler(window, cx));
+/// `WindowCloseButton`, which closes the dialog.
+fn close_button(on_close: Option<Handler>) -> super::icon_button::IconButton {
+    let button = super::icon_button("modal-close", "window-close")
+        .look(super::icon_button::Look::WindowClose);
+    match on_close {
+        Some(handler) => button.on_click(move |_, window, cx| handler(window, cx)),
+        None => button,
     }
-    button
 }
 
 impl RenderOnce for Modal {
@@ -272,16 +261,6 @@ impl RenderOnce for Modal {
             .read(cx)
             .clone();
 
-        // `.panel`'s edges: 25% white on top, 15% at the sides and 10% at
-        // the bottom. One border has one colour, so the bottom's goes all
-        // the way round and the others are laid over it.
-        let over = |alpha: f32| Rgba {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a: alpha,
-        };
-        let edge = || div().absolute().inset_0().rounded(px(theme::RADIUS_LG));
         // `modalIn` / `modalOut`: `scale(0.97) translateY(4px)` about the
         // centre, with the opacity. GPUI cannot scale the contents, so while
         // the dialog moves the panel's surface is drawn at the scale, the
@@ -338,7 +317,7 @@ impl RenderOnce for Modal {
                             .text_color(theme.text())
                             .child(self.title),
                     )
-                    .child(close_button(self.on_close.clone(), cx))
+                    .child(close_button(self.on_close.clone()))
                     // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
                     .child(
                         div()
@@ -386,16 +365,13 @@ impl RenderOnce for Modal {
                     .children(self.footer),
             );
         }
-        let mut panel = div()
-            .id(self.id.clone())
+        // `.panel`: the glass, with its edges.
+        let mut panel = super::glass_panel(self.id.clone(), theme::RADIUS_LG, cx)
             .relative()
             .flex_none()
             .overflow_hidden()
             .top(px(drop))
             .opacity(shown)
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
             // A press inside the panel is not a press on the backdrop.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation());
@@ -417,10 +393,6 @@ impl RenderOnce for Modal {
                 .flex_col()
                 .child(content.relative().max_h(px(max_height - 2. * BORDER))),
         };
-        panel = panel
-            .child(edge().border_1().border_color(over(0.10)))
-            .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))
-            .child(edge().border_t_1().border_color(over(0.1667)));
 
         let backdrop = rgba(theme::MODAL_BACKDROP);
         let mut layer = div()

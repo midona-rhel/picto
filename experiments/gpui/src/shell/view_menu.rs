@@ -3,6 +3,8 @@
 //! and the two rails. Each choice changes the destination's view at once
 //! and saves it to its `view_pref` row.
 use crate::grid::layout::ViewMode;
+use crate::grid::menu::Panel;
+use crate::grid::prefs::{self, fixed_order};
 use crate::session::{Change, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -16,24 +18,16 @@ use picto_library::predicate::{SortDirection, SortField};
 use picto_library::query::ItemScope;
 use serde_json::json;
 
-/// Which half of the menu a panel is.
-#[derive(Clone, Copy, PartialEq)]
-enum Part {
-    /// `ViewPanel`: layout and sort.
-    Layout,
-    /// `DisplayPanel`: the toggles.
-    Display,
-}
-
 /// A rail's toggle in the menu was used.
 pub enum RailToggled {
     Sidebar,
     Inspector,
 }
 
+/// One of the view panels (`ViewPanel`, `DisplayPanel`).
 pub struct ViewOptions {
     session: Entity<Session>,
-    part: Part,
+    part: Panel,
     pub sidebar_shown: bool,
     pub inspector_shown: bool,
     _subscription: Subscription,
@@ -50,32 +44,6 @@ const GAP: f32 = 6.;
 const TOGGLE_ROW: f32 = 28.;
 /// `.sep`: one pixel with 2px above and below.
 const SEPARATOR: f32 = 5.;
-
-/// `LAYOUT_OPTIONS`
-const LAYOUTS: [(&str, &str); 3] = [
-    ("waterfall", "Waterfall"),
-    ("grid", "Grid"),
-    ("justified", "Justified"),
-];
-
-/// `SORT_OPTIONS`
-const SORTS: [(&str, &str, SortField); 6] = [
-    ("imported_at", "Date Added", SortField::ImportedAt),
-    ("captured_at", "Date Created", SortField::CapturedAt),
-    ("name", "Name", SortField::Name),
-    ("total_size", "File Size", SortField::TotalSize),
-    ("rating", "Rating", SortField::Rating),
-    ("random", "Random", SortField::Random),
-];
-
-/// Whether the destination keeps its own order, which hides the sort
-/// (`hasFixedOrder`): a folder, and Recently Viewed.
-fn fixed_order(scope: &ItemScope) -> bool {
-    matches!(
-        scope,
-        ItemScope::Folder { .. } | ItemScope::FolderTree { .. } | ItemScope::RecentlyViewed
-    )
-}
 
 fn is_folder(scope: &ItemScope) -> bool {
     matches!(
@@ -96,10 +64,10 @@ const DIRECTION_PILL: f32 = 28.;
 
 /// A panel's height in its menu row. The sort row is as tall as the
 /// direction pill, which a random sort does not show.
-fn height(part: Part, scope: &ItemScope, random: bool) -> f32 {
+fn height(part: Panel, scope: &ItemScope, random: bool) -> f32 {
     match part {
-        Part::Layout if fixed_order(scope) => 2. * PADDING + theme::CONTROL_SM,
-        Part::Layout => {
+        Panel::Layout if fixed_order(scope) => 2. * PADDING + theme::CONTROL_SM,
+        Panel::Layout => {
             let sort = if random {
                 theme::CONTROL_SM
             } else {
@@ -107,11 +75,90 @@ fn height(part: Part, scope: &ItemScope, random: bool) -> f32 {
             };
             2. * PADDING + theme::CONTROL_SM + GAP + sort
         }
-        Part::Display => {
+        Panel::Display => {
             let toggles = toggle_count(is_folder(scope)) as f32;
             // The toggles and the separator, each 6px from the next.
             2. * PADDING + toggles * TOGGLE_ROW + SEPARATOR + toggles * GAP
         }
+    }
+}
+
+/// `LAYOUT_OPTIONS` as a select's choices, each with its layout's glyph.
+pub fn layout_choices() -> Vec<ui::select::Choice> {
+    prefs::LAYOUTS
+        .iter()
+        .map(|(mode, value, label)| {
+            let choice = ui::choice(value, *label);
+            match mode {
+                ViewMode::Grid => choice.icon("select-border-all"),
+                ViewMode::Justified => choice.rotated_icon("select-layout-board"),
+                ViewMode::Waterfall => choice.icon("select-layout-board"),
+            }
+        })
+        .collect()
+}
+
+/// The two view panels for the current destination, which the titlebar's
+/// view menu shows one above the other and the grid's context menu shows
+/// inline and inside "Display".
+pub struct Panels {
+    pub layout: Entity<ViewOptions>,
+    pub display: Entity<ViewOptions>,
+    scope: ItemScope,
+    random: bool,
+}
+
+impl Panels {
+    pub fn new(
+        session: &Entity<Session>,
+        sidebar_shown: bool,
+        inspector_shown: bool,
+        cx: &mut App,
+    ) -> Self {
+        let (scope, random) = {
+            let session = session.read(cx);
+            (
+                session
+                    .nav
+                    .get(session.scope)
+                    .map_or(ItemScope::All, |entry| entry.scope.clone()),
+                session.prefs.sort.field == SortField::Random,
+            )
+        };
+        let panel = |part: Panel, cx: &mut App| {
+            cx.new(|cx| ViewOptions {
+                session: session.clone(),
+                part,
+                sidebar_shown,
+                inspector_shown,
+                _subscription: cx.subscribe(session, |_, _, change: &Change, cx| {
+                    if matches!(change, Change::Results | Change::Navigation) {
+                        cx.notify();
+                    }
+                }),
+            })
+        };
+        Self {
+            layout: panel(Panel::Layout, cx),
+            display: panel(Panel::Display, cx),
+            scope,
+            random,
+        }
+    }
+
+    /// A panel as a menu entry, at its height for the destination.
+    pub fn entry(&self, part: Panel) -> menu::Entry {
+        let view = match part {
+            Panel::Layout => self.layout.clone(),
+            Panel::Display => self.display.clone(),
+        };
+        menu::view(view, WIDTH, height(part, &self.scope, self.random))
+            .padded()
+            .into()
+    }
+
+    pub fn both(&self) -> [Entity<ViewOptions>; 2] {
+        [self.layout.clone(), self.display.clone()]
     }
 }
 
@@ -123,48 +170,16 @@ pub fn build(
     sidebar_shown: bool,
     inspector_shown: bool,
     cx: &mut App,
-) -> (Entity<Menu>, [Entity<ViewOptions>; 2]) {
-    let (scope, random) = {
-        let session = session.read(cx);
-        (
-            session
-                .nav
-                .get(session.scope)
-                .map_or(ItemScope::All, |entry| entry.scope.clone()),
-            session.prefs.sort.field == SortField::Random,
-        )
-    };
-    let panel = |part: Part, cx: &mut App| {
-        cx.new(|cx| ViewOptions {
-            session: session.clone(),
-            part,
-            sidebar_shown,
-            inspector_shown,
-            _subscription: cx.subscribe(session, |_, _, change: &Change, cx| {
-                if matches!(change, Change::Results | Change::Navigation) {
-                    cx.notify();
-                }
-            }),
-        })
-    };
-    let layout = panel(Part::Layout, cx);
-    let display = panel(Part::Display, cx);
+) -> (Entity<Menu>, Panels) {
+    let panels = Panels::new(session, sidebar_shown, inspector_shown, cx);
     let entries = vec![
-        menu::view(layout.clone(), WIDTH, height(Part::Layout, &scope, random))
-            .padded()
-            .into(),
+        panels.entry(Panel::Layout),
         menu::Entry::Separator,
-        menu::view(
-            display.clone(),
-            WIDTH,
-            height(Part::Display, &scope, random),
-        )
-        .padded()
-        .into(),
+        panels.entry(Panel::Display),
     ];
     // The selects open over the window, so the menu draws in it.
     let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false).in_window());
-    (menu, [layout, display])
+    (menu, panels)
 }
 
 impl ViewOptions {
@@ -191,22 +206,8 @@ impl ViewOptions {
                 .text_color(theme.text_tertiary())
                 .child(text)
         };
-        let mode = match prefs.mode {
-            ViewMode::Waterfall => "waterfall",
-            ViewMode::Grid => "grid",
-            ViewMode::Justified => "justified",
-        };
-        let choices = LAYOUTS
-            .iter()
-            .map(|(value, label)| {
-                let choice = ui::choice(value, *label);
-                match *value {
-                    "grid" => choice.icon("select-border-all"),
-                    "justified" => choice.rotated_icon("select-layout-board"),
-                    _ => choice.icon("select-layout-board"),
-                }
-            })
-            .collect();
+        let mode = prefs::mode_value(prefs.mode);
+        let choices = layout_choices();
         let this = cx.entity().downgrade();
         let mut panel = div().py(px(PADDING)).flex().flex_col().gap(px(GAP)).child(
             div()
@@ -225,22 +226,16 @@ impl ViewOptions {
                 ),
         );
         if !fixed_order(&scope) {
-            let field = SORTS
-                .iter()
-                .find(|(_, _, field)| *field == prefs.sort.field)
-                .map_or("imported_at", |(value, _, _)| value);
+            let field = prefs::sort_value(prefs.sort.field);
             let direction = prefs.sort.direction;
-            let order = |direction: SortDirection| match direction {
-                SortDirection::Ascending => "ascending",
-                SortDirection::Descending => "descending",
-            };
+            let order = prefs::direction_value;
             let sort_handle = cx.entity().downgrade();
             let select = ui::select(
                 "view-sort",
                 field,
-                SORTS
+                prefs::SORTS
                     .iter()
-                    .map(|(value, label, _)| ui::choice(value, *label))
+                    .map(|(_, value, label)| ui::choice(value, *label))
                     .collect(),
             )
             .width(130.)
@@ -442,15 +437,16 @@ impl ViewOptions {
 impl Render for ViewOptions {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.part {
-            Part::Layout => self.layout_panel(cx),
-            Part::Display => self.display_panel(cx),
+            Panel::Layout => self.layout_panel(cx),
+            Panel::Display => self.display_panel(cx),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Part, height};
+    use super::height;
+    use crate::grid::menu::Panel;
     use picto_library::FolderId;
     use picto_library::query::ItemScope;
 
@@ -459,20 +455,20 @@ mod tests {
         // Layout, then the sort beside the 28px direction pill, 6px apart,
         // 4px above and below; a random sort has no pill.
         let all = ItemScope::All;
-        assert_eq!(height(Part::Layout, &all, false), 4. + 26. + 6. + 28. + 4.);
-        assert_eq!(height(Part::Layout, &all, true), 4. + 26. + 6. + 26. + 4.);
+        assert_eq!(height(Panel::Layout, &all, false), 4. + 26. + 6. + 28. + 4.);
+        assert_eq!(height(Panel::Layout, &all, true), 4. + 26. + 6. + 26. + 4.);
         // A folder has no sort, and one more toggle.
         let folder = ItemScope::FolderTree {
             folder_id: FolderId(1),
         };
-        assert_eq!(height(Part::Layout, &folder, false), 4. + 26. + 4.);
+        assert_eq!(height(Panel::Layout, &folder, false), 4. + 26. + 4.);
         // Seven toggles, the separator and the two rails.
         assert_eq!(
-            height(Part::Display, &all, false),
+            height(Panel::Display, &all, false),
             8. + 9. * 28. + 5. + 9. * 6.
         );
         assert_eq!(
-            height(Part::Display, &folder, false) - height(Part::Display, &all, false),
+            height(Panel::Display, &folder, false) - height(Panel::Display, &all, false),
             28. + 6.
         );
     }

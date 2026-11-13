@@ -1517,10 +1517,9 @@ impl Menu {
         content: Div,
         cx: &App,
     ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
         let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
-        div()
-            .id(id)
+        // `.floatingGlassSurface`: the glass, with its edges.
+        super::glass_panel(id, theme::RADIUS_LG, cx)
             .occlude()
             .absolute()
             .left(px(at.0 + dx))
@@ -1528,21 +1527,9 @@ impl Menu {
             .w(px(scaled_w))
             .h(px(scaled_h))
             .overflow_hidden()
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
             .opacity(opacity)
             // A press on the panel itself is not a press outside it.
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            // `--glass-border-side`, drawn inside so it takes no room.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(theme::RADIUS_LG))
-                    .border_1()
-                    .border_color(theme.glass_border()),
-            )
             .child(
                 content
                     .absolute()
@@ -1553,6 +1540,7 @@ impl Menu {
                     .flex()
                     .flex_col(),
             )
+            .into_div()
     }
 
     /// A row as `.item` draws it, without what it does.

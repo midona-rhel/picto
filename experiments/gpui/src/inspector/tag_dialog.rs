@@ -12,9 +12,9 @@ use crate::theme::Text as _;
 use crate::ui::{
     self,
     action_button::Look,
+    check::{self, Mark, Size as CheckSize},
     menu::Return,
     modal::{self, Size},
-    overlay_shell::{self, Mark},
     selection_modal::{self as shell, Key, ROW},
     text_input::TextInput,
 };
@@ -548,9 +548,9 @@ impl TagDialog {
             self.focus_index == Some(index),
             cx,
         )
-        .child(overlay_shell::check_box(
+        .child(check::check_box(
             if checked { Mark::Checked } else { Mark::Empty },
-            cx,
+            CheckSize::Compact,
         ))
         // `.tagDot`
         .child(

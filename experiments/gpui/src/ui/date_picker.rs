@@ -27,6 +27,7 @@ pub struct DatePicker {
     id: ElementId,
     value: SharedString,
     on_change: Option<ChangeHandler>,
+    layer: usize,
 }
 
 pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> DatePicker {
@@ -34,10 +35,17 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
         id: id.into(),
         value: value.into(),
         on_change: None,
+        layer: 3,
     }
 }
 
 impl DatePicker {
+    /// The calendar's drawing order, above a dialog the picker sits in.
+    pub fn layer(mut self, priority: usize) -> Self {
+        self.layer = priority;
+        self
+    }
+
     /// Called with the day chosen, or an empty key for Clear.
     pub fn on_change(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -68,17 +76,28 @@ fn add_months(month: NaiveDate, delta: i32) -> NaiveDate {
 /// `.popover`'s place: under the button's left edge, kept 8px inside the
 /// window, or above the button when it does not fit below.
 pub fn place(button: Bounds<Pixels>, viewport: Size<Pixels>) -> (f32, f32) {
+    place_sized(button, viewport, WIDTH, HEIGHT)
+}
+
+/// [`place`] for a popover of another size, as the smart-folder rules'
+/// colour popover is placed the same way.
+pub fn place_sized(
+    button: Bounds<Pixels>,
+    viewport: Size<Pixels>,
+    popover_width: f32,
+    popover_height: f32,
+) -> (f32, f32) {
     let (left, top, bottom) = (
         f32::from(button.left()),
         f32::from(button.top()),
         f32::from(button.bottom()),
     );
     let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
-    let x = left.min(width - WIDTH - MARGIN).max(MARGIN);
-    let y = if bottom + HEIGHT <= height - MARGIN {
+    let x = left.min(width - popover_width - MARGIN).max(MARGIN);
+    let y = if bottom + popover_height <= height - MARGIN {
         bottom + 5.
     } else {
-        (top - HEIGHT - 5.).max(MARGIN)
+        (top - popover_height - 5.).max(MARGIN)
     };
     (x, y)
 }
@@ -287,7 +306,12 @@ impl RenderOnce for DatePicker {
                     cell.bg(theme.text())
                         .text_color(theme.background())
                         .shadow(vec![
-                            BoxShadow::new(px(0.), px(1.), rgba(0xffffff73).into()).inset(),
+                            BoxShadow::new(
+                                px(0.),
+                                px(1.),
+                                rgba(theme::DATE_SELECTED_HIGHLIGHT).into(),
+                            )
+                            .inset(),
                         ])
                 } else {
                     cell.hover(move |style| style.bg(theme.contrast(10.)))
@@ -362,30 +386,26 @@ impl RenderOnce for DatePicker {
                     .child("Clear"),
             );
         let (x, y) = place(bounds.get(), window.viewport_size());
-        let popover = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id.clone()),
-                "calendar".into(),
-            ))
-            .occlude()
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(WIDTH))
-            .p(px(9.))
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .border_1()
-            .border_color(theme.glass_border())
-            .shadow(theme::panel_shadow())
-            .font_family(theme::FONT_UI)
-            .text(theme::TEXT_SM)
-            .text_color(theme.text())
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(header)
-            .child(weekdays)
-            .child(grid)
-            .child(footer);
+        let popover = super::glass_panel(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "calendar".into()),
+            theme::RADIUS_LG,
+            cx,
+        )
+        .occlude()
+        .absolute()
+        .left(px(x))
+        .top(px(y))
+        .w(px(WIDTH))
+        // `.popover`'s 9px padding inside its 1px glass border.
+        .p(px(10.))
+        .font_family(theme::FONT_UI)
+        .text(theme::TEXT_SM)
+        .text_color(theme.text())
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(header)
+        .child(weekdays)
+        .child(grid)
+        .child(footer);
         // `.backdrop`: a press anywhere else closes the calendar.
         let backdrop = div()
             .id(ElementId::NamedChild(
@@ -413,14 +433,14 @@ impl RenderOnce for DatePicker {
                             .child(popover),
                     ),
             )
-            .with_priority(3),
+            .with_priority(self.layer),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{add_months, calendar_days, parse_day, place};
+    use super::{add_months, calendar_days, parse_day, place, place_sized};
     use chrono::NaiveDate;
     use gpui::{Bounds, point, px, size};
 
@@ -460,5 +480,9 @@ mod tests {
         assert_eq!(place(button, viewport), (1000. - 278. - 8., 131.));
         let low = Bounds::new(point(px(20.), px(700.)), size(px(140.), px(26.)));
         assert_eq!(place(low, viewport), (20., 700. - 340. - 5.));
+        // A smaller popover (the rules' colour, 230×286) fits below there.
+        let middle = Bounds::new(point(px(20.), px(480.)), size(px(140.), px(26.)));
+        assert_eq!(place_sized(middle, viewport, 230., 286.), (20., 511.));
+        assert_eq!(place(middle, viewport), (20., 480. - 340. - 5.));
     }
 }

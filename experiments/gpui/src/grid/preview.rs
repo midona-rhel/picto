@@ -9,12 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// `HOVER_PREVIEW_DELAY_MS`: how long the pointer rests on the magnifier.
-pub const SHOW_DELAY: Duration = Duration::from_millis(200);
-/// `HOVER_HIDE_DELAY_MS`: how long after leaving it the preview stays.
-pub const HIDE_DELAY: Duration = Duration::from_millis(90);
-/// `MIN_WAIT_MS`: the preview never appears sooner than this after it opens.
-const MIN_WAIT: Duration = Duration::from_millis(150);
 /// `PREVIEW_INSET`: the image keeps this far from each edge of the window.
 const INSET: f32 = 48.;
 const RADIUS: f32 = 8.;
@@ -69,7 +63,7 @@ impl HoverPreview {
 /// fade starts once the image has decoded and the minimum wait has passed.
 pub fn strength(since_opened: Duration, since_decoded: Option<Duration>) -> Option<f32> {
     let since_decoded = since_decoded?;
-    let waited = since_opened.checked_sub(MIN_WAIT)?;
+    let waited = since_opened.checked_sub(motion::HOVER_PREVIEW_MIN_WAIT)?;
     let since_visible = waited.min(since_decoded);
     Some(motion::EASE.ease(motion::progress(since_visible, motion::HOVER_PREVIEW_FADE)))
 }

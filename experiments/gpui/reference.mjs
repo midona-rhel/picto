@@ -5,12 +5,14 @@
 //
 //   move X Y | down X Y [clicks] | up X Y [clicks] | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
-//   shot <name> | size W H | js <expression> | reload
+//   shot <name> | size W H | js <expression> | reload | window <n>
 //
 // `size` sets the viewport in points (pictures are twice that), `js` prints
 // an expression's value, and `reload` loads the window again so that a
 // script starts where a freshly opened app does (the GPUI test opens the
-// app anew each run and ignores the line). The app must be a development build started with
+// app anew each run and ignores the line). `window <n>` sends what follows
+// to the app's nth window: 0 is the main one, the others are numbered in the
+// order they opened during the script. The app must be a development build started with
 // its automation switches on a disposable library copy; see the README.
 //
 //   node reference.mjs steps.txt outdir            (PICTO_REFERENCE_PORT, default 9222)
@@ -20,26 +22,48 @@ import path from 'node:path';
 const [script, out] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
 const port = process.env.PICTO_REFERENCE_PORT || '9222';
-const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-// The main window is the page served from the renderer's own address.
-const page = targets.find((target) => target.type === 'page' && /^http:\/\/(127\.0\.0\.1|localhost)/.test(target.url));
-if (!page) throw new Error('reference app not found');
-const socket = new WebSocket(page.webSocketDebuggerUrl);
-await new Promise((resolve, reject) => {
-  socket.onopen = resolve;
-  socket.onerror = reject;
-});
+// The app's windows are the pages served from the renderer's own address.
+const pages = async () =>
+  (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter(
+    (target) => target.type === 'page' && /^http:\/\/(127\.0\.0\.1|localhost)/.test(target.url),
+  );
+// Windows in the order this script came to know them: the main one first
+// (the page at the renderer's root), then each new one as it appears.
+const known = [];
+async function refresh() {
+  const found = await pages();
+  if (known.length === 0) {
+    const main = found.find((target) => new URL(target.url).hash.length <= 2 && !new URL(target.url).search) ?? found[0];
+    if (!main) throw new Error('reference app not found');
+    known.push(main.id);
+  }
+  for (const target of found) if (!known.includes(target.id)) known.push(target.id);
+  return found;
+}
+let socket;
 let next = 0;
 const pending = new Map();
-socket.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (message.id && pending.has(message.id)) {
-    const { resolve, reject } = pending.get(message.id);
-    pending.delete(message.id);
-    if (message.error) reject(new Error(JSON.stringify(message.error)));
-    else resolve(message.result);
-  }
-};
+async function attach(index) {
+  const found = await refresh();
+  const target = found.find((candidate) => candidate.id === known[index]);
+  if (!target) throw new Error(`there are ${known.length} windows`);
+  socket?.close();
+  socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = reject;
+  });
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.id && pending.has(message.id)) {
+      const { resolve, reject } = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) reject(new Error(JSON.stringify(message.error)));
+      else resolve(message.result);
+    }
+  };
+}
+await attach(0);
 const send = (method, params = {}) =>
   new Promise((resolve, reject) => {
     const id = ++next;
@@ -95,6 +119,8 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   } else if (kind === 'size') {
     await send('Emulation.setDeviceMetricsOverride', { width: numbers[0], height: numbers[1], deviceScaleFactor: 2, mobile: false });
     await sleep(500);
+  } else if (kind === 'window') {
+    await attach(numbers[0]);
   } else if (kind === 'reload') {
     await send('Page.reload');
     await sleep(4000);
@@ -111,6 +137,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);
-  if (!['wait', 'shot', 'js', 'size', 'reload'].includes(kind)) await sleep(200);
+  if (!['wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
 }
 socket.close();

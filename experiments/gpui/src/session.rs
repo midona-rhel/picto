@@ -8,7 +8,7 @@ use crate::motion;
 use gpui::*;
 use picto_library::predicate::FilterExpr;
 use picto_library::query::{RootPage, RootSummary};
-use picto_library::{Rating, RootDetails, RootId, TagRecord};
+use picto_library::{RootDetails, RootId, TagRecord};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -58,6 +58,9 @@ pub enum Change {
     Results,
     Selection,
     Details,
+    /// An edit of the selected items finished: a summary of them is read
+    /// again.
+    Edited,
     /// The viewer opened, closed, or moved to another member.
     Viewer,
     /// Background work the sidebar shows: whether subscriptions are running
@@ -104,6 +107,8 @@ impl SubscriptionActivity {
 /// `subscriptionsSettle.ts`: progress is read again this often while a run
 /// is going.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
+/// How often the session takes in what the library's thread has sent.
+const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 
 /// One step of Back and Forward.
 #[derive(Clone, Copy, PartialEq)]
@@ -242,9 +247,7 @@ impl Session {
         let (sender, receiver) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(30))
-                    .await;
+                cx.background_executor().timer(RECEIVE_INTERVAL).await;
                 if session
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()
@@ -458,7 +461,7 @@ impl Session {
                 .selected_details()
                 .map(|details| details.root.root_id.0);
             if shown.is_some_and(|id| changed.item_ids.contains(&id)) {
-                self.refresh_details();
+                self.refresh_details(cx);
             }
         }
         // `subscriptionsSettle.ts`: the running state follows runs.
@@ -886,17 +889,6 @@ impl Session {
                         self.apply_page(append, page, prefs, cx);
                     }
                 }
-                Reply::Details(id, details)
-                    if self.selected_item().is_some_and(|item| item.root_id == id) =>
-                {
-                    if let Some(item) = self.focus.and_then(|focus| self.items.get_mut(focus)) {
-                        item.name = details.root.name.clone();
-                    }
-                    self.details = Some(details);
-                    cx.emit(Change::Details);
-                }
-                // What other destinations held may no longer be true.
-                Reply::Changed => self.reload(cx),
                 // A query that failed is the grid's error, shown in place of
                 // the destination. A failed edit leaves the grid as it is.
                 Reply::Error(error) if self.loading => {
@@ -1238,7 +1230,7 @@ impl Session {
             Some(id) if showing == Some(id) => {}
             Some(id) => {
                 self.member = 0;
-                let _ = self.sender.send(Request::Details(id));
+                self.read_details(id, cx);
             }
             None => {
                 self.member = 0;
@@ -1410,20 +1402,64 @@ impl Session {
 
     // ── Edits, each through the library's own owner ─────────────
 
-    pub fn rate(&self, id: RootId, rating: Rating) {
-        let _ = self.sender.send(Request::Rate(id, rating));
+    /// Runs an edit on the library's thread, reports a failure on the
+    /// console, and reads again what `reread` names, whether or not the edit
+    /// went through. Hands back the edit's answer once the reads are asked
+    /// for, so a view's own follow-up comes after them. What was shown stays
+    /// until each read arrives. The sidebar's destinations and counts follow
+    /// the library's change events by themselves.
+    pub fn edit<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
+        &mut self,
+        work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
+        reread: Reread,
+        cx: &mut Context<Self>,
+    ) -> futures::channel::oneshot::Receiver<Result<T, E>> {
+        let (answer, receiver) = futures::channel::oneshot::channel();
+        let job = self.run(move |library| {
+            let result = work(library);
+            let navigation = reread
+                .navigation
+                .then(|| backend::navigation(library).ok())
+                .flatten();
+            (result, navigation)
+        });
+        cx.spawn(async move |session, cx| {
+            let Ok((result, navigation)) = job.await else {
+                return;
+            };
+            let _ = session.update(cx, |this, cx| {
+                if let Some((nav, tags)) = navigation {
+                    this.replace_navigation(nav, tags, cx);
+                }
+                // TODO: show a failure as a notification, as production's
+                // `showErrorNotification` does.
+                if let Err(error) = &result {
+                    eprintln!("picto: {error}");
+                }
+                this.reread(reread, cx);
+            });
+            let _ = answer.send(result);
+        })
+        .detach();
+        receiver
     }
 
-    pub fn rename(&self, id: RootId, name: String) {
-        let _ = self.sender.send(Request::Name(id, name));
+    /// Reads again what an edit may have changed, keeping what is shown
+    /// until each answer arrives.
+    pub fn reread(&mut self, reread: Reread, cx: &mut Context<Self>) {
+        if reread.details {
+            self.refresh_details(cx);
+        }
+        if reread.summary {
+            cx.emit(Change::Edited);
+        }
+        if reread.results {
+            self.refresh_results(cx);
+        }
     }
 
-    pub fn set_notes(&self, id: RootId, notes: String) {
-        let _ = self.sender.send(Request::Notes(id, notes));
-    }
-
-    /// Moves the selected items to the trash, or back out of it, and
-    /// reloads the scope.
+    /// Moves the selected items to the trash, or back out of it, and reads
+    /// the destination again in place.
     pub fn move_selection_to(
         &mut self,
         lifecycle: picto_library::Lifecycle,
@@ -1437,29 +1473,111 @@ impl Session {
             .collect::<Vec<_>>();
         if !ids.is_empty() {
             self.close_viewer(cx);
-            let _ = self.sender.send(Request::Lifecycle(ids, lifecycle));
+            let target = picto_library::selection::SelectionTarget::Explicit { root_ids: ids };
+            let _ = self.edit(
+                move |library| library.set_lifecycle(&target, lifecycle),
+                Reread::RESULTS,
+                cx,
+            );
         }
     }
 
-    /// Fetches the selected item's details again, after an edit made
-    /// elsewhere changed them.
-    pub fn refresh_details(&self) {
-        if let Some(item) = self.selected_item() {
-            let _ = self.sender.send(Request::Details(item.root_id));
+    /// Fetches the selected item's details again, after an edit changed
+    /// them.
+    pub fn refresh_details(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected_item().map(|item| item.root_id) {
+            self.read_details(id, cx);
         }
     }
 
-    pub fn undo(&self) {
-        if let Some(item) = self.selected_item() {
-            let _ = self.sender.send(Request::Undo(item.root_id));
+    /// Reads an item's details, which are shown if it is still the one
+    /// selected when they arrive.
+    fn read_details(&mut self, id: RootId, cx: &mut Context<Self>) {
+        let answer = self.run(move |library| library.details(id));
+        cx.spawn(async move |session, cx| {
+            let Ok(result) = answer.await else {
+                return;
+            };
+            let _ = session.update(cx, |this, cx| match result {
+                Ok(details) if this.selected_item().is_some_and(|item| item.root_id == id) => {
+                    if let Some(item) = this.focus.and_then(|focus| this.items.get_mut(focus)) {
+                        item.name = details.root.name.clone();
+                    }
+                    this.details = Some(details);
+                    cx.emit(Change::Details);
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!("picto: {error}"),
+            });
+        })
+        .detach();
+    }
+
+    /// Undoes the library's last edit, while an item is selected, and shows
+    /// that item as it is now.
+    pub fn undo(&mut self, cx: &mut Context<Self>) {
+        if self.selected_item().is_some() {
+            let _ = self.edit(|library| library.undo(), Reread::DETAILS, cx);
         }
     }
 
-    pub fn redo(&self) {
-        if let Some(item) = self.selected_item() {
-            let _ = self.sender.send(Request::Redo(item.root_id));
+    pub fn redo(&mut self, cx: &mut Context<Self>) {
+        if self.selected_item().is_some() {
+            let _ = self.edit(|library| library.redo(), Reread::DETAILS, cx);
         }
     }
+}
+
+/// What an edit may have changed, and so what [`Session::edit`] reads again
+/// once it is done.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reread {
+    /// The selected item's details.
+    pub details: bool,
+    /// The summary the inspector shows of several selected items
+    /// ([`Change::Edited`]).
+    pub summary: bool,
+    /// The grid's results, read in place: the same items stay selected and
+    /// the grid where it was scrolled ([`Session::refresh_results`]).
+    pub results: bool,
+    /// The sidebar's destinations, read with the edit and put in place
+    /// before its answer is handed back, for a follow-up that needs them at
+    /// once, such as a new folder renamed in place.
+    pub navigation: bool,
+}
+
+impl Reread {
+    pub const NOTHING: Self = Self {
+        details: false,
+        summary: false,
+        results: false,
+        navigation: false,
+    };
+    pub const DETAILS: Self = Self {
+        details: true,
+        ..Self::NOTHING
+    };
+    /// The selected items: the one shown and the summary of them all.
+    pub const SELECTION: Self = Self {
+        details: true,
+        summary: true,
+        ..Self::NOTHING
+    };
+    /// The selected items, and the results they may have left or joined.
+    pub const RESULTS: Self = Self {
+        results: true,
+        ..Self::SELECTION
+    };
+    /// The results alone, for an edit of what the destination holds rather
+    /// than of its items.
+    pub const RESULTS_ONLY: Self = Self {
+        results: true,
+        ..Self::NOTHING
+    };
+    pub const NAVIGATION: Self = Self {
+        navigation: true,
+        ..Self::NOTHING
+    };
 }
 
 /// `recordRecentFolderUse`: `folder` first, each folder once, at most 30.

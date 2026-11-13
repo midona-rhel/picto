@@ -200,7 +200,6 @@ impl Kind {
     }
 }
 
-const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
 /// A stored field's new value, with the key it was set for.
 pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
@@ -1023,7 +1022,7 @@ impl Element for TextElement {
         let line_height = window.line_height();
         // The caret is on for the first half of each second since it moved.
         let since_move = self.input.read(cx).blink.elapsed();
-        let caret_on = (since_move.as_millis() / BLINK.as_millis()) % 2 == 0;
+        let caret_on = (since_move.as_millis() / crate::motion::CARET_BLINK.as_millis()) % 2 == 0;
         let (single, wrapped) = match prepaint {
             PrepaintState::Single {
                 line,
@@ -1108,7 +1107,8 @@ impl Element for TextElement {
             }
             // Repaint at the caret's next change for as long as it shows.
             if focused && input.blink_task.is_none() {
-                let wait = BLINK.as_millis() - since_move.as_millis() % BLINK.as_millis();
+                let wait = crate::motion::CARET_BLINK.as_millis()
+                    - since_move.as_millis() % crate::motion::CARET_BLINK.as_millis();
                 input.blink_task = Some(cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(wait as u64 + 1))

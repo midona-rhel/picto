@@ -246,14 +246,10 @@ impl Inspector {
                 },
             ),
             cx.subscribe(&name, |this, _, event: &text_input::Committed, cx| {
-                this.session
-                    .read(cx)
-                    .rename(RootId(event.0 as u32), event.1.clone());
+                this.rename_item(RootId(event.0 as u32), event.1.clone(), cx);
             }),
             cx.subscribe(&notes, |this, _, event: &text_input::Committed, cx| {
-                this.session
-                    .read(cx)
-                    .set_notes(RootId(event.0 as u32), event.1.clone());
+                this.set_item_notes(RootId(event.0 as u32), event.1.clone(), cx);
             }),
             cx.subscribe(&scope.name, |this, _, event: &text_input::Committed, cx| {
                 this.commit_scope(event.0, Some(event.1.clone()), None, cx);
@@ -302,6 +298,7 @@ impl Inspector {
                         this.sync_item(true, cx);
                         cx.notify();
                     }
+                    Change::Edited => this.selection_edited(cx),
                     Change::Viewer => {
                         this.sync_item(false, cx);
                         this.ensure_summary(cx);
@@ -537,28 +534,13 @@ impl Inspector {
         id: &'static str,
         tip: ui::tooltip::Tip,
         open: fn(&mut Self, &'static str, &mut Window, &mut Context<Self>),
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let button = div()
-            .id(id)
-            .group(id)
-            .w(px(26.))
-            .h(px(theme::CONTROL_SM))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(theme::RADIUS_MD))
-            .cursor_pointer()
+    ) -> ui::icon_button::IconButton {
+        ui::icon_button(id, "inspector-add")
+            .look(ui::icon_button::Look::TagAdd)
+            .tip(tip)
             .child(self.place(id))
-            .child(
-                ui::icon("inspector-add", 15., theme.text())
-                    .opacity(0.5)
-                    .group_hover(id, |style| style.opacity(1.)),
-            )
-            .on_click(cx.listener(move |this, _, window, cx| open(this, id, window, cx)));
-        ui::tooltip::attach(button, (id, 1usize), tip, theme::CONTROL_SM, window, cx)
+            .on_click(cx.listener(move |this, _, window, cx| open(this, id, window, cx)))
     }
 
     /// One wide "Add …" button for a section with nothing in it
@@ -613,7 +595,7 @@ impl Inspector {
             )
         } else {
             chips
-                .child(self.add_button("add-folder", tip, Self::open_folder_picker_at, window, cx))
+                .child(self.add_button("add-folder", tip, Self::open_folder_picker_at, cx))
                 .into_any_element()
         }
     }
@@ -639,7 +621,7 @@ impl Inspector {
             )
         } else {
             chips
-                .child(self.add_button("add-tag", tip, Self::open_tag_picker_at, window, cx))
+                .child(self.add_button("add-tag", tip, Self::open_tag_picker_at, cx))
                 .into_any_element()
         }
     }
@@ -765,7 +747,8 @@ impl Inspector {
                     .rounded(px(theme::RADIUS_MD))
                     .overflow_hidden()
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into()).blur_radius(px(5.)),
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
+                            .blur_radius(px(5.)),
                     ])
                     .child(picture)
                     // The glass edge: a 1px ring over the image.
@@ -775,7 +758,7 @@ impl Inspector {
                             .inset_0()
                             .rounded(px(theme::RADIUS_MD))
                             .border_1()
-                            .border_color(rgba(0x0000001a)),
+                            .border_color(rgba(theme::BLACK_10)),
                     )
                     .child(label),
             )
@@ -895,7 +878,7 @@ impl Inspector {
                             picto_library::Rating::ALL[if value == current { 0 } else { value }];
                         match target {
                             Rate::Item(id) => {
-                                this.session.read(cx).rate(id, next);
+                                this.rate_item(id, next, cx);
                                 // A pinned item is not the selection, whose
                                 // details the session reads back.
                                 if this.pinned {
@@ -996,14 +979,14 @@ impl Inspector {
                     .left(px(5.))
                     .w(px(18.))
                     .justify_center()
-                    .child(ui::icon("group", 14., white()))
+                    .child(ui::icon("group", 14., rgb(theme::BADGE_STRONG_TEXT)))
                     .into_any_element()
             } else {
                 ui::badge(3.)
                     .top(px(5.))
                     .left(px(5.))
                     .font_family(theme::FONT_UI)
-                    .text_color(white())
+                    .text_color(rgb(theme::BADGE_STRONG_TEXT))
                     .child(format::format_label(&media.facts.mime))
                     .into_any_element()
             };
@@ -1027,7 +1010,7 @@ impl Inspector {
                 &self.notes,
                 Look::Inspector,
             )))
-            .child(self.source(Some(&root.source_urls), window, cx));
+            .child(self.source(Some(&root.source_urls), cx));
 
         // Folders: a chip each, then "+"; or one wide button when there are none.
         let folders = self.folder_chips(&entries, &details.folder_ids, window, cx);
@@ -1109,12 +1092,7 @@ impl Inspector {
 impl Inspector {
     /// `UnavailableInspectorSkeleton`: the rows a state will have, with
     /// dashes for values, while there is nothing to show yet.
-    fn skeleton(
-        &mut self,
-        mode: Mode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn skeleton(&mut self, mode: Mode, cx: &mut Context<Self>) -> Stateful<Div> {
         let error = self.session.read(cx).error.clone();
         let mut panel = Self::panel()
             .child(div().h(px(PREVIEW)).mb(px(8.)))
@@ -1122,7 +1100,7 @@ impl Inspector {
             .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)))
             .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)));
         if mode != Mode::Scope {
-            panel = panel.child(self.source(None, window, cx));
+            panel = panel.child(self.source(None, cx));
         }
         panel = panel.child(self.section("Properties", Some(div().into_any_element()), cx));
         // An item's or a selection's details are on their way; a
@@ -1161,7 +1139,7 @@ impl Render for Inspector {
             (Mode::Item, true) => self.body(window, cx),
             (Mode::Scope, true) => self.scope_body(cx),
             (Mode::Selection, true) => self.selection_body(window, cx),
-            (mode, false) => self.skeleton(mode, window, cx),
+            (mode, false) => self.skeleton(mode, cx),
         };
         let menu = self.menu.layer(window, cx);
         let confirm = self.confirm_dialog(window, cx);

@@ -11,9 +11,9 @@ use crate::theme;
 use crate::ui::{
     self,
     action_button::Look,
+    check::{self, Mark, Size as CheckSize},
     menu::Return,
     modal::{self, Size},
-    overlay_shell::{self, Mark},
     selection_modal::{self as shell, Key, ROW},
     text_input::TextInput,
 };
@@ -381,7 +381,7 @@ impl FolderDialog {
             });
         }
         let tint = folder.color.map_or(theme.text(), rgb);
-        row.child(overlay_shell::check_box(
+        row.child(check::check_box(
             if removing {
                 Mark::Removed
             } else if checked {
@@ -389,7 +389,7 @@ impl FolderDialog {
             } else {
                 Mark::Empty
             },
-            cx,
+            CheckSize::Compact,
         ))
         // TODO: a folder with its own glyph shows that glyph, filled, as
         // `DynamicIcon` draws it.

@@ -1196,7 +1196,7 @@ impl DuplicatesScreen {
         if self.difference_hovered && !self.resolving {
             // `.differenceComposite`: on black.
             inside = inside.child(
-                frame(div().bg(black())).children(
+                frame(div().bg(rgb(theme::DIFFERENCE_BACKGROUND))).children(
                     shown
                         .difference
                         .clone()

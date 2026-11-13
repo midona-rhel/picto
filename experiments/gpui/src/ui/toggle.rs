@@ -36,23 +36,20 @@ impl Toggle {
     }
 }
 
-/// `transition: 0.2s ease`
-const SWITCH: std::time::Duration = std::time::Duration::from_millis(200);
-
 impl RenderOnce for Toggle {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let on = self.on;
         let fade = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::at(on));
         if fade.read(cx).on() != on {
-            fade.update(cx, |fade, _| fade.set(on, SWITCH));
+            fade.update(cx, |fade, _| fade.set(on, motion::TOGGLE_SWITCH));
         }
         let amount = fade.read(cx).value_with(motion::EASE);
         if fade.read(cx).animating() {
             window.request_animation_frame();
         }
         // `rgba(128, 128, 128, 0.25)`, then `--color-primary`.
-        let track = theme::blend(rgba(0x80808040), theme.primary(), amount);
+        let track = theme::blend(rgba(theme::TOGGLE_TRACK_OFF), theme.primary(), amount);
         let mut toggle = div()
             .id(self.id)
             .occlude()
@@ -67,7 +64,7 @@ impl RenderOnce for Toggle {
                     .rounded(px(10.))
                     .bg(track)
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x0000001a).into())
+                        BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_10).into())
                             .blur_radius(px(2.))
                             .inset(),
                     ]),
@@ -79,10 +76,11 @@ impl RenderOnce for Toggle {
                     .left(px(2. + 12. * amount))
                     .size(px(16.))
                     .rounded_full()
-                    .bg(rgb(0xffffff))
+                    .bg(rgb(theme::TOGGLE_KNOB))
                     .opacity(0.6 + 0.4 * amount)
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0x00000033).into()).blur_radius(px(3.)),
+                        BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_20).into())
+                            .blur_radius(px(3.)),
                     ]),
             );
         if self.disabled {

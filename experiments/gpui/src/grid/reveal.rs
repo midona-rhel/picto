@@ -10,8 +10,10 @@ use std::collections::HashMap;
 
 /// Layout pixels above and below the real viewport that count as visible.
 pub const MARGIN: f32 = 500.;
-const DELAY_MS: f64 = 100.;
-const DURATION_MS: f64 = 500.;
+/// `motion::THUMBNAIL_REVEAL_DELAY` and `motion::THUMBNAIL_REVEAL`, in the
+/// milliseconds the tracker's clock counts.
+const DELAY_MS: f64 = crate::motion::THUMBNAIL_REVEAL_DELAY.as_millis() as f64;
+const DURATION_MS: f64 = crate::motion::THUMBNAIL_REVEAL.as_millis() as f64;
 
 struct State {
     entered_at: f64,

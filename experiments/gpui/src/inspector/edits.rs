@@ -6,6 +6,7 @@ use super::membership::{self, Touches};
 use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
+use crate::session::Reread;
 use crate::tags::record_name as name;
 use crate::ui::{
     self,
@@ -14,7 +15,7 @@ use crate::ui::{
 use gpui::*;
 use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
-use picto_library::{FolderId, Library, MutationReceipt, RootId, TagId, TagRecord};
+use picto_library::{FolderId, Library, MutationReceipt, Rating, RootId, TagId, TagRecord};
 
 /// What the inspector's edits apply to: the items, their tags and their
 /// folders (for several items, the ones they all share).
@@ -67,11 +68,28 @@ impl Inspector {
     }
 
     /// Applies `work` to the items the rail describes, then reads again what
-    /// it changed: the destinations and their counts, the tags, the item or
-    /// the selection's summary, and the grid where its results may differ.
+    /// it changed: the item or the selection's summary, and the grid where
+    /// its results may differ. The destinations and their counts follow the
+    /// library's change events.
     pub(super) fn edit(
         &mut self,
         touches: Touches,
+        work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
+        + Send
+        + 'static,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_reading(touches, false, work, then, cx);
+    }
+
+    /// [`Inspector::edit`], reading the destination list and the tags with
+    /// the edit when `navigation`: a tag it creates must be among the
+    /// session's tags by the time the item's chips are drawn again.
+    fn edit_reading(
+        &mut self,
+        touches: Touches,
+        navigation: bool,
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
         + Send
         + 'static,
@@ -84,18 +102,21 @@ impl Inspector {
         self.edit_items(
             target.ids,
             touches,
+            navigation,
             move |library, target| work(library, target).map(|_| ()),
             then,
             cx,
         );
     }
 
-    /// [`Inspector::edit`] for the items given rather than those the rail
-    /// describes: the Add Tags and Folders dialogs edit the grid's selection.
+    /// [`Inspector::edit_reading`] for the items given rather than those the
+    /// rail describes: the Add Tags and Folders dialogs edit the grid's
+    /// selection.
     pub(super) fn edit_items(
         &mut self,
         ids: Vec<RootId>,
         touches: Touches,
+        navigation: bool,
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<()> + Send + 'static,
         then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
@@ -104,60 +125,103 @@ impl Inspector {
             return;
         }
         let selection = SelectionTarget::Explicit { root_ids: ids };
-        let answer = self.session.read(cx).run(move |library| {
-            let result = work(library, &selection);
-            (result, crate::backend::navigation(library))
+        let reread = Reread {
+            results: self.changes_results(touches, cx),
+            navigation,
+            ..Reread::NOTHING
+        };
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit(move |library| work(library, &selection), reread, cx)
         });
         cx.spawn(async move |this, cx| {
-            let Ok((result, navigation)) = answer.await else {
+            if answer.await.is_err() {
                 return;
-            };
+            }
             let _ = this.update(cx, |this, cx| {
-                if let Ok((nav, tags)) = navigation {
-                    this.session
-                        .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
-                }
-                if let Err(error) = result {
-                    // TODO: show this as the notification production shows.
-                    eprintln!("inspector: the edit failed: {error}");
-                }
-                this.reread(touches, cx);
+                this.reread_rail(cx);
                 then(this, cx);
             });
         })
         .detach();
     }
 
+    /// One item's name, as its field commits it.
+    pub(super) fn rename_item(&mut self, id: RootId, name: String, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(
+                move |library| library.rename_root(id, &name, crate::now_ms()),
+                Reread::DETAILS,
+                cx,
+            );
+        });
+    }
+
+    /// One item's notes, as their field commits them.
+    pub(super) fn set_item_notes(&mut self, id: RootId, notes: String, cx: &mut Context<Self>) {
+        let target = SelectionTarget::Explicit { root_ids: vec![id] };
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(
+                move |library| library.set_notes(&target, Some(notes), crate::now_ms()),
+                Reread::DETAILS,
+                cx,
+            );
+        });
+    }
+
+    /// One item's rating, from its stars.
+    pub(super) fn rate_item(&mut self, id: RootId, rating: Rating, cx: &mut Context<Self>) {
+        let target = SelectionTarget::Explicit { root_ids: vec![id] };
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(
+                move |library| library.set_rating(&target, rating),
+                Reread::DETAILS,
+                cx,
+            );
+        });
+    }
+
     /// Reads again what the rail shows after an edit, and the grid when the
     /// edit may change which items its destination holds.
     pub(super) fn reread(&mut self, touches: Touches, cx: &mut Context<Self>) {
+        self.reread_rail(cx);
+        let reread = Reread {
+            results: self.changes_results(touches, cx),
+            ..Reread::NOTHING
+        };
+        self.session
+            .update(cx, |session, cx| session.reread(reread, cx));
+    }
+
+    /// Reads again what the rail shows: the item, even a pinned one, or the
+    /// selection's summary.
+    fn reread_rail(&mut self, cx: &mut Context<Self>) {
         match self.shown {
             Mode::Item => {
                 if let Some(id) = self.item.as_ref().map(|item| item.root.root_id) {
                     self.reread_item(id, cx);
                 }
                 if !self.pinned {
-                    self.session.read(cx).refresh_details();
+                    self.session
+                        .update(cx, |session, cx| session.refresh_details(cx));
                 }
             }
             Mode::Selection => self.reread_summary(cx),
             _ => {}
         }
-        let changes = {
-            let session = self.session.read(cx);
-            session.nav.get(session.scope).is_some_and(|entry| {
-                membership::changes_results(
-                    &entry.scope,
-                    session.filter.is_some(),
-                    session.searching(),
-                    touches,
-                )
-            })
-        };
-        if changes {
-            self.session
-                .update(cx, |session, cx| session.refresh_results(cx));
-        }
+    }
+
+    /// Whether an edit that `touches` this may change which items the
+    /// grid's destination holds.
+    fn changes_results(&self, touches: Touches, cx: &App) -> bool {
+        let session = self.session.read(cx);
+        session.nav.get(session.scope).is_some_and(|entry| {
+            membership::changes_results(
+                &entry.scope,
+                session.filter.is_some(),
+                session.searching(),
+                touches,
+            )
+        })
     }
 
     /// The details of the item shown, read directly, as a pinned item's
@@ -206,8 +270,9 @@ impl Inspector {
             self.session
                 .update(cx, |session, _| session.record_tags_use(&added));
         }
-        self.edit(
+        self.edit_reading(
             Touches::Tags,
+            created,
             move |library, target| library.apply_tags(target, &[tag_name], add),
             move |this, cx| {
                 this.tag_picker
@@ -239,24 +304,9 @@ impl Inspector {
                 self.set_tag(name.clone(), *add, *created, cx)
             }
             tag_picker::Event::Filter(tag) => self.show_tag_items(*tag, cx),
-            tag_picker::Event::Renamed => {
-                // Labels shown in the chips and the sidebar's tag count.
-                let answer = self
-                    .session
-                    .read(cx)
-                    .run(|library| crate::backend::navigation(library));
-                cx.spawn(async move |this, cx| {
-                    let Ok(Ok((nav, tags))) = answer.await else {
-                        return;
-                    };
-                    let _ = this.update(cx, |this, cx| {
-                        this.session
-                            .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
-                        this.reread(Touches::Tags, cx);
-                    });
-                })
-                .detach();
-            }
+            // The chips' labels follow the destination list, which the
+            // library's change events read again.
+            tag_picker::Event::Renamed => self.reread(Touches::Tags, cx),
             // The inspector opens the picker only to change the items' tags.
             tag_picker::Event::FilterChanged { .. } => {}
         }
@@ -420,6 +470,7 @@ impl Inspector {
         self.edit_items(
             ids,
             Touches::Tags,
+            false,
             move |library, target| {
                 if !add.is_empty() {
                     library.apply_tags(target, &add, true)?;
@@ -455,6 +506,7 @@ impl Inspector {
         self.edit_items(
             ids,
             Touches::Folders,
+            false,
             move |library, target| {
                 for folder in add {
                     library.add_to_folder(target, folder)?;

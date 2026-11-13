@@ -408,8 +408,6 @@ impl Render for SettingsWindow {
             .child(ui::window_chrome::close_button(
                 "settings-close",
                 cx.listener(|this, _, window, cx| this.close(window, cx)),
-                window,
-                cx,
             ));
         let body = if !searching && panel.id == "shortcuts" {
             div()
@@ -522,8 +520,8 @@ impl Render for SettingsWindow {
             .border_color(theme.contrast(5.))
             .bg(theme.contrast(3.))
             .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), rgba(0x00000026).into()).spread_radius(px(1.)),
-                BoxShadow::new(px(0.), px(2.), rgba(0x0000001a).into()).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).spread_radius(px(1.)),
+                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_10).into()).blur_radius(px(8.)),
             ])
             .child(header)
             .child(body)
@@ -547,7 +545,7 @@ impl Render for SettingsWindow {
             .child(sidebar)
             .child(content);
         if cfg!(target_os = "macos") {
-            root = root.child(ui::window_chrome::rim());
+            root = root.child(ui::window_chrome::rim(cx));
         }
         root
     }

@@ -229,9 +229,8 @@ impl RenderOnce for FilterControl {
 
 type ClickHandler = Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
-/// `.filterAction` and `.addButton`: a 24px glyph button with no fill at
-/// rest and the subtle overlay when hovered or switched on; disabled it
-/// fades to 25%.
+/// `.filterAction` and `.addButton`: the shared icon button's filter look,
+/// which tells its click where it is, for a menu that opens below it.
 #[derive(IntoElement)]
 pub struct FilterAction {
     id: ElementId,
@@ -278,51 +277,30 @@ impl FilterAction {
 
 impl RenderOnce for FilterAction {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = theme::theme(cx);
         let bounds = window
-            .use_keyed_state(self.id.clone(), cx, |_, _| {
-                Rc::new(Cell::new(Bounds::<Pixels>::default()))
-            })
+            .use_keyed_state(
+                ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "bounds".into()),
+                cx,
+                |_, _| Rc::new(Cell::new(Bounds::<Pixels>::default())),
+            )
             .read(cx)
             .clone();
-        let mut button = div()
-            .id(self.id.clone())
-            .occlude()
-            .relative()
-            .size(px(24.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(theme::RADIUS_MD))
-            .child(super::icon(self.icon, 16., theme.text()))
-            .child({
-                let bounds = bounds.clone();
-                canvas(move |painted, _, _| bounds.set(painted), |_, _, _, _| {})
-                    .absolute()
-                    .inset_0()
-            });
-        if self.disabled {
-            return button.opacity(0.25);
+        let probe = {
+            let bounds = bounds.clone();
+            canvas(move |painted, _, _| bounds.set(painted), |_, _, _, _| {})
+                .absolute()
+                .inset_0()
+        };
+        let mut button = super::icon_button(self.id, self.icon)
+            .look(super::icon_button::Look::Filter)
+            .toggled(self.active)
+            .disabled(self.disabled)
+            .child(probe);
+        if let Some(tip) = self.tip {
+            button = button.tip(tip);
         }
-        if self.active {
-            button = button.bg(theme.subtle_overlay());
-        }
-        button = button
-            .cursor_pointer()
-            .hover(move |style| style.bg(theme.subtle_overlay()));
         if let Some(handler) = self.on_click {
             button = button.on_click(move |_, window, cx| handler(bounds.get(), window, cx));
-        }
-        if let Some(tip) = self.tip {
-            button = tooltip::attach(
-                button,
-                ElementId::NamedChild(std::sync::Arc::new(self.id), "tip".into()),
-                tip,
-                24.,
-                window,
-                cx,
-            );
         }
         button
     }

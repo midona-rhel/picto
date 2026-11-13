@@ -5,6 +5,7 @@
 //! on (`cx.propagate()`), as an unhandled key does in production.
 use super::Shell;
 use crate::keymap::*;
+use crate::session::Reread;
 use crate::settings;
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -125,60 +126,50 @@ impl Shell {
     fn rate(&mut self, stars: usize, cx: &mut Context<Self>) {
         let rating = Rating::ALL[stars];
         let session = self.session.read(cx);
-        if session.viewer {
-            if let Some(item) = session.selected_item() {
-                session.rate(item.root_id, rating);
+        let ids = if session.viewer {
+            session
+                .selected_item()
+                .map(|item| vec![item.root_id])
+                .unwrap_or_default()
+        } else {
+            self.selected_ids(cx)
+        };
+        if ids.is_empty() {
+            if !self.session.read(cx).viewer {
+                cx.propagate();
             }
             return;
         }
-        let ids = self.selected_ids(cx);
-        match ids.as_slice() {
-            [] => cx.propagate(),
-            [one] => self.session.read(cx).rate(*one, rating),
-            _ => self.edit_selection(
-                move |library, target| library.set_rating(target, rating).map(|_| ()),
-                false,
-                cx,
-            ),
-        }
+        self.edit_selection(
+            ids,
+            move |library, target| library.set_rating(target, rating).map(|_| ()),
+            false,
+            cx,
+        );
     }
 
-    /// Runs an edit of the selected items on the library's thread, then
-    /// shows its result: the details and the selection's summary again, or
-    /// the destination read again when items may have left it.
+    /// Runs an edit of these items on the library's thread, then shows its
+    /// result: the details and the selection's summary again, or with
+    /// `reload` the destination read again in place, when items may have
+    /// left it.
     fn edit_selection(
         &mut self,
+        ids: Vec<RootId>,
         work: impl FnOnce(&picto_library::Library, &SelectionTarget) -> picto_library::Result<()>
         + Send
         + 'static,
         reload: bool,
         cx: &mut Context<Self>,
     ) {
-        let target = SelectionTarget::Explicit {
-            root_ids: self.selected_ids(cx),
+        let target = SelectionTarget::Explicit { root_ids: ids };
+        let reread = if reload {
+            Reread::RESULTS
+        } else {
+            Reread::SELECTION
         };
-        let job = self
-            .session
-            .read(cx)
-            .run(move |library| work(library, &target));
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = job.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    eprintln!("picto: {error}");
-                }
-                if reload {
-                    this.session.update(cx, |session, cx| session.reload(cx));
-                } else {
-                    this.session.read(cx).refresh_details();
-                    this.inspector
-                        .update(cx, |inspector, cx| inspector.selection_edited(cx));
-                }
-            });
-        })
-        .detach();
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit(move |library| work(library, &target), reread, cx);
+        });
     }
 
     /// `file.delete`, as `gridRemovalAction` reads it: in a folder the key
@@ -204,7 +195,9 @@ impl Shell {
         let kind = self.scope_kind(cx);
         match kind.folder {
             Some(folder) if !kind.trash && !self.session.read(cx).selection.is_empty() => {
+                let ids = self.selected_ids(cx);
                 self.edit_selection(
+                    ids,
                     move |library, target| library.remove_from_folder(target, folder).map(|_| ()),
                     true,
                     cx,
