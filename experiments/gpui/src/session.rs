@@ -1443,6 +1443,12 @@ impl Session {
         self.focus_on(Some(focus), cx);
     }
 
+    /// Whether the whole destination is selected (`selection.mode ===
+    /// 'query_results'`), rather than listed items.
+    pub fn selects_whole(&self) -> bool {
+        self.whole.is_some()
+    }
+
     /// How many items are selected: with the whole destination selected,
     /// all it holds less those taken out, however few are loaded.
     pub fn selection_count(&self) -> u64 {
