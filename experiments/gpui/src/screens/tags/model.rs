@@ -384,31 +384,24 @@ pub struct Preferences {
 }
 
 impl Preferences {
-    /// Reads them from the settings' JSON; anything missing is empty.
-    pub fn parse(json: Option<&str>) -> Self {
-        let value = json
-            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-            .unwrap_or_default();
-        let starred = value
-            .get("starredTags")
-            .and_then(|tags| tags.as_array())
-            .map(|tags| {
-                tags.iter()
-                    .filter_map(|tag| tag.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let colors = value
-            .get("tagGroupColors")
-            .and_then(|colors| colors.as_object())
-            .map(|colors| {
-                colors
-                    .iter()
-                    .filter_map(|(group, color)| Some((group.clone(), color.as_str()?.to_owned())))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self { starred, colors }
+    /// The preferences as the settings model holds them.
+    pub fn from_settings(settings: &crate::settings::model::AppSettings) -> Self {
+        Self {
+            starred: settings.starred_tags.clone(),
+            colors: settings
+                .tag_group_colors
+                .iter()
+                .filter_map(|(group, color)| Some((group.clone(), color.as_str()?.to_owned())))
+                .collect(),
+        }
+    }
+
+    /// The group colours as the settings model stores them.
+    pub fn colors_json(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.colors
+            .iter()
+            .map(|(group, color)| (group.clone(), serde_json::Value::from(color.clone())))
+            .collect()
     }
 
     pub fn is_starred(&self, name: &str) -> bool {
@@ -466,43 +459,6 @@ impl Preferences {
         colors.remove(previous);
         Some(colors)
     }
-
-    /// The settings patch that stores these preferences.
-    pub fn patch(
-        starred: Option<&[String]>,
-        colors: Option<&BTreeMap<String, String>>,
-    ) -> serde_json::Value {
-        let mut patch = serde_json::Map::new();
-        if let Some(starred) = starred {
-            patch.insert("starredTags".into(), serde_json::json!(starred));
-        }
-        if let Some(colors) = colors {
-            patch.insert("tagGroupColors".into(), serde_json::json!(colors));
-        }
-        serde_json::Value::Object(patch)
-    }
-}
-
-/// Applies a settings patch to the stored JSON as the settings service
-/// does: each key replaces the stored one, and a null removes it.
-pub fn apply_patch(stored: Option<&str>, patch: &serde_json::Value) -> Result<String, String> {
-    let mut value = match stored {
-        Some(json) => {
-            serde_json::from_str::<serde_json::Value>(json).map_err(|error| error.to_string())?
-        }
-        None => serde_json::json!({}),
-    };
-    let target = value
-        .as_object_mut()
-        .ok_or("Stored settings must be a JSON object")?;
-    for (name, replacement) in patch.as_object().into_iter().flatten() {
-        if replacement.is_null() {
-            target.remove(name);
-        } else {
-            target.insert(name.clone(), replacement.clone());
-        }
-    }
-    serde_json::to_string(&value).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -672,9 +628,11 @@ mod tests {
 
     #[test]
     fn preferences_read_star_and_rename_as_the_settings_store_them() {
-        let preferences = Preferences::parse(Some(
-            r##"{"starredTags":["b","a"],"tagGroupColors":{"species":"#40C057"},"other":1}"##,
-        ));
+        let settings = crate::settings::model::AppSettings::from_json(&serde_json::json!({
+            "starredTags": ["b", "a"],
+            "tagGroupColors": {"species": "#40C057"},
+        }));
+        let preferences = Preferences::from_settings(&settings);
         assert!(preferences.is_starred("a"));
         assert_eq!(preferences.with_star("c", true), ["a", "b", "c"]);
         assert_eq!(preferences.with_star("b", false), ["a"]);
@@ -687,12 +645,9 @@ mod tests {
         assert_eq!(moved.get("animal").map(String::as_str), Some("#40C057"));
         assert!(!moved.contains_key("species"));
         assert!(preferences.with_color("species", None).is_empty());
-        assert_eq!(Preferences::parse(None), Preferences::default());
-
-        let patch = Preferences::patch(Some(&["x".to_owned()]), None);
-        let stored = apply_patch(Some(r#"{"starredTags":["a"],"theme":"dark"}"#), &patch).unwrap();
-        let stored = serde_json::from_str::<serde_json::Value>(&stored).unwrap();
-        assert_eq!(stored["starredTags"], serde_json::json!(["x"]));
-        assert_eq!(stored["theme"], "dark");
+        assert_eq!(
+            preferences.colors_json().get("species"),
+            Some(&serde_json::json!("#40C057"))
+        );
     }
 }

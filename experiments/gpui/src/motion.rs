@@ -6,26 +6,46 @@ use std::time::Duration;
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// CSS `ease-in`.
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// CSS `ease-out`.
+pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// `--ease-scale-in`: popovers and menus growing in.
+pub const EASE_SCALE_IN: CubicBezier = CubicBezier::new(0., 0.89, 0.44, 1.);
+/// `--duration-menu-in`: a popover's scale-in.
+pub const MENU_IN: Duration = Duration::from_millis(70);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
+/// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
+/// and how long it stays up.
+pub const BOUNDARY_FADE: Duration = Duration::from_millis(200);
+pub const BOUNDARY_HOLD: Duration = Duration::from_millis(800);
+/// `NAVIGATOR_SHOW_DELAY_MS`: the viewer's navigator appears this long after
+/// the image first overflows the pane.
+pub const NAVIGATOR_DELAY: Duration = Duration::from_millis(80);
+/// `QuickLookNavigation`'s buttons: `transition: background 200ms ease`.
+pub const STRIP_BUTTON: Duration = Duration::from_millis(200);
+/// `--ease-standard`
+pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.
 pub const MENU_ROW: Duration = Duration::from_millis(30);
 /// `menuOut`: a dismissed context menu fades for this long.
 pub const MENU_OUT: Duration = Duration::from_millis(80);
+/// `handleSubmenuIntent`: an open submenu stays this long after the pointer
+/// moves onto another row of its menu.
+pub const MENU_SUBMENU_GRACE: Duration = Duration::from_millis(150);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
-/// CSS `ease-out`.
-pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
-/// CSS `ease`.
-pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// `GlassModal`: `modalIn` and `backdropIn`.
 pub const MODAL_IN: Duration = Duration::from_millis(150);
 /// `GlassModal`: `EXIT_MS`, `modalOut` and `backdropOut`.
 pub const MODAL_OUT: Duration = Duration::from_millis(120);
-/// `ContextMenu`: a submenu closes this long after the pointer leaves its row.
-pub const SUBMENU_CLOSE: Duration = Duration::from_millis(150);
+/// `HoverPreviewPortal.tsx`: the backdrop and the original fade in together.
+pub const HOVER_PREVIEW_FADE: Duration = Duration::from_millis(150);
+/// `EmptyState.module.css` `.action`: its background on hover.
+pub const EMPTY_ACTION_HOVER: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug)]
 pub struct CubicBezier {
@@ -77,8 +97,27 @@ pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
+/// `.querySmallBtn`: a row button's opacity and fill, on `ease`.
+pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
+/// `.followCover`: a subscription card's border on hover, on `ease`.
+pub const CARD_HOVER: Duration = Duration::from_millis(120);
+/// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
+pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
+
+/// Duplicate review: an original fades in over its thumbnail (`.fullImage`).
+pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
+/// `LOADING_MESSAGE_DELAY_MS`: a loading message waits this long, so a
+/// quick load shows none.
+pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
+
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
+/// A settings row's or check row's highlight (`background 100ms ease`), and
+/// a theme swatch's outline.
+pub const ROW_HOVER: Duration = Duration::from_millis(100);
+/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`), and
+/// `GlassInput`'s border on focus.
+pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
 /// `GlassInput`: a dialog field's border on focus.

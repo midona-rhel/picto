@@ -2,6 +2,7 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+pub mod library;
 pub mod sidebar;
 pub mod toolbar;
 
@@ -43,6 +44,9 @@ actions!(
     ]
 );
 
+/// The grid menu's "Set Rating" rows, from no rating to five stars.
+const RATE_ACTIONS: [&str; 6] = ["rate-0", "rate-1", "rate-2", "rate-3", "rate-4", "rate-5"];
+
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -77,11 +81,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let session = cx.new(|cx| Session::new(database, blobs, cx));
+        crate::settings::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let grid =
             cx.new(|cx| GridView::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
+        let sidebar =
+            cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
+        let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
         let subscriptions = vec![
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
@@ -97,15 +105,42 @@ impl Shell {
                     this.open_menu(event.0, window, cx)
                 },
             ),
+            // The sidebar builds its own menus and acts on them; the shell
+            // shows them above everything, as it does the grid's.
+            cx.subscribe_in(
+                &sidebar,
+                window,
+                |this, _, event: &sidebar::ShowMenu, window, cx| {
+                    this._menu = None;
+                    this.show_menu(event.0.clone(), window, cx)
+                },
+            ),
         ];
+        let duplicates = cx.new(|cx| {
+            screens::duplicates::DuplicatesScreen::new(
+                session.clone(),
+                thumbnails.clone(),
+                window,
+                cx,
+            )
+        });
+        let tags = cx.new(|cx| {
+            screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
+        });
+        let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
+        // A screen's titlebar controls take the grid's place in the toolbar.
+        let controls = duplicates.read(cx).toolbar();
+        let tag_controls = tags.read(cx).toolbar();
+        toolbar.update(cx, |toolbar, _| {
+            toolbar.set_screen_controls(Screen::Duplicates, controls.into());
+            toolbar.set_screen_controls(Screen::Tags, tag_controls.into());
+        });
         Self {
-            sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
-            toolbar: cx.new(|cx| Toolbar::new(session.clone(), cx)),
+            sidebar,
+            toolbar,
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
-            viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
-            tags: cx.new(|cx| {
-                screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
-            }),
+            viewer,
+            tags,
             subscriptions: cx.new(|cx| {
                 screens::subscriptions::SubscriptionsScreen::new(
                     session.clone(),
@@ -114,14 +149,7 @@ impl Shell {
                     cx,
                 )
             }),
-            duplicates: cx.new(|cx| {
-                screens::duplicates::DuplicatesScreen::new(
-                    session.clone(),
-                    thumbnails.clone(),
-                    window,
-                    cx,
-                )
-            }),
+            duplicates,
             grid,
             session,
             focus,
@@ -205,6 +233,31 @@ impl Shell {
                     .into(),
                 menu::Entry::Separator,
             ]);
+            // The library rates one item per request here, so the row is
+            // offered for a single item, with its rating checked.
+            let rating = self
+                .session
+                .read(cx)
+                .selected_details()
+                .map(|details| details.rating);
+            let rows = picto_library::Rating::ALL
+                .iter()
+                .zip(RATE_ACTIONS)
+                .enumerate()
+                .map(|(stars, (value, action))| {
+                    let label = match stars {
+                        0 => "No Rating".to_owned(),
+                        _ => "★".repeat(stars),
+                    };
+                    menu::item(action, label)
+                        .checked(rating == Some(*value))
+                        .into()
+                })
+                .collect();
+            entries.extend([
+                menu::submenu("Set Rating", rows).icon("menu-star").into(),
+                menu::Entry::Separator,
+            ]);
         }
         let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
         if trash {
@@ -248,6 +301,11 @@ impl Shell {
                     this.run_menu_action(action, window, cx);
                 }),
             );
+        self.show_menu(menu, window, cx);
+    }
+
+    /// Puts a context menu above the window and gives it the keyboard.
+    fn show_menu(&mut self, menu: Entity<Menu>, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&menu.focus_handle(cx), cx);
         self.menu = Some(menu);
         cx.notify();
@@ -303,6 +361,13 @@ impl Shell {
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
             }
+            rate if RATE_ACTIONS.contains(&rate) => {
+                let stars = RATE_ACTIONS.iter().position(|action| *action == rate);
+                let session = self.session.read(cx);
+                if let (Some(item), Some(stars)) = (session.selected_item(), stars) {
+                    session.rate(item.root_id, picto_library::Rating::ALL[stars]);
+                }
+            }
             "trash" => self.session.update(cx, |session, cx| {
                 session.move_selection_to(picto_library::Lifecycle::Trash, cx)
             }),
@@ -349,10 +414,10 @@ impl Shell {
             .children(
                 (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
             )
-            // TODO: open the settings window.
             .child(
                 ui::icon_button("open-settings", "settings")
-                    .tip(ui::tip("Settings").keys(&["⌘", ","])),
+                    .tip(ui::tip("Settings").keys(&["⌘", ","]))
+                    .on_click(|_, _, cx| crate::settings::open(cx)),
             )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
@@ -388,7 +453,14 @@ impl Render for Shell {
         } else {
             theme::SIDEBAR_WIDTH
         };
-        let inspector_width = self.inspector_width;
+        // The inspector belongs to the grid and the viewer. A screen has the
+        // window's full width, titlebar included (`inspectorAvailable`).
+        let inspector_available = screen.is_none() || viewer_open;
+        let inspector_width = if inspector_available {
+            self.inspector_width
+        } else {
+            0.
+        };
         let right = if self.inspector_collapsed {
             0.
         } else {
@@ -435,7 +507,7 @@ impl Render for Shell {
         });
         // The inspector rail spans the window's full height, titlebar strip
         // included, and slides as one piece.
-        let inspector = (inspector_hidden < 1.).then(|| {
+        let inspector = (inspector_available && inspector_hidden < 1.).then(|| {
             div()
                 .absolute()
                 .top_0()
@@ -632,42 +704,18 @@ impl Render for Shell {
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
+        if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
             self._menu = None;
             // Unless its action moved the keyboard somewhere, such as into
-            // the name field.
-            if window.focused(cx).is_none() {
+            // the name field. A menu shown in pop-up windows can outlive
+            // this by a moment, still holding the keyboard.
+            if window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window) {
                 window.focus(&self.focus, cx);
             }
         }
         root = root.children(self.menu.clone());
-        // `.shellMac::after`: the window's rim, over everything. Top 25%
-        // white, sides 15%, bottom 10%; one border has one colour, so the
-        // bottom's goes all the way round and the others are laid over it.
-        let over = |alpha: f32| Rgba {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a: alpha,
-        };
-        let edge = || div().absolute().inset_0().rounded(px(theme::WINDOW_RADIUS));
-        root = root.child(
-            deferred(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(edge().border_1().border_color(over(0.10)))
-                    // 1 − 0.9 × (1 − a) gives 0.15 at the sides, 0.25 on top.
-                    .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))
-                    .child(edge().border_t_1().border_color(over(0.1667))),
-            )
-            .with_priority(100),
-        );
+        // `.shellMac::after`: the window's rim, over everything.
+        root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.
         if self.rails.animating() {
             window.request_animation_frame();

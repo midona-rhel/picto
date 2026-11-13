@@ -7,6 +7,11 @@ pub struct Assets;
 // and Picto's own glyphs transcribed from `src/shared/ui/icons`.
 include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 
+/// Whether an icon of this name is embedded.
+pub fn has_icon(name: &str) -> bool {
+    icon_bytes(name).is_some()
+}
+
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         Ok(icon_bytes(path).map(std::borrow::Cow::Borrowed))

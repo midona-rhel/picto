@@ -1,47 +1,92 @@
-//! The context menu (`ContextMenu.tsx`): a glass panel of rows at the pointer.
-use super::text_input::{Submitted, TextInput};
+//! The context menu (`ContextMenu.tsx`): a glass panel of rows at the
+//! pointer, with check marks, submenus and a search row.
+//!
+//! A menu is shown one of two ways, and `presentation()` alone chooses:
+//! drawn over the owner's window and kept 12px inside it, or with each panel
+//! (the menu and its open submenu) in a pop-up window of its own, kept 12px
+//! inside the display, so a menu can reach past the window's edge. In both,
+//! the keyboard stays with the owner's window, where the menu's layer takes
+//! it, and a press anywhere outside the panels closes the menu.
 use crate::theme::Text as _;
+use crate::ui::text_input::{self, TextInput};
 use crate::{motion, theme};
-use gpui::{prelude::FluentBuilder as _, *};
-use std::time::Instant;
+use gpui::*;
+use std::time::{Duration, Instant};
 
-actions!(menu, [Up, Down, Left, Right, Confirm, Cancel]);
+actions!(menu, [Up, Down, Confirm, Cancel, OpenSubmenu, CloseSubmenu]);
 
 pub fn bind(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", Up, Some("Menu")),
         KeyBinding::new("down", Down, Some("Menu")),
-        KeyBinding::new("left", Left, Some("Menu")),
-        KeyBinding::new("right", Right, Some("Menu")),
         KeyBinding::new("enter", Confirm, Some("Menu")),
         KeyBinding::new("escape", Cancel, Some("Menu")),
+        KeyBinding::new("right", OpenSubmenu, Some("Menu")),
+        KeyBinding::new("left", CloseSubmenu, Some("Menu")),
     ]);
 }
 
+/// How menus are shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presentation {
+    /// Panels drawn over the owner's window, kept inside it.
+    InWindow,
+    /// Each panel in a pop-up window of its own, kept inside the display.
+    PopUpWindows,
+}
+
+/// The one switch between the two presentations. Pop-up windows on macOS,
+/// where GPUI opens a `WindowKind::PopUp` as a non-activating panel that can
+/// be shown without taking the keyboard; the in-window overlay elsewhere,
+/// and on macOS too with `PICTO_GPUI_MENU=window`. A menu whose pop-up
+/// window cannot be opened falls back to the overlay by itself.
+pub fn presentation() -> Presentation {
+    let forced_in_window = std::env::var("PICTO_GPUI_MENU").is_ok_and(|value| value == "window");
+    if cfg!(target_os = "macos") && !forced_in_window {
+        Presentation::PopUpWindows
+    } else {
+        Presentation::InWindow
+    }
+}
+
 const WIDTH: f32 = 270.;
-/// The panel keeps this far from the window's edges.
+/// The panel keeps this far from the window's (or the display's) edges.
 const MARGIN: f32 = 12.;
 const PADDING: f32 = 4.;
 const GAP: f32 = 2.;
 /// A separator's line and its 2px margins.
 const SEPARATOR: f32 = 5.;
-/// `ColorPicker`'s row: 18px swatches with 4px above and below.
-const SWATCH_ROW: f32 = 26.;
-const SWATCH: f32 = 18.;
-/// A submenu opens this far from the menu's edge, its first row level with
-/// the row that opened it.
-const SUBMENU_GAP: f32 = 4.;
-const SUBMENU_RISE: f32 = 3.;
-/// `SEARCH_ITEM_THRESHOLD`: a menu with this many rows to choose from opens
-/// with a search field.
-const SEARCH_THRESHOLD: usize = 7;
-/// `.searchArea`
+/// `.searchArea`, and the input's left edge: 10px padding, the 16px glyph
+/// and a 6px gap.
 const SEARCH_HEIGHT: f32 = 36.;
+const SEARCH_INPUT_LEFT: f32 = 32.;
+/// `SEARCH_ITEM_THRESHOLD`: rows (items and submenus, separators aside) a
+/// menu needs before it offers the search row.
+const SEARCH_THRESHOLD: usize = 7;
+/// `.empty`: 8px above and below one line of 12px text.
+const EMPTY_HEIGHT: f32 = 30.;
+/// `max-height: calc(100vh - 40px)`.
+const VIEWPORT_INSET: f32 = 40.;
+/// A submenu opens this far right of its menu and this far above its row.
+const SUBMENU_GAP: f32 = 4.;
+const SUBMENU_LIFT: f32 = 3.;
+/// A row's horizontal padding, the icon slot with its gap, the check slot,
+/// and the space before a shortcut.
+const ROW_PADDING: f32 = 6.;
+const ICON_SLOT: f32 = 22.;
+const CHECK_SLOT: f32 = 16.;
+const SHORTCUT_GAP: f32 = 28.;
+/// Room around a pop-up panel for its drawn shadow (`--shadow-panel`
+/// reaches 24px out and 36px down).
+const SHADOW_ROOM: f32 = 40.;
+/// After a window of the menu loses the keyboard, how long to wait for
+/// another of its windows to report that it took it.
+const ACTIVATION_SETTLE: Duration = Duration::from_millis(50);
 
 pub enum Entry {
     Item(Item),
     Separator,
-    /// A row that opens a panel of further rows beside the menu.
+    /// A row that opens its own rows beside the menu. Submenus do not nest.
     Submenu(Submenu),
     /// A row of colour swatches (`ColorPicker`).
     Swatches(Swatches),
@@ -51,11 +96,17 @@ pub struct Item {
     /// What the owner is told was chosen.
     action: &'static str,
     label: SharedString,
+    /// Other words the search row matches.
+    keywords: Vec<SharedString>,
     icon: Option<&'static str>,
     shortcut: Option<SharedString>,
     danger: bool,
     disabled: bool,
-    /// Which of several rows with the same action this is.
+    /// `Some` reserves the check slot; `Some(true)` shows the check.
+    checked: Option<bool>,
+    excluded: bool,
+    keep_open: bool,
+    /// Tells rows that share an action apart; see [`Menu::chosen_value`].
     value: Option<SharedString>,
 }
 
@@ -63,15 +114,25 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
     Item {
         action,
         label: label.into(),
+        keywords: Vec::new(),
         icon: None,
         shortcut: None,
         danger: false,
         disabled: false,
+        checked: None,
+        excluded: false,
+        keep_open: false,
         value: None,
     }
 }
 
 impl Item {
+    /// What [`Menu::chosen_value`] gives when this row is chosen, for rows
+    /// that share an action, such as one row per group.
+    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
         self
@@ -90,10 +151,32 @@ impl Item {
         self.disabled = disabled;
         self
     }
-    /// Tells rows that share an action apart: the owner reads it with
-    /// [`Menu::chosen_value`].
-    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
-        self.value = Some(value.into());
+    /// A row with a check slot, checked or not. The owner changes it while
+    /// the menu is open with `Menu::set_checked`.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+    /// A value a filter leaves out: negative colour, struck through, with a
+    /// cross in the check slot.
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn excluded(mut self, excluded: bool) -> Self {
+        self.excluded = excluded;
+        self
+    }
+    /// Choosing the row tells the owner and leaves the menu open, so several
+    /// toggles can be changed together.
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn keep_open(mut self, keep_open: bool) -> Self {
+        self.keep_open = keep_open;
+        self
+    }
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn keywords<S: Into<SharedString>>(mut self, words: impl IntoIterator<Item = S>) -> Self {
+        self.keywords = words.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -106,13 +189,15 @@ impl From<Item> for Entry {
 
 pub struct Submenu {
     label: SharedString,
+    keywords: Vec<SharedString>,
     icon: Option<&'static str>,
-    children: Vec<Item>,
+    children: Vec<Entry>,
 }
 
-pub fn submenu(label: impl Into<SharedString>, children: Vec<Item>) -> Submenu {
+pub fn submenu(label: impl Into<SharedString>, children: Vec<Entry>) -> Submenu {
     Submenu {
         label: label.into(),
+        keywords: Vec::new(),
         icon: None,
         children,
     }
@@ -121,6 +206,12 @@ pub fn submenu(label: impl Into<SharedString>, children: Vec<Item>) -> Submenu {
 impl Submenu {
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
+        self
+    }
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn keywords<S: Into<SharedString>>(mut self, words: impl IntoIterator<Item = S>) -> Self {
+        self.keywords = words.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -135,7 +226,7 @@ impl From<Submenu> for Entry {
 pub struct Swatch {
     /// Its tooltip.
     pub label: SharedString,
-    /// `None` is the default, drawn in the primary text colour.
+    /// `None` is the default colour, drawn in the primary text colour.
     pub color: Option<Rgba>,
     /// What [`Menu::chosen_value`] gives when it is picked.
     pub value: SharedString,
@@ -147,8 +238,8 @@ pub struct Swatches {
     selected: Option<usize>,
 }
 
-/// A row of colour swatches. Picking one tells the owner and leaves the
-/// menu open, with the new choice ringed.
+/// A row of colour swatches. Picking one tells the owner, with the swatch's
+/// value, and leaves the menu open with the new choice ringed.
 pub fn swatches(action: &'static str, swatches: Vec<Swatch>, selected: Option<usize>) -> Swatches {
     Swatches {
         action,
@@ -163,114 +254,344 @@ impl From<Swatches> for Entry {
     }
 }
 
+/// `ColorPicker`'s row: 18px swatches with 4px above and below.
+const SWATCH_ROW: f32 = 26.;
+const SWATCH: f32 = 18.;
+
 pub enum Event {
-    /// A row was chosen. A swatch leaves the menu open; any other row has
-    /// already started it closing.
+    /// A row was chosen. Unless it keeps the menu open, the menu is already
+    /// closing.
     Chosen(&'static str),
 }
 
-/// A row the menu shows: one of its entries, or, while searching, a row of
-/// a submenu brought up to the top level.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Slot {
-    Entry(usize),
-    Child(usize, usize),
+/// Where an entry is: a row of the menu, or a row of one of its submenus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Path {
+    top: usize,
+    child: Option<usize>,
 }
 
-/// `menuSearchScore`: lower is better; none when the label does not match.
-fn search_score(label: &str, query: &str) -> Option<usize> {
+/// One line of a panel as drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row {
+    Entry(Path),
+    Separator,
+    /// A swatch row: not a stop for the arrow keys, nor found by a search.
+    Swatches(Path),
+}
+
+/// A rectangle in the coordinates of the window or display it is placed in.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Rect {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Rect {
+    fn right(&self) -> f32 {
+        self.x + self.w
+    }
+    fn bottom(&self) -> f32 {
+        self.y + self.h
+    }
+    fn outset(&self, by: f32) -> Rect {
+        Rect {
+            x: self.x - by,
+            y: self.y - by,
+            w: self.w + 2. * by,
+            h: self.h + 2. * by,
+        }
+    }
+    fn intersect(&self, other: Rect) -> Rect {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        Rect {
+            x,
+            y,
+            w: (self.right().min(other.right()) - x).max(0.),
+            h: (self.bottom().min(other.bottom()) - y).max(0.),
+        }
+    }
+    fn from_bounds(bounds: Bounds<Pixels>) -> Rect {
+        Rect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            w: f32::from(bounds.size.width),
+            h: f32::from(bounds.size.height),
+        }
+    }
+    fn to_bounds(self) -> Bounds<Pixels> {
+        Bounds::new(point(px(self.x), px(self.y)), size(px(self.w), px(self.h)))
+    }
+}
+
+/// `placeMenu`: the panel's corner at the pointer, moved inward so the
+/// panel keeps the margin from every edge of the area. The height is the
+/// panel's full height, before any maximum.
+fn place(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
+    let (mut x, mut y) = pointer;
+    if x + w > area.right() - MARGIN {
+        x = area.right() - w - MARGIN;
+    }
+    if y + h > area.bottom() - MARGIN {
+        y = area.bottom() - h - MARGIN;
+    }
+    (x.max(area.x + MARGIN), y.max(area.y + MARGIN))
+}
+
+/// `SubmenuPanel`'s placement: 4px right of the parent panel and 3px above
+/// its row, on the parent's left instead when it would cross the margin on
+/// the right, then moved up or down to keep the margin.
+fn place_submenu(parent: Rect, row_top: f32, w: f32, h: f32, area: Rect) -> (f32, f32) {
+    let mut x = parent.right() + SUBMENU_GAP;
+    let mut y = row_top - SUBMENU_LIFT;
+    if x + w > area.right() - MARGIN {
+        x = parent.x - w - SUBMENU_GAP;
+    }
+    if y + h > area.bottom() - MARGIN {
+        y = area.bottom() - h - MARGIN;
+    }
+    (x, y.max(area.y + MARGIN))
+}
+
+/// `cleanSeparators`: no separator first, last or twice in a row. A
+/// submenu's rows leave out nested submenus, which are not drawn.
+fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let path = match parent {
+            Some(top) => Path {
+                top,
+                child: Some(index),
+            },
+            None => Path {
+                top: index,
+                child: None,
+            },
+        };
+        match entry {
+            Entry::Separator => {
+                if matches!(rows.last(), Some(Row::Entry(_))) {
+                    rows.push(Row::Separator);
+                }
+            }
+            Entry::Submenu(_) if parent.is_some() => {}
+            Entry::Swatches(_) => rows.push(Row::Swatches(path)),
+            _ => rows.push(Row::Entry(path)),
+        }
+    }
+    if rows.last() == Some(&Row::Separator) {
+        rows.pop();
+    }
+    rows
+}
+
+/// `menuSearchScore`: a label that starts with the query, then one that
+/// contains it, then the label and keywords containing it, then the query's
+/// letters in order with the fewest gaps. Lower is better.
+fn score(text: &str, label: &str, query: &str) -> Option<usize> {
     if label.starts_with(query) {
         return Some(0);
     }
-    if let Some(index) = label.find(query) {
-        return Some(10 + index);
+    if let Some(at) = label.find(query) {
+        return Some(10 + label[..at].chars().count());
     }
-    // The label followed by its (absent) keywords.
-    let text = format!("{label} ");
-    if let Some(index) = text.find(query) {
-        return Some(100 + index);
+    if let Some(at) = text.find(query) {
+        return Some(100 + text[..at].chars().count());
     }
-    // The query's letters in order, with what lies between them counted.
-    let wanted = query.chars().collect::<Vec<_>>();
+    let query = query.chars().collect::<Vec<_>>();
     let (mut found, mut gap) = (0, 0);
-    for character in text.chars() {
-        if found == wanted.len() {
+    for letter in text.chars() {
+        if found == query.len() {
             break;
         }
-        if character == wanted[found] {
+        if letter == query[found] {
             found += 1;
         } else if found > 0 {
             gap += 1;
         }
     }
-    (found == wanted.len()).then_some(200 + gap)
+    (found == query.len()).then_some(200 + gap)
 }
 
-/// The rows to show for `query`: every entry when it is blank, else
-/// `searchMenuEntries`: the rows and submenu rows that match, best first,
-/// without separators or swatches.
-fn shown_for(entries: &[Entry], query: &str) -> Vec<Slot> {
-    let query = query.trim().to_lowercase();
+/// `searchMenuEntries`: every enabled item and submenu whose label or
+/// keywords match, best first and in menu order among equals. Submenu rows
+/// are searched too, so a match inside one is a row that can be chosen
+/// directly.
+fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
+    let query = raw.trim().to_lowercase();
     if query.is_empty() {
-        return (0..entries.len()).map(Slot::Entry).collect();
+        return Vec::new();
     }
+    let matching = |label: &SharedString, keywords: &[SharedString]| {
+        let label = label.to_lowercase();
+        let text = format!(
+            "{label} {}",
+            keywords
+                .iter()
+                .map(|word| word.as_ref())
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+        .to_lowercase();
+        score(&text, &label, &query)
+    };
     let mut matches = Vec::new();
     let mut order = 0;
-    let mut consider = |slot: Slot, label: &SharedString, disabled: bool| {
-        order += 1;
-        if !disabled && let Some(score) = search_score(&label.to_lowercase(), &query) {
-            matches.push((score, order, slot));
+    let mut visit = |entry: &Entry, path: Path| {
+        let found = match entry {
+            Entry::Separator | Entry::Swatches(_) => return,
+            Entry::Item(item) if item.disabled => None,
+            Entry::Item(item) => matching(&item.label, &item.keywords),
+            Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
+        };
+        if let Some(score) = found {
+            matches.push((score, order, path));
         }
+        order += 1;
     };
-    for (index, entry) in entries.iter().enumerate() {
-        match entry {
-            Entry::Item(item) => consider(Slot::Entry(index), &item.label, item.disabled),
-            Entry::Submenu(submenu) => {
-                consider(Slot::Entry(index), &submenu.label, false);
-                for (child, item) in submenu.children.iter().enumerate() {
-                    consider(Slot::Child(index, child), &item.label, item.disabled);
+    for (top, entry) in entries.iter().enumerate() {
+        visit(entry, Path { top, child: None });
+        if let Entry::Submenu(submenu) = entry {
+            for (child, entry) in submenu.children.iter().enumerate() {
+                // A submenu inside a submenu has no row to show it.
+                if !matches!(entry, Entry::Submenu(_)) {
+                    visit(
+                        entry,
+                        Path {
+                            top,
+                            child: Some(child),
+                        },
+                    );
                 }
             }
-            _ => {}
         }
     }
-    // Entries are visited in order, so the order they were found in breaks
-    // ties between equal scores.
     matches.sort_by_key(|(score, order, _)| (*score, *order));
-    matches.into_iter().map(|(_, _, slot)| slot).collect()
+    matches.into_iter().map(|(_, _, path)| path).collect()
+}
+
+/// The row the arrow keys reach next among the rows that can be stopped
+/// on, wrapping at the ends.
+fn step(stops: &[bool], current: Option<usize>, forward: bool) -> Option<usize> {
+    let rows = (0..stops.len())
+        .filter(|index| stops[*index])
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return current;
+    }
+    let at = current.and_then(|current| rows.iter().position(|row| *row == current));
+    let next = match (at, forward) {
+        (Some(at), true) => (at + 1) % rows.len(),
+        (Some(at), false) => (at + rows.len() - 1) % rows.len(),
+        (None, true) => 0,
+        (None, false) => rows.len() - 1,
+    };
+    Some(rows[next])
+}
+
+fn row_height(row: &Row) -> f32 {
+    match row {
+        Row::Entry(_) => theme::CONTROL_SM,
+        Row::Separator => SEPARATOR,
+        Row::Swatches(_) => SWATCH_ROW,
+    }
+}
+
+/// `.items`: its padding, rows and gaps, or the empty-result line.
+fn items_height(rows: &[Row], empty_line: bool) -> f32 {
+    if rows.is_empty() {
+        return 2. * PADDING + if empty_line { EMPTY_HEIGHT } else { 0. };
+    }
+    2. * PADDING + rows.iter().map(row_height).sum::<f32>() + GAP * (rows.len() - 1) as f32
+}
+
+/// Where a row starts below the top of its panel's items area.
+fn row_offset(rows: &[Row], index: usize) -> f32 {
+    PADDING
+        + rows[..index.min(rows.len())]
+            .iter()
+            .map(|row| row_height(row) + GAP)
+            .sum::<f32>()
+}
+
+/// The display a pop-up menu is shown on, and its root panel's window.
+struct Screen {
+    /// The display's usable area, in the display's coordinates.
+    area: Rect,
+    /// Where the owner window's content starts on that display.
+    origin: (f32, f32),
+    display: DisplayId,
+    /// The part of the display the root panel's window covers. It is sized
+    /// for the tallest the panel can become while searching.
+    bounds: Rect,
+    window: Option<AnyWindowHandle>,
+}
+
+/// The open submenu.
+struct Opened {
+    /// Its row in the menu as drawn, and its entry.
+    row: usize,
+    top: usize,
+    /// The row under the pointer or reached with the arrow keys. While set,
+    /// the arrow keys move in the submenu.
+    current: Option<usize>,
+    /// The panel, placed when it opened, in the menu's coordinates.
+    rect: Rect,
+    /// Its pop-up window, and the part of the display that covers.
+    window: Option<AnyWindowHandle>,
+    bounds: Rect,
+    serial: u64,
+}
+
+/// What a pop-up window being opened will show.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Root,
+    Submenu(u64),
 }
 
 pub struct Menu {
     entries: Vec<Entry>,
-    /// The rows showing, which the search narrows; the positions below are
-    /// positions in this list.
-    shown: Vec<Slot>,
     position: Point<Pixels>,
+    width: f32,
+    search: Option<Entity<TextInput>>,
+    query: String,
     /// The row under the pointer or reached with the arrow keys: one
     /// highlight for both, as in the Electron menu.
     current: Option<usize>,
     highlights: motion::Fades,
-    /// The submenu showing, by the position of the row that opened it.
-    open_submenu: Option<usize>,
-    /// The submenu row under the pointer.
-    sub_current: Option<usize>,
-    /// Closes the submenu once the pointer has been off it for 150 ms.
-    submenu_timer: Option<Task<()>>,
-    /// The value of the last row or swatch chosen.
-    chosen: Option<SharedString>,
+    submenu: Option<Opened>,
+    submenu_highlights: motion::Fades,
+    submenu_grace: Option<Task<()>>,
+    serial: u64,
+    scroll: ScrollHandle,
     focus: FocusHandle,
     /// Set once dismissed: the menu fades for 80 ms and takes no more input.
     closing: Option<Instant>,
-    /// The search field of a long menu, and what it holds.
-    search: Option<Entity<TextInput>>,
-    query: String,
-    _search: Vec<Subscription>,
+    /// The value of the row or swatch last chosen.
+    chosen: Option<SharedString>,
+    presentation: Presentation,
+    /// The window the owner draws the menu in.
+    main: Option<AnyWindowHandle>,
+    /// The owner window's size, the area an in-window menu is kept inside.
+    viewport: Rect,
+    screen: Option<Screen>,
+    opening: Option<Role>,
+    /// Windows whose activation is watched, so that the menu closes when
+    /// none of its windows has the keyboard.
+    watched: Vec<AnyWindowHandle>,
+    activation: Option<Task<()>>,
+    close_windows: Option<Task<()>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<Event> for Menu {}
 
 impl Focusable for Menu {
-    /// The search field when the menu has one, as it takes the keyboard.
+    /// The search field while the menu has one, else the menu itself.
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.search {
             Some(search) => search.read(cx).focus_handle(cx),
@@ -279,74 +600,109 @@ impl Focusable for Menu {
     }
 }
 
-/// Where a submenu panel goes: right of the menu, or left of it when there
-/// is no room on the right, and moved up or down to keep inside the window.
-fn submenu_origin(
-    menu_left: f32,
-    row_top: f32,
-    width: f32,
-    height: f32,
-    view: Size<Pixels>,
-) -> (f32, f32) {
-    let (view_width, view_height) = (f32::from(view.width), f32::from(view.height));
-    let mut left = menu_left + WIDTH + SUBMENU_GAP;
-    if left + width > view_width - MARGIN {
-        left = menu_left - width - SUBMENU_GAP;
-    }
-    let mut top = row_top - SUBMENU_RISE;
-    if top + height > view_height - MARGIN {
-        top = view_height - height - MARGIN;
-    }
-    (left, top.max(MARGIN))
-}
-
 impl Menu {
     pub fn new(entries: Vec<Entry>, position: Point<Pixels>, cx: &mut Context<Self>) -> Self {
         let searchable = entries
             .iter()
-            .filter(|entry| matches!(entry, Entry::Item(_) | Entry::Submenu(_)))
+            .filter(|entry| !matches!(entry, Entry::Separator))
             .count();
-        let (search, subscriptions) = if searchable >= SEARCH_THRESHOLD {
-            let search = cx.new(|cx| TextInput::plain("Search...", cx));
-            let subscriptions = vec![
-                cx.observe(&search, |this, search, cx| {
-                    let query = search.read(cx).value();
-                    this.filter(query, cx);
-                }),
-                // Enter in the field chooses the highlighted row.
-                cx.subscribe(&search, |this, _, _: &Submitted, cx| {
-                    if let Some(current) = this.current {
-                        this.choose(current, cx);
-                    }
-                }),
-            ];
-            (Some(search), subscriptions)
-        } else {
-            (None, Vec::new())
-        };
+        let search = (searchable >= SEARCH_THRESHOLD).then(|| cx.new(TextInput::menu_search));
+        let mut subscriptions = Vec::new();
+        if let Some(search) = &search {
+            subscriptions.push(cx.observe(search, |this, search, cx| {
+                let query = search.read(cx).value();
+                if query != this.query {
+                    this.query = query;
+                    this.current = None;
+                    this.highlights = motion::Fades::default();
+                    this.scroll.set_offset(point(px(0.), px(0.)));
+                    this.close_submenu(cx);
+                    cx.notify();
+                }
+            }));
+        }
         Self {
-            shown: shown_for(&entries, ""),
-            search,
-            query: String::new(),
-            _search: subscriptions,
             entries,
             position,
+            width: WIDTH,
+            search,
+            query: String::new(),
             current: None,
             highlights: motion::Fades::default(),
-            open_submenu: None,
-            sub_current: None,
-            submenu_timer: None,
-            chosen: None,
+            submenu: None,
+            submenu_highlights: motion::Fades::default(),
+            submenu_grace: None,
+            serial: 0,
+            scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             closing: None,
+            chosen: None,
+            presentation: presentation(),
+            main: None,
+            viewport: Rect::default(),
+            screen: None,
+            opening: None,
+            watched: Vec::new(),
+            activation: None,
+            close_windows: None,
+            _subscriptions: subscriptions,
         }
     }
 
-    pub fn dismiss(&mut self, cx: &mut Context<Self>) {
-        if self.closing.is_none() {
-            self.closing = Some(Instant::now());
-            cx.notify();
+    /// Whether the menu may offer its search row (`showSearch`); it does
+    /// when it has at least seven rows.
+    pub fn search(mut self, show: bool) -> Self {
+        if !show {
+            self.search = None;
         }
+        self
+    }
+
+    /// A width other than the usual 270px, for content that needs it.
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
+    /// Checks or unchecks the row with this action while the menu is open.
+    // Part of the shared API; the grid's menu does not use it.
+    #[allow(dead_code)]
+    pub fn set_checked(&mut self, action: &'static str, checked: bool, cx: &mut Context<Self>) {
+        fn visit(entries: &mut [Entry], action: &str, checked: bool) {
+            for entry in entries {
+                match entry {
+                    Entry::Item(item) if item.action == action => item.checked = Some(checked),
+                    Entry::Submenu(submenu) => visit(&mut submenu.children, action, checked),
+                    _ => {}
+                }
+            }
+        }
+        visit(&mut self.entries, action, checked);
+        cx.notify();
+    }
+
+    pub fn dismiss(&mut self, cx: &mut Context<Self>) {
+        if self.closing.is_some() {
+            return;
+        }
+        self.closing = Some(Instant::now());
+        self.submenu_grace = None;
+        if self.presentation == Presentation::PopUpWindows {
+            // The pop-up windows fade with the menu, then close.
+            self.close_windows = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(motion::MENU_OUT).await;
+                let _ = this.update(cx, |this, cx| this.close_pop_ups(cx));
+            }));
+        }
+        cx.notify();
+    }
+
+    /// The value of the row or swatch last chosen, for rows that share an
+    /// action ([`Item::value`], [`Swatch::value`]).
+    pub fn chosen_value(&self) -> Option<SharedString> {
+        self.chosen.clone()
     }
 
     /// Whether the menu has faded out and can be dropped.
@@ -355,56 +711,145 @@ impl Menu {
             .is_some_and(|since| since.elapsed() >= motion::MENU_OUT)
     }
 
-    /// The value of the row or swatch last chosen, for rows that share an
-    /// action.
-    pub fn chosen_value(&self) -> Option<SharedString> {
-        self.chosen.clone()
-    }
-
-    /// Narrows the rows to those matching `query`. The highlight and any
-    /// open submenu start again.
-    fn filter(&mut self, query: String, cx: &mut Context<Self>) {
-        if query == self.query {
-            return;
-        }
-        self.shown = shown_for(&self.entries, &query);
-        self.query = query;
-        self.current = None;
-        self.open_submenu = None;
-        self.sub_current = None;
-        self.submenu_timer = None;
-        self.highlights = motion::Fades::default();
-        cx.notify();
-    }
-
-    /// The item a row chooses, if it is an item.
-    fn item_at(&self, position: usize) -> Option<&Item> {
-        match *self.shown.get(position)? {
-            Slot::Entry(index) => match &self.entries[index] {
-                Entry::Item(item) => Some(item),
-                _ => None,
-            },
-            Slot::Child(parent, child) => match &self.entries[parent] {
-                Entry::Submenu(submenu) => submenu.children.get(child),
-                _ => None,
-            },
+    fn opacity(&self) -> f32 {
+        match self.closing {
+            Some(since) => {
+                1. - motion::EASE_IN.ease(motion::progress(since.elapsed(), motion::MENU_OUT))
+            }
+            None => 1.,
         }
     }
 
-    /// The submenu a row opens, if it opens one.
-    fn submenu_at(&self, position: usize) -> Option<(usize, &Submenu)> {
-        match *self.shown.get(position)? {
-            Slot::Entry(index) => match &self.entries[index] {
-                Entry::Submenu(submenu) => Some((index, submenu)),
-                _ => None,
-            },
-            Slot::Child(..) => None,
+    fn searching(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
+    /// The menu's rows as drawn: all of them, or the search's results.
+    fn rows(&self) -> Vec<Row> {
+        if self.searching() {
+            search(&self.entries, &self.query)
+                .into_iter()
+                .map(Row::Entry)
+                .collect()
+        } else {
+            clean(&self.entries, None)
         }
     }
 
-    fn actionable(&self, position: usize) -> bool {
-        self.item_at(position).is_some_and(|item| !item.disabled)
-            || self.submenu_at(position).is_some()
+    fn submenu_rows(&self, top: usize) -> Vec<Row> {
+        match &self.entries[top] {
+            Entry::Submenu(submenu) => clean(&submenu.children, Some(top)),
+            _ => Vec::new(),
+        }
+    }
+
+    fn entry(&self, path: Path) -> &Entry {
+        match (&self.entries[path.top], path.child) {
+            (Entry::Submenu(submenu), Some(child)) => &submenu.children[child],
+            (entry, _) => entry,
+        }
+    }
+
+    /// Whether the arrow keys stop on a row: an enabled item or a submenu.
+    fn stops(&self, rows: &[Row]) -> Vec<bool> {
+        rows.iter()
+            .map(|row| match row {
+                Row::Entry(path) => match self.entry(*path) {
+                    Entry::Item(item) => !item.disabled,
+                    Entry::Submenu(_) => true,
+                    Entry::Separator | Entry::Swatches(_) => false,
+                },
+                Row::Separator | Row::Swatches(_) => false,
+            })
+            .collect()
+    }
+
+    fn has_icons(&self, rows: &[Row]) -> bool {
+        rows.iter().any(|row| match row {
+            Row::Entry(path) => match self.entry(*path) {
+                Entry::Item(item) => item.icon.is_some(),
+                Entry::Submenu(submenu) => submenu.icon.is_some(),
+                Entry::Separator | Entry::Swatches(_) => false,
+            },
+            Row::Separator | Row::Swatches(_) => false,
+        })
+    }
+
+    fn search_height(&self) -> f32 {
+        if self.search.is_some() {
+            SEARCH_HEIGHT
+        } else {
+            0.
+        }
+    }
+
+    /// The panel's full height for these rows.
+    fn height(&self, rows: &[Row]) -> f32 {
+        self.search_height() + items_height(rows, self.searching())
+    }
+
+    /// The tallest the panel can be: every row, or every row a search can
+    /// find, whichever is more.
+    fn tallest(&self) -> f32 {
+        let all = self.rows();
+        let mut found = 0;
+        for entry in &self.entries {
+            match entry {
+                Entry::Separator | Entry::Swatches(_) => {}
+                Entry::Item(_) => found += 1,
+                Entry::Submenu(submenu) => {
+                    found += 1 + submenu
+                        .children
+                        .iter()
+                        .filter(|child| matches!(child, Entry::Item(_)))
+                        .count();
+                }
+            }
+        }
+        let found = vec![
+            Row::Entry(Path {
+                top: 0,
+                child: None
+            });
+            found
+        ];
+        self.height(&all)
+            .max(self.height(&found))
+            .max(self.search_height() + items_height(&[], true))
+    }
+
+    /// The area the menu is kept inside, and the pointer in its
+    /// coordinates.
+    fn area(&self) -> (Rect, (f32, f32)) {
+        let pointer = (f32::from(self.position.x), f32::from(self.position.y));
+        match (&self.screen, self.presentation) {
+            (Some(screen), Presentation::PopUpWindows) => (
+                screen.area,
+                (screen.origin.0 + pointer.0, screen.origin.1 + pointer.1),
+            ),
+            _ => (self.viewport, pointer),
+        }
+    }
+
+    /// The menu's panel: placed by its full height, drawn no taller than the
+    /// area less 40px.
+    fn root_rect(&self, rows: &[Row]) -> Rect {
+        let (area, pointer) = self.area();
+        let height = self.height(rows);
+        let (x, y) = place(pointer, self.width, height, area);
+        Rect {
+            x,
+            y,
+            w: self.width,
+            h: height.min(area.h - VIEWPORT_INSET),
+        }
+    }
+
+    /// The open submenu's row, entry and current row.
+    fn opened(&self) -> Option<(usize, usize, Option<usize>)> {
+        self.submenu
+            .as_ref()
+            .map(|open| (open.row, open.top, open.current))
     }
 
     fn set_current(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
@@ -422,175 +867,553 @@ impl Menu {
         cx.notify();
     }
 
-    fn set_sub_current(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
-        if self.sub_current == row {
+    fn set_submenu_current(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
+        let Some(open) = &mut self.submenu else {
+            return;
+        };
+        if open.current == row {
             return;
         }
-        if let Some(previous) = self.sub_current {
-            self.highlights
-                .set(("sub", previous), false, motion::MENU_ROW);
+        if let Some(previous) = open.current {
+            self.submenu_highlights
+                .set(("row", previous), false, motion::MENU_ROW);
         }
         if let Some(next) = row {
-            self.highlights.set(("sub", next), true, motion::MENU_ROW);
+            self.submenu_highlights
+                .set(("row", next), true, motion::MENU_ROW);
         }
-        self.sub_current = row;
+        open.current = row;
         cx.notify();
     }
 
-    /// The pointer has come to a row: a submenu row opens its panel at once;
-    /// any other row lets an open one close after 150 ms.
-    fn submenu_intent(&mut self, target: Option<usize>, cx: &mut Context<Self>) {
-        self.submenu_timer = None;
-        match target {
-            Some(index) => self.show_submenu(Some(index), cx),
-            None if self.open_submenu.is_some() => {
-                self.submenu_timer = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(motion::SUBMENU_CLOSE).await;
-                    let _ = this.update(cx, |this: &mut Self, cx| {
-                        this.show_submenu(None, cx);
-                    });
-                }));
+    fn arrow(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if let Some((_, top, Some(current))) = self.opened() {
+            let rows = self.submenu_rows(top);
+            let next = step(&self.stops(&rows), Some(current), forward);
+            self.set_submenu_current(next, cx);
+            return;
+        }
+        let rows = self.rows();
+        let next = step(&self.stops(&rows), self.current, forward);
+        if self
+            .submenu
+            .as_ref()
+            .is_some_and(|open| Some(open.row) != next)
+        {
+            self.close_submenu(cx);
+        }
+        self.set_current(next, cx);
+    }
+
+    /// Right arrow: into the open submenu, or opens the current row's.
+    /// Returns whether it did either.
+    fn right(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(current) = self.current else {
+            return false;
+        };
+        if let Some((row, top, inside)) = self.opened()
+            && row == current
+        {
+            if inside.is_none() {
+                let first = step(&self.stops(&self.submenu_rows(top)), None, true);
+                self.set_submenu_current(first, cx);
             }
-            None => {}
+            return true;
+        }
+        let rows = self.rows();
+        match rows.get(current) {
+            Some(Row::Entry(path)) if matches!(self.entry(*path), Entry::Submenu(_)) => {
+                self.open_submenu(current, true, window, cx);
+                true
+            }
+            _ => false,
         }
     }
 
-    fn show_submenu(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        if self.open_submenu != index {
-            self.open_submenu = index;
-            self.set_sub_current(None, cx);
-            cx.notify();
-        }
-    }
-
-    /// Moves to the next row that can be chosen, wrapping at the ends.
-    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let rows = (0..self.shown.len())
-            .filter(|index| self.actionable(*index))
-            .collect::<Vec<_>>();
-        if rows.is_empty() {
-            return;
-        }
-        let at = self
-            .current
-            .and_then(|current| rows.iter().position(|row| *row == current));
-        let next = match (at, forward) {
-            (Some(at), true) => (at + 1) % rows.len(),
-            (Some(at), false) => (at + rows.len() - 1) % rows.len(),
-            (None, true) => 0,
-            (None, false) => rows.len() - 1,
-        };
-        self.set_current(Some(rows[next]), cx);
-    }
-
-    fn choose(&mut self, position: usize, cx: &mut Context<Self>) {
-        if self.closing.is_some() || !self.actionable(position) {
-            return;
-        }
-        if let Some(item) = self.item_at(position) {
-            let action = item.action;
-            self.chosen = item.value.clone();
-            cx.emit(Event::Chosen(action));
-            self.dismiss(cx);
+    /// Left arrow: closes the open submenu. Returns whether one was open.
+    fn left(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.submenu.is_some() {
+            self.close_submenu(cx);
+            true
         } else {
-            // Enter on a submenu row opens or closes its panel.
-            let target = (self.open_submenu != Some(position)).then_some(position);
-            self.submenu_timer = None;
-            self.show_submenu(target, cx);
+            false
         }
     }
 
-    fn choose_child(&mut self, parent: usize, child: usize, cx: &mut Context<Self>) {
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, top, Some(current))) = self.opened() {
+            if let Some(Row::Entry(path)) = self.submenu_rows(top).get(current).copied() {
+                self.choose(path, cx);
+            }
+            return;
+        }
+        let Some(current) = self.current else {
+            return;
+        };
+        let rows = self.rows();
+        match rows.get(current) {
+            Some(Row::Entry(path)) if matches!(self.entry(*path), Entry::Submenu(_)) => {
+                self.toggle_submenu(current, true, window, cx)
+            }
+            Some(Row::Entry(path)) => self.choose(*path, cx),
+            _ => {}
+        }
+    }
+
+    fn choose(&mut self, path: Path, cx: &mut Context<Self>) {
         if self.closing.is_some() {
             return;
         }
-        if let Some(Entry::Submenu(submenu)) = self.entries.get(parent)
-            && let Some(item) = submenu.children.get(child).filter(|item| !item.disabled)
-        {
-            self.chosen = item.value.clone();
-            cx.emit(Event::Chosen(item.action));
+        let Entry::Item(item) = self.entry(path) else {
+            return;
+        };
+        if item.disabled {
+            return;
+        }
+        let (action, keep_open) = (item.action, item.keep_open);
+        self.chosen = item.value.clone();
+        cx.emit(Event::Chosen(action));
+        if !keep_open {
             self.dismiss(cx);
         }
     }
 
-    fn pick_swatch(&mut self, index: usize, swatch: usize, cx: &mut Context<Self>) {
+    fn toggle_submenu(
+        &mut self,
+        row: usize,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.submenu.as_ref().is_some_and(|open| open.row == row) {
+            self.close_submenu(cx);
+        } else {
+            self.open_submenu(row, keyboard, window, cx);
+        }
+    }
+
+    /// The pointer moved onto a row that has no submenu: an open submenu
+    /// closes after a grace period, unless the pointer reaches it first.
+    fn leave_submenu(&mut self, cx: &mut Context<Self>) {
+        if self.submenu.is_none() {
+            return;
+        }
+        self.submenu_grace = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(motion::MENU_SUBMENU_GRACE)
+                .await;
+            let _ = this.update(cx, |this, cx| this.close_submenu(cx));
+        }));
+    }
+
+    /// The width a submenu's rows need (`width: auto`).
+    fn submenu_width(&self, top: usize, window: &Window) -> f32 {
+        let rows = self.submenu_rows(top);
+        let has_icons = self.has_icons(&rows);
+        let measure = |text: &SharedString, size: f32| {
+            let run = TextRun {
+                len: text.len(),
+                font: font(theme::FONT_UI),
+                color: black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            f32::from(
+                window
+                    .text_system()
+                    .shape_line(text.clone(), px(size), &[run], None)
+                    .width,
+            )
+        };
+        let widest = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Entry(path) => match self.entry(*path) {
+                    Entry::Item(item) => Some(
+                        2. * ROW_PADDING
+                            + if has_icons { ICON_SLOT } else { 0. }
+                            + measure(&item.label, theme::TEXT_MD)
+                            + if item.checked.is_some() || item.excluded {
+                                CHECK_SLOT
+                            } else {
+                                0.
+                            }
+                            + item.shortcut.as_ref().map_or(0., |shortcut| {
+                                SHORTCUT_GAP + measure(shortcut, theme::TEXT_CAPTION)
+                            }),
+                    ),
+                    _ => None,
+                },
+                Row::Separator | Row::Swatches(_) => None,
+            })
+            .fold(0f32, f32::max);
+        (2. * PADDING + widest).ceil()
+    }
+
+    fn open_submenu(
+        &mut self,
+        row: usize,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.closing.is_some() {
             return;
         }
-        if let Some(Entry::Swatches(row)) = self.entries.get_mut(index)
-            && let Some(choice) = row.swatches.get(swatch)
+        self.submenu_grace = None;
+        if let Some((open_row, top, inside)) = self.opened()
+            && open_row == row
         {
-            row.selected = Some(swatch);
-            self.chosen = Some(choice.value.clone());
-            cx.emit(Event::Chosen(row.action));
+            if keyboard && inside.is_none() {
+                let first = step(&self.stops(&self.submenu_rows(top)), None, true);
+                self.set_submenu_current(first, cx);
+            }
+            return;
+        }
+        let rows = self.rows();
+        let Some(Row::Entry(path)) = rows.get(row).copied() else {
+            return;
+        };
+        if !matches!(self.entry(path), Entry::Submenu(_)) {
+            return;
+        }
+        self.close_submenu(cx);
+        let (area, _) = self.area();
+        let parent = self.root_rect(&rows);
+        let row_top = parent.y
+            + self.search_height()
+            + row_offset(&rows, row)
+            + f32::from(self.scroll.offset().y);
+        let children = self.submenu_rows(path.top);
+        let width = self.submenu_width(path.top, window);
+        let height = items_height(&children, false).min(area.h - VIEWPORT_INSET);
+        let (x, y) = place_submenu(parent, row_top, width, height, area);
+        let rect = Rect {
+            x,
+            y,
+            w: width,
+            h: height,
+        };
+        self.serial += 1;
+        self.submenu_highlights = motion::Fades::default();
+        self.submenu = Some(Opened {
+            row,
+            top: path.top,
+            current: None,
+            rect,
+            window: None,
+            bounds: rect.outset(SHADOW_ROOM).intersect(area),
+            serial: self.serial,
+        });
+        if keyboard {
+            let first = step(&self.stops(&children), None, true);
+            self.set_submenu_current(first, cx);
+        }
+        if self.presentation == Presentation::PopUpWindows {
+            self.open_pop_up(Role::Submenu(self.serial), cx);
+        }
+        cx.notify();
+    }
+
+    fn close_submenu(&mut self, cx: &mut Context<Self>) {
+        self.submenu_grace = None;
+        if let Some(open) = self.submenu.take() {
+            if let Some(window) = open.window {
+                close_window(window, cx);
+            }
             cx.notify();
         }
     }
 
-    fn entry_height(entry: &Entry) -> f32 {
-        match entry {
-            Entry::Item(_) | Entry::Submenu(_) => theme::CONTROL_SM,
-            Entry::Separator => SEPARATOR,
-            Entry::Swatches(_) => SWATCH_ROW,
-        }
-    }
+    // ── Pop-up windows ──────────────────────────────────────────────
 
-    fn slot_height(&self, slot: Slot) -> f32 {
-        match slot {
-            Slot::Entry(index) => Self::entry_height(&self.entries[index]),
-            Slot::Child(..) => theme::CONTROL_SM,
-        }
-    }
-
-    /// The search field's height, when the menu has one.
-    fn search_height(&self) -> f32 {
-        if self.search.is_some() {
-            SEARCH_HEIGHT
-        } else {
-            0.
-        }
-    }
-
-    fn height(&self) -> f32 {
-        let rows = if self.shown.is_empty() {
-            // "No results"
-            2. * 8. + theme::TEXT_SM + 2.
-        } else {
-            self.shown
-                .iter()
-                .map(|slot| self.slot_height(*slot))
-                .sum::<f32>()
-                + GAP * (self.shown.len() - 1) as f32
+    /// Finds the display and the owner window's place on it, and opens the
+    /// root panel's window. Falls back to the overlay when there is no
+    /// display to place it on.
+    fn open_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(display) = window.display(cx) else {
+            self.presentation = Presentation::InWindow;
+            return;
         };
-        // The panel's border sits outside this, as a 1px ring.
-        self.search_height() + 2. * PADDING + rows
+        // `Window::bounds` is the frame on its display; the content starts
+        // below any system titlebar, at the frame's bottom less its height.
+        let frame = window.bounds();
+        let content = window.viewport_size();
+        let origin = (
+            f32::from(frame.origin.x),
+            f32::from(frame.origin.y) + f32::from(frame.size.height - content.height),
+        );
+        let area = Rect::from_bounds(display.visible_bounds());
+        self.screen = Some(Screen {
+            area,
+            origin,
+            display: display.id(),
+            bounds: Rect::default(),
+            window: None,
+        });
+        let (area, pointer) = self.area();
+        let tallest = self.tallest();
+        let (x, y) = place(pointer, self.width, tallest, area);
+        let rect = Rect {
+            x,
+            y,
+            w: self.width,
+            h: tallest.min(area.h - VIEWPORT_INSET),
+        };
+        if let Some(screen) = &mut self.screen {
+            screen.bounds = rect.outset(SHADOW_ROOM).intersect(area);
+        }
+        self.open_pop_up(Role::Root, cx);
     }
 
-    /// How far below the panel's top the row at `position` starts.
-    fn row_offset(&self, position: usize) -> f32 {
-        self.search_height()
-            + PADDING
-            + self.shown[..position]
-                .iter()
-                .map(|slot| self.slot_height(*slot) + GAP)
-                .sum::<f32>()
+    /// Opens a pop-up window for the root panel or the open submenu, once
+    /// this update is over: the window draws the menu as it opens.
+    fn open_pop_up(&mut self, role: Role, cx: &mut Context<Self>) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let bounds = match role {
+            Role::Root => screen.bounds,
+            Role::Submenu(_) => match &self.submenu {
+                Some(open) => open.bounds,
+                None => return,
+            },
+        };
+        let display = screen.display;
+        let focus = match role {
+            Role::Root => self.focus_handle(cx),
+            Role::Submenu(_) => self.focus.clone(),
+        };
+        let menu = cx.entity();
+        cx.defer(move |cx| {
+            let still_wanted = menu.update(cx, |this, _| {
+                let wanted = this.closing.is_none()
+                    && match role {
+                        Role::Root => true,
+                        Role::Submenu(serial) => this
+                            .submenu
+                            .as_ref()
+                            .is_some_and(|open| open.serial == serial),
+                    };
+                if wanted {
+                    this.opening = Some(role);
+                }
+                wanted
+            });
+            if !still_wanted {
+                return;
+            }
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds.to_bounds())),
+                display_id: Some(display),
+                titlebar: None,
+                focus: false,
+                show: true,
+                kind: WindowKind::PopUp,
+                is_movable: false,
+                is_resizable: false,
+                is_minimizable: false,
+                window_background: WindowBackgroundAppearance::Transparent,
+                ..Default::default()
+            };
+            let view = menu.clone();
+            let opened = cx
+                .open_window(options, move |window, cx| {
+                    without_system_shadow(window);
+                    window.focus(&focus, cx);
+                    view
+                })
+                .ok()
+                .map(AnyWindowHandle::from);
+            menu.update(cx, |this, cx| {
+                this.opening = None;
+                match (role, opened) {
+                    (_, Some(handle)) if this.closing.is_some() => close_window(handle, cx),
+                    (Role::Root, Some(handle)) => {
+                        if let Some(screen) = &mut this.screen {
+                            screen.window = Some(handle);
+                        }
+                    }
+                    (Role::Submenu(serial), Some(handle)) => match &mut this.submenu {
+                        Some(open) if open.serial == serial => open.window = Some(handle),
+                        _ => close_window(handle, cx),
+                    },
+                    // The platform has no pop-up windows: draw in the window.
+                    (Role::Root, None) => {
+                        this.presentation = Presentation::InWindow;
+                        this.screen = None;
+                    }
+                    (Role::Submenu(_), None) => this.close_submenu(cx),
+                }
+                cx.notify();
+            });
+        });
     }
 
-    /// The drawing of a row, without what it does: its highlight, glyph,
-    /// label and shortcut or chevron.
-    #[allow(clippy::too_many_arguments)]
-    fn row_frame(
-        id: ElementId,
-        label: SharedString,
-        icon: Option<&'static str>,
-        trailing: Option<AnyElement>,
-        danger: bool,
+    /// Closes the pop-up windows. If one of them had taken the keyboard (a
+    /// click in a panel makes it the key window), it goes back to the owner.
+    fn close_pop_ups(&mut self, cx: &mut Context<Self>) {
+        let mut windows = Vec::new();
+        if let Some(screen) = &mut self.screen {
+            windows.extend(screen.window.take());
+        }
+        if let Some(open) = &mut self.submenu {
+            windows.extend(open.window.take());
+        }
+        let main = self.main;
+        cx.defer(move |cx| {
+            let had_keyboard = windows.iter().any(|window| {
+                window
+                    .update(cx, |_, window, _| window.is_window_active())
+                    .unwrap_or(false)
+            });
+            for window in windows {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+            if had_keyboard && let Some(main) = main {
+                let _ = main.update(cx, |_, window, _| window.activate_window());
+            }
+        });
+    }
+
+    /// Closes the menu when the keyboard leaves all of its windows: another
+    /// application was chosen, or the owner window was. A pop-up stays
+    /// above other applications' windows, so it must not outlive that.
+    fn watch_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = window.window_handle();
+        if self.presentation != Presentation::PopUpWindows || self.watched.contains(&handle) {
+            return;
+        }
+        self.watched.push(handle);
+        let subscription = cx.observe_window_activation(window, |this, _, cx| {
+            let mut windows = this.main.into_iter().collect::<Vec<_>>();
+            windows.extend(this.screen.as_ref().and_then(|screen| screen.window));
+            windows.extend(this.submenu.as_ref().and_then(|open| open.window));
+            // When a click moves the keyboard from one of the menu's windows
+            // to another, the one losing it reports first; wait for the
+            // other before deciding.
+            this.activation = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(ACTIVATION_SETTLE).await;
+                let active = windows.iter().any(|window| {
+                    window
+                        .update(cx, |_, window, _| window.is_window_active())
+                        .unwrap_or(false)
+                });
+                if !active {
+                    let _ = this.update(cx, |this, cx| this.dismiss(cx));
+                }
+            }));
+        });
+        self._subscriptions.push(subscription);
+    }
+
+    // ── Drawing ─────────────────────────────────────────────────────
+
+    /// The menu's keys, on whichever of its windows has the keyboard. The
+    /// search field binds Enter, Escape and the side arrows itself; they are
+    /// taken here before it sees them.
+    fn keyboard(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        element
+            .track_focus(&self.focus)
+            .key_context("Menu")
+            .on_action(cx.listener(|this, _: &Up, _, cx| this.arrow(false, cx)))
+            .on_action(cx.listener(|this, _: &Down, _, cx| this.arrow(true, cx)))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm(window, cx)))
+            .on_action(cx.listener(|this, _: &Cancel, _, cx| this.dismiss(cx)))
+            .on_action(cx.listener(|this, _: &OpenSubmenu, window, cx| {
+                this.right(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseSubmenu, _, cx| {
+                this.left(cx);
+            }))
+            .capture_action(cx.listener(|this, _: &text_input::Commit, window, cx| {
+                this.confirm(window, cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &text_input::Cancel, _, cx| {
+                this.dismiss(cx);
+                cx.stop_propagation();
+            }))
+            .capture_action(cx.listener(|this, _: &text_input::Right, window, cx| {
+                if this.right(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &text_input::Left, _, cx| {
+                if this.left(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    /// While open, a press outside the panels closes the menu, with any
+    /// button, and goes no further.
+    fn press_outside(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        if self.closing.is_some() {
+            return element;
+        }
+        element
+            .occlude()
+            .on_any_mouse_down(cx.listener(|this, _, _, cx| {
+                this.dismiss(cx);
+                cx.stop_propagation();
+            }))
+    }
+
+    /// The glass panel at `at` in its window.
+    fn chrome(&self, id: &'static str, at: (f32, f32), w: f32, h: f32, cx: &App) -> Stateful<Div> {
+        let theme = theme::theme(cx);
+        div()
+            .id(id)
+            .occlude()
+            .absolute()
+            .left(px(at.0))
+            .top(px(at.1))
+            .w(px(w))
+            .h(px(h))
+            .flex()
+            .flex_col()
+            .rounded(px(theme::RADIUS_LG))
+            .bg(theme.glass())
+            .shadow(theme::panel_shadow())
+            .opacity(self.opacity())
+            // A press on the panel itself is not a press outside it.
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            // `--glass-border-side`, drawn inside so it takes no room.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(theme::RADIUS_LG))
+                    .border_1()
+                    .border_color(theme.glass_border()),
+            )
+    }
+
+    /// A row as `.item` draws it, without what it does.
+    fn row(
+        &self,
+        id: impl Into<ElementId>,
+        entry: &Entry,
         highlight: f32,
         current: bool,
+        has_icons: bool,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
-        let color = if danger {
+        let (label, icon) = match entry {
+            Entry::Item(item) => (item.label.clone(), item.icon),
+            Entry::Submenu(submenu) => (submenu.label.clone(), submenu.icon),
+            Entry::Separator | Entry::Swatches(_) => (SharedString::default(), None),
+        };
+        let item = match entry {
+            Entry::Item(item) => Some(item),
+            _ => None,
+        };
+        let danger = item.is_some_and(|item| item.danger);
+        let excluded = item.is_some_and(|item| item.excluded);
+        let color = if danger || excluded {
             theme.negative()
         } else {
             theme.text()
@@ -600,7 +1423,7 @@ impl Menu {
             .relative()
             .h(px(theme::CONTROL_SM))
             .flex_none()
-            .px(px(6.))
+            .px(px(ROW_PADDING))
             .flex()
             .items_center()
             .rounded(px(theme::RADIUS_MD))
@@ -618,7 +1441,7 @@ impl Menu {
                     })
                     .opacity(highlight),
             );
-        if let Some(icon) = icon {
+        if has_icons {
             row = row.child(
                 div()
                     .relative()
@@ -627,152 +1450,406 @@ impl Menu {
                     .flex_none()
                     .flex()
                     .items_center()
-                    .child(super::icon(icon, 16., color).opacity(if current { 1. } else { 0.8 })),
+                    .children(icon.map(|icon| {
+                        super::icon(icon, 16., color).opacity(if current { 1. } else { 0.8 })
+                    })),
             );
         }
-        row.child(div().relative().flex_1().min_w_0().truncate().child(label))
-            .children(trailing)
-    }
-
-    fn row(&self, index: usize, item: &Item, cx: &mut Context<Self>) -> Stateful<Div> {
-        let current = self.current == Some(index);
-        let shortcut = item.shortcut.clone().map(|shortcut| {
-            div()
-                .relative()
-                .flex_none()
-                .pl(px(28.))
-                .text(theme::TEXT_CAPTION)
-                .opacity(0.5)
-                .child(shortcut)
-                .into_any_element()
-        });
-        let row = Self::row_frame(
-            ("menu-row", index).into(),
-            item.label.clone(),
-            item.icon,
-            shortcut,
-            item.danger,
-            self.highlights.value(("row", index)),
-            current,
-            cx,
-        );
-        if item.disabled {
-            return row.opacity(0.4);
+        let mut text = div().relative().flex_1().min_w_0().truncate().child(label);
+        if excluded {
+            text = text.line_through();
+        }
+        row = row.child(text);
+        if let Some(item) = item {
+            // `.checkSlot`, in the primary text colour on any row. Its glyph is
+            // drawn at 16px: `.item svg` sizes every glyph in a row.
+            if item.checked.is_some() || item.excluded {
+                let glyph = if item.excluded {
+                    Some("menu-x")
+                } else if item.checked == Some(true) {
+                    Some("menu-check")
+                } else {
+                    None
+                };
+                row = row.child(
+                    div()
+                        .relative()
+                        .size(px(CHECK_SLOT))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .children(glyph.map(|glyph| super::icon(glyph, 16., theme.text()))),
+                );
+            }
+            if let Some(shortcut) = &item.shortcut {
+                row = row.child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .pl(px(SHORTCUT_GAP))
+                        .text(theme::TEXT_CAPTION)
+                        .opacity(0.5)
+                        .child(shortcut.clone()),
+                );
+            }
+            if item.disabled {
+                return row.opacity(0.4);
+            }
+        } else {
+            // `.chevron`: 40% of the row's colour, and 16px like every
+            // glyph in a row.
+            row = row.child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .child(super::icon("menu-chevron-right", 16., color).opacity(0.4)),
+            );
         }
         row.cursor_pointer()
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.set_current(Some(index), cx);
-                    this.submenu_intent(None, cx);
-                } else if this.current == Some(index) {
-                    this.set_current(None, cx);
-                }
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)))
     }
 
-    fn submenu_row(
+    /// The menu's own panel: the search row, then its rows, scrolling when
+    /// the panel is held shorter than they are.
+    fn root_panel(
         &self,
-        index: usize,
-        submenu: &Submenu,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let chevron = div()
-            .relative()
-            .flex_none()
-            .ml_auto()
-            .child(super::icon("menu-chevron-right", 12., theme.text()).opacity(0.4))
-            .into_any_element();
-        Self::row_frame(
-            ("menu-row", index).into(),
-            submenu.label.clone(),
-            submenu.icon,
-            Some(chevron),
-            false,
-            self.highlights.value(("row", index)),
-            self.current == Some(index),
-            cx,
-        )
-        .cursor_pointer()
-        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-            if *hovered {
-                this.set_current(Some(index), cx);
-                this.submenu_intent(Some(index), cx);
-            } else if this.current == Some(index) {
-                this.set_current(None, cx);
-            }
-        }))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            let target = (this.open_submenu != Some(index)).then_some(index);
-            this.submenu_timer = None;
-            this.show_submenu(target, cx);
-        }))
-    }
-
-    /// `ColorPicker`: swatches spread across the row, the chosen one ringed
-    /// in its colour over the app background, with a check.
-    fn swatch_row(
-        &self,
-        index: usize,
-        row: &Swatches,
+        rows: &[Row],
+        rect: Rect,
+        at: (f32, f32),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        let has_icons = self.has_icons(rows);
+        let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));
+        for (index, row) in rows.iter().enumerate() {
+            let path = match *row {
+                Row::Entry(path) => path,
+                Row::Swatches(path) => {
+                    list = list.child(self.swatch_row(path, window, cx));
+                    continue;
+                }
+                Row::Separator => {
+                    list = list.child(separator(cx));
+                    continue;
+                }
+            };
+            let entry = self.entry(path);
+            let element = self.row(
+                ("menu-row", index),
+                entry,
+                self.highlights.value(("row", index)),
+                self.current == Some(index),
+                has_icons,
+                cx,
+            );
+            list = list.child(match entry {
+                Entry::Item(item) if item.disabled => element,
+                Entry::Item(_) => element
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.set_current(Some(index), cx);
+                            this.leave_submenu(cx);
+                        } else if this.current == Some(index) {
+                            this.set_current(None, cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose(path, cx))),
+                // A submenu row keeps its highlight when the pointer leaves
+                // it for the submenu.
+                _ => element
+                    .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                        if *hovered {
+                            this.set_current(Some(index), cx);
+                            this.open_submenu(index, false, window, cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_submenu(index, false, window, cx)
+                    })),
+            });
+        }
+        if rows.is_empty() && self.searching() {
+            list = list.child(
+                div()
+                    .py(px(8.))
+                    .px(px(12.))
+                    .flex()
+                    .justify_center()
+                    .text(theme::TEXT_SM)
+                    .text_color(theme.text_tertiary())
+                    .child("No results"),
+            );
+        }
+        let mut panel = self.chrome("menu", at, rect.w, rect.h, cx);
+        if let Some(search) = &self.search {
+            let mut glyph = theme.text_tertiary();
+            glyph.a *= 0.6;
+            panel = panel.child(
+                div()
+                    .relative()
+                    .h(px(SEARCH_HEIGHT))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .pl(px(10.))
+                    .gap(px(6.))
+                    // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(-1.), theme.border_secondary().into()).inset(),
+                    ])
+                    .child(super::icon("menu-search", 16., glyph).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(px(SEARCH_HEIGHT))
+                            .text_color(theme.text())
+                            .child(search.clone()),
+                    ),
+            );
+        }
+        panel.child(
+            div()
+                .id("menu-items")
+                .relative()
+                .h(px((rect.h - self.search_height()).max(0.)))
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .child(list),
+        )
+    }
+
+    /// The open submenu's panel.
+    fn submenu_panel(
+        &self,
+        open: &Opened,
+        at: (f32, f32),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let rows = self.submenu_rows(open.top);
+        let has_icons = self.has_icons(&rows);
+        let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));
+        for (index, row) in rows.iter().enumerate() {
+            let path = match *row {
+                Row::Entry(path) => path,
+                Row::Swatches(path) => {
+                    list = list.child(self.swatch_row(path, window, cx));
+                    continue;
+                }
+                Row::Separator => {
+                    list = list.child(separator(cx));
+                    continue;
+                }
+            };
+            let entry = self.entry(path);
+            let element = self.row(
+                ("submenu-row", index),
+                entry,
+                self.submenu_highlights.value(("row", index)),
+                open.current == Some(index),
+                has_icons,
+                cx,
+            );
+            list = list.child(match entry {
+                Entry::Item(item) if !item.disabled => element
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        let current = this.submenu.as_ref().and_then(|open| open.current);
+                        if *hovered {
+                            this.set_submenu_current(Some(index), cx);
+                        } else if current == Some(index) {
+                            this.set_submenu_current(None, cx);
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose(path, cx))),
+                _ => element,
+            });
+        }
+        self.chrome("submenu", at, open.rect.w, open.rect.h, cx)
+            // Reaching the submenu keeps it open.
+            .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+                if *hovered {
+                    this.submenu_grace = None;
+                }
+            }))
+            .child(
+                div()
+                    .id("submenu-items")
+                    .relative()
+                    .h(px(open.rect.h))
+                    .overflow_y_scroll()
+                    .child(list),
+            )
+    }
+
+    /// The owner window's part: the layer that takes the keyboard and
+    /// presses outside, and, drawn in the window, the panels.
+    fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = window.viewport_size();
+        self.viewport = Rect {
+            x: 0.,
+            y: 0.,
+            w: f32::from(view.width),
+            h: f32::from(view.height),
+        };
+        if self.presentation == Presentation::PopUpWindows
+            && self.screen.is_none()
+            && self.closing.is_none()
+        {
+            self.open_screen(window, cx);
+        }
+        self.watch_activation(window, cx);
+        let layer = self.keyboard(div().id("menu-layer").absolute().inset_0(), cx);
+        let mut layer = self.press_outside(layer, cx);
+        match self.presentation {
+            Presentation::InWindow => {
+                let rows = self.rows();
+                let rect = self.root_rect(&rows);
+                layer = layer.child(self.root_panel(&rows, rect, (rect.x, rect.y), window, cx));
+                if let Some(open) = &self.submenu {
+                    layer = layer.child(self.submenu_panel(
+                        open,
+                        (open.rect.x, open.rect.y),
+                        window,
+                        cx,
+                    ));
+                }
+            }
+            Presentation::PopUpWindows => {
+                // The keyboard stays with this window, so the search field
+                // types here: a twin of it, invisible, at the same place in
+                // this window as the one shown in the pop-up, so both lay the
+                // text out alike.
+                if let (Some(search), Some(screen)) = (&self.search, &self.screen) {
+                    let rect = self.root_rect(&self.rows());
+                    layer = layer.child(
+                        div()
+                            .absolute()
+                            .left(px(rect.x - screen.bounds.x + SEARCH_INPUT_LEFT))
+                            .top(px(rect.y - screen.bounds.y))
+                            .w(px(rect.w - SEARCH_INPUT_LEFT))
+                            .h(px(SEARCH_HEIGHT))
+                            .opacity(0.)
+                            .child(search.clone()),
+                    );
+                }
+            }
+        }
+        layer.into_any_element()
+    }
+
+    /// A pop-up window's part: a transparent window holding one panel.
+    fn render_pop_up(
+        &mut self,
+        role: Role,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.watch_activation(window, cx);
+        let theme = theme::theme(cx);
+        let root = div()
+            .id("menu-window")
+            .size_full()
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_MD)
+            .text_color(theme.text());
+        let root = self.keyboard(root, cx);
+        let mut root = self.press_outside(root, cx);
+        match role {
+            Role::Root => {
+                if let Some(screen) = &self.screen {
+                    let rows = self.rows();
+                    let rect = self.root_rect(&rows);
+                    let at = (rect.x - screen.bounds.x, rect.y - screen.bounds.y);
+                    root = root.child(self.root_panel(&rows, rect, at, window, cx));
+                }
+            }
+            Role::Submenu(serial) => {
+                if let Some(open) = self.submenu.as_ref().filter(|open| open.serial == serial) {
+                    let at = (open.rect.x - open.bounds.x, open.rect.y - open.bounds.y);
+                    root = root.child(self.submenu_panel(open, at, window, cx));
+                }
+            }
+        }
+        root.into_any_element()
+    }
+}
+
+impl Menu {
+    /// Picks a swatch: the owner is told, and the menu stays open with the
+    /// new choice ringed.
+    fn pick_swatch(&mut self, path: Path, swatch: usize, cx: &mut Context<Self>) {
+        if self.closing.is_some() {
+            return;
+        }
+        let entry = match (&mut self.entries[path.top], path.child) {
+            (Entry::Submenu(submenu), Some(child)) => &mut submenu.children[child],
+            (entry, _) => entry,
+        };
+        if let Entry::Swatches(row) = entry
+            && let Some(choice) = row.swatches.get(swatch)
+        {
+            row.selected = Some(swatch);
+            self.chosen = Some(choice.value.clone());
+            cx.emit(Event::Chosen(row.action));
+            cx.notify();
+        }
+    }
+
+    /// `ColorPicker`: swatches spread across the row, the chosen one ringed
+    /// in its colour over the app background, with a check.
+    fn swatch_row(&self, path: Path, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = theme::theme(cx);
+        let Entry::Swatches(row) = self.entry(path) else {
+            return div().id("menu-swatches");
+        };
         let mut line = div()
-            .id(("menu-swatches", index))
+            .id(("menu-swatches", path.top))
             .relative()
             .h(px(SWATCH_ROW))
             .flex_none()
-            .px(px(6.))
+            .px(px(ROW_PADDING))
             .flex()
             .items_center()
             .justify_between()
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.set_current(None, cx);
-                    this.submenu_intent(None, cx);
+                    this.leave_submenu(cx);
                 }
             }));
         for (position, swatch) in row.swatches.iter().enumerate() {
             let color = swatch.color.unwrap_or(theme.text());
             let selected = row.selected == Some(position);
-            let mut dot = div()
+            let check = if swatch.color.is_some() {
+                theme.on_primary()
+            } else {
+                theme.background()
+            };
+            let mut ring = div()
                 .size(px(SWATCH))
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded_full()
-                .bg(color);
+                .bg(color)
+                .children(selected.then(|| super::icon("swatch-check", 10., check)));
             if selected {
-                let check = if swatch.color.is_some() {
-                    rgb(0xffffff)
-                } else {
-                    theme.background()
-                };
-                dot = dot.child(super::icon("swatch-check", 10., check));
+                // `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`
+                ring = ring.shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), theme.background().into())
+                        .spread_radius(px(1.5)),
+                    BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
+                ]);
             }
-            // `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`
-            let ring = div()
-                .size(px(SWATCH))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .when(selected, |ring| {
-                    ring.shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), theme.background().into())
-                            .spread_radius(px(1.5)),
-                        BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
-                    ])
-                })
-                .child(dot);
             let target = div()
                 .id(("menu-swatch", position))
                 .cursor_pointer()
                 .child(ring)
-                .on_click(cx.listener(move |this, _, _, cx| this.pick_swatch(index, position, cx)));
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_swatch(path, position, cx)));
             line = line.child(super::tooltip::attach(
                 target,
                 ("menu-swatch-tip", position),
@@ -784,330 +1861,307 @@ impl Menu {
         }
         line
     }
+}
 
-    /// The width a submenu panel needs for its widest row.
-    fn submenu_width(submenu: &Submenu, window: &mut Window) -> f32 {
-        let mut style = window.text_style();
-        style.font_family = theme::FONT_UI.into();
-        let has_icons = submenu.children.iter().any(|item| item.icon.is_some());
-        let widest = submenu
-            .children
-            .iter()
-            .map(|item| {
-                let run = style.to_run(item.label.len());
-                f32::from(
-                    window
-                        .text_system()
-                        .shape_line(item.label.clone(), px(theme::TEXT_MD), &[run], None)
-                        .width,
-                )
-                .ceil()
-            })
-            .fold(0., f32::max);
-        2. * PADDING + 2. * 6. + if has_icons { 22. } else { 0. } + widest
-    }
+fn separator(cx: &App) -> Div {
+    div()
+        .relative()
+        .h(px(1.))
+        .my(px(2.))
+        .flex_none()
+        .bg(theme::theme(cx).border_secondary())
+}
 
-    fn submenu_panel(
-        &self,
-        parent: usize,
-        submenu: &Submenu,
-        origin: (f32, f32),
-        width: f32,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let mut panel = div()
-            .id("submenu")
-            .occlude()
-            .absolute()
-            .left(px(origin.0))
-            .top(px(origin.1))
-            .w(px(width))
-            .p(px(PADDING))
-            .gap(px(GAP))
-            .flex()
-            .flex_col()
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            // The pointer reaching the panel keeps it open.
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.submenu_timer = None;
-                    cx.notify();
-                }
-            }))
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(theme::RADIUS_LG))
-                    .border_1()
-                    .border_color(theme.glass_border()),
-            );
-        for (child, item) in submenu.children.iter().enumerate() {
-            let row = Self::row_frame(
-                ("submenu-row", child).into(),
-                item.label.clone(),
-                item.icon,
-                None,
-                item.danger,
-                self.highlights.value(("sub", child)),
-                self.sub_current == Some(child),
-                cx,
-            );
-            panel = panel.child(if item.disabled {
-                row.opacity(0.4)
-            } else {
-                row.cursor_pointer()
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                        if *hovered {
-                            this.set_sub_current(Some(child), cx);
-                        } else if this.sub_current == Some(child) {
-                            this.set_sub_current(None, cx);
-                        }
-                    }))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.choose_child(parent, child, cx)),
-                    )
-            });
-        }
-        panel
-    }
+/// Closes a window once the current update is over.
+fn close_window(window: AnyWindowHandle, cx: &mut App) {
+    cx.defer(move |cx| {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+    });
 }
 
 impl Render for Menu {
+    /// The same menu draws in the owner's window and in each of its pop-up
+    /// windows; which part it draws depends on the window.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme::theme(cx);
-        let opacity = match self.closing {
-            Some(since) => {
-                1. - motion::EASE_IN.ease(motion::progress(since.elapsed(), motion::MENU_OUT))
-            }
-            None => 1.,
-        };
-        if self.closing.is_some() || self.highlights.animating() {
+        if self.closing.is_some()
+            || self.highlights.animating()
+            || self.submenu_highlights.animating()
+        {
             window.request_animation_frame();
         }
-        // The panel opens with its corner at the pointer, moved inward so it
-        // keeps a margin from every edge of the window.
-        let view = window.viewport_size();
-        let height = self.height();
-        let left = f32::from(self.position.x)
-            .min(f32::from(view.width) - WIDTH - MARGIN)
-            .max(MARGIN);
-        let top = f32::from(self.position.y)
-            .min(f32::from(view.height) - height - MARGIN)
-            .max(MARGIN);
-
-        let mut panel = div()
-            .id("menu")
-            .occlude()
-            .absolute()
-            .left(px(left))
-            .top(px(top))
-            .w(px(WIDTH))
-            .flex()
-            .flex_col()
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
-            // A press on the panel itself is not a press outside it.
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation());
-        if let Some(search) = &self.search {
-            // `.searchArea`, with its line below.
-            panel = panel.child(
-                div()
-                    .relative()
-                    .h(px(SEARCH_HEIGHT))
-                    .flex_none()
-                    .child(
-                        super::field("menu-search", search, super::field::Look::MenuSearch).icon(
-                            "menu-search-field",
-                            16.,
-                            10.,
-                            theme::blend(
-                                gpui::transparent_black().into(),
-                                theme.text_tertiary(),
-                                0.6,
-                            ),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left_0()
-                            .right_0()
-                            .bottom_0()
-                            .h(px(1.))
-                            .bg(theme.border_secondary()),
-                    ),
-            );
+        let handle = window.window_handle();
+        if self.main.is_none() {
+            self.main = Some(handle);
         }
-        let mut items = div()
-            .relative()
-            .p(px(PADDING))
-            .gap(px(GAP))
-            .flex()
-            .flex_col();
-        let mut submenu = None;
-        for (position, slot) in self.shown.iter().copied().enumerate() {
-            let (index, entry) = match slot {
-                Slot::Entry(index) => (index, &self.entries[index]),
-                Slot::Child(..) => {
-                    if let Some(item) = self.item_at(position) {
-                        items = items.child(self.row(position, item, cx));
-                    }
-                    continue;
-                }
-            };
-            items = match entry {
-                Entry::Item(item) => items.child(self.row(position, item, cx)),
-                Entry::Submenu(child) => {
-                    if self.open_submenu == Some(position) {
-                        let width = Self::submenu_width(child, window);
-                        let rows = child.children.len() as f32;
-                        let height =
-                            2. * PADDING + rows * theme::CONTROL_SM + GAP * (rows - 1.).max(0.);
-                        let origin = submenu_origin(
-                            left,
-                            top + self.row_offset(position),
-                            width,
-                            height,
-                            view,
-                        );
-                        submenu = Some(self.submenu_panel(index, child, origin, width, cx));
-                    }
-                    items.child(self.submenu_row(position, child, cx))
-                }
-                Entry::Swatches(row) => items.child(self.swatch_row(index, row, window, cx)),
-                Entry::Separator => items.child(
-                    div()
-                        .relative()
-                        .h(px(1.))
-                        .my(px(2.))
-                        .flex_none()
-                        .bg(theme.border_secondary()),
-                ),
-            };
+        if self.main == Some(handle) {
+            return self.render_main(window, cx);
         }
-        if self.shown.is_empty() {
-            // `.empty`
-            items = items.child(
-                div()
-                    .py(px(8.))
-                    .px(px(12.))
-                    .flex()
-                    .justify_center()
-                    .text_color(theme.text_tertiary())
-                    .text(theme::TEXT_SM)
-                    .child("No results"),
-            );
+        let role = if self.screen.as_ref().and_then(|screen| screen.window) == Some(handle) {
+            Some(Role::Root)
+        } else if let Some(open) = self
+            .submenu
+            .as_ref()
+            .filter(|open| open.window == Some(handle))
+        {
+            Some(Role::Submenu(open.serial))
+        } else {
+            // A window drawn as it opens, before its handle is known.
+            self.opening
+        };
+        match role {
+            Some(role) => self.render_pop_up(role, window, cx),
+            // A submenu window already replaced, about to close.
+            None => div().into_any_element(),
         }
-        panel = panel.child(items).child(
-            // `--glass-border-side`, drawn inside so it takes no room.
-            div()
-                .absolute()
-                .inset_0()
-                .rounded(px(theme::RADIUS_LG))
-                .border_1()
-                .border_color(theme.glass_border()),
-        );
-        let mut layer = div()
-            .id("menu-layer")
-            .absolute()
-            .inset_0()
-            .opacity(opacity)
-            .track_focus(&self.focus)
-            .key_context("Menu")
-            .on_action(cx.listener(|this, _: &Up, _, cx| this.step(false, cx)))
-            .on_action(cx.listener(|this, _: &Down, _, cx| this.step(true, cx)))
-            .on_action(cx.listener(|this, _: &Right, _, cx| {
-                if let Some(current) = this
-                    .current
-                    .filter(|current| this.submenu_at(*current).is_some())
-                {
-                    this.submenu_timer = None;
-                    this.show_submenu(Some(current), cx);
-                } else {
-                    // Only a submenu row takes the arrow.
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &Left, _, cx| {
-                if this.open_submenu.is_some() {
-                    this.show_submenu(None, cx);
-                } else {
-                    cx.propagate();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &Confirm, _, cx| {
-                if let Some(current) = this.current {
-                    this.choose(current, cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &Cancel, _, cx| this.dismiss(cx)));
-        // While open, the layer takes every press outside the panel, with
-        // any button, and nothing beneath it sees the pointer.
-        if self.closing.is_none() {
-            layer = layer
-                .occlude()
-                .on_any_mouse_down(cx.listener(|this, _, _, cx| {
-                    this.dismiss(cx);
-                    cx.stop_propagation();
-                }));
-        }
-        layer.child(panel).children(submenu)
     }
 }
+
+/// A transparent window still gets the system's own shadow and edge
+/// highlight, traced round whatever it draws, which shows as a second, glassy
+/// border round the panel. The panel draws its own shadow, so the system's
+/// is turned off. GPUI has no option for this, so it asks AppKit directly.
+#[cfg(target_os = "macos")]
+fn without_system_shadow(window: &Window) {
+    use std::ffi::{c_char, c_void};
+    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    #[link(name = "objc", kind = "dylib")]
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `ns_view` is the live content view of this window; `window`
+    // and `setHasShadow:` are AppKit methods with these signatures, called
+    // on the main thread.
+    unsafe {
+        let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_bool: extern "C" fn(*mut c_void, *const c_void, bool) =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let ns_window = send_id(
+            appkit.ns_view.as_ptr(),
+            sel_registerName(c"window".as_ptr()),
+        );
+        if !ns_window.is_null() {
+            send_bool(
+                ns_window,
+                sel_registerName(c"setHasShadow:".as_ptr()),
+                false,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn without_system_shadow(_: &Window) {}
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Entry, MARGIN, Slot, WIDTH, item, search_score, shown_for, submenu, submenu_origin,
+        Entry, MARGIN, PADDING, Path, Rect, Row, SEPARATOR, clean, item, items_height, place,
+        place_submenu, row_offset, score, search, step, submenu,
     };
-    use gpui::{px, size};
 
-    #[test]
-    fn a_search_finds_rows_and_submenu_rows_best_first() {
-        let entries: Vec<Entry> = vec![
-            item("copy", "Copy Tag").into(),
+    fn top(index: usize) -> Path {
+        Path {
+            top: index,
+            child: None,
+        }
+    }
+
+    fn child(top: usize, child: usize) -> Path {
+        Path {
+            top,
+            child: Some(child),
+        }
+    }
+
+    fn grid_like() -> Vec<Entry> {
+        vec![
+            item("open", "Open with Default App").into(),
+            item("reveal", "Reveal in Finder")
+                .keywords(["show", "folder"])
+                .into(),
+            Entry::Separator,
+            item("copy-path", "Copy File Path").into(),
+            item("copy-name", "Copy Name").into(),
             Entry::Separator,
             submenu(
-                "Move to Group…",
-                vec![item("move", "creator"), item("move", "series")],
+                "Set Rating",
+                vec![
+                    item("rate-0", "No Rating").into(),
+                    item("rate-1", "★").into(),
+                ],
             )
+            .icon("menu-star")
             .into(),
-            item("delete", "Delete Tag").into(),
-            item("off", "Tag Off").disabled(true).into(),
-        ];
-        // A blank search shows every entry, separators included.
-        assert_eq!(shown_for(&entries, "  ").len(), 5);
-        // Label prefix, then a match inside a label, in menu order; a
-        // disabled row is never offered.
-        assert_eq!(shown_for(&entries, "tag"), [Slot::Entry(0), Slot::Entry(3)]);
-        assert_eq!(shown_for(&entries, "ser"), [Slot::Child(2, 1)]);
-        assert_eq!(shown_for(&entries, "zzz"), []);
-        assert_eq!(search_score("delete tag", "delete"), Some(0));
-        assert_eq!(search_score("copy tag", "tag"), Some(15));
-        assert_eq!(search_score("delete tag", "dt"), Some(203));
+            item("delete", "Delete Permanently").disabled(true).into(),
+            item("trash", "Move to Trash").into(),
+        ]
     }
 
     #[test]
-    fn a_submenu_opens_beside_the_menu_and_stays_inside_the_window() {
-        let view = size(px(1000.), px(600.));
-        // Room on the right: 4px from the menu, 3px above its row.
+    fn search_ranks_label_starts_then_contains_then_keywords_then_letters() {
+        let entries = grid_like();
+        // "co": both copies start with it; earlier in the menu first.
+        assert_eq!(search(&entries, "co"), vec![top(3), top(4)]);
+        // "name": inside a label.
+        assert_eq!(search(&entries, " Name "), vec![top(4)]);
+        // "folder": a keyword only.
+        assert_eq!(search(&entries, "folder"), vec![top(1)]);
+        // "mvt": the letters of "Move to Trash" in order, with gaps.
+        assert_eq!(search(&entries, "mvt"), vec![top(8)]);
+        assert_eq!(score("move to trash", "move to trash", "move"), Some(0));
+        assert_eq!(score("copy name", "copy name", "name"), Some(15));
         assert_eq!(
-            submenu_origin(100., 200., 150., 100., view),
-            (100. + WIDTH + 4., 197.)
+            score("reveal in finder show", "reveal in finder", "show"),
+            Some(117)
         );
-        // No room on the right: it opens on the left instead.
-        assert_eq!(submenu_origin(700., 200., 150., 100., view).0, 700. - 154.);
-        // Too low: it rises to keep the margin; too high: it drops to it.
+        assert_eq!(score("abc", "abc", "xyz"), None);
+    }
+
+    #[test]
+    fn search_skips_disabled_items_and_finds_submenus_and_their_rows() {
+        let entries = grid_like();
+        // The disabled delete row never matches.
+        assert_eq!(search(&entries, "delete"), Vec::<Path>::new());
+        // A submenu's own row and its children are both results.
+        assert_eq!(search(&entries, "rating"), vec![child(6, 0), top(6)]);
+        assert_eq!(search(&entries, "set"), vec![top(6)]);
+        assert_eq!(search(&entries, "★"), vec![child(6, 1)]);
+        assert_eq!(search(&entries, "   "), Vec::<Path>::new());
+    }
+
+    #[test]
+    fn separators_never_lead_trail_or_double() {
+        let entries: Vec<Entry> = vec![
+            Entry::Separator,
+            item("a", "A").into(),
+            Entry::Separator,
+            Entry::Separator,
+            item("b", "B").into(),
+            Entry::Separator,
+        ];
         assert_eq!(
-            submenu_origin(100., 560., 150., 100., view).1,
-            600. - 100. - MARGIN
+            clean(&entries, None),
+            vec![Row::Entry(top(1)), Row::Separator, Row::Entry(top(4))]
         );
-        assert_eq!(submenu_origin(100., 5., 150., 100., view).1, MARGIN);
+    }
+
+    #[test]
+    fn arrows_step_over_separators_and_disabled_rows_and_stop_on_submenus() {
+        // open, reveal, ─, copy path, copy name, ─, Set Rating ›, delete (disabled), trash
+        let stops = [true, true, false, true, true, false, true, false, true];
+        assert_eq!(step(&stops, None, true), Some(0));
+        assert_eq!(step(&stops, None, false), Some(8));
+        assert_eq!(step(&stops, Some(1), true), Some(3));
+        assert_eq!(step(&stops, Some(4), true), Some(6));
+        assert_eq!(step(&stops, Some(6), true), Some(8));
+        assert_eq!(step(&stops, Some(8), true), Some(0));
+        assert_eq!(step(&stops, Some(0), false), Some(8));
+        assert_eq!(step(&stops, Some(8), false), Some(6));
+        // Nothing to stop on leaves the highlight where it was.
+        assert_eq!(step(&[false, false], Some(1), true), Some(1));
+    }
+
+    #[test]
+    fn heights_count_rows_separators_gaps_and_the_empty_line() {
+        let rows = [Row::Entry(top(0)), Row::Separator, Row::Entry(top(2))];
+        assert_eq!(
+            items_height(&rows, false),
+            2. * PADDING + 26. + SEPARATOR + 26. + 2. * 2.
+        );
+        assert_eq!(items_height(&[], true), 2. * PADDING + 30.);
+        assert_eq!(row_offset(&rows, 2), PADDING + 26. + 2. + SEPARATOR + 2.);
+    }
+
+    #[test]
+    fn a_menu_moves_inward_to_keep_its_margin() {
+        let area = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1000.,
+            h: 800.,
+        };
+        // Room at the pointer.
+        assert_eq!(place((100., 100.), 270., 300., area), (100., 100.));
+        // Near the right and bottom edges it moves left and up.
+        assert_eq!(
+            place((900., 700.), 270., 300., area),
+            (1000. - 270. - MARGIN, 800. - 300. - MARGIN)
+        );
+        // Taller than the area: held at the top margin.
+        assert_eq!(place((50., 50.), 270., 900., area).1, MARGIN);
+        // An area that does not start at zero, like a display's usable part
+        // below the menu bar.
+        let display = Rect {
+            x: 0.,
+            y: 25.,
+            w: 1000.,
+            h: 775.,
+        };
+        assert_eq!(place((5., 0.), 270., 100., display), (MARGIN, 25. + MARGIN));
+    }
+
+    #[test]
+    fn a_submenu_opens_right_of_its_row_and_flips_left_at_the_edge() {
+        let area = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1000.,
+            h: 800.,
+        };
+        let parent = Rect {
+            x: 100.,
+            y: 100.,
+            w: 270.,
+            h: 400.,
+        };
+        assert_eq!(
+            place_submenu(parent, 160., 150., 200., area),
+            (100. + 270. + 4., 157.)
+        );
+        // Too close to the right edge: on the parent's left.
+        let right = Rect { x: 700., ..parent };
+        assert_eq!(
+            place_submenu(right, 160., 150., 200., area),
+            (700. - 150. - 4., 157.)
+        );
+        // Low rows move up to keep the margin; high ones down.
+        assert_eq!(
+            place_submenu(parent, 700., 150., 200., area).1,
+            800. - 200. - MARGIN
+        );
+        assert_eq!(place_submenu(parent, 5., 150., 200., area).1, MARGIN);
+    }
+
+    #[test]
+    fn rects_grow_for_shadows_and_clip_to_the_display() {
+        let panel = Rect {
+            x: 10.,
+            y: 20.,
+            w: 100.,
+            h: 50.,
+        };
+        let area = Rect {
+            x: 0.,
+            y: 25.,
+            w: 1000.,
+            h: 800.,
+        };
+        assert_eq!(
+            panel.outset(40.).intersect(area),
+            Rect {
+                x: 0.,
+                y: 25.,
+                w: 150.,
+                h: 85.,
+            }
+        );
     }
 }

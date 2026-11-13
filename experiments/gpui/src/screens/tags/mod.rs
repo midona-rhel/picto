@@ -98,21 +98,12 @@ impl Render for TagsToolbar {
     }
 }
 
-/// Where the toolbar finds the Tags screen's part of the titlebar.
-struct ToolbarSlot(Entity<TagsToolbar>);
-impl Global for ToolbarSlot {}
-
-/// The Tags screen's titlebar controls, for the toolbar to show while the
-/// screen is up.
-pub fn toolbar(cx: &App) -> Option<AnyView> {
-    cx.try_global::<ToolbarSlot>()
-        .map(|slot| slot.0.clone().into())
-}
-
 pub struct TagsScreen {
     session: Entity<Session>,
     _thumbnails: Entity<Thumbnails>,
     focus: FocusHandle,
+    /// The titlebar's part while this screen shows.
+    toolbar: Entity<TagsToolbar>,
     query: String,
 
     // What the library holds.
@@ -168,12 +159,11 @@ impl TagsScreen {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| TextInput::plain("Search tags", cx));
+        let search = cx.new(|cx| TextInput::dialog("Search tags", cx));
         let toolbar = cx.new(|cx| TagsToolbar {
             _observe: cx.observe(&search, |_, _, cx| cx.notify()),
             search: search.clone(),
         });
-        cx.set_global(ToolbarSlot(toolbar));
         let subscriptions = vec![
             cx.observe(&search, |this, search, cx| {
                 let query = search.read(cx).value();
@@ -184,6 +174,10 @@ impl TagsScreen {
                     this.load(cx);
                 }
             }),
+            cx.subscribe(
+                &crate::settings::model(cx),
+                |this, _, _: &crate::settings::Applied, cx| this.follow_settings(cx),
+            ),
             cx.subscribe(&session, |this, session, change: &Change, cx| {
                 if *change != Change::Navigation {
                     return;
@@ -200,10 +194,11 @@ impl TagsScreen {
             session,
             _thumbnails: thumbnails,
             focus: cx.focus_handle(),
+            toolbar,
             query: String::new(),
             namespaces: Vec::new(),
             unused: 0,
-            preferences: Preferences::default(),
+            preferences: Preferences::from_settings(crate::settings::current(cx)),
             tags: Vec::new(),
             cursor: None,
             loading: true,
@@ -237,19 +232,21 @@ impl TagsScreen {
         screen
     }
 
+    /// The search field the titlebar shows while this screen is up.
+    pub fn toolbar(&self) -> Entity<TagsToolbar> {
+        self.toolbar.clone()
+    }
+
     // ── Loading ─────────────────────────────────────────────────
 
-    /// The groups and their counts, the unused count and the preferences.
+    /// The groups and their counts, and the unused count.
     fn load_summary(&mut self, cx: &mut Context<Self>) {
         self.summary_generation += 1;
         let generation = self.summary_generation;
         let answer = self.session.read(cx).run(|library| {
             let namespaces = library.tag_namespaces().map_err(|e| e.to_string())?;
             let unused = library.unused_tag_count().map_err(|e| e.to_string())?;
-            let settings = library
-                .read_auxiliary_json("setting", "application")
-                .map_err(|e| e.to_string())?;
-            Ok::<_, String>((namespaces, unused, Preferences::parse(settings.as_deref())))
+            Ok::<_, String>((namespaces, unused))
         });
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else { return };
@@ -258,14 +255,22 @@ impl TagsScreen {
                     return;
                 }
                 match result {
-                    Ok((namespaces, unused, preferences)) => {
-                        let starred_changed = preferences.starred != this.preferences.starred;
+                    Ok((namespaces, unused)) => {
+                        let total = namespaces.iter().map(|ns| ns.tag_count).sum::<u64>();
                         this.namespaces = namespaces;
                         this.unused = unused;
-                        this.preferences = preferences;
-                        if starred_changed && this.browse == Browse::Starred {
-                            this.load(cx);
-                        }
+                        // The sidebar's Tags row counts every tag.
+                        this.session.update(cx, |session, cx| {
+                            if let Some(entry) = session
+                                .nav
+                                .iter_mut()
+                                .find(|entry| entry.screen == Some(Screen::Tags))
+                                && entry.count != Some(total)
+                            {
+                                entry.count = Some(total);
+                                cx.emit(Change::Navigation);
+                            }
+                        });
                     }
                     Err(error) => this.error = Some(error),
                 }
@@ -487,46 +492,42 @@ impl TagsScreen {
         .detach();
     }
 
-    /// Stores changed tag preferences in the library's application settings,
-    /// showing them at once and going back if the write fails.
-    fn save_preferences(
-        &mut self,
-        next: Preferences,
-        patch: serde_json::Value,
-        cx: &mut Context<Self>,
-    ) {
-        let previous = std::mem::replace(&mut self.preferences, next.clone());
-        if self.browse == Browse::Starred && previous.starred != next.starred {
+    /// The tag preferences changed, here or in the Settings window.
+    fn follow_settings(&mut self, cx: &mut Context<Self>) {
+        let next = Preferences::from_settings(crate::settings::current(cx));
+        if next == self.preferences {
+            return;
+        }
+        let starred_changed = next.starred != self.preferences.starred;
+        self.preferences = next;
+        if starred_changed && self.browse == Browse::Starred {
             self.load(cx);
         }
         cx.notify();
-        let answer = self
-            .session
-            .read(cx)
-            .run(move |library| write_preferences(library, &patch));
-        cx.spawn(async move |this, cx| {
-            let result = answer
-                .await
-                .unwrap_or_else(|_| Err("The library stopped".into()));
-            let _ = this.update(cx, |this: &mut Self, cx| {
-                if let Err(error) = result {
-                    // A newer change made meanwhile is kept.
-                    if this.preferences == next {
-                        this.preferences = previous;
-                    }
-                    this.error = Some(format!("Unable to save tag preferences: {error}"));
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+    }
+
+    /// Stores changed tag preferences through the settings model, which owns
+    /// the library's application settings and writes what changed.
+    fn save_preferences(&mut self, next: Preferences, cx: &mut Context<Self>) {
+        let colors = next.colors_json();
+        let starred = next.starred.clone();
+        crate::settings::model(cx).update(cx, |model, cx| {
+            model.apply_now(
+                |app| {
+                    app.starred_tags = starred.clone();
+                    app.tag_group_colors = colors.clone();
+                },
+                cx,
+            )
+        });
+        // The model tells every follower, this screen too.
+        self.follow_settings(cx);
     }
 
     fn set_starred(&mut self, name: String, starred: bool, cx: &mut Context<Self>) {
         let mut next = self.preferences.clone();
         next.starred = self.preferences.with_star(&name, starred);
-        let patch = Preferences::patch(Some(&next.starred), None);
-        self.save_preferences(next, patch, cx);
+        self.save_preferences(next, cx);
     }
 
     /// Moves a starred tag's star to its new name after a rename.
@@ -534,16 +535,14 @@ impl TagsScreen {
         if let Some(starred) = self.preferences.renamed_star(previous, next_name) {
             let mut next = self.preferences.clone();
             next.starred = starred;
-            let patch = Preferences::patch(Some(&next.starred), None);
-            self.save_preferences(next, patch, cx);
+            self.save_preferences(next, cx);
         }
     }
 
     fn set_group_color(&mut self, group: &str, color: Option<&str>, cx: &mut Context<Self>) {
         let mut next = self.preferences.clone();
         next.colors = self.preferences.with_color(group, color);
-        let patch = Preferences::patch(None, Some(&next.colors));
-        self.save_preferences(next, patch, cx);
+        self.save_preferences(next, cx);
     }
 
     /// Renames a tag, or merges it into the tag that already has the name,
@@ -605,8 +604,7 @@ impl TagsScreen {
                 if let Some(colors) = this.preferences.renamed_color(&group.name, &name) {
                     let mut next = this.preferences.clone();
                     next.colors = colors;
-                    let patch = Preferences::patch(None, Some(&next.colors));
-                    this.save_preferences(next, patch, cx);
+                    this.save_preferences(next, cx);
                 }
                 this.drop_layers(|dialog| matches!(dialog, Dialog::RenameGroup { .. }));
                 if this.browse == Browse::Group(group.name.clone()) {
@@ -667,9 +665,32 @@ impl TagsScreen {
                     .map_err(|error| error.to_string())
             },
             false,
-            |_, _| {},
+            |this, cx| this.forget_deleted_stars(cx),
             cx,
         );
+    }
+
+    /// The library drops deleted tags from the starred list it stores; the
+    /// settings model, which holds that list too, is told the same.
+    fn forget_deleted_stars(&mut self, cx: &mut Context<Self>) {
+        let answer = self.session.read(cx).run(|library| {
+            library.tags().map(|tags| {
+                tags.iter()
+                    .map(|tag| model::tag_name(&tag.namespace, &tag.subname))
+                    .collect::<std::collections::HashSet<_>>()
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(names)) = answer.await else { return };
+            let _ = this.update(cx, |this: &mut Self, cx| {
+                let mut next = this.preferences.clone();
+                next.starred.retain(|name| names.contains(name));
+                if next != this.preferences {
+                    this.save_preferences(next, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// `showTagManagerItems`: the All grid, filtered to items with the tag.
@@ -743,7 +764,7 @@ impl TagsScreen {
         targets.dedup();
         let mut entries: Vec<menu::Entry> = vec![
             menu::item("filter", "Filter Items with This Tag")
-                .icon("menu-search")
+                .icon("menu-filter")
                 .into(),
             if starred {
                 menu::item("unstar", "Remove from Starred").icon("menu-star-off")
@@ -766,6 +787,7 @@ impl TagsScreen {
                             menu::item("move-to-group", group.clone())
                                 .icon("menu-bookmark")
                                 .value(group)
+                                .into()
                         })
                         .collect(),
                 )
@@ -1526,25 +1548,6 @@ fn page(
         .map_err(|error| error.to_string())
 }
 
-/// Stores a patch of the application settings, as `settings.patch` does.
-fn write_preferences(library: &Library, patch: &serde_json::Value) -> Result<(), String> {
-    library
-        .update_auxiliary_json(
-            "settings.patch",
-            "Change settings",
-            "setting",
-            "application",
-            true,
-            |stored| {
-                model::apply_patch(stored, patch)
-                    .map(Some)
-                    .map_err(picto_library::LibraryError::InvalidInput)
-            },
-        )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
 /// Renames a tag, or merges it into the tag that already has the name, as
 /// the application's `tags.rename_or_merge` does.
 fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), String> {
@@ -1643,13 +1646,13 @@ impl Render for TagsScreen {
 
 #[cfg(test)]
 mod tests {
-    use super::{Preferences, model, page, rename_or_merge, write_preferences};
+    use super::{model, page, rename_or_merge};
     use picto_library::Library;
     use std::path::PathBuf;
 
     #[test]
     #[ignore = "Requires PICTO_GPUI_TEST_DB pointing to a marked disposable snapshot"]
-    fn real_snapshot_tags_browse_rename_and_preferences() {
+    fn real_snapshot_tags_browse_rename_and_groups() {
         let path = PathBuf::from(std::env::var("PICTO_GPUI_TEST_DB").unwrap());
         assert!(path.parent().unwrap().join(".gpui-snapshot").is_file());
         let library = Library::open(path).unwrap();
@@ -1714,22 +1717,5 @@ mod tests {
                 .iter()
                 .all(|ns| !ns.name.starts_with("gpui_check"))
         );
-
-        // Starring is stored in the application settings beside the rest.
-        let stored = library
-            .read_auxiliary_json("setting", "application")
-            .unwrap();
-        let before = Preferences::parse(stored.as_deref());
-        let starred = before.with_star(&name, true);
-        write_preferences(&library, &Preferences::patch(Some(&starred), None)).unwrap();
-        let after = library
-            .read_auxiliary_json("setting", "application")
-            .unwrap();
-        assert!(Preferences::parse(after.as_deref()).is_starred(&name));
-        write_preferences(&library, &Preferences::patch(Some(&before.starred), None)).unwrap();
-        let restored = library
-            .read_auxiliary_json("setting", "application")
-            .unwrap();
-        assert_eq!(Preferences::parse(restored.as_deref()), before);
     }
 }

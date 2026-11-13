@@ -64,12 +64,15 @@ struct Visit {
     scope: usize,
     /// The viewer, opened on an item of this destination.
     viewing: bool,
+    /// A place inside a screen, such as the subscription it has open.
+    place: Option<i64>,
 }
 
 /// A destination's grid as it was left.
 struct SavedGrid {
     items: Vec<RootSummary>,
     total: u64,
+    total_size_bytes: u128,
     cursor: Option<String>,
     prefs: ViewPrefs,
     tile: f32,
@@ -111,6 +114,8 @@ pub struct Session {
     /// Counts each time the items are replaced rather than extended.
     pub results_epoch: u64,
     pub total: u64,
+    /// The size of every item in the results, not only the loaded ones.
+    pub total_size_bytes: u128,
     cursor: Option<String>,
     pub loading: bool,
     pub error: Option<String>,
@@ -136,6 +141,8 @@ pub struct Session {
     blobs: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
+    /// What the open place of a screen is called, for the scope title.
+    pub place_label: Option<SharedString>,
 }
 
 impl EventEmitter<Change> for Session {}
@@ -171,6 +178,7 @@ impl Session {
             history: vec![Visit {
                 scope: 0,
                 viewing: false,
+                place: None,
             }],
             history_index: 0,
             saved: HashMap::new(),
@@ -182,6 +190,7 @@ impl Session {
             items: Vec::new(),
             results_epoch: 0,
             total: 0,
+            total_size_bytes: 0,
             cursor: None,
             loading: true,
             error: None,
@@ -201,7 +210,56 @@ impl Session {
             blobs,
             library_cover,
             fixtures,
+            place_label: None,
         }
+    }
+
+    /// The library's blob store.
+    pub fn blobs(&self) -> &std::path::Path {
+        &self.blobs
+    }
+
+    /// The place open inside the current screen, if any.
+    pub fn place(&self) -> Option<i64> {
+        self.history
+            .get(self.history_index)
+            .filter(|visit| visit.scope == self.scope)
+            .and_then(|visit| visit.place)
+    }
+
+    /// Opens a place inside the current screen, or the screen's own top
+    /// with `None`, as a step of Back and Forward.
+    pub fn open_place(&mut self, place: Option<i64>, cx: &mut Context<Self>) {
+        if self.place() == place {
+            return;
+        }
+        self.record(Visit {
+            scope: self.scope,
+            viewing: false,
+            place,
+        });
+        cx.emit(Change::Navigation);
+    }
+
+    /// Names the open place in the scope title, or clears the name.
+    pub fn set_place_label(&mut self, label: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.place_label != label {
+            self.place_label = label;
+            cx.emit(Change::Navigation);
+        }
+    }
+
+    /// Where the library keeps an original: beside its thumbnail's folder,
+    /// under its content hash and its type's extension.
+    pub fn original(&self, hash: &str, mime: &str) -> PathBuf {
+        if hash.len() < 4 {
+            return PathBuf::new();
+        }
+        self.blobs
+            .join("f")
+            .join(&hash[..2])
+            .join(&hash[2..4])
+            .join(format!("{hash}.{}", crate::grid::format::extension(mime)))
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
@@ -252,6 +310,73 @@ impl Session {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.saved.clear();
         self.query(false, cx);
+    }
+
+    /// Puts a rebuilt destination list in place of the current one, after
+    /// the sidebar edited the folders. Places are kept by what they show, not
+    /// by their position. When the open destination is gone, its nearest
+    /// surviving ancestor opens instead, or All, as the Electron app falls
+    /// back after a delete.
+    pub fn replace_navigation(
+        &mut self,
+        nav: Vec<Navigation>,
+        tags: Vec<TagRecord>,
+        cx: &mut Context<Self>,
+    ) {
+        let old = std::mem::replace(&mut self.nav, nav);
+        let positions = self
+            .nav
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.id(), index))
+            .collect::<HashMap<_, _>>();
+        let map = old
+            .iter()
+            .map(|entry| positions.get(&entry.id()).copied())
+            .collect::<Vec<_>>();
+        let moved = |index: usize| map.get(index).copied().flatten();
+        let survivor = |index: usize| {
+            let mut at = Some(index);
+            while let Some(index) = at {
+                if let Some(now) = moved(index) {
+                    return now;
+                }
+                at = old.get(index).and_then(|entry| entry.parent);
+            }
+            0
+        };
+        self.tags = tags.into_iter().map(|tag| (tag.tag_id.0, tag)).collect();
+        let (history, history_index) = remap_history(&self.history, self.history_index, moved);
+        self.history = history;
+        self.history_index = history_index;
+        self.saved = std::mem::take(&mut self.saved)
+            .into_iter()
+            .filter_map(|(index, grid)| Some((moved(index)?, grid)))
+            .collect();
+        self.prefs_scope = self.prefs_scope.and_then(moved);
+        self.displayed = moved(self.displayed).unwrap_or_else(|| survivor(self.displayed));
+        match moved(self.scope) {
+            Some(scope) => self.scope = scope,
+            None => {
+                let fallback = survivor(self.scope);
+                if self.history.is_empty() {
+                    self.history_index = 0;
+                } else {
+                    self.history.truncate(self.history_index + 1);
+                }
+                self.history.push(Visit {
+                    scope: fallback,
+                    viewing: false,
+                    place: None,
+                });
+                self.history_index = self.history.len() - 1;
+                self.open(fallback, None, cx);
+                // What `open` kept of the grid on screen was the deleted
+                // destination's, not the fallback's.
+                self.saved.remove(&fallback);
+            }
+        }
+        cx.emit(Change::Navigation);
     }
 
     // ── Results ─────────────────────────────────────────────────
@@ -318,6 +443,16 @@ impl Session {
         self.set_filter(Some(filter), cx);
     }
 
+    /// The open library's folder, the one that holds its blobs.
+    pub fn library_root(&self) -> Option<&std::path::Path> {
+        self.blobs.parent()
+    }
+
+    /// What the search field holds, which the results are filtered by.
+    pub fn search_text(&self) -> &str {
+        &self.search_text
+    }
+
     /// The library folder's name without its `.library` suffix.
     pub fn library_name(&self) -> Option<String> {
         let name = self.blobs.parent()?.file_name()?.to_string_lossy();
@@ -358,11 +493,17 @@ impl Session {
                 }
                 // What other destinations held may no longer be true.
                 Reply::Changed => self.reload(cx),
-                Reply::Error(error) => {
+                // A query that failed is the grid's error, shown in place of
+                // the destination. A failed edit leaves the grid as it is.
+                Reply::Error(error) if self.loading => {
                     self.error = Some(error);
                     self.loading = false;
+                    if matches!(self.transition, Transition::Waiting) {
+                        self.show_error(cx);
+                    }
                     cx.emit(Change::Results);
                 }
+                Reply::Error(error) => eprintln!("picto: {error}"),
                 _ => {}
             }
         }
@@ -383,6 +524,7 @@ impl Session {
         }
         self.prefs = prefs;
         self.total = page.total;
+        self.total_size_bytes = page.total_size_bytes;
         self.cursor = page.next_cursor;
         self.loading = false;
         if append {
@@ -409,12 +551,17 @@ impl Session {
     /// viewer is over it, which this closes.
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
+            // Choosing a screen from inside one of its places goes to its top.
+            if self.place().is_some() {
+                self.open_place(None, cx);
+            }
             self.close_viewer(cx);
             return;
         }
         self.record(Visit {
             scope: index,
             viewing: false,
+            place: None,
         });
         // A destination chosen afresh opens at its top.
         self.open(index, None, cx);
@@ -476,6 +623,7 @@ impl Session {
             SavedGrid {
                 items: self.items.clone(),
                 total: self.total,
+                total_size_bytes: self.total_size_bytes,
                 cursor: self.cursor.clone(),
                 prefs: self.prefs.clone(),
                 tile: self.tile,
@@ -492,6 +640,7 @@ impl Session {
     fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
         self.items = saved.items;
         self.total = saved.total;
+        self.total_size_bytes = saved.total_size_bytes;
         self.cursor = saved.cursor;
         self.prefs = saved.prefs;
         self.prefs_scope = Some(self.scope);
@@ -568,9 +717,24 @@ impl Session {
         self.results_epoch += 1;
         self.forget_selection();
         self.total = 0;
+        self.total_size_bytes = 0;
         self.cursor = None;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
+    }
+
+    /// Fades the destination in on its error, which takes the grid's place.
+    /// The previous destination's items go, so a retry never shows them.
+    fn show_error(&mut self, cx: &mut Context<Self>) {
+        self.items.clear();
+        self.results_epoch += 1;
+        self.forget_selection();
+        self.total = 0;
+        self.cursor = None;
+        self.displayed = self.scope;
+        self.transition = Transition::FadingIn(Instant::now());
+        cx.emit(Change::Navigation);
+        cx.emit(Change::Selection);
     }
 
     /// Moves a scope change along once its current stage has run its time.
@@ -591,6 +755,8 @@ impl Session {
                     self.restore_grid(saved, cx);
                 } else if let Some((page, prefs)) = self.pending_page.take() {
                     self.apply_page(false, page, prefs, cx);
+                } else if self.error.is_some() && !self.loading {
+                    self.show_error(cx);
                 }
                 cx.emit(Change::Navigation);
             }
@@ -683,6 +849,31 @@ impl Session {
         self.focus_on(Some(focus), cx);
     }
 
+    /// Replaces the selection, as a finished rubber band does. The item shown
+    /// stays if it is still selected; otherwise the last one is shown. No
+    /// range anchor remains.
+    pub fn set_selection(
+        &mut self,
+        selection: std::collections::BTreeSet<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection = selection
+            .into_iter()
+            .filter(|index| *index < self.items.len())
+            .collect();
+        self.anchor = None;
+        let focus = self
+            .focus
+            .filter(|focus| self.selection.contains(focus))
+            .or_else(|| self.selection.iter().next_back().copied());
+        self.focus_on(focus, cx);
+    }
+
+    /// Whether the search field narrows the results (three characters or more).
+    pub fn searching(&self) -> bool {
+        backend::text_filter(&self.search_text) != FilterExpr::default()
+    }
+
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() {
             self.selection.clear();
@@ -722,6 +913,7 @@ impl Session {
             self.record(Visit {
                 scope: self.scope,
                 viewing: true,
+                place: None,
             });
             cx.emit(Change::Viewer);
             cx.emit(Change::Navigation);
@@ -738,6 +930,7 @@ impl Session {
         let grid = Visit {
             scope: self.scope,
             viewing: false,
+            place: None,
         };
         if self.history_index > 0 && self.history[self.history_index - 1] == grid {
             self.history_index -= 1;
@@ -816,6 +1009,14 @@ impl Session {
         }
     }
 
+    /// Fetches the selected item's details again, after an edit made
+    /// elsewhere changed them.
+    pub fn refresh_details(&self) {
+        if let Some(item) = self.selected_item() {
+            let _ = self.sender.send(Request::Details(item.root_id));
+        }
+    }
+
     pub fn undo(&self) {
         if let Some(item) = self.selected_item() {
             let _ = self.sender.send(Request::Undo(item.root_id));
@@ -826,5 +1027,59 @@ impl Session {
         if let Some(item) = self.selected_item() {
             let _ = self.sender.send(Request::Redo(item.root_id));
         }
+    }
+}
+
+/// Back and Forward without the places that no longer exist, each moved to
+/// its destination's new position, and where the current place now is.
+fn remap_history(
+    history: &[Visit],
+    index: usize,
+    moved: impl Fn(usize) -> Option<usize>,
+) -> (Vec<Visit>, usize) {
+    let mut kept = Vec::with_capacity(history.len());
+    let mut current = 0;
+    for (at, visit) in history.iter().enumerate() {
+        if let Some(scope) = moved(visit.scope) {
+            // Two steps to the same place, once what was between them is gone.
+            if kept.last() != Some(&Visit { scope, ..*visit }) {
+                kept.push(Visit { scope, ..*visit });
+            }
+        }
+        if at == index {
+            current = kept.len().saturating_sub(1);
+        }
+    }
+    (kept, current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Visit, remap_history};
+
+    #[test]
+    fn history_drops_deleted_places_and_follows_moved_ones() {
+        let visit = |scope| Visit {
+            scope,
+            viewing: false,
+            place: None,
+        };
+        // Destinations 0..4; 2 was deleted and 3 moved up to 2.
+        let moved = |index: usize| match index {
+            2 => None,
+            3 => Some(2),
+            other => Some(other),
+        };
+        let history = [visit(0), visit(2), visit(3), visit(1)];
+        let (kept, current) = remap_history(&history, 2, moved);
+        assert!(kept == [visit(0), visit(2), visit(1)]);
+        assert_eq!(current, 1);
+        // The current place itself deleted: the one before it is current.
+        let (kept, current) = remap_history(&history, 1, moved);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(current, 0);
+        // Steps that meet once the place between them is gone become one.
+        let (kept, _) = remap_history(&[visit(1), visit(2), visit(1)], 2, moved);
+        assert!(kept == [visit(1)]);
     }
 }

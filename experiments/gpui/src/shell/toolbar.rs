@@ -1,6 +1,10 @@
-//! The grid toolbar (`GridToolbar.tsx`), which sits in the titlebar row.
-use crate::session::{Change, Session};
+//! The titlebar's content (`.titlebarContent` in `AppShell.tsx`): the grid
+//! toolbar (`GridToolbar.tsx`) with Back, Forward and the scope title, or the
+//! viewer toolbar while an item is open.
+use crate::backend::Screen;
+use crate::session::{Change, Session, Transition};
 use crate::ui::{self, field::Look, text_input::TextInput, zoom};
+use crate::viewer::{Viewer, toolbar::ViewerToolbar};
 use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
 
@@ -8,11 +12,18 @@ pub struct Toolbar {
     session: Entity<Session>,
     search: Entity<TextInput>,
     zoom: Entity<Zoom>,
+    viewer: Entity<ViewerToolbar>,
+    /// Set when the viewer closed by going to another destination: the
+    /// titlebar's content then fades with the grid (`data-viewer-exit-transition`),
+    /// the viewer toolbar out and the destination's toolbar in.
+    viewer_exit: bool,
+    /// The controls a screen puts in the titlebar in place of the grid's.
+    screen_controls: Vec<(Screen, AnyView)>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Toolbar {
-    pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+    pub fn new(session: Entity<Session>, viewer: &Entity<Viewer>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::new);
         let zoom = cx.new(|_| Zoom::new());
         let subscriptions = vec![
@@ -29,6 +40,12 @@ impl Toolbar {
                 &session,
                 |this, session, change: &Change, cx| match change {
                     Change::Navigation => cx.notify(),
+                    Change::Viewer => {
+                        let session = session.read(cx);
+                        this.viewer_exit =
+                            !session.viewer && !matches!(session.transition, Transition::Idle);
+                        cx.notify();
+                    }
                     Change::Results => {
                         // A destination opens at its saved zoom.
                         let tile = session.read(cx).tile;
@@ -40,11 +57,21 @@ impl Toolbar {
             ),
         ];
         Self {
+            viewer: viewer.read(cx).toolbar(),
+            viewer_exit: false,
             session,
             search,
             zoom,
+            screen_controls: Vec::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Shows `controls` after the history buttons while `screen` is the
+    /// destination shown.
+    pub fn set_screen_controls(&mut self, screen: Screen, controls: AnyView) {
+        self.screen_controls.retain(|(owner, _)| *owner != screen);
+        self.screen_controls.push((screen, controls));
     }
 }
 
@@ -71,6 +98,11 @@ impl Toolbar {
                 at = session.nav[index].parent;
             }
             crumbs.reverse();
+            // A screen's open place follows the screen, which links back to
+            // the screen's top.
+            if let Some(label) = session.place().and(session.place_label.clone()) {
+                crumbs.push((usize::MAX, label.to_string()));
+            }
             crumbs
         };
         let last = crumbs.len().saturating_sub(1);
@@ -128,6 +160,29 @@ impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
+        let (viewing, transition) = {
+            let session = self.session.read(cx);
+            (session.viewer, session.transition)
+        };
+        if self.viewer_exit && matches!(transition, Transition::Idle) {
+            self.viewer_exit = false;
+        }
+        // The content as a whole fades only on the way out of the viewer.
+        let content = if self.viewer_exit {
+            if transition.animating() {
+                window.request_animation_frame();
+            }
+            transition.opacity()
+        } else {
+            1.
+        };
+        if viewing || (self.viewer_exit && matches!(transition, Transition::FadingOut(_))) {
+            return div()
+                .size_full()
+                .opacity(content)
+                .child(self.viewer.clone())
+                .into_any_element();
+        }
         let (opacity, animating, back, forward, filtered, screen) = {
             let session = self.session.read(cx);
             (
@@ -157,10 +212,10 @@ impl Render for Toolbar {
                         .update(cx, |session, cx| session.step_history(delta, cx));
                 }))
         };
-        let background = theme.background();
-        let bar = ui::drag_region("toolbar", window, cx)
+        let toolbar = ui::drag_region("toolbar", window, cx)
             .relative()
             .size_full()
+            .opacity(content)
             // 8px either side from the titlebar, and 8 more on the right
             // from the toolbar itself.
             .pl(px(8.))
@@ -184,69 +239,55 @@ impl Render for Toolbar {
                 ui::tip("Forward").keys(&["⌥", "→"]),
                 cx,
             ));
-        // A screen with controls of its own shows them instead of the grid's.
-        let screen_controls = match screen {
-            Some(crate::backend::Screen::Tags) => crate::screens::tags::toolbar(cx),
-            _ => None,
-        };
-        if let Some(controls) = screen_controls {
-            return bar.child(div().flex_1()).child(controls);
+        // A screen has no grid to zoom, filter or search: the Electron
+        // titlebar shows the grid's controls only over the grid, and a
+        // screen's own controls, if it has any, in their place.
+        if let Some(screen) = screen {
+            let controls = self
+                .screen_controls
+                .iter()
+                .find(|(owner, _)| *owner == screen)
+                .map(|(_, controls)| controls.clone());
+            return toolbar.children(controls).into_any_element();
         }
-        bar.child(
-            // The zoom is centred in the space between the history
-            // buttons and the right-hand controls. It has the app
-            // background, with a short fade on its left, so a long
-            // scope title disappears under it.
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .relative()
-                        .occlude()
-                        .bg(background)
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .right(relative(1.))
-                                .w(px(20.))
-                                .bg(linear_gradient(
-                                    90.,
-                                    linear_color_stop(clear(background), 0.),
-                                    linear_color_stop(background, 1.),
-                                )),
-                        )
-                        .child(self.zoom.clone()),
+        toolbar
+            .child(
+                // The zoom is centred in the space between the history
+                // buttons and the right-hand controls. It has the app
+                // background, with a short fade on its left, so a long
+                // scope title disappears under it.
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(zoom::section(cx).child(self.zoom.clone())),
+            )
+            // TODO: open the view menu at the button's left edge, 4px below it.
+            .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
+            .child(div().w(px(4.)).flex_none())
+            .child(
+                // TODO: this opens the filter bar. Until that exists, a
+                // press clears the filter the inspector set.
+                ui::icon_button("filter-library", "toolbar-filter")
+                    .tip(ui::tip("Filter library"))
+                    .toggled(filtered)
+                    .badge(filtered as usize)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.session
+                            .update(cx, |session, cx| session.set_filter(None, cx));
+                    })),
+            )
+            .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
+                ui::field("search", &self.search, Look::Search).icon(
+                    "search",
+                    14.,
+                    8.,
+                    theme.text_tertiary(),
                 ),
-        )
-        // TODO: open the view menu at the button's left edge, 4px below it.
-        .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
-        .child(div().w(px(4.)).flex_none())
-        .child(
-            // TODO: this opens the filter bar. Until that exists, a
-            // press clears the filter the inspector set.
-            ui::icon_button("filter-library", "toolbar-filter")
-                .tip(ui::tip("Filter library"))
-                .toggled(filtered)
-                .badge(filtered as usize)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.set_filter(None, cx));
-                })),
-        )
-        .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
-            ui::field("search", &self.search, Look::Search).icon(
-                "search",
-                14.,
-                8.,
-                theme.text_tertiary(),
-            ),
-        ))
+            ))
+            .into_any_element()
     }
 }

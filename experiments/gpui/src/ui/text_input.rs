@@ -44,14 +44,20 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
-    field_key: Option<picto_library::RootId>,
+    /// What the stored value belongs to, as the view that owns the field
+    /// numbers it.
+    field_key: Option<u64>,
     original: SharedString,
     kind: Kind,
+    /// Enter submits the field and Escape is left to what holds it.
+    submits: bool,
     /// How far the text is scrolled left to keep the caret in view.
     scroll: Pixels,
     /// When the caret last moved; it shows for 500 ms from then, and blinks.
     blink: std::time::Instant,
     blink_task: Option<gpui::Task<()>>,
+    /// An in-place rename that has not yet been committed or cancelled.
+    renaming: bool,
 }
 
 /// Which of the app's text fields this is, which decides its type. The frame
@@ -64,22 +70,44 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
-    /// A plain field in the UI font at 13px: dialog inputs and the Tags
-    /// screen's search. Enter submits it; Escape is left to what holds it.
-    Plain,
+    /// A form field at the UI font's 13px: the settings searches.
+    Form,
+    /// A number, at 12px and against the right edge (`CompactNumberInput`).
+    Number,
+    /// A name edited in place, in the UI font at the size of the text it
+    /// replaces.
+    Rename(f32),
+    /// A sidebar row renamed in place (`Sidebar.module.css` `.renameInput`):
+    /// the row's own type, on a line that fits the 20px field.
+    SidebarRename,
+    /// The search at the top of a popover (`LibrarySwitcherPopover`).
+    Popover,
+    /// A context menu's search row (`.searchInput`).
+    Menu,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search | Kind::Plain => crate::theme::FONT_UI,
-            Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
+            Kind::Search
+            | Kind::Form
+            | Kind::Number
+            | Kind::Popover
+            | Kind::Rename(_)
+            | Kind::Menu => crate::theme::FONT_UI,
+            Kind::Sidebar | Kind::Inspector | Kind::SidebarRename => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
-            Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector | Kind::Plain => crate::theme::TEXT_MD,
+            Kind::Search | Kind::Number => crate::theme::TEXT_SM,
+            Kind::Sidebar
+            | Kind::Inspector
+            | Kind::Form
+            | Kind::Popover
+            | Kind::SidebarRename
+            | Kind::Menu => crate::theme::TEXT_MD,
+            Kind::Rename(size) => size,
         }
     }
     fn line_height(self) -> f32 {
@@ -87,17 +115,38 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
-            Kind::Plain => crate::theme::LINE_HEIGHT,
+            Kind::Form | Kind::Number => self.size() + 2.,
+            Kind::Rename(size) => size + 2.,
+            Kind::SidebarRename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
+            Kind::Popover => 48.,
+            Kind::Menu => 36.,
+        }
+    }
+    /// The popover's input has no `::placeholder` rule, so it keeps
+    /// Chromium's; the others set the tertiary text colour.
+    fn placeholder(self, theme: crate::theme::Theme) -> gpui::Hsla {
+        match self {
+            Kind::Popover => theme.placeholder().into(),
+            _ => theme.text_tertiary().into(),
         }
     }
 }
 
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
-pub struct Committed(pub picto_library::RootId, pub String);
+/// A stored field's new value, with the key it was set for.
+pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
-/// Enter was pressed in a [`Kind::Plain`] field.
+/// Enter was pressed in a field made with [`TextInput::dialog`].
 pub struct Submitted;
 impl gpui::EventEmitter<Submitted> for TextInput {}
+
+/// How an in-place rename ended: Enter or leaving the field commits the
+/// trimmed text, Escape cancels (`useInlineRename.ts`).
+pub enum Renamed {
+    Commit(String),
+    Cancel,
+}
+impl gpui::EventEmitter<Renamed> for TextInput {}
 
 impl TextInput {
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -496,6 +545,7 @@ impl Element for TextElement {
         let focused = input.focus_handle.is_focused(window);
         let marked_range = input.marked_range.clone();
         let placeholder = input.placeholder.clone();
+        let kind = input.kind;
         let previous_scroll = input.scroll;
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
@@ -540,7 +590,7 @@ impl Element for TextElement {
         };
 
         let (display_text, text_color) = if content.is_empty() {
-            (placeholder, theme.text_tertiary().into())
+            (placeholder, kind.placeholder(theme))
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -571,7 +621,12 @@ impl Element for TextElement {
         // While editing, the text scrolls just far enough to show the caret.
         let cursor_x = line.x_for_index(cursor.min(line.len()));
         let caret_room = bounds.size.width - px(1.);
-        let scroll = if !focused || line.width <= caret_room {
+        let right_aligned = input.kind == Kind::Number;
+        let scroll = if right_aligned && line.width <= caret_room {
+            // Text set against the right edge: a negative scroll moves it
+            // there, and the caret, selection and hit testing follow.
+            line.width - caret_room
+        } else if !focused || line.width <= caret_room {
             px(0.)
         } else {
             previous_scroll
@@ -696,7 +751,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|this, _: &Commit, window, cx| {
-                if this.kind == Kind::Plain {
+                if this.submits {
                     cx.emit(Submitted);
                     return;
                 }
@@ -705,10 +760,11 @@ impl Render for TextInput {
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
                 // A dialog or screen decides what Escape does in its field.
-                if this.kind == Kind::Plain {
+                if this.submits {
                     cx.propagate();
                     return;
                 }
+                this.finish_rename(false, cx);
                 // The sidebar filter empties on Escape; a stored field goes
                 // back to its saved value.
                 this.content = if this.kind == Kind::Sidebar {
@@ -752,9 +808,11 @@ impl TextInput {
             field_key: None,
             original: "".into(),
             kind: Kind::Search,
+            submits: false,
             scroll: px(0.),
             blink: std::time::Instant::now(),
             blink_task: None,
+            renaming: false,
         }
     }
     /// The sidebar's tree filter.
@@ -764,18 +822,47 @@ impl TextInput {
         input.kind = Kind::Sidebar;
         input
     }
-    /// A [`Kind::Plain`] field.
-    pub fn plain(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+    /// A sidebar row's in-place rename, holding the current name selected.
+    /// Losing focus commits it.
+    pub fn sidebar_rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Plain;
+        input.placeholder = "".into();
+        input.kind = Kind::SidebarRename;
+        input.content = value.to_owned().into();
+        input.original = input.content.clone();
+        input.selected_range = 0..input.content.len();
+        input.renaming = true;
+        cx.on_blur(&input.focus_handle, window, |this, _, cx| {
+            this.finish_rename(true, cx)
+        })
+        .detach();
         input
     }
-    /// Replaces the text, with the caret at its end.
-    pub fn set_text(&mut self, value: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = value.into();
-        self.selected_range = self.content.len()..self.content.len();
-        cx.notify();
+    /// Ends an in-place rename once: committed, or cancelled.
+    pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.renaming) {
+            return;
+        }
+        cx.emit(if commit {
+            Renamed::Commit(self.content.trim().to_owned())
+        } else {
+            Renamed::Cancel
+        });
+    }
+    /// The search field of a popover.
+    pub fn popover(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Popover;
+        input
+    }
+    /// A context menu's search field. The menu takes its Enter, Escape and
+    /// arrows before the field sees them.
+    pub fn menu_search(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "Search...".into();
+        input.kind = Kind::Menu;
+        input
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
@@ -793,6 +880,34 @@ impl TextInput {
     pub fn value(&self) -> String {
         self.content.to_string()
     }
+    /// A form field whose Enter submits it ([`Submitted`]) and whose Escape
+    /// is left to what holds it: dialog fields and the Tags screen's search.
+    pub fn dialog(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::form(placeholder, cx);
+        input.submits = true;
+        input
+    }
+    /// A form field, at the UI font's 13px.
+    pub fn form(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Form;
+        input
+    }
+    /// A number field, set against its right edge.
+    pub fn number(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "".into();
+        input.kind = Kind::Number;
+        input
+    }
+    /// Replaces the text, which Escape then goes back to.
+    pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.original = text.clone().into();
+        self.content = text.into();
+        self.selected_range = 0..0;
+        cx.notify();
+    }
     pub fn field(placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
@@ -801,7 +916,22 @@ impl TextInput {
             .detach();
         input
     }
-    pub fn set_field(&mut self, key: picto_library::RootId, value: String, cx: &mut Context<Self>) {
+    /// A name edited in place: it commits when it loses focus, as the
+    /// inspector's fields do.
+    pub fn rename(size: f32, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::field("", window, cx);
+        input.kind = Kind::Rename(size);
+        input
+    }
+    /// Sets the size of a name edited in place, to match the text it
+    /// replaces.
+    pub fn set_rename_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if matches!(self.kind, Kind::Rename(_)) && self.kind != Kind::Rename(size) {
+            self.kind = Kind::Rename(size);
+            cx.notify();
+        }
+    }
+    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {
             return;
         }

@@ -4,7 +4,8 @@ use super::{TagsScreen, model};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
-    self, Variant,
+    self,
+    action_button::Look as ButtonLook,
     field::Look,
     modal::{Presence, Size},
     text_input::{Submitted, TextInput},
@@ -96,7 +97,7 @@ fn input_with(
     cx: &mut Context<TagsScreen>,
 ) -> Entity<TextInput> {
     cx.new(|cx| {
-        let mut input = TextInput::plain(placeholder, cx);
+        let mut input = TextInput::dialog(placeholder, cx);
         if let Some(text) = text {
             input.set_text(text, cx);
         }
@@ -168,6 +169,14 @@ pub fn create_group(cx: &mut Context<TagsScreen>) -> Dialog {
 fn group_name(input: &Entity<TextInput>, current: Option<&str>, cx: &App) -> Option<String> {
     let name = model::normalized_group_name(&input.read(cx).value());
     (model::valid_group_name(&name) && Some(name.as_str()) != current).then_some(name)
+}
+
+/// `TagChip`'s namespace prefix, shown only with `showTagPrefixes` on.
+fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
+    let show = crate::settings::current(cx).show_tag_prefixes;
+    model::group_of(namespace)
+        .filter(|_| show)
+        .map(SharedString::from)
 }
 
 /// `.pickerHint` and the dialogs' help text.
@@ -330,7 +339,8 @@ impl TagsScreen {
         };
         let cancel_button = |cx: &mut Context<Self>| {
             let focus = focus.clone();
-            ui::action_button(("cancel", index), "Cancel")
+            ui::action_button(("cancel", index), ButtonLook::Standard)
+                .label("Cancel")
                 .disabled(busy)
                 .on_click(cx.listener(move |this, _, _, cx| this.cancel(&focus, cx)))
         };
@@ -359,14 +369,17 @@ impl TagsScreen {
                 )
                 .footer(cancel_button(cx))
                 .footer(
-                    ui::action_button(("confirm", index), label)
-                        .variant(if danger {
-                            Variant::Danger
+                    ui::action_button(
+                        ("confirm", index),
+                        if danger {
+                            ButtonLook::Danger
                         } else {
-                            Variant::Primary
-                        })
-                        .disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| action(this, cx))),
+                            ButtonLook::Primary
+                        },
+                    )
+                    .label(label)
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| action(this, cx))),
                 )
         };
         let element = match &layer.dialog {
@@ -401,11 +414,16 @@ impl TagsScreen {
                                 )
                                 .child(
                                     div()
-                                        .child(div().flex().child(ui::chip(
-                                            ("editor-chip", tag.tag_id.0 as usize),
-                                            tag.subname.clone(),
-                                            model::chip_color(&tag.namespace),
-                                        )))
+                                        .child(
+                                            div().flex().child(
+                                                ui::chip(
+                                                    ("editor-chip", tag.tag_id.0 as usize),
+                                                    tag.subname.clone(),
+                                                    model::chip_color(&tag.namespace),
+                                                )
+                                                .namespace(prefix(&tag.namespace, cx)),
+                                            ),
+                                        )
                                         .child(
                                             div()
                                                 .mt(px(7.))
@@ -438,13 +456,19 @@ impl TagsScreen {
                                                 .child("Tag name"),
                                         )
                                         .child(
-                                            ui::action_button("editor-rename", "Rename")
-                                                .compact(true)
-                                                .icon("tags-edit")
-                                                .disabled(busy || typed.trim().is_empty())
-                                                .on_click(cx.listener(|this, _, _, cx| {
+                                            ui::action_button(
+                                                "editor-rename",
+                                                ButtonLook::Standard,
+                                            )
+                                            .label("Rename")
+                                            .compact()
+                                            .icon("tags-edit", 14.)
+                                            .disabled(busy || typed.trim().is_empty())
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
                                                     this.submit_editor(cx)
-                                                })),
+                                                }),
+                                            ),
                                         ),
                                 )
                                 .child(
@@ -463,9 +487,10 @@ impl TagsScreen {
                                 .border_t_1()
                                 .border_color(theme.border_secondary())
                                 .child(
-                                    ui::action_button("editor-merge", "Merge into...")
-                                        .compact(true)
-                                        .icon("tags-git-merge")
+                                    ui::action_button("editor-merge", ButtonLook::Standard)
+                                        .label("Merge into...")
+                                        .compact()
+                                        .icon("tags-git-merge", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             let step = merge(&merge_tag, cx);
@@ -473,10 +498,10 @@ impl TagsScreen {
                                         })),
                                 )
                                 .child(
-                                    ui::action_button("editor-delete", "Delete")
-                                        .compact(true)
-                                        .variant(Variant::Danger)
-                                        .icon("tags-trash")
+                                    ui::action_button("editor-delete", ButtonLook::Danger)
+                                        .label("Delete")
+                                        .compact()
+                                        .icon("tags-trash", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             let tag = delete_tag.clone();
@@ -511,11 +536,14 @@ impl TagsScreen {
                             .rounded(px(theme::RADIUS_SM))
                             .cursor_pointer()
                             .hover(move |style| style.bg(theme.subtle_overlay()))
-                            .child(ui::chip(
-                                ("merge-chip", position),
-                                target.subname.clone(),
-                                model::chip_color(&target.namespace),
-                            ))
+                            .child(
+                                ui::chip(
+                                    ("merge-chip", position),
+                                    target.subname.clone(),
+                                    model::chip_color(&target.namespace),
+                                )
+                                .namespace(prefix(&target.namespace, cx)),
+                            )
                             .child(
                                 div()
                                     .flex_none()
@@ -613,7 +641,8 @@ impl TagsScreen {
                     .child(ui::field(("group-name", index), name, Look::Modal))
                     .footer(cancel_button(cx))
                     .footer(
-                        ui::action_button(("rename-group", index), "Rename")
+                        ui::action_button(("rename-group", index), ButtonLook::Standard)
+                            .label("Rename")
                             .disabled(busy || !ready)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_group_name(cx))),
                     )
@@ -624,7 +653,8 @@ impl TagsScreen {
                     .child(ui::field(("group-name", index), name, Look::Modal))
                     .footer(cancel_button(cx))
                     .footer(
-                        ui::action_button(("create-group", index), "Create")
+                        ui::action_button(("create-group", index), ButtonLook::Standard)
+                            .label("Create")
                             .disabled(busy || !ready)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_group_name(cx))),
                     )

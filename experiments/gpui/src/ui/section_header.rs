@@ -5,6 +5,8 @@ use crate::{motion, theme};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type AddHandler = Box<dyn Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static>;
+type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 struct State {
     /// The title pill, 50 ms.
@@ -24,7 +26,8 @@ pub struct SectionHeader {
     count: usize,
     expanded: bool,
     on_toggle: Option<ClickHandler>,
-    add: Option<(Tip, ClickHandler)>,
+    add: Option<(Tip, AddHandler)>,
+    on_secondary: Option<PressHandler>,
 }
 
 pub fn section_header(id: impl Into<ElementId>, label: impl Into<SharedString>) -> SectionHeader {
@@ -35,6 +38,7 @@ pub fn section_header(id: impl Into<ElementId>, label: impl Into<SharedString>) 
         expanded: true,
         on_toggle: None,
         add: None,
+        on_secondary: None,
     }
 }
 
@@ -55,13 +59,22 @@ impl SectionHeader {
         self.on_toggle = Some(Box::new(handler));
         self
     }
-    /// The button at the header's right edge that adds to the section.
+    /// The button at the header's right edge that adds to the section. The
+    /// handler is given the button's bounds, for a menu that opens below it.
     pub fn on_add(
         mut self,
         tip: Tip,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        handler: impl Fn(&Bounds<Pixels>, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.add = Some((tip, Box::new(handler)));
+        self
+    }
+    /// A right-button press: the section's context menu.
+    pub fn on_secondary(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_secondary = Some(Box::new(handler));
         self
     }
 }
@@ -77,6 +90,12 @@ impl RenderOnce for SectionHeader {
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "tip".into()),
             cx,
             |_, _| tooltip::Hover::default(),
+        );
+        // Where the add button was last painted, for its handler.
+        let placed = window.use_keyed_state(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "add".into()),
+            cx,
+            |_, _| Bounds::<Pixels>::default(),
         );
         let (hover, hovered, reveal, animating) = {
             let state = state.read(cx);
@@ -168,6 +187,7 @@ impl RenderOnce for SectionHeader {
             .child(title);
         if let Some((tip, handler)) = self.add {
             let entered = hint.clone();
+            let measure = placed.clone();
             header = header.child(
                 div()
                     .id("add")
@@ -193,16 +213,28 @@ impl RenderOnce for SectionHeader {
                                 style.text_color(theme.text()).opacity(1.)
                             }),
                     )
+                    .child(
+                        canvas(
+                            move |bounds, _, cx| measure.update(cx, |placed, _| *placed = bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .children(hint.read(cx).layer(&tip, 20., cx))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |event, window, cx| {
+                    .on_click(move |_, window, cx| {
                         cx.stop_propagation();
-                        handler(event, window, cx);
+                        let bounds = *placed.read(cx);
+                        handler(&bounds, window, cx);
                     }),
             );
         }
         if let Some(handler) = self.on_toggle {
             header = header.on_click(handler);
+        }
+        if let Some(handler) = self.on_secondary {
+            header = header.on_mouse_down(MouseButton::Right, handler);
         }
         header
     }

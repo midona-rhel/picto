@@ -8,6 +8,7 @@ mod motion;
 mod pointer;
 mod screens;
 mod session;
+mod settings;
 mod shell;
 mod stats;
 mod theme;
@@ -51,6 +52,8 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", Preview, grid),
         KeyBinding::new("escape", ClosePreview, Some("Browser")),
         KeyBinding::new("cmd-q", Quit, None),
+        // file.settings, in every window.
+        KeyBinding::new("cmd-,", settings::OpenSettings, None),
         KeyBinding::new("cmd-1", DemoSvg, Some("Browser")),
         KeyBinding::new("cmd-2", DemoFlash, Some("Browser")),
     ]
@@ -105,12 +108,19 @@ fn main() {
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
             ui::modal::bind(cx);
+            screens::subscriptions::bind(cx);
+            ui::popover::bind(cx);
+            viewer::bind(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
             cx.set_menus(vec![
                 Menu {
                     name: "Picto GPUI".into(),
-                    items: vec![MenuItem::action("Quit", Quit)],
+                    items: vec![
+                        MenuItem::action("Settings…", settings::OpenSettings),
+                        MenuItem::action("Quit", Quit),
+                    ],
                     disabled: false,
                 },
                 Menu {

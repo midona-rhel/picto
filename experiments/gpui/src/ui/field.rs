@@ -1,4 +1,5 @@
 use super::text_input::TextInput;
+use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 use std::time::Duration;
@@ -20,8 +21,16 @@ pub enum Look {
     /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
     /// the text with no frame of their own.
     ModalSearch,
-    /// `ContextMenu.module.css` `.searchRow`: a long menu's search.
-    MenuSearch,
+    /// `Settings.module.css` `.sidebarSearch`, with room for its glyph.
+    SettingsSearch,
+    /// `ShortcutsPanel.module.css` `.searchInput`.
+    Form,
+    /// `GlassInput` as `CompactNumberInput` sizes it, with room on the
+    /// right for its stepper.
+    Number,
+    /// `.renameInput`: a name edited in place, in a 20px box outlined in the
+    /// primary colour over the app background.
+    Rename,
 }
 
 struct Frame {
@@ -107,11 +116,8 @@ impl Look {
                 right: 10.,
                 drop: 0.,
             },
-            Look::ModalSearch | Look::MenuSearch => {
+            Look::ModalSearch => {
                 let clear: Rgba = gpui::transparent_black().into();
-                // 10px in, the icon (14px in a dialog, 16px in a menu) and a
-                // 6px gap; the border is clear.
-                let icon = if self == Look::MenuSearch { 16. } else { 14. };
                 Frame {
                     height: 36.,
                     radius: 0.,
@@ -119,13 +125,73 @@ impl Look {
                     fill: (clear, clear),
                     focus: Duration::ZERO,
                     curve: motion::EASE_DEFAULT,
-                    left: 10. + icon + 6. - 1.,
+                    // 10px in, a 14px icon and a 6px gap; the border is clear.
+                    left: 29.,
                     right: 0.,
                     drop: 0.,
                 }
             }
+            Look::SettingsSearch | Look::Form => Frame {
+                height: theme::CONTROL_LG,
+                radius: theme::RADIUS_MD,
+                border: (theme.border(), theme.primary_at(60.)),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: if self == Look::Form { 12. } else { 30. },
+                right: if self == Look::Form { 12. } else { 8. },
+                drop: 0.,
+            },
+            Look::Number => Frame {
+                height: theme::CONTROL_SM,
+                radius: theme::RADIUS_SM,
+                border: (theme.border(), theme.primary_at(50.)),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: motion::STEPPER,
+                curve: motion::EASE_DEFAULT,
+                left: 8.,
+                right: 25.,
+                drop: 0.,
+            },
+            Look::Rename => Frame {
+                height: 20.,
+                radius: 3.,
+                border: (theme.primary(), theme.primary()),
+                fill: (theme.background(), theme.background()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: 0.,
+                right: 0.,
+                drop: 0.,
+            },
         }
     }
+}
+
+/// An inspector field that cannot be edited (`.fieldControl.fieldDisabled`):
+/// the field's frame at rest with its value in the tertiary colour, ending in
+/// an ellipsis when it does not fit. It takes no pointer input.
+pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
+    let theme = theme::theme(cx);
+    let frame = Look::Inspector.frame(theme);
+    div()
+        .w_full()
+        .h(px(frame.height))
+        .flex_none()
+        .rounded(px(frame.radius))
+        .border_1()
+        .border_color(frame.border.0)
+        .bg(frame.fill.0)
+        .overflow_hidden()
+        // `padding: 6px 10px` inside the border, around a 20px line.
+        .pl(px(frame.left))
+        .pr(px(frame.right))
+        .pt(px(6.))
+        .font_family(theme::FONT_INSPECTOR)
+        .text(theme::TEXT_MD)
+        .line_height(px(20.))
+        .text_color(theme.text_tertiary())
+        .child(div().h(px(20.)).truncate().child(value.into()))
 }
 
 /// The frame around a text input: its fill and border, how they change on
