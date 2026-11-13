@@ -3,7 +3,7 @@
 // saves pictures, taking the same lines as the GPUI off-screen test
 // (`src/offscreen.rs`), so one script photographs a view in both apps:
 //
-//   move X Y | down X Y [clicks] | up X Y [clicks] | rdown X Y | rup X Y
+//   move X Y | down X Y [clicks] | up X Y [clicks] | drag X Y | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
 //   shot <name> | size W H | js <expression> | reload | window <n>
 //
@@ -128,6 +128,8 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
     const result = await send('Runtime.evaluate', { expression: rest.join(' '), returnByValue: true, awaitPromise: true });
     console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.text ?? null));
   } else if (kind === 'move') await mouse('mouseMoved', numbers[0], numbers[1]);
+  // A move with the left button held, as a drag delivers it.
+  else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'down') await mouse('mousePressed', numbers[0], numbers[1], 'left', numbers[2] || 1);
   else if (kind === 'up') await mouse('mouseReleased', numbers[0], numbers[1], 'left', numbers[2] || 1);
   else if (kind === 'rdown') await mouse('mousePressed', numbers[0], numbers[1], 'right', 1);

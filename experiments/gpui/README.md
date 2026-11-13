@@ -234,8 +234,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `queryModel.ts` does and reads it back, tested both ways. While rules are
   edited the folder is saved 100 ms after each change so the grid follows;
   Cancel writes the rules it opened with back. Enter saves.
-- Set Auto Tags (`FolderAutoTagsModal`): the tags all chosen folders share,
-  saved at each change through `set_folder_auto_tags`. Auto-Import Folder
+- Set Auto Tags (`FolderAutoTagsModal`): the tags all chosen folders share
+  in `TagAssignmentControl` (the label, the tags as chips with their remove
+  buttons, and "Add tags" or the square add button), which opens the tag
+  picker above it, over the dialog; each change is saved at once through
+  `set_folder_auto_tags`. Auto-Import Folder
   (`FolderWatchModal`): the directory from the system's folder chooser,
   Enable Watch, Watch Subfolders, Import Status, Remove Watch, stored with
   `set_folder_watch` or `clear_folder_watch`.
@@ -864,19 +867,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: Import Folder (Here)... and Export
-  (`TODO`s); watching a directory (the
+- Not in the sidebar yet: Import Folder (Here)... and the Export submenu's
+  three rows (`TODO`s); watching a directory (the
   watch is stored, the watcher is a `TODO`, and the dialog does not check the
   folder's structure). The activity
   button's tooltip opens below it, not to its right as `position="right"`
   puts it. Tab from the grid
   toggles the panels as in production, so the rows are entered from the
-  tree filter; section headers are not in the keyboard order. The smart-folder
-  editor's notes are one line rather than a three-row text area, the file types are the
+  tree filter; section headers are not in the keyboard order. In production
+  Down in the tree filter does nothing and Tab leaves it for the grid, so
+  this row keyboard has no Electron counterpart; whether to keep it is open.
+  Production's folder drag ghost is drawn 48px below the pointer (its
+  `position: fixed` is measured from the rail below the titlebar); here it
+  sits on the pointer as `Sidebar.tsx` means it to. The smart-folder
+  editor's notes text area does not scroll past its three lines or show
+  the resize grip, the file types are the
   six built-in choices rather than the accepted formats, and a failed save
-  or preview shows in the dialog rather than as a notification. Set Auto
-  Tags edits the tags with the tag token input, not production's tag
-  assignment control and tag picker. The icon picker shows the sidebar's
+  or preview shows in the dialog rather than as a notification. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
   tiles light at once rather than over 50 ms. Dragging items out of the
   window and reordering a folder's items by dragging are not built. Folded

@@ -639,8 +639,10 @@ impl Sidebar {
                                     }),
                             )
                             .child(
+                                // `.helpText`: 12px on an 18px line.
                                 div()
                                     .text(theme::TEXT_SM)
+                                    .line_height(px(18.))
                                     .text_color(theme.text_secondary())
                                     .child("New files added to this folder will be automatically imported into the library."),
                             ),
