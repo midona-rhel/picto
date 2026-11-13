@@ -54,6 +54,13 @@ impl Thumbnails {
             .get(resource)
             .is_some_and(|item| matches!(item.get(), Some(Ok(_))))
     }
+
+    /// Whether this thumbnail was tried and could not be read or decoded.
+    pub fn is_failed(&self, resource: &Resource) -> bool {
+        self.entries
+            .get(resource)
+            .is_some_and(|item| matches!(item.get(), Some(Err(_))))
+    }
 }
 impl ImageCache for Thumbnails {
     fn load(

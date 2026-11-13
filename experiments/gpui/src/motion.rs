@@ -8,6 +8,10 @@ pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
+/// `--ease-standard`
+pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.
@@ -16,6 +20,10 @@ pub const MENU_ROW: Duration = Duration::from_millis(30);
 pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
+/// `HoverPreviewPortal.tsx`: the backdrop and the original fade in together.
+pub const HOVER_PREVIEW_FADE: Duration = Duration::from_millis(150);
+/// `EmptyState.module.css` `.action`: its background on hover.
+pub const EMPTY_ACTION_HOVER: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug)]
 pub struct CubicBezier {

@@ -358,11 +358,17 @@ impl Session {
                 }
                 // What other destinations held may no longer be true.
                 Reply::Changed => self.reload(cx),
-                Reply::Error(error) => {
+                // A query that failed is the grid's error, shown in place of
+                // the destination. A failed edit leaves the grid as it is.
+                Reply::Error(error) if self.loading => {
                     self.error = Some(error);
                     self.loading = false;
+                    if matches!(self.transition, Transition::Waiting) {
+                        self.show_error(cx);
+                    }
                     cx.emit(Change::Results);
                 }
+                Reply::Error(error) => eprintln!("picto: {error}"),
                 _ => {}
             }
         }
@@ -573,6 +579,20 @@ impl Session {
         self.transition = Transition::FadingIn(Instant::now());
     }
 
+    /// Fades the destination in on its error, which takes the grid's place.
+    /// The previous destination's items go, so a retry never shows them.
+    fn show_error(&mut self, cx: &mut Context<Self>) {
+        self.items.clear();
+        self.results_epoch += 1;
+        self.forget_selection();
+        self.total = 0;
+        self.cursor = None;
+        self.displayed = self.scope;
+        self.transition = Transition::FadingIn(Instant::now());
+        cx.emit(Change::Navigation);
+        cx.emit(Change::Selection);
+    }
+
     /// Moves a scope change along once its current stage has run its time.
     /// The views that fade call this as they paint.
     pub fn advance_transition(&mut self, cx: &mut Context<Self>) {
@@ -591,6 +611,8 @@ impl Session {
                     self.restore_grid(saved, cx);
                 } else if let Some((page, prefs)) = self.pending_page.take() {
                     self.apply_page(false, page, prefs, cx);
+                } else if self.error.is_some() && !self.loading {
+                    self.show_error(cx);
                 }
                 cx.emit(Change::Navigation);
             }
@@ -681,6 +703,31 @@ impl Session {
         let focus = self.focus.unwrap_or(0);
         self.anchor.get_or_insert(focus);
         self.focus_on(Some(focus), cx);
+    }
+
+    /// Replaces the selection, as a finished rubber band does. The item shown
+    /// stays if it is still selected; otherwise the last one is shown. No
+    /// range anchor remains.
+    pub fn set_selection(
+        &mut self,
+        selection: std::collections::BTreeSet<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection = selection
+            .into_iter()
+            .filter(|index| *index < self.items.len())
+            .collect();
+        self.anchor = None;
+        let focus = self
+            .focus
+            .filter(|focus| self.selection.contains(focus))
+            .or_else(|| self.selection.iter().next_back().copied());
+        self.focus_on(focus, cx);
+    }
+
+    /// Whether the search field narrows the results (three characters or more).
+    pub fn searching(&self) -> bool {
+        backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {

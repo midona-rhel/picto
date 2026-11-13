@@ -219,6 +219,25 @@ pub const BADGE_BACKGROUND: u32 = 0x00000080;
 pub const BADGE_BORDER: u32 = 0x00000033;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 
+/// `.marquee` in `CanvasGrid.module.css`: the rubber band's fill,
+/// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
+pub const MARQUEE_FILL: u32 = 0x339af01f;
+pub const MARQUEE_BORDER: u32 = 0x339af080;
+/// `HoverPreviewPortal.tsx`: the backdrop, rgba(0, 0, 0, 0.6), and the
+/// image's shadow colour, rgba(0, 0, 0, 0.7).
+pub const PREVIEW_BACKDROP: u32 = 0x00000099;
+pub const PREVIEW_SHADOW: u32 = 0x000000b3;
+/// `drawBase.ts`: an audio tile's tint in the dark theme,
+/// rgba(247, 248, 248, 0.05). The radial gradient laid over it runs from
+/// 0.05 at the top centre to 0.03 at a full tile's distance; a linear
+/// gradient from 0.05 to 0.04 stands in for it.
+pub const AUDIO_TINT: u32 = 0xf7f8f80d;
+pub const AUDIO_TINT_FAR: u32 = 0xf7f8f80a;
+/// `--color-black-20`
+pub const BLACK_20: u32 = 0x00000033;
+/// rgba(0, 0, 0, 0.1), the bottom edge of `EmptyState`'s inner frame.
+pub const BLACK_10: u32 = 0x0000001a;
+
 // ── Typography ──────────────────────────────────────────────────
 /// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
 /// family, so Chromium draws the system font; this is the same face.
@@ -249,6 +268,8 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-xl`
+pub const TEXT_XL: f32 = 16.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
