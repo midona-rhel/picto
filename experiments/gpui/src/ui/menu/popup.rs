@@ -132,6 +132,17 @@ impl Menu {
                 None => return,
             },
         };
+        // `menuIn`: the root panel scales in about the corner at the
+        // pointer. Submenus appear at once.
+        let pop = match role {
+            Role::Root => {
+                let rows = self.rows();
+                let panel = self.root_rect(&rows);
+                let corner = self.root_origin(&rows);
+                Some(pop_point(panel, corner, bounds))
+            }
+            Role::Submenu(_) => None,
+        };
         let display = screen.display;
         let focus = match role {
             Role::Root => self.focus_handle(cx),
@@ -173,6 +184,7 @@ impl Menu {
             let opened = cx
                 .open_window(options, move |window, cx| {
                     without_system_shadow(window);
+                    pop_in(window, pop);
                     window.focus(&focus, cx);
                     view
                 })
@@ -298,3 +310,61 @@ pub(crate) fn without_system_shadow(window: &Window) {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn without_system_shadow(_: &Window) {}
+
+/// Where the corner `corner` (fractions of its width and height) of `panel`
+/// lies in the window `bounds`, from the window's centre with y upwards, as
+/// `appkit::pop_in` takes it.
+fn pop_point(panel: Rect, corner: (f32, f32), bounds: Rect) -> (f32, f32) {
+    let x = panel.x - bounds.x + corner.0 * panel.w;
+    let y = panel.y - bounds.y + corner.1 * panel.h;
+    (x - bounds.w / 2., bounds.h / 2. - y)
+}
+
+/// Plays `menuIn` on a pop-up window that has a point to scale about, and
+/// turns off the system's own animation for every pop-up.
+#[cfg(target_os = "macos")]
+fn pop_in(window: &Window, about: Option<(f32, f32)>) {
+    use crate::ui::window_chrome::appkit;
+    appkit::with_ns_window(window, |ns_window| {
+        appkit::without_appear_animation(ns_window);
+        if let Some(about) = about {
+            use crate::motion;
+            let curve = motion::EASE_SCALE_IN;
+            appkit::pop_in(
+                ns_window,
+                about,
+                motion::MENU_IN_SCALE,
+                motion::MENU_IN.as_secs_f64(),
+                curve.points(),
+            );
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pop_in(_: &Window, _: Option<(f32, f32)>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::{Rect, pop_point};
+
+    #[test]
+    fn a_menu_pops_in_about_the_corner_at_the_pointer() {
+        let bounds = Rect {
+            x: 60.,
+            y: 160.,
+            w: 350.,
+            h: 480.,
+        };
+        let panel = Rect {
+            x: 100.,
+            y: 200.,
+            w: 270.,
+            h: 400.,
+        };
+        // The top-left corner: left of and above the window's centre.
+        assert_eq!(pop_point(panel, (0., 0.), bounds), (-135., 200.));
+        // The bottom-right corner, where the menu was moved in from an edge.
+        assert_eq!(pop_point(panel, (1., 1.), bounds), (135., -200.));
+    }
+}

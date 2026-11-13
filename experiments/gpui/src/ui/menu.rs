@@ -330,16 +330,24 @@ impl Menu {
             .is_some_and(|since| since.elapsed() >= motion::MENU_OUT)
     }
 
-    /// The root panel's scale and opacity now: growing in once it is first
-    /// drawn, shrinking and fading once dismissed. Submenus have neither
-    /// (`.submenuMenu { animation: none }`): an open one stays as it is until
-    /// the menu is gone.
+    /// The root panel's opacity now: fading in once it is first drawn where
+    /// the system does not scale it in (see `pop_in`), fading out once
+    /// dismissed. GPUI cannot scale an element's contents, and a panel that
+    /// grows around contents standing still does not read as `menuIn`'s
+    /// scale, so the panel itself never changes size. Submenus do not
+    /// animate (`.submenuMenu { animation: none }`): an open one stays as it
+    /// is until the menu is gone.
     fn root_motion(&self) -> (f32, f32) {
-        match (self.closing, self.shown) {
-            (Some(since), _) => motion::menu_out(since.elapsed()),
-            (None, Some(shown)) => (motion::menu_in(shown.elapsed()), 1.),
-            (None, None) => (motion::MENU_IN_SCALE, 1.),
-        }
+        let opacity = match (self.closing, self.shown) {
+            (Some(since), _) => motion::menu_out(since.elapsed()).1,
+            // Its window's layer is scaled in instead.
+            (None, _) if self.presentation == Presentation::PopUpWindows => 1.,
+            (None, Some(shown)) => {
+                motion::EASE_SCALE_IN.ease(motion::progress(shown.elapsed(), motion::MENU_IN))
+            }
+            (None, None) => 0.,
+        };
+        (1., opacity)
     }
 
     /// Whether the root panel is still growing in.
