@@ -19,7 +19,7 @@ pub mod zoom;
 
 pub use action_row::action_row;
 pub use avatar::library_avatar;
-pub use chip::chip;
+pub use chip::{Chip, chip};
 pub use empty_state::{empty_state, empty_state_action};
 pub use field::field;
 pub use icon_button::icon_button;

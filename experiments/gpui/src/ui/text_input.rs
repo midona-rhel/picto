@@ -44,7 +44,9 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
-    field_key: Option<picto_library::RootId>,
+    /// What the stored value belongs to, as the view that owns the field
+    /// numbers it.
+    field_key: Option<u64>,
     original: SharedString,
     kind: Kind,
     /// How far the text is scrolled left to keep the caret in view.
@@ -100,7 +102,8 @@ impl Kind {
 }
 
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
-pub struct Committed(pub picto_library::RootId, pub String);
+/// A stored field's new value, with the key it was set for.
+pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
 
 impl TextInput {
@@ -791,7 +794,7 @@ impl TextInput {
             .detach();
         input
     }
-    pub fn set_field(&mut self, key: picto_library::RootId, value: String, cx: &mut Context<Self>) {
+    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {
             return;
         }

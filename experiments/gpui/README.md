@@ -157,6 +157,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
   inspector lists. Its left edge drags between 260 and 550px.
+- Inspector with nothing selected, describing the destination as the
+  Electron scope state does: the folder card (two peeking cards over a front
+  card holding the first four covers on their palette colour, or a folder
+  glyph when empty), the name, read-only for All, Inbox and the other
+  built-in destinations, a folder's or smart folder's name and notes, which
+  save through the library's folder owners and rename the sidebar row, Items
+  and Size for the whole result, Export for folders and smart folders, and a
+  Details section with the search and a folder's auto-tag and watch state.
+- Inspector with several items selected, from the library's selection
+  summary: the stacked preview of the last six covers chosen with its
+  shade, the turned cards' scale and the enter and exit motion, "N items
+  selected", the shared notes and sources, folder and tag chips shared by
+  all (removing one removes it from every item), a shared rating that rates
+  all of them, and Media and Size.
+- The inspector keeps what it shows until the next state's data is there,
+  whichever state it moves between; the dashed skeleton appears only when
+  there is nothing to keep.
 - The media viewer as `MediaView.tsx` has it: the media fills the pane, and
   the titlebar's content switches to the viewer toolbar (back to the grid,
   "n / total", the zoom percentage with its menu of levels and a right-click
@@ -185,14 +202,20 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Tags, Subscriptions and Duplicates are sidebar rows without screens.
 - Drawn with their hover states and tooltips but not wired: Settings, View
   options, the section headers' add buttons, the inspector's Add to Folder,
-  Add Tags, Export, source-address list and Pin, and in the library
-  switcher's popover choosing another library, Create Library, Open Library
-  and Library Manager (those rows only close the popover). Each has a `TODO`
-  where its action belongs. The Filter button only clears a
-  filter the inspector set; there is no filter bar.
-- With nothing selected the inspector is empty; the Electron one describes
-  the scope. With several items selected it shows the last one, not the
-  stacked summary.
+  Add Tags, Export (for an item, a selection and a destination),
+  source-address list and Pin, and in the library switcher's popover
+  choosing another library, Create Library, Open Library and Library Manager
+  (those rows only close the popover). Each has a `TODO` where its action
+  belongs. The Filter button only clears a filter the inspector set; there
+  is no filter bar.
+- Inspector: the stacked preview's cards cannot turn (GPUI rotates only
+  SVGs), so they lie straight; the folder card's radial light is a vertical
+  gradient. Overwriting the notes of a selection that already has notes needs
+  the confirmation dialog, so it is refused and the field reverts. Auto Tag,
+  the subfolder scope, the summary spinners and the 250 ms switch to the
+  loading skeleton are not ported, and a selection's covers follow the order
+  items were chosen in this session, not the Electron query-selection order
+  for ranges and Select All.
 - Not in the grid yet: dragging items out or to reorder, middle-click,
   inline rename, the empty grid's context menu, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
@@ -304,10 +327,28 @@ One model, separate views, shared components:
 - Each part of the window is its own cached view that repaints only for the
   changes it shows: `shell/` (the root, the sidebar, the library popover, the toolbar), `grid/`
   (the grid view with its layout, saved view, labels, reveal, keyboard
-  movement, rubber band, hover preview, tile artwork and thumbnail cache),
-  `inspector.rs` and `viewer/` (the media surface with its zoom and pan
-  arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
-  shows).
+  Add Tags, Export (for an item, a selection and a destination),
+  source-address list and Pin, and in the library switcher's popover
+  choosing another library, Create Library, Open Library and Library Manager
+  (those rows only close the popover). Each has a `TODO` where its action
+  belongs. The Filter button only clears a filter the inspector set; there
+  is no filter bar.
+- Inspector: the stacked preview's cards cannot turn (GPUI rotates only
+  SVGs), so they lie straight; the folder card's radial light is a vertical
+  gradient. Overwriting the notes of a selection that already has notes needs
+  the confirmation dialog, so it is refused and the field reverts. Auto Tag,
+  the subfolder scope, the summary spinners and the 250 ms switch to the
+  loading skeleton are not ported, and a selection's covers follow the order
+  items were chosen in this session, not the Electron query-selection order
+  for ranges and Select All.
+- Not in the grid yet: dragging items out or to reorder, middle-click,
+  inline rename, the empty grid's context menu, and the subfolder tiles a
+  folder shows above its items (an empty folder with subfolders shows the
+  empty state). The Import buttons are drawn with a `TODO`. The audio tile's
+  radial gradient is approximated by a linear one and its `brightness(1.5)`
+  is not applied; the hover preview does not apply EXIF orientation.
+- Not in the sidebar yet: the Subscriptions activity dot, rename in place,
+  context menus, multi-selection and drag reorder.
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, field frame and text input,
