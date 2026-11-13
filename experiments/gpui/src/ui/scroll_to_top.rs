@@ -14,7 +14,7 @@ pub fn scroll_to_top(
     bottom: f32,
     window: &mut Window,
     cx: &mut App,
-) -> Option<Stateful<Div>> {
+) -> Option<super::GlassPanel> {
     let theme = theme::theme(cx);
     let id = id.into();
     let visible = -scroll.offset().y >= px(threshold);
@@ -35,8 +35,9 @@ pub fn scroll_to_top(
     let scroll = scroll.clone();
     let view = window.current_view();
     Some(
-        div()
-            .id(id)
+        super::GlassPanel::new(div().id(id), theme::RADIUS_MD)
+            .backdrop_blur(theme.glass_blur())
+            .drop_shadows(theme.panel_shadow_small())
             .group("return-to-top")
             .occlude()
             .absolute()
@@ -47,11 +48,9 @@ pub fn scroll_to_top(
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(theme::RADIUS_MD))
             .border_1()
             .border_color(theme.glass_border())
             .bg(theme.glass())
-            .shadow(theme.panel_shadow_small())
             .opacity(0.9 * shown)
             .hover(|style| style.opacity(1.))
             .child(

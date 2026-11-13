@@ -108,12 +108,27 @@ snapshot of upstream GPUI (`zed-industries/zed`). The official `gpui` crate has
 not been published since 0.2.2 (October 2025). GPUI promises no API stability
 between snapshots, so the version is pinned exactly and upgraded deliberately.
 
+Four of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
+`gpui-pre-windows`) are vendored under `vendor/` with a backdrop-blur primitive
+added, and replace the published ones through `[patch.crates-io]`;
+`vendor/README.md` lists every change against 0.3.12 so that it can be
+re-applied to a newer snapshot.
+
 The snapshot needs Rust 1.98, the version `rust-toolchain.toml` pins. Without
 rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 `.toolchain/` in this directory is ignored by Git for that purpose.
 
 ## Implemented
 
+- Backdrop blur behind the glass surfaces (`ui::GlassPanel`): what the window
+  drew behind a panel shows through its fill blurred, at production's
+  `backdrop-filter` for that surface (`--glass-blur` for panels, menus,
+  dialogs, pickers, popovers, the tag results list and the return-to-top
+  button; 16px for tooltips; 12px under the detail toolbar; 5px under the
+  inspector's type label), and its shadow is cut out beneath it as CSS draws a
+  `box-shadow`. Stacked panels blur each other, and a fading panel fades its
+  blur. Metal (macOS) and wgpu (Linux) draw it; Windows' DirectX renderer
+  leaves the backdrop unblurred under the same translucent fill.
 - Existing `picto_library` query, details, smart-folder, rating, rename, notes
   and undo owners. Database work runs on one worker thread, never in the
   rendering callback.
@@ -934,8 +949,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   share (production starts from the details of the item last shown). The
   pickers' layout, counts, folded rail, pin and recent folders last for the
   session (production keeps some in localStorage). Not drawn: the create
-  row's sticky position, the 60 ms row highlight transitions, the panel's
-  backdrop blur, and an error notification when an edit fails (it is
+  row's sticky position, the 60 ms row highlight transitions, and an error
+  notification when an edit fails (it is
   printed).
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
@@ -1083,7 +1098,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the item. Space paging the grid jumps where production scrolls smoothly.
 - Detail window: its menu's Copy, Search by Image and More rows do nothing
   yet; no Copy (the file itself) shortcut, per-image zoom
-  memory, backdrop blur under the toolbar, or "Loading..." placeholder; the
+  memory, or "Loading..." placeholder; the
   pinned button rests at full strength rather than production's 94%. Moving
   the window by its toolbar does not keep the toolbar showing as
   `picto:window-moved` does. Its size uses the primary display's work area,
@@ -1128,7 +1143,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the moment of the click, so the main window may briefly look inactive; the
   keyboard is handed back to it when the menu closes. The panels do not
   follow the main window if it moves while a menu is open.
-- The library popover's glass has no blur, and only its surface scales in;
+- The library popover: only its surface scales in;
   its rows appear at full size. A library's folder has no hover title. A
   cover is cropped once per session, so a cover changed elsewhere meanwhile
   shows the old one. A library with an icon but no cover shows the books
@@ -1186,9 +1201,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   a subscription's run progress fading in, the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
   and the spinner loops.
-- No glass surfaces or window vibrancy yet. In-app backdrop blur needs a
-  renderer patch; two open-source implementations exist to port. GPUI cannot
-  scale or rotate arbitrary elements; see Motion above for what stands in.
+- Context menus shown as pop-up windows (the default on macOS) are not
+  blurred: their window is transparent, so there is nothing of the app's
+  behind them to blur, and the system's material is not yet masked to the
+  panel (`PICTO_GPUI_MENU=window` shows them blurred, in the window). No
+  backdrop blur on Windows (DirectX renderer), and no window vibrancy. GPUI
+  cannot scale or rotate arbitrary elements; see Motion above for what stands
+  in.
 - Sidebar expansion, rail widths and hidden rails are not persisted. The
   sidebar cannot be resized.
 - The grid lays out every loaded item; the Electron grid's windowed model for

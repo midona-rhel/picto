@@ -506,7 +506,7 @@ impl DetailWindow {
     /// `.toolbar`: the title and count on the left; the zoom, actual size,
     /// fit, pin and close on the right, over a dark strip that moves the
     /// window.
-    fn toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> ui::GlassPanel {
         let theme = theme::theme(cx);
         let title = if self.group {
             // `GroupDetailWindow`: the collection's name.
@@ -600,7 +600,8 @@ impl DetailWindow {
                 window,
                 cx,
             ));
-        ui::drag_region("detail-toolbar", window, cx)
+        ui::GlassPanel::new(ui::drag_region("detail-toolbar", window, cx), 0.)
+            .backdrop_blur(theme::detail_toolbar_blur())
             .absolute()
             .top_0()
             .left_0()
@@ -610,8 +611,6 @@ impl DetailWindow {
             .flex()
             .items_center()
             .justify_between()
-            // TODO: `backdrop-filter: blur(12px)` under the strip; GPUI has
-            // no backdrop blur yet.
             .bg(rgba(theme::DETAIL_TOOLBAR_BACKGROUND))
             .opacity(self.toolbar.value_with(motion::EASE))
             .child(left)

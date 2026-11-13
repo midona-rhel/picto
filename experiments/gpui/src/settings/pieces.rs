@@ -238,35 +238,39 @@ pub(super) fn swatch(
         .on_click(move |_, window, cx| on_click(window, cx));
     if shown > 0. {
         // Centred 6px above the swatch, growing from 95% as it fades in.
-        let bubble = div()
-            .relative()
-            .h(px(24.))
-            .px(px(6.))
-            .flex()
-            .items_center()
-            .rounded(px(theme::RADIUS_SM))
-            .bg(theme.glass())
-            .border_1()
-            .border_color(theme.border_secondary())
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
-            ])
-            .text(theme::TEXT_SM)
-            .line_height(px(24.))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(theme.text())
-            .whitespace_nowrap()
-            .opacity(shown)
-            .child(
-                div()
-                    .absolute()
-                    .top(px(-1.))
-                    .left_0()
-                    .right_0()
-                    .h(px(1.))
-                    .bg(theme.contrast(15.)),
-            )
-            .child(name);
+        let bubble = ui::GlassPanel::new(
+            div()
+                .id("swatch-tip")
+                .relative()
+                .h(px(24.))
+                .px(px(6.))
+                .flex()
+                .items_center()
+                .bg(theme.glass())
+                .border_1()
+                .border_color(theme.border_secondary()),
+            theme::RADIUS_SM,
+        )
+        .backdrop_blur(theme::tooltip_blur())
+        .drop_shadows(vec![
+            BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
+        ])
+        .text(theme::TEXT_SM)
+        .line_height(px(24.))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(theme.text())
+        .whitespace_nowrap()
+        .opacity(shown)
+        .child(
+            div()
+                .absolute()
+                .top(px(-1.))
+                .left_0()
+                .right_0()
+                .h(px(1.))
+                .bg(theme.contrast(15.)),
+        )
+        .child(name);
         cell = cell.child(div().absolute().top(px(-6.)).left(relative(0.5)).child(
             deferred(anchored().anchor(Anchor::BottomCenter).child(bubble)).with_priority(3),
         ));

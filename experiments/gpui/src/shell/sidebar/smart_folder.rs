@@ -1214,21 +1214,24 @@ impl SmartFolderEditor {
                             }),
                         )
                         .child(
-                            div()
-                                .id("color-popover")
-                                .absolute()
-                                .left(px(left))
-                                .top(px(top))
-                                .w(px(COLOR_POPOVER_WIDTH))
-                                .min_h(px(COLOR_POPOVER_HEIGHT))
-                                .p(px(7.))
-                                .rounded(px(theme::RADIUS_LG))
-                                .bg(theme.glass())
-                                .border_t_1()
-                                .border_color(theme.glass_border_top())
-                                .shadow(theme.panel_shadow())
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .child(open.editor.clone()),
+                            ui::GlassPanel::new(
+                                div()
+                                    .id("color-popover")
+                                    .absolute()
+                                    .left(px(left))
+                                    .top(px(top))
+                                    .w(px(COLOR_POPOVER_WIDTH))
+                                    .min_h(px(COLOR_POPOVER_HEIGHT))
+                                    .p(px(7.))
+                                    .bg(theme.glass())
+                                    .border_t_1()
+                                    .border_color(theme.glass_border_top()),
+                                theme::RADIUS_LG,
+                            )
+                            .backdrop_blur(theme.glass_blur())
+                            .drop_shadows(theme.panel_shadow())
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(open.editor.clone()),
                         ),
                 ),
             )

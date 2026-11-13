@@ -43,30 +43,67 @@ pub fn glass_edges(radius: f32, cx: &App) -> Div {
 
 /// A glass panel with corners of `radius`: a div to lay out and fill as
 /// usual, whose glass edges are drawn over its contents, as a border would
-/// be, once it renders. The edges take no room.
+/// be, once it renders. The edges take no room. What the window drew behind
+/// it shows through its fill blurred (`--glass-blur`), and its shadow
+/// (`--shadow-panel`) is cut out beneath it.
 pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPanel {
     let theme = theme::theme(cx);
-    GlassPanel {
-        panel: div()
-            .id(id)
-            .rounded(px(radius))
-            .bg(theme.glass())
-            .shadow(theme.panel_shadow()),
-        edges: glass_edges(radius, cx),
-    }
+    let mut panel = GlassPanel::new(div().id(id).bg(theme.glass()), radius)
+        .backdrop_blur(theme.glass_blur())
+        .drop_shadows(theme.panel_shadow());
+    panel.edges = Some(glass_edges(radius, cx));
+    panel
 }
 
-#[derive(IntoElement)]
+/// A surface that shows what the window drew behind it through a backdrop
+/// blur (CSS `backdrop-filter`) and casts its drop shadows only outside its
+/// rounded shape, as CSS draws a `box-shadow`. Give it its fill as usual;
+/// set its shadows here rather than with `.shadow()`, which GPUI would draw
+/// beneath the fill as well, where the blur would take them in.
 pub struct GlassPanel {
     panel: Stateful<Div>,
-    edges: Div,
+    /// Added as the last child when the panel lays out.
+    edges: Option<Div>,
+    radius: f32,
+    backdrop: Option<BackdropFilter>,
+    shadows: Vec<BoxShadow>,
 }
 
 impl GlassPanel {
-    /// The panel as a plain element, its edges over what it holds so far,
-    /// for a caller that must return a `Stateful<Div>`.
-    pub fn into_div(self) -> Stateful<Div> {
-        self.panel.child(self.edges)
+    /// `panel`, rounded to `radius`, with no blur or shadow yet.
+    pub fn new(panel: Stateful<Div>, radius: f32) -> Self {
+        Self {
+            panel: panel.rounded(px(radius)),
+            edges: None,
+            radius,
+            backdrop: None,
+            shadows: Vec::new(),
+        }
+    }
+
+    /// Shows what is behind the surface through `filter`.
+    pub fn backdrop_blur(mut self, filter: BackdropFilter) -> Self {
+        self.backdrop = Some(filter);
+        self
+    }
+
+    /// Leaves what is behind the panel unblurred: for a panel alone in a
+    /// transparent window, where the window draws nothing behind it to blur.
+    pub fn without_backdrop_blur(mut self) -> Self {
+        self.backdrop = None;
+        self
+    }
+
+    /// The surface's drop shadows, drawn outside it only.
+    pub fn drop_shadows(mut self, shadows: Vec<BoxShadow>) -> Self {
+        self.shadows = shadows;
+        self
+    }
+
+    /// The panel's own opacity, which its blur and shadows, drawn outside
+    /// it, take too.
+    fn opacity(&mut self) -> f32 {
+        self.panel.style().opacity.unwrap_or(1.)
     }
 }
 
@@ -90,15 +127,281 @@ impl ParentElement for GlassPanel {
     }
 }
 
-impl RenderOnce for GlassPanel {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.into_div()
+impl IntoElement for GlassPanel {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+/// The panel lays out and paints as its div; before the div paints, the
+/// blurred backdrop and the cut-out shadow go beneath it.
+impl Element for GlassPanel {
+    type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
+    type PrepaintState = <Stateful<Div> as Element>::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        Element::id(&self.panel)
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        Element::source_location(&self.panel)
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        if let Some(edges) = self.edges.take() {
+            self.panel.extend([edges.into_any_element()]);
+        }
+        Element::request_layout(&mut self.panel, id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        Element::prepaint(
+            &mut self.panel,
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            window,
+            cx,
+        )
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let opacity = self.opacity();
+        let corners = Corners::all(px(self.radius));
+        if let Some(filter) = self.backdrop {
+            let filter = BackdropFilter {
+                opacity: filter.opacity * opacity,
+                ..filter
+            };
+            window.paint_backdrop_blur(bounds, corners, filter);
+        }
+        let shadows: Vec<BoxShadow> = self
+            .shadows
+            .iter()
+            .map(|shadow| BoxShadow {
+                color: shadow.color.opacity(opacity),
+                ..shadow.clone()
+            })
+            .collect();
+        if !shadows.is_empty() {
+            window.paint_drop_shadows_outside(bounds, corners, &shadows);
+        }
+        Element::paint(
+            &mut self.panel,
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        );
+    }
+
+    fn a11y_role(&self) -> Option<accesskit::Role> {
+        Element::a11y_role(&self.panel)
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        Element::write_a11y_info(&self.panel, node)
+    }
+
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut A11ySubtreeBuilder,
+    ) {
+        Element::a11y_synthetic_children(&mut self.panel, prepaint, builder)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::laid_over;
+    use gpui::{
+        BACKDROP_BLUR_MAX_TAPS, BackdropBlur, BackdropBlurKernel, Bounds, ContentMask, Corners,
+        DevicePixels, PrimitiveBatch, Quad, ScaledPixels, Scene, Size, backdrop_blur_downsample,
+        backdrop_blur_reduced_sigma, point, size,
+    };
+
+    fn scaled(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: point(ScaledPixels(x), ScaledPixels(y)),
+            size: size(ScaledPixels(w), ScaledPixels(h)),
+        }
+    }
+
+    fn blur(bounds: Bounds<ScaledPixels>, clip: Bounds<ScaledPixels>, sigma: f32) -> BackdropBlur {
+        BackdropBlur {
+            order: 0,
+            bounds,
+            corner_radii: Corners::all(ScaledPixels(16.)),
+            content_mask: ContentMask { bounds: clip },
+            blur_radius: ScaledPixels(sigma),
+            saturation: 1.,
+            brightness: 0.7,
+            opacity: 1.,
+        }
+    }
+
+    fn viewport() -> Size<DevicePixels> {
+        size(DevicePixels(2426), DevicePixels(1730))
+    }
+
+    #[test]
+    fn blurs_shrink_the_backdrop_by_an_even_factor_once_they_are_wide() {
+        assert_eq!(backdrop_blur_downsample(0.), 1);
+        assert_eq!(backdrop_blur_downsample(5.9), 1);
+        assert_eq!(backdrop_blur_downsample(6.), 2);
+        // `--glass-blur` at 2x: 13px and 25px.
+        assert_eq!(backdrop_blur_downsample(26.), 8);
+        assert_eq!(backdrop_blur_downsample(50.), 16);
+        for sigma in [7., 13., 26., 32., 50., 100.] {
+            assert_eq!(backdrop_blur_downsample(sigma) % 2, 0, "{sigma}");
+        }
+    }
+
+    #[test]
+    fn the_reduced_gaussian_and_the_resampling_add_up_to_the_requested_blur() {
+        assert_eq!(backdrop_blur_reduced_sigma(4., 1), 4.);
+        for sigma in [6., 10., 24., 26., 32., 50., 100.] {
+            let d = backdrop_blur_downsample(sigma);
+            let reduced = backdrop_blur_reduced_sigma(sigma, d);
+            let variance = (reduced * d as f32).powi(2) + (d * d) as f32 / 4.;
+            assert!((variance.sqrt() - sigma).abs() < 1e-3, "{sigma}");
+            // About three reduced texels: a short kernel at every size.
+            assert!((2.5..6.).contains(&reduced), "{sigma} {reduced}");
+        }
+    }
+
+    #[test]
+    fn kernels_are_normalised_and_fit_their_taps() {
+        for sigma in [0., 0.5, 1., 2.9, 3.2, 4.5, 5.99, 8., 40.] {
+            let kernel = BackdropBlurKernel::new(sigma);
+            let used = kernel.tap_count as usize;
+            assert!((1..=BACKDROP_BLUR_MAX_TAPS).contains(&used), "{sigma}");
+            let total = kernel.weights[0] + 2. * kernel.weights[1..used].iter().sum::<f32>();
+            assert!((total - 1.).abs() < 1e-5, "{sigma} {total}");
+            assert_eq!(kernel.offsets[0], 0.);
+            for pair in kernel.offsets[..used].windows(2) {
+                assert!(pair[1] > pair[0], "{sigma} {:?}", kernel.offsets);
+            }
+        }
+        // Each pair sits between its two texels, nearer the heavier one.
+        let kernel = BackdropBlurKernel::new(3.);
+        assert!((1. ..=2.).contains(&kernel.offsets[1]));
+        assert!(kernel.offsets[1] < 1.5);
+        // Cut at three deviations.
+        assert_eq!(BackdropBlurKernel::new(3.).reach(), 9);
+        assert_eq!(BackdropBlurKernel::new(0.).reach(), 0);
+    }
+
+    #[test]
+    fn a_plan_reads_around_the_clipped_region_and_stays_on_screen() {
+        let menu = blur(
+            scaled(900., 40., 532., 1660.),
+            scaled(0., 0., 2426., 1730.),
+            26.,
+        );
+        let plan = menu.plan(viewport()).unwrap();
+        assert_eq!(plan.downsample, 8);
+        assert_eq!(
+            plan.target.origin,
+            point(DevicePixels(900), DevicePixels(40))
+        );
+        assert_eq!(
+            plan.target.size,
+            size(DevicePixels(532), DevicePixels(1660))
+        );
+        let margin = (plan.kernel.reach() + 1) * 8;
+        assert_eq!(plan.source_origin.x.0, 900 - margin);
+        // Clamped at the top of the frame.
+        assert_eq!(plan.source_origin.y.0, 0);
+        let source_right = plan.source_origin.x.0 + plan.reduced_size.width.0 * 8;
+        assert!(source_right >= 900 + 532 + margin);
+        let source_bottom = plan.source_origin.y.0 + plan.reduced_size.height.0 * 8;
+        assert!(source_bottom >= 1730 && source_bottom < 1730 + 8);
+
+        // Fractional bounds round out; the clip trims them.
+        let clipped = blur(
+            scaled(10.5, 20.25, 100., 100.),
+            scaled(0., 50., 2426., 1730.),
+            4.,
+        );
+        let plan = clipped.plan(viewport()).unwrap();
+        assert_eq!(plan.downsample, 1);
+        assert_eq!(
+            plan.target.origin,
+            point(DevicePixels(10), DevicePixels(50))
+        );
+        assert_eq!(plan.target.size, size(DevicePixels(101), DevicePixels(71)));
+
+        let off_screen = blur(
+            scaled(3000., 0., 50., 50.),
+            scaled(0., 0., 4000., 4000.),
+            4.,
+        );
+        assert_eq!(off_screen.plan(viewport()), None);
+    }
+
+    #[test]
+    fn a_backdrop_blur_ends_the_batch_beneath_it() {
+        let quad = |x: f32| Quad {
+            bounds: scaled(x, 0., 100., 100.),
+            content_mask: ContentMask {
+                bounds: scaled(0., 0., 1000., 1000.),
+            },
+            ..Default::default()
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(0.));
+        scene.insert_backdrop_blur(blur(
+            scaled(50., 0., 100., 100.),
+            scaled(0., 0., 1000., 1000.),
+            26.,
+        ));
+        scene.insert_primitive(quad(60.));
+        scene.finish();
+        let blur_order = scene.backdrop_blurs[0].order;
+        let batches: Vec<_> = scene.batches().collect();
+        assert_eq!(batches.len(), 2);
+        assert!(matches!(&batches[0], PrimitiveBatch::Quads(range) if range.len() == 1));
+        assert!(scene.batch_order(&batches[0]) < blur_order);
+        assert!(scene.batch_order(&batches[1]) > blur_order);
+
+        // Without the blur, the two quads are one batch.
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(0.));
+        scene.insert_primitive(quad(60.));
+        scene.finish();
+        assert_eq!(scene.batches().count(), 1);
+    }
 
     #[test]
     fn edges_laid_over_the_bottom_show_the_tokens_strengths() {

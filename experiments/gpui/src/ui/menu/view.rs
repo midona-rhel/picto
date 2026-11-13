@@ -91,7 +91,7 @@ impl Menu {
         origin: (f32, f32),
         content: Div,
         cx: &App,
-    ) -> Stateful<Div> {
+    ) -> crate::ui::GlassPanel {
         let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
         // `.floatingGlassSurface`: the glass, with its edges.
         super::glass_panel(id, theme::RADIUS_LG, cx)
@@ -115,7 +115,10 @@ impl Menu {
                     .flex()
                     .flex_col(),
             )
-            .into_div()
+            .when(self.presentation == Presentation::PopUpWindows, |panel| {
+                // TODO: blur what is behind the pop-up window with the system's material.
+                panel.without_backdrop_blur()
+            })
     }
 
     /// A row as `.item` draws it, without what it does.
@@ -249,7 +252,7 @@ impl Menu {
         at: (f32, f32),
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> crate::ui::GlassPanel {
         let theme = theme::theme(cx);
         let has_icons = self.has_icons(rows);
         let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));
@@ -388,7 +391,7 @@ impl Menu {
         at: (f32, f32),
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> crate::ui::GlassPanel {
         let rows = self.submenu_rows(open.top);
         let has_icons = self.has_icons(&rows);
         let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));

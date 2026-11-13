@@ -5,7 +5,9 @@ edition = "2024"
 publish = false
 
 # Keep experimental dependencies and lockfile out of the production workspace.
+# The patched GPUI crates under `vendor/` are dependencies, not members.
 [workspace]
+exclude = ["vendor"]
 
 # This standalone workspace does not inherit Picto's optimized debug profile.
 # Keep symbols/checks while optimizing the rendering and decoding hot paths.
@@ -97,3 +99,12 @@ objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
 objc2-av-foundation = { version = "0.3", features = ["AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVMediaFormat", "AVTime", "AVVideoSettings", "AVVideoComposition", "block2", "objc2-core-media", "objc2-core-video"] }
 block2 = "0.6"
 objc2-quartz-core = { version = "0.3", features = ["CABase"] }
+
+# GPUI with a backdrop-blur primitive for the glass panels. Only the crates
+# that change are vendored; `vendor/README.md` lists every change against the
+# published 0.3.12 sources.
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

@@ -117,29 +117,33 @@ impl Hover {
         // and shadow are drawn at the scale, about the bubble's centre; the
         // label, inside the 6px padding, stays at full size.
         let inset = relative((1. - scale) / 2.);
-        let surface = div()
-            .absolute()
-            .left(inset)
-            .top(inset)
-            .w(relative(scale))
-            .h(relative(scale))
-            .rounded(px(theme::RADIUS_SM))
-            .bg(theme.glass())
-            .border_1()
-            .border_color(theme.border_secondary())
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
-            ])
-            // `--glass-border-top`: the top edge is brighter than the sides.
-            .child(
-                div()
-                    .absolute()
-                    .top(px(-1.))
-                    .left(px(3.))
-                    .right(px(3.))
-                    .h(px(1.))
-                    .bg(theme.glass_border_top()),
-            );
+        let surface = super::GlassPanel::new(
+            div()
+                .id("tooltip-surface")
+                .absolute()
+                .left(inset)
+                .top(inset)
+                .w(relative(scale))
+                .h(relative(scale))
+                .bg(theme.glass())
+                .border_1()
+                .border_color(theme.border_secondary()),
+            theme::RADIUS_SM,
+        )
+        .backdrop_blur(theme::tooltip_blur())
+        .drop_shadows(vec![
+            BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
+        ])
+        // `--glass-border-top`: the top edge is brighter than the sides.
+        .child(
+            div()
+                .absolute()
+                .top(px(-1.))
+                .left(px(3.))
+                .right(px(3.))
+                .h(px(1.))
+                .bg(theme.glass_border_top()),
+        );
         // `padding: 0 6px` inside the 1px border, which the surface draws.
         let mut bubble = div()
             .relative()

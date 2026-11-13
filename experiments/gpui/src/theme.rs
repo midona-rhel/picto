@@ -194,6 +194,16 @@ impl Theme {
     pub fn avatar_surface(&self) -> Rgba {
         blend(self.control_surface(), self.text_secondary(), 0.1)
     }
+    /// `--glass-blur`: what a glass panel does to what is behind it,
+    /// `blur(13px) brightness(0.7)`, or `blur(25px) brightness(3)` in the
+    /// light themes.
+    pub fn glass_blur(&self) -> BackdropFilter {
+        let (radius, brightness) = if self.light { (25., 3.) } else { (13., 0.7) };
+        BackdropFilter {
+            brightness,
+            ..BackdropFilter::blur(px(radius))
+        }
+    }
     /// `--glass-border-top`
     pub fn glass_border_top(&self) -> Rgba {
         if self.light {
@@ -283,6 +293,22 @@ impl Theme {
     pub fn shortcut_conflict(&self) -> Rgba {
         rgb(0xffa500)
     }
+}
+
+// Each surface's `backdrop-filter`. The glass panels' own, `--glass-blur`,
+// changes with the theme: `Theme::glass_blur`.
+
+/// `KbdTooltip` and the settings swatches' tips: `blur(16px)`.
+pub fn tooltip_blur() -> BackdropFilter {
+    BackdropFilter::blur(px(16.))
+}
+/// `DetailWindow.module.css` `.toolbar`: `blur(12px)`.
+pub fn detail_toolbar_blur() -> BackdropFilter {
+    BackdropFilter::blur(px(12.))
+}
+/// `Inspector.module.css` `.previewTypeLabel`: `blur(5px)`.
+pub fn preview_label_blur() -> BackdropFilter {
+    BackdropFilter::blur(px(5.))
 }
 
 /// `.btnDanger`'s label colour.

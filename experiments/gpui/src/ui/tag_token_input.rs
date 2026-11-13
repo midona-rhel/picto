@@ -277,20 +277,23 @@ impl Render for TagTokenInput {
             .child(surface);
         if self.open && focused {
             let area = self.bounds.get();
-            let mut list = div()
-                .id("tag-token-results")
-                .occlude()
-                .w(area.size.width)
-                .max_h(px(200.))
-                .overflow_y_scroll()
-                .p(px(4.))
-                .rounded(px(theme::RADIUS_SM))
-                .border_1()
-                .border_color(theme.border_secondary())
-                .bg(theme.glass())
-                .shadow(theme.panel_shadow())
-                .font_family(theme::FONT_UI)
-                .text(theme::TEXT_SM);
+            let mut list = super::GlassPanel::new(
+                div()
+                    .id("tag-token-results")
+                    .occlude()
+                    .w(area.size.width)
+                    .max_h(px(200.))
+                    .overflow_y_scroll()
+                    .p(px(4.))
+                    .border_1()
+                    .border_color(theme.border_secondary())
+                    .bg(theme.glass()),
+                theme::RADIUS_SM,
+            )
+            .backdrop_blur(theme.glass_blur())
+            .drop_shadows(theme.panel_shadow())
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_SM);
             for (index, found) in self.results.iter().enumerate() {
                 let name = found.name();
                 list = list.child(

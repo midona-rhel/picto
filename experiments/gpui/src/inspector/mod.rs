@@ -1127,7 +1127,6 @@ impl Inspector {
                     .w(px(18.))
                     .justify_center()
                     .child(ui::icon("group", 14., rgb(theme::BADGE_STRONG_TEXT)))
-                    .into_any_element()
             } else {
                 ui::badge(3.)
                     .top(px(5.))
@@ -1135,8 +1134,11 @@ impl Inspector {
                     .font_family(theme::FONT_UI)
                     .text_color(rgb(theme::BADGE_STRONG_TEXT))
                     .child(format::format_label(&media.facts.mime))
-                    .into_any_element()
             };
+            // `.previewTypeLabel`'s `backdrop-filter`.
+            let label = ui::GlassPanel::new(label.id("preview-type-label"), theme::TILE_RADIUS)
+                .backdrop_blur(theme::preview_label_blur())
+                .into_any_element();
             panel = panel.child(self.preview(
                 thumbnail,
                 media.facts.width.zip(media.facts.height),
