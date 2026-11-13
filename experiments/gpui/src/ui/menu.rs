@@ -36,6 +36,8 @@ pub struct Item {
     shortcut: Option<SharedString>,
     danger: bool,
     disabled: bool,
+    /// A check slot on the right: `Some(true)` shows the check.
+    checked: Option<bool>,
 }
 
 pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
@@ -46,6 +48,7 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
         shortcut: None,
         danger: false,
         disabled: false,
+        checked: None,
     }
 }
 
@@ -66,6 +69,11 @@ impl Item {
     }
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+    /// One of a set of choices, with the check on the current one.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
         self
     }
 }
@@ -239,6 +247,19 @@ impl Menu {
                 .truncate()
                 .child(item.label.clone()),
         );
+        // `.checkSlot`: 16px, after the label.
+        if let Some(checked) = item.checked {
+            row = row.child(
+                div()
+                    .relative()
+                    .size(px(16.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .children(checked.then(|| super::icon("menu-check", 16., theme.text()))),
+            );
+        }
         if let Some(shortcut) = &item.shortcut {
             row = row.child(
                 div()

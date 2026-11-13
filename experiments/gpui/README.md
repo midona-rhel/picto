@@ -134,9 +134,26 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
   inspector lists. Its left edge drags between 260 and 550px.
-- Space/Enter/double-click preview, Escape back, previous/next item, and
-  navigation through members of a collection. Thumbnail-first preview with
-  asynchronous full decode; stale loads are fenced.
+- The media viewer as `MediaView.tsx` has it: the media fills the pane, and
+  the titlebar's content switches to the viewer toolbar (back to the grid,
+  "n / total", the zoom percentage with its menu of levels and a right-click
+  between fit and actual size, the logarithmic zoom slider, Fit to window,
+  Actual size, and Previous/Next that disable at the ends), with their
+  tooltips and shortcuts. Leaving the viewer for another destination fades
+  the titlebar's content with the grid over 170 ms.
+- Images zoom and pan by the rules of `useImageZoom.ts`: they open fitted;
+  the pointer wheel and trackpad zoom about the pointer (wheel notches glide
+  150 ms by 1.25×), pinch zooms, `+`/`=` and `-` glide by 1.25×, `` ` `` or
+  Shift+F fits, Cmd+0 shows actual size; a drag pans with the grab and
+  grabbing cursors. The navigator appears 80 ms after the image overflows
+  the pane; a press or drag in it moves the view there. A step past either
+  end shows "First item" or "Last item" for 800 ms. The previous image stays
+  until the next thumbnail has decoded; the original replaces the thumbnail
+  once decoded, as `ImageCrossfadeFrame` swaps them.
+- A collection's members step with the bottom strip of
+  `QuickLookNavigation` (48×32 buttons, monospace counter).
+- Space, Enter or a double-click opens and closes the viewer, Escape closes
+  it. Originals decode off the drawing thread; stale loads are fenced.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
@@ -173,11 +190,17 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shows the old one. A library with an icon but no cover shows the books
   glyph, not its icon.
 - No import/export, subscriptions, cloud, localization or site login.
-  The viewer still has its own header instead of the titlebar's viewer
-  toolbar.
+- Viewer: the breadcrumb and "Edit group" belong to the collection editor,
+  which does not exist yet, so neither is ever shown; collections step
+  through members with the bottom strip instead of the reader surface. No
+  transparency checkerboard (off by default in Picto), no per-image zoom
+  memory, no viewer context menu, rating or copy shortcuts, and no video
+  shortcuts (there is no video playback). Next stops at the last loaded item
+  until the next page arrives. The very first opening shows one empty frame
+  while the pane is measured. When the viewer closes by going to another
+  destination, the pane shows the fading grid rather than the fading viewer.
 - Motion still to port: modal enter/exit, the inspector's fade when entering
-  the grid from the viewer, toasts, the viewer's
-  thumbnail-to-original crossfade and its zoom and pan tween, smooth paging,
+  the grid from the viewer, toasts, smooth paging,
   progress and spinner loops. A scope change does not yet restore the previous
   scroll position as the Electron grid does.
 - No glass surfaces or window vibrancy yet. In-app backdrop blur needs a
@@ -206,6 +229,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
 ```
 
 The regular tests cover the three layout modes against hand-computed geometry,
+the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
+logarithmic zoom track,
 banded visibility against a full scan of 20,000 tiles in every mode, view
 preference fallbacks, grid labels, popover placement, the known-library
 order and name search, the reveal timeline, the easing curve
@@ -251,12 +276,13 @@ One model, separate views, shared components:
 - Each part of the window is its own cached view that repaints only for the
   changes it shows: `shell/` (the root, the sidebar, the library popover, the toolbar), `grid/`
   (the grid view with its layout, saved view, labels, reveal, keyboard
-  movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
-  presentation).
+  movement and thumbnail cache), `inspector.rs` and `viewer/` (the media
+  surface with its zoom and pan arithmetic in `camera.rs`, Flash, and the
+  viewer toolbar the titlebar shows).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row,
-  field frame and text input, scrollbar, "Return to Top", badge, button, zoom
+  field frame and text input, scrollbar, "Return to Top", badge, zoom
   control and the titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.

@@ -68,24 +68,6 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
         })
 }
 
-/// A plain text push button. It occludes what is behind it, so it works
-/// inside a titlebar strip.
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    div()
-        .id(id.into())
-        .occlude()
-        .h(px(theme::CONTROL_SM))
-        .px(px(12.))
-        .flex()
-        .items_center()
-        .rounded(px(theme::RADIUS_MD))
-        .bg(theme.contrast(8.))
-        .hover(move |style| style.bg(theme.contrast(14.)))
-        .cursor_pointer()
-        .child(label.into())
-}
-
 /// The grid's translucent label chip (`drawBadge` in `primitives.ts`).
 pub fn badge(padding: f32) -> Div {
     div()
