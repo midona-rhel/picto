@@ -645,6 +645,9 @@ pub const TEXT_SM: f32 = 12.;
 pub const TEXT_MD: f32 = 13.;
 /// `--font-size-lg`
 pub const TEXT_LG: f32 = 14.;
+/// Mantine's body `line-height` (`--mantine-line-height`), which text with
+/// no line height of its own inherits: 13px text sits on a 20.15px line.
+pub const LINE_HEIGHT_INHERITED: f32 = 1.55;
 /// `--line-height-md`
 pub const LINE_HEIGHT_MD: f32 = 20.;
 /// Mantine's `--mantine-line-height`, which text inherits from the body

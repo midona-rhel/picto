@@ -974,6 +974,11 @@ impl Render for VideoPlayer {
         if self.playback.playing
             || now < self.settle_until
             || (self.kind == Kind::Video && self.frame.is_none() && now < self.first_picture_until)
+            // Paused before the media loaded: keep asking until its length
+            // is known, so the time reads as production's does.
+            || (self.playback.duration <= 0.
+                && self.status.error.is_none()
+                && now < self.first_picture_until)
             || self.controls_fade.animating()
             || self.bar_expand.animating()
             || self.hud_fade.animating()

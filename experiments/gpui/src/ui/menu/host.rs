@@ -123,6 +123,11 @@ impl Host {
         cx.notify();
     }
 
+    /// Where the keyboard goes back to after the next menu that opens.
+    pub fn returning(&mut self, back: Return) {
+        self.back = back;
+    }
+
     /// Whether a menu is showing, fading out included.
     pub fn is_open(&self) -> bool {
         self.menu.is_some()

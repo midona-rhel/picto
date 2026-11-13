@@ -198,8 +198,7 @@ const GLOW: [(f32, u32); 3] = [(0., 0x735cff2e), (0.34, 0xff4fa314), (1., 0x0505
 
 /// `drawStage`: the night sky and the violet glow about the middle. GPUI
 /// draws two-stop linear gradients only, so the sky is two bands and the
-/// radial glow is a stack of concentric discs whose alphas compose to the
-/// gradient's.
+/// radial glow is a run of thin rings.
 fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
     let split = height * 0.58;
     let top = canvas.rect(0., 0., width, split);
@@ -221,26 +220,27 @@ fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
         ),
     ));
     let stops = GLOW.map(|(at, colour)| (at, rgba(colour)));
-    let (centre_x, centre_y) = (width / 2., height * 0.54);
+    // On whole device pixels, so that each ring meets the next without a
+    // seam of partly covered pixels between them.
+    let (centre_x, centre_y) = ((width / 2.).round(), (height * 0.54).round());
     let radius = (width * 0.58).max(height);
-    const RINGS: usize = 32;
-    let mut outer_alpha = 0.;
-    for ring in (1..=RINGS).rev() {
-        let r = radius * ring as f32 / RINGS as f32;
-        let colour = along(&stops, ring as f32 / RINGS as f32);
-        // Each disc adds what takes the alpha from the ring outside it to
-        // the gradient's alpha at its own edge.
-        let target = along(&stops, (ring - 1) as f32 / RINGS as f32).a;
-        let alpha = if outer_alpha < 1. {
-            ((target - outer_alpha) / (1. - outer_alpha)).max(0.)
-        } else {
-            0.
-        };
-        outer_alpha = target;
-        let bounds = canvas.rect(centre_x - r, centre_y - r, 2. * r, 2. * r);
-        canvas.window.paint_quad(
-            fill(bounds, Rgba { a: alpha, ..colour }).corner_radii(px(r / canvas.scale)),
-        );
+    // Rings that do not overlap, each drawn once in the gradient's colour
+    // at its middle: discs laid one over another would keep the outer pink
+    // under the violet middle, where the gradient has none.
+    const RINGS: usize = 96;
+    let step = (radius / RINGS as f32).ceil();
+    for ring in 0..RINGS {
+        let outer = step * (ring + 1) as f32;
+        let colour = along(&stops, (ring as f32 + 0.5) / RINGS as f32);
+        let bounds = canvas.rect(centre_x - outer, centre_y - outer, 2. * outer, 2. * outer);
+        canvas.window.paint_quad(quad(
+            bounds,
+            px(outer / canvas.scale),
+            transparent_black(),
+            px(step / canvas.scale),
+            colour,
+            BorderStyle::Solid,
+        ));
     }
 }
 
