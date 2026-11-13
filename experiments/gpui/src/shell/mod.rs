@@ -414,7 +414,14 @@ impl Render for Shell {
         } else {
             theme::SIDEBAR_WIDTH
         };
-        let inspector_width = self.inspector_width;
+        // The inspector belongs to the grid and the viewer. A screen has the
+        // window's full width, titlebar included (`inspectorAvailable`).
+        let inspector_available = screen.is_none() || viewer_open;
+        let inspector_width = if inspector_available {
+            self.inspector_width
+        } else {
+            0.
+        };
         let right = if self.inspector_collapsed {
             0.
         } else {
@@ -461,7 +468,7 @@ impl Render for Shell {
         });
         // The inspector rail spans the window's full height, titlebar strip
         // included, and slides as one piece.
-        let inspector = (inspector_hidden < 1.).then(|| {
+        let inspector = (inspector_available && inspector_hidden < 1.).then(|| {
             div()
                 .absolute()
                 .top_0()
