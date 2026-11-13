@@ -1169,7 +1169,7 @@ impl Session {
         let saved = self
             .saved
             .remove(&visit.scope)
-            .filter(|saved| saved.search_text == self.search_text && saved.filters == filters);
+            .filter(|saved| saved.search_text.is_empty() && saved.filters == filters);
         self.open(visit.scope, saved, Some(filters), cx);
     }
 
@@ -1240,6 +1240,9 @@ impl Session {
     ) {
         self.reselect = None;
         self.save_grid();
+        // Every destination opens without a search (`prepareNavigation`
+        // sets `searchText: ''`), Back and Forward included.
+        self.search_text.clear();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
             self.filters = filters;

@@ -266,8 +266,10 @@ impl RenderOnce for Select {
                 canvas(
                     move |bounds, window, _| {
                         let bounds = bounds.dilate(px(1.));
+                        // The open list is placed from these bounds; while
+                        // drawing, only a requested frame repaints it.
                         if measured.replace(bounds) != bounds && open {
-                            window.refresh();
+                            window.request_animation_frame();
                         }
                     },
                     |_, _, _, _| {},
