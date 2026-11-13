@@ -166,6 +166,22 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<BackendState>, St
     open_library_inner(library_root, None).await
 }
 
+/// Opens a library as [`open_library`] does, and hands its `Library` to
+/// `opened` as soon as the database is open: before the recovery passes run
+/// and the workers start, which on a large library takes many seconds. The
+/// caller can read from it meanwhile; commands still wait for the whole
+/// open. If the open is then cancelled or fails, that library is never
+/// published.
+pub async fn open_library_reporting(
+    library_root: PathBuf,
+    opened: impl FnOnce(Arc<picto_library::Library>) + Send + 'static,
+) -> Result<Arc<BackendState>, String> {
+    cancel_in_flight_open();
+    let _lifecycle = lifecycle_lock().lock().await;
+    let _invocations = invocation_lock().write().await;
+    open_library_stages(library_root, None, Some(Box::new(opened))).await
+}
+
 pub async fn open_tutorial_library(
     library_root: PathBuf,
     fixture_root: PathBuf,
@@ -183,6 +199,17 @@ pub async fn open_tutorial_library(
 async fn open_library_inner(
     library_root: PathBuf,
     tutorial_fixture_root: Option<PathBuf>,
+) -> Result<Arc<BackendState>, String> {
+    open_library_stages(library_root, tutorial_fixture_root, None).await
+}
+
+/// Told the library as soon as its database is open.
+type LibraryOpened = Box<dyn FnOnce(Arc<picto_library::Library>) + Send>;
+
+async fn open_library_stages(
+    library_root: PathBuf,
+    tutorial_fixture_root: Option<PathBuf>,
+    readable: Option<LibraryOpened>,
 ) -> Result<Arc<BackendState>, String> {
     let cancel = OpenCancellation::new();
     let stage = Arc::new(AtomicU8::new(OpenStage::Opening as u8));
@@ -229,6 +256,9 @@ async fn open_library_inner(
         Err(_) if cancel.is_cancelled() => return Err(OPEN_CANCELLED_MESSAGE.to_string()),
         Err(error) => return Err(error),
     };
+    if let Some(readable) = readable {
+        readable(Arc::clone(application.library()));
+    }
     if let Err(error) = crate::ai_models::migrate_legacy_storage(application.as_ref()) {
         tracing::warn!(%error, "Could not migrate legacy AI model storage");
     }
@@ -848,8 +878,12 @@ async fn join_workers(workers: Vec<WorkerHandle>) {
 mod tests {
     use super::{initialize_joined_database, QUEUE_CLOUD_MEDIA_RECOVERY_SQL};
 
+    /// The tests that open the one global library take turns.
+    static GLOBAL_LIBRARY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_close_racing_an_open_leaves_nothing_open_and_no_in_flight_record() {
+        let _turn = GLOBAL_LIBRARY.lock().await;
         assert_eq!(
             super::invoke("library.open_status", "{}").await.unwrap(),
             "null"
@@ -891,6 +925,29 @@ mod tests {
         assert!(super::get_state().is_ok());
         super::close_library().await.unwrap();
         assert!(super::get_state().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reported_open_hands_over_the_library_before_it_is_published() {
+        let _turn = GLOBAL_LIBRARY.lock().await;
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("Reported.library");
+        // Created, closed, and opened again as an existing library.
+        super::open_library(root.clone()).await.unwrap();
+        super::close_library().await.unwrap();
+        let (sender, handed) = std::sync::mpsc::channel();
+        let state = super::open_library_reporting(root, move |library| {
+            // Not yet published: the recovery passes and workers are to come.
+            let published = super::get_state().is_ok();
+            sender.send((library, published)).unwrap();
+        })
+        .await
+        .unwrap();
+        let (library, published) = handed.try_recv().unwrap();
+        assert!(!published);
+        assert!(std::sync::Arc::ptr_eq(&library, state.application().library()));
+        assert!(library.sidebar_counts().is_ok());
+        super::close_library().await.unwrap();
     }
 
     #[test]
