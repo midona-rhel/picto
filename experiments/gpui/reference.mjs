@@ -90,10 +90,14 @@ const KEYS = {
   right: ['ArrowRight', 'ArrowRight', 39],
   up: ['ArrowUp', 'ArrowUp', 38],
   down: ['ArrowDown', 'ArrowDown', 40],
+  '-': ['-', 'Minus', 189, '-'],
+  '=': ['=', 'Equal', 187, '='],
 };
 async function key(stroke) {
-  const parts = stroke.split('-');
-  const name = parts.pop();
+  // The minus key is the one name that holds the separator (`cmd--`).
+  const minus = stroke.endsWith('-');
+  const parts = (minus ? stroke.slice(0, -1) : stroke).split('-');
+  const name = minus ? (parts.pop(), '-') : parts.pop();
   let modifiers = 0;
   for (const part of parts) {
     modifiers |= { alt: 1, ctrl: 2, cmd: 4, shift: 8 }[part] ?? 0;
