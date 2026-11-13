@@ -39,6 +39,8 @@ pub struct SettingsWindow {
     pub(super) shortcuts_scroll: ScrollHandle,
     pub(super) statistics: Option<LibraryStatistics>,
     pub(super) cloud: Option<CloudInfo>,
+    /// The bytes the downloaded AI models take (`ai.status`).
+    pub(super) ai_storage: Option<u64>,
     /// Shortcuts whose new keys another shortcut has: the other's label, and
     /// which conflict this was.
     pub(super) conflicts: HashMap<&'static str, (&'static str, u64)>,
@@ -106,6 +108,20 @@ impl SettingsWindow {
                 panels::cloud_info(library),
             )
         });
+        // The AI model runtime's status reads the models' folder only.
+        let ai_status = session
+            .read(cx)
+            .dispatch("ai.status", serde_json::json!({}));
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(status)) = ai_status.await {
+                let storage = status.get("storageBytes").and_then(|bytes| bytes.as_u64());
+                let _ = this.update(cx, |this, cx| {
+                    this.ai_storage = storage;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             if let Ok((statistics, cloud)) = read.await {
                 let _ = this.update(cx, |this, cx| {
@@ -126,6 +142,7 @@ impl SettingsWindow {
             shortcuts_scroll: ScrollHandle::new(),
             statistics: None,
             cloud: None,
+            ai_storage: None,
             conflicts: HashMap::new(),
             conflict_generation: 0,
             capturing: None,
@@ -138,13 +155,17 @@ impl SettingsWindow {
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected = index;
         self.search.update(cx, |search, cx| search.clear(cx));
-        self.body_scroll.set_offset(point(px(0.), px(0.)));
+        // The panel keeps the scroll offset it had, as production's one
+        // scrolling body does; the next section is shown at most as far down
+        // as it reaches.
         cx.notify();
     }
 
     /// Discards the draft and closes the window (`handleClose`).
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update(cx, |model, _| model.begin());
+        let saved = self.model.read(cx).saved.app.color_scheme.clone();
+        theme::show(&saved, cx);
         window.remove_window();
     }
 
@@ -240,6 +261,7 @@ impl SettingsWindow {
                     .child(
                         div()
                             .text(theme::TEXT_MD)
+                            .line_height(px(theme::TEXT_MD * 1.55))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(panel.label),
                     )
@@ -365,12 +387,8 @@ impl Render for SettingsWindow {
                                         &self.search,
                                         FieldLook::SettingsSearch,
                                     )
-                                    .icon(
-                                        "settings-search",
-                                        14.,
-                                        10.,
-                                        theme.text_tertiary(),
-                                    ),
+                                    .icon("settings-search", 14., 10., theme.text_tertiary())
+                                    .clearable(),
                                 ),
                             )
                             .child(items),
@@ -437,6 +455,8 @@ impl Render for SettingsWindow {
                     div()
                         .mb(px(8.))
                         .text(theme::TEXT_SM)
+                        // Mantine's body `line-height: 1.55`.
+                        .line_height(px(theme::TEXT_SM * 1.55))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary())
                         .child("CATEGORIES"),
@@ -518,7 +538,8 @@ impl Render for SettingsWindow {
             .rounded(px(theme::RADIUS_LG))
             .border_1()
             .border_color(theme.contrast(5.))
-            .bg(theme.contrast(3.))
+            // `--settings-content-bg` over the shell.
+            .bg(theme.rail_raised())
             .shadow(vec![
                 BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).spread_radius(px(1.)),
                 BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_10).into()).blur_radius(px(8.)),

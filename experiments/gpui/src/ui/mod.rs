@@ -28,6 +28,7 @@ pub mod scrollbar;
 mod section_header;
 pub mod segmented;
 pub mod select;
+pub mod selection_modal;
 pub mod sidebar_row;
 pub mod slider;
 mod small_button;
@@ -37,6 +38,7 @@ pub mod tag_token_input;
 pub mod text_input;
 mod toggle;
 pub mod tooltip;
+mod tracked;
 pub mod window_chrome;
 pub mod zoom;
 
@@ -65,6 +67,7 @@ pub use status_badge::status_badge;
 pub use tabs::tabs;
 pub use toggle::toggle;
 pub use tooltip::tip;
+pub use tracked::tracked;
 
 use crate::theme;
 use crate::theme::Text as _;

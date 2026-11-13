@@ -51,7 +51,7 @@ pub fn scroll_to_top(
             .border_1()
             .border_color(theme.glass_border())
             .bg(theme.glass())
-            .shadow(theme::panel_shadow_small())
+            .shadow(theme.panel_shadow_small())
             .opacity(0.9 * shown)
             .hover(|style| style.opacity(1.))
             .child(

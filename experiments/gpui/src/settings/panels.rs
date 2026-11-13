@@ -464,9 +464,12 @@ fn value_label(theme: theme::Theme, text: String) -> Div {
         .child(text)
 }
 
-/// `.checkboxGrid`: two columns, each 4px short of half, 4px apart.
+/// `.checkboxGrid`: items 4px short of half wide, wrapping 4px apart, each
+/// pulled 6px left by its own margin, so the second column starts 6px short
+/// of half. Equal grid columns put it there with no gap and 12px spare at
+/// the end (an item is then 2px narrower than production's).
 fn two_columns() -> Div {
-    div().w_full().grid().grid_cols(2).gap(px(4.)).pr(px(4.))
+    div().w_full().grid().grid_cols(2).gap_y(px(4.)).pr(px(12.))
 }
 
 /// `.sidebarSettingsGrid`: three equal columns 4px apart.
@@ -668,6 +671,8 @@ fn copy(
         .child(
             div()
                 .text(theme::TEXT_MD)
+                // Mantine's body `line-height: 1.55`.
+                .line_height(px(theme::TEXT_MD * 1.55))
                 .text_color(theme.text())
                 .child(name.into()),
         )
@@ -733,13 +738,18 @@ impl SettingsWindow {
         );
         let mut swatches = div().flex().flex_wrap().justify_end().gap(px(8.));
         for (index, &(name, css, color)) in THEMES.iter().enumerate() {
-            // TODO: preview and apply the theme; only Dark exists here yet.
+            // The choice shows in every window at once (`previewTheme`);
+            // closing without saving puts the saved theme back.
+            let choose = edit(model, move |draft| draft.app.color_scheme = css.into());
             swatches = swatches.child(swatch(
                 index,
                 name,
                 color,
                 active == css,
-                edit(model, move |draft| draft.app.color_scheme = css.into()),
+                move |window, cx| {
+                    choose(window, cx);
+                    theme::show(css, cx);
+                },
                 window,
                 cx,
             ));
@@ -754,7 +764,10 @@ impl SettingsWindow {
                         .child(row(
                             theme,
                             "Zoom Level",
-                            // TODO: scale the main window's content by this factor.
+                            // TODO: production saves this factor without applying
+                            // it (its zoom is the separate ⌘+ and ⌘- renderer
+                            // zoom), so the window is not scaled here either;
+                            // scale the main window's content once it does.
                             ui::select(
                                 "zoom",
                                 zoom.to_string(),
@@ -1262,6 +1275,8 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .items_center()
+                    // `.settingControl`'s gap.
+                    .gap(px(6.))
                     .child(
                         ui::slider("thumbnail-size", size, 100., 600., 50.).on_change(number(
                             model,
@@ -1643,8 +1658,9 @@ impl SettingsWindow {
             .child(separator(theme))
             .child(
                 // TODO: sync, pause and snapshot through the cloud service.
+                // `.cloudActions`' 10px top margin collapses into the
+                // separator's 12px, as the card is a block.
                 div()
-                    .mt(px(10.))
                     .flex()
                     .flex_wrap()
                     .gap(px(8.))
@@ -1772,9 +1788,10 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = model.read(cx).draft.app.clone();
-        // TODO: read the model runtime's status (which models are downloaded
-        // and optimized, the storage they take) and download, optimize and
-        // delete through it. Until then every model shows as not downloaded.
+        // TODO: read which models are downloaded and optimized from the
+        // runtime's status and download, optimize and delete through it.
+        // Until then every model shows as not downloaded; only the storage
+        // they take is read.
         let mut models = card(theme).child(title(theme, "Models"));
         for (index, info) in MODELS.iter().enumerate() {
             if index > 0 {
@@ -1852,10 +1869,11 @@ impl SettingsWindow {
                     ),
             );
         }
-        let models =
-            models
-                .child(separator(theme))
-                .child(row(theme, "Model storage", value(theme, "—")));
+        let models = models.child(separator(theme)).child(row(
+            theme,
+            "Model storage",
+            value(theme, self.ai_storage.map_or("—".into(), model_size)),
+        ));
 
         let mut confidence = card(theme).child(title(theme, "Confidence"));
         for (index, (key, name, namespace)) in THRESHOLDS.iter().enumerate() {
@@ -1984,10 +2002,10 @@ impl SettingsWindow {
         };
         let year = chrono::Datelike::year(&chrono::Local::now());
         vec![
+            // `.aboutPanel`'s 620px limit loses to `.panelContent`'s
+            // `max-width: 100%`, which comes later in the stylesheet.
             div()
                 .w_full()
-                .max_w(px(620.))
-                .mx_auto()
                 .flex()
                 .flex_col()
                 .child(
@@ -2015,11 +2033,17 @@ impl SettingsWindow {
                                     div()
                                         .mt(px(3.))
                                         .mb(px(7.))
+                                        // Mantine's body `line-height: 1.55`.
+                                        .line_height(px(theme::TEXT_MD * 1.55))
                                         .text_color(theme.text_secondary())
                                         .child("Personal media library and organization."),
                                 )
                                 .child(
+                                    // An inline span on the paragraph's 20.15px
+                                    // strut, which its own 18.6px line lowers.
                                     div()
+                                        .h(px(20.6))
+                                        .pt(px(4.))
                                         .font_family(theme::FONT_INSPECTOR_MONO)
                                         .text(theme::TEXT_SM)
                                         .text_color(theme.text_tertiary())
@@ -2075,6 +2099,7 @@ impl SettingsWindow {
                         .flex()
                         .justify_center()
                         .text(theme::TEXT_SM)
+                        .line_height(px(theme::TEXT_SM * 1.55))
                         .text_color(theme.text_tertiary())
                         .child(format!("© {year} Picto contributors")),
                 )
@@ -2159,5 +2184,6 @@ mod tests {
         assert_eq!(model_size(1_260_000_000), "1.26 GB");
         assert_eq!(model_size(2_000_000_000), "2 GB");
         assert_eq!(model_size(993_246_982), "993 MB");
+        assert_eq!(model_size(0), "0 MB");
     }
 }

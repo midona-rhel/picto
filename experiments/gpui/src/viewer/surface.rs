@@ -10,6 +10,7 @@
 use super::camera::{self, Camera, Glide, Size};
 use super::document::{self, Document, kind::RendererKind};
 use crate::{motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
@@ -37,6 +38,9 @@ pub struct Options {
     pub scroll_pans: bool,
     /// The detail window's: a resized pane keeps the image's framing.
     pub follows_resize: bool,
+    /// A collection member in the reader (`GroupDeferredRenderer`): video
+    /// and audio wait to be played, do not loop and start with sound.
+    pub member: bool,
 }
 
 impl Default for Options {
@@ -46,6 +50,7 @@ impl Default for Options {
             opens_actual: false,
             scroll_pans: false,
             follows_resize: false,
+            member: false,
         }
     }
 }
@@ -136,20 +141,6 @@ impl MediaSurface {
     /// The media player, while a video or audio item is shown.
     pub fn player(&self) -> Option<Entity<super::video::VideoPlayer>> {
         self.player.clone()
-    }
-
-    /// Whether the shown item draws a bar of its own along the pane's bottom
-    /// edge: a document's page footer, or a player's controls. A host that
-    /// has a strip to show there gives it a row of its own instead.
-    pub fn has_bottom_bar(&self) -> bool {
-        match self.mode {
-            Mode::Document => matches!(
-                &self.document,
-                Some(Document::Paged(_) | Document::Reader(_))
-            ),
-            Mode::Media | Mode::Flash => true,
-            _ => false,
-        }
     }
 
     /// Whether the shown item has zoom controls: images and PDF pages do,
@@ -594,6 +585,11 @@ impl MediaSurface {
                     settings.video_auto_play,
                     settings.video_loop,
                 );
+                if self.options.member {
+                    options.auto_play = false;
+                    options.looping = false;
+                    options.muted = false;
+                }
                 // `PICTO_GPUI_SILENT=1`: nothing plays aloud, for checks run
                 // while nobody is at the machine.
                 options.muted |= std::env::var_os("PICTO_GPUI_SILENT").is_some();
@@ -893,7 +889,9 @@ impl Render for MediaSurface {
         let mut surface = div()
             .id("media-surface")
             .track_focus(&focus)
-            .key_context("Flash")
+            // Only a Flash movie keeps the keys for itself; on anything else
+            // a click that focuses the surface leaves the host's keys working.
+            .when(self.flash.is_some(), |surface| surface.key_context("Flash"))
             .relative()
             .size_full()
             .overflow_hidden()

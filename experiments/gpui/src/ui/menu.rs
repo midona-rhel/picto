@@ -2017,12 +2017,13 @@ impl Menu {
             }));
         for (position, swatch) in row.swatches.iter().enumerate() {
             let color = swatch.color.unwrap_or(theme.text());
-            let ring = super::color_picker::swatch(
-                color,
-                swatch.color.is_none(),
-                row.selected == Some(position),
-                cx,
-            );
+            let selected = row.selected == Some(position);
+            let check = if swatch.color.is_some() {
+                theme.on_primary()
+            } else {
+                theme.background()
+            };
+            let ring = super::color_picker::swatch(color, selected.then_some(check), cx);
             let target = div()
                 .id(("menu-swatch", position))
                 .cursor_pointer()

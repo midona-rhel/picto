@@ -3,6 +3,7 @@
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
 mod item_menu;
+pub(crate) use item_menu::media_link;
 pub mod library;
 mod shortcuts;
 pub mod sidebar;
@@ -125,6 +126,11 @@ impl Shell {
             cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx));
         let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
+            // The "Auto" theme follows the system's appearance as it changes.
+            cx.observe_window_appearance(window, |_, _, cx| {
+                let scheme = crate::settings::current(cx).color_scheme.clone();
+                crate::theme::show(&scheme, cx);
+            }),
             cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
             cx.subscribe_in(
                 &grid,
@@ -163,7 +169,16 @@ impl Shell {
                 &viewer,
                 window,
                 |this, _, event: &crate::viewer::MenuRequested, window, cx| {
-                    this.open_viewer_menu(event.position, event.flash, window, cx)
+                    let surface = this.viewer.read(cx).surface();
+                    this.open_viewer_menu(event, surface, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &quick_look,
+                window,
+                |this, _, event: &crate::viewer::MenuRequested, window, cx| {
+                    let surface = this.quick_look.read(cx).surface();
+                    this.open_viewer_menu(event, surface, window, cx)
                 },
             ),
             cx.subscribe_in(
@@ -872,6 +887,8 @@ impl Render for Shell {
         // The inspector's tag and folder pickers float over everything.
         let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
+        let (tag_dialog, folder_dialog) = self.inspector.read(cx).dialogs();
+        root = root.child(tag_dialog).child(folder_dialog);
         // So are the filter bar's, in their filter mode.
         let (tag_picker, folder_picker) = self.filter_bar.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);

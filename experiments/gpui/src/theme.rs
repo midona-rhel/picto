@@ -4,12 +4,15 @@
 //! colours and sizes from here and write none of their own.
 use gpui::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     background: u32,
     contrast: u32,
     text: u32,
     primary: u32,
+    /// `data-mantine-color-scheme="light"`: the light themes' stronger
+    /// borders, white control surfaces, glass and softer shadows.
+    light: bool,
 }
 
 impl Global for Theme {}
@@ -23,10 +26,69 @@ pub const DARK: Theme = Theme {
     contrast: 0xf8f9fb,
     text: 0xf8f9fb,
     primary: 0x3297ff,
+    light: false,
+};
+/// `:root[data-theme="blue"]`
+pub const BLUE: Theme = Theme {
+    background: 0x0d1630,
+    ..DARK
+};
+/// `:root[data-theme="purple"]`
+pub const PURPLE: Theme = Theme {
+    background: 0x1c1424,
+    ..DARK
+};
+/// `:root[data-theme="gray"]`
+pub const GRAY: Theme = Theme {
+    background: 0x37383c,
+    ..DARK
+};
+/// `:root[data-mantine-color-scheme="light"]`
+pub const LIGHT: Theme = Theme {
+    background: 0xffffff,
+    contrast: 0x2c2f32,
+    text: 0x2c2f32,
+    primary: 0x2563eb,
+    light: true,
+};
+/// `:root[data-mantine-color-scheme="light"][data-theme="lightgray"]`
+pub const LIGHT_GRAY: Theme = Theme {
+    background: 0xe3e4e6,
+    ..LIGHT
 };
 
 pub fn theme(cx: &App) -> Theme {
     *cx.global::<Theme>()
+}
+
+/// `resolveTheme`: the theme a stored `colorScheme` names. "auto" follows
+/// the system's appearance; an unknown name, and the native transparency
+/// themes this app cannot draw, are Dark.
+pub fn named(name: &str, system_dark: bool) -> Theme {
+    match name {
+        "auto" if system_dark => DARK,
+        "auto" | "light" => LIGHT,
+        "lightgray" => LIGHT_GRAY,
+        "gray" => GRAY,
+        "blue" => BLUE,
+        "purple" => PURPLE,
+        _ => DARK,
+    }
+}
+
+/// Shows `name`'s theme in every window, repainting each view, if it is
+/// not the one shown.
+pub fn show(name: &str, cx: &mut App) {
+    let system_dark = matches!(
+        cx.window_appearance(),
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    );
+    let next = named(name, system_dark);
+    if !cx.has_global::<Theme>() || *cx.global::<Theme>() != next {
+        cx.set_global(next);
+        // Cached views paint again only when the window refreshes.
+        cx.refresh_windows();
+    }
 }
 
 /// `color-mix(in srgb, <color> <percent>%, transparent)`.
@@ -55,6 +117,14 @@ impl Theme {
     pub fn rail(&self) -> Rgba {
         mixed(self.contrast, 3., self.background)
     }
+    /// `--color-contrast-03` laid over the rail, as one opaque colour: the
+    /// Settings content panel. GPUI paints a box shadow under the whole
+    /// element rather than only outside it, so a translucent fill over a
+    /// shadow would darken.
+    pub fn rail_raised(&self) -> Rgba {
+        // 3% over 3%: 1 - 0.97².
+        mixed(self.contrast, 5.91, self.background)
+    }
     /// `--color-surface-2`, placeholders.
     pub fn surface_2(&self) -> Rgba {
         mixed(self.contrast, 5., self.background)
@@ -69,7 +139,11 @@ impl Theme {
     }
     /// `--color-control-surface`, text fields.
     pub fn control_surface(&self) -> Rgba {
-        rgba(0x00000033)
+        if self.light {
+            rgba(0xffffff80)
+        } else {
+            rgba(0x00000033)
+        }
     }
     /// `--color-hover-overlay`
     pub fn hover_overlay(&self) -> Rgba {
@@ -89,11 +163,11 @@ impl Theme {
     }
     /// `--color-border-primary`
     pub fn border(&self) -> Rgba {
-        translucent(self.contrast, 10.)
+        translucent(self.contrast, if self.light { 15. } else { 10. })
     }
     /// `--color-border-secondary`, rail edges and separators.
     pub fn border_secondary(&self) -> Rgba {
-        translucent(self.contrast, 8.)
+        translucent(self.contrast, if self.light { 10. } else { 8. })
     }
     /// `color-mix(in srgb, var(--color-text-primary) NN%, transparent)`.
     pub fn text_at(&self, percent: f32) -> Rgba {
@@ -113,7 +187,7 @@ impl Theme {
     }
     /// `--glass-bg`: floating surfaces.
     pub fn glass(&self) -> Rgba {
-        translucent(self.background, 92.)
+        translucent(self.background, if self.light { 90. } else { 92. })
     }
     /// `LibraryAvatar`: `color-mix(currentColor 10%, control-surface)` with
     /// the secondary text colour.
@@ -122,7 +196,11 @@ impl Theme {
     }
     /// `--glass-border-top`
     pub fn glass_border_top(&self) -> Rgba {
-        rgba(0xffffff40)
+        if self.light {
+            rgba(0xffffffff)
+        } else {
+            rgba(0xffffff40)
+        }
     }
     /// `--color-border-focus`: `--color-primary-60`.
     pub fn border_focus(&self) -> Rgba {
@@ -142,7 +220,11 @@ impl Theme {
     }
     /// `--glass-border-side`
     pub fn glass_border(&self) -> Rgba {
-        rgba(0xffffff26)
+        if self.light {
+            rgba(0xffffff80)
+        } else {
+            rgba(0xffffff26)
+        }
     }
     /// `--color-subtle-overlay`: `--color-contrast-10`.
     pub fn subtle_overlay(&self) -> Rgba {
@@ -171,7 +253,11 @@ impl Theme {
     }
     /// `--glass-border-bottom`
     pub fn glass_border_bottom(&self) -> Rgba {
-        rgba(0xffffff1a)
+        if self.light {
+            rgba(0xffffff40)
+        } else {
+            rgba(0xffffff1a)
+        }
     }
     /// Chromium's `::placeholder` colour (`darkGray`), for inputs the app
     /// does not give a placeholder colour of its own.
@@ -181,7 +267,11 @@ impl Theme {
     /// `color-mix(in srgb, var(--color-control-surface) 50%, transparent)`:
     /// the footer of the library switcher.
     pub fn control_surface_half(&self) -> Rgba {
-        rgba(0x0000001a)
+        if self.light {
+            rgba(0xffffff40)
+        } else {
+            rgba(0x0000001a)
+        }
     }
     /// `--color-text-disabled`
     pub fn text_disabled(&self) -> Rgba {
@@ -268,20 +358,34 @@ pub fn blend(from: Rgba, to: Rgba, amount: f32) -> Rgba {
     }
 }
 
-/// `--shadow-panel`
-pub fn panel_shadow() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow::new(px(0.), px(12.), rgba(0x0000004d).into()).blur_radius(px(24.)),
-        BoxShadow::new(px(0.), px(0.), rgba(0x00000080).into()).spread_radius(px(1.)),
-    ]
-}
+impl Theme {
+    /// `--shadow-panel`
+    pub fn panel_shadow(&self) -> Vec<BoxShadow> {
+        let (shade, ring) = self.panel_shadow_colors();
+        vec![
+            BoxShadow::new(px(0.), px(12.), rgba(shade).into()).blur_radius(px(24.)),
+            BoxShadow::new(px(0.), px(0.), rgba(ring).into()).spread_radius(px(1.)),
+        ]
+    }
 
-/// `--shadow-panel-small`
-pub fn panel_shadow_small() -> Vec<BoxShadow> {
-    vec![
-        BoxShadow::new(px(0.), px(3.), rgba(0x0000004d).into()).blur_radius(px(12.)),
-        BoxShadow::new(px(0.), px(0.), rgba(0x00000080).into()).spread_radius(px(1.)),
-    ]
+    /// `--shadow-panel-small`
+    pub fn panel_shadow_small(&self) -> Vec<BoxShadow> {
+        let (shade, ring) = self.panel_shadow_colors();
+        vec![
+            BoxShadow::new(px(0.), px(3.), rgba(shade).into()).blur_radius(px(12.)),
+            BoxShadow::new(px(0.), px(0.), rgba(ring).into()).spread_radius(px(1.)),
+        ]
+    }
+
+    /// The panel shadows' black: 30% and a 50% ring, 15% for both in the
+    /// light themes.
+    fn panel_shadow_colors(&self) -> (u32, u32) {
+        if self.light {
+            (0x00000026, 0x00000026)
+        } else {
+            (0x0000004d, 0x00000080)
+        }
+    }
 }
 
 /// `LibraryAvatar.module.css` `.avatar::after`: its inset shadows.
@@ -541,8 +645,14 @@ pub const TEXT_SM: f32 = 12.;
 pub const TEXT_MD: f32 = 13.;
 /// `--font-size-lg`
 pub const TEXT_LG: f32 = 14.;
+/// Mantine's body `line-height` (`--mantine-line-height`), which text with
+/// no line height of its own inherits: 13px text sits on a 20.15px line.
+pub const LINE_HEIGHT_INHERITED: f32 = 1.55;
 /// `--line-height-md`
 pub const LINE_HEIGHT_MD: f32 = 20.;
+/// Mantine's `--mantine-line-height`, which text inherits from the body
+/// where no rule sets a line height (the Subscriptions screen's cards).
+pub const LINE_HEIGHT_BODY: f32 = 1.55;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
 /// `--font-size-title`
@@ -602,7 +712,10 @@ pub const TILE_RADIUS: f32 = 4.;
 
 #[cfg(test)]
 mod tests {
-    use super::{DARK, blend, parse_css_color, parse_hex, parse_hex_code};
+    use super::{
+        BLUE, DARK, GRAY, LIGHT, LIGHT_GRAY, PURPLE, blend, named, parse_css_color, parse_hex,
+        parse_hex_code,
+    };
     use gpui::{Rgba, rgb, rgba};
 
     #[test]
@@ -634,6 +747,28 @@ mod tests {
         assert_eq!(DARK.border_secondary(), rgba(0xf8f9fb14));
         assert_eq!(DARK.text_tertiary(), rgba(0xf8f9fb99));
         assert_eq!(DARK.glass(), rgba(0x18191ceb));
+    }
+
+    #[test]
+    fn stored_theme_names_resolve_as_resolve_theme_does() {
+        assert_eq!(named("auto", true), DARK);
+        assert_eq!(named("auto", false), LIGHT);
+        assert_eq!(named("lightgray", true), LIGHT_GRAY);
+        assert_eq!(named("gray", false), GRAY);
+        assert_eq!(named("blue", false), BLUE);
+        assert_eq!(named("purple", false), PURPLE);
+        // Unknown names and the native transparency themes are Dark.
+        assert_eq!(named("vibrancy", false), DARK);
+        assert_eq!(named("nonsense", false), DARK);
+    }
+
+    #[test]
+    fn light_themes_resolve_their_own_surfaces() {
+        assert_eq!(LIGHT.border(), rgba(0x2c2f3226));
+        assert_eq!(LIGHT.border_secondary(), rgba(0x2c2f321a));
+        assert_eq!(LIGHT.control_surface(), rgba(0xffffff80));
+        assert_eq!(LIGHT_GRAY.glass(), rgba(0xe3e4e6e6));
+        assert_eq!(BLUE.rail(), rgb(0x141d36));
     }
 
     #[test]

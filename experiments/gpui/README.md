@@ -378,6 +378,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   sections, the inspector's tag prefixes, and the grid's default view and the
   `gridSpacing` fallback, which the grid reads again. Writes go to the
   disposable copy only.
+- Themes (`theme.rs`, from `tokens.css`): Auto, Light, Light Gray, Gray,
+  Dark, Blue and Purple, with the light themes' stronger borders, white
+  control surfaces, glass and softer panel shadows. A swatch shows its theme
+  in every window at once, as `previewTheme` does; Save & Close or Apply
+  keep it, and closing Settings without saving puts the saved one back. Auto
+  follows the system's appearance as it changes. Every window repaints.
+  The Zoom Level setting is saved and, as in production, not applied.
 - Shared form controls in `ui/`, each once, to the production CSS with their
   hover, pressed, focus and disabled states and timings: the Settings footer
   and inline buttons as looks of the one action button,
@@ -394,8 +401,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Details section with the search and a folder's auto-tag and watch state.
 - The inspector's tag picker (`TagSelectPanel` in `OverlayShell`), from
   Add Tags, the "+" after the tag chips, a right-click in the Tags section
-  and T: a 540×480 glass panel docked left of the inspector at the button
-  (80px below the rail's top from the keyboard, centred when the rail is
+  and the viewer menu's Add Tags: a 540×480 glass panel docked left of the inspector at the button
+  (80px below the rail's top from the viewer menu, centred when the rail is
   hidden), over a clear backdrop that closes it on a click or right-click,
   dragged by its header or footer after 5px, Escape to close, a pin that
   keeps it open without the backdrop. The search asks the library's ranked
@@ -415,13 +422,28 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   to Group or Remove from this Group, and Copy Tag.
 - The folder picker (`FolderPickerPanel` with `FolderTree`), from Add to
   Folder, the "+" after the folder chips, a right-click in the Folders
-  section and F: the folder tree with its guide lines, folding chevrons and
+  section and the viewer menu's Add to Folder: the folder tree with its guide lines, folding chevrons and
   parent names, the search (matches with their ancestors, every branch
   open), the items' folders checked, a click that adds the items to the
   folder or takes them out, the Recent and Selected views (Tab cycles), the
   arrows and Enter, and a row's menu with New Subfolder and New Sibling
   Folder, which ask for a name in a dialog, create the folder and add the
   items to it.
+- The Add Tags and Folders dialogs (`TagSelectModal`, `FolderPickerModal`
+  on the shared `SelectionModalShell`: `inspector/tag_dialog.rs`,
+  `inspector/folder_dialog.rs`, `ui/selection_modal.rs`), from T, F, ⌘⇧J and
+  the grid menu's Add Tags and Add to Folder: a 680×614 (560×574) glass
+  dialog with the search, a rail of Recent, Selected (Members) and All, then
+  the tag groups with their dots and counts, and a list of check-box rows
+  (the tag list virtualised to the whole count, 100 a page; the folder tree
+  with its fold buttons). Clicks and Enter only mark tags or folders; the
+  footer sums them ("+1, −2 · 3 files", or "N files selected") and Apply (N)
+  writes them to the selection through the inspector's edit path, Cancel,
+  Escape, the close button and the backdrop forget them. The arrows, Enter
+  and Tab work in the tag dialog's search as in production; in the folder
+  dialog Enter applies. As in production the checks start from the item the
+  inspector shows or last showed, whatever is selected; Folders' Apply
+  clears the selection. Recent tags and folders last for the session.
 - After any of these edits the library is read again: the sidebar's
   destinations and counts, the tags, the item or the selection's summary,
   and the grid when its destination's results can change (Untagged, a
@@ -475,8 +497,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   end shows "First item" or "Last item" for 800 ms. The previous image stays
   until the next thumbnail has decoded; the original replaces the thumbnail
   once decoded, as `ImageCrossfadeFrame` swaps them.
-- A collection's members step with the bottom strip of
-  `QuickLookNavigation` (48×32 buttons, monospace counter).
+- A collection opens in `GroupSurface`'s reader (`viewer/group.rs`), in the
+  media view, Quick Look and the detail window alike: its members one under
+  another, each in a glass frame of its own shape the column's full width
+  (at least 180px tall), 16px apart and from the edges, beside the 8px
+  scrollbar gutter. A member shows its thumbnail; after 200 ms in view its
+  full media loads (an image's original fades in over 130 ms; a PDF, video
+  or other member opens in a media surface of its own, video not playing
+  by itself), the last 100 kept. The viewer toolbar then has no zoom and
+  shows "Edit group". A right-click on a member opens the viewer's menu for
+  it, with the search field.
 - Enter or a double-click opens the media view on the one selected item;
   Enter, Space or Escape close it. Originals decode off the drawing thread;
   stale loads are fenced.
@@ -494,7 +524,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Open with Default App, Reveal in Finder, ⌘⌫ by scope as
   `gridRemovalAction` decides, Restore in the Trash, Accept and Reject in the
   Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which open the
-  inspector's tag and folder pickers), `Viewer` (previous, next, fit, actual
+  Add Tags and Folders dialogs), `Viewer` (previous, next, fit, actual
   size, zoom, close, ratings for the shown item, in the media view and Quick
   Look), `DetailWindow` (the viewer's keys except that only Escape closes,
   ⇧T and Copy File Path) and `Duplicates`. None of them fires while a text
@@ -533,7 +563,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   ⌘⌥C copies the file's path. It has the navigator. Several can be open at
   once; opening an item already open brings its window forward. A
   collection opens as `GroupDetailWindow`: its name, the pin and close
-  buttons, and its members on the strip.
+  buttons, and its members in the reader. A right-click on the media opens
+  the viewer's menu on the file alone (open, reveal, new window, copy rows,
+  Search by Image, More), as production's detail window has it.
 - Opening triggers per the Controls settings: a double-click opens the
   media view, or the default application under `gridDoubleClickAction:
   external` (media only); a middle-click opens the tile in a detail window
@@ -577,7 +609,14 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   rail (cover, name, status with the failure as its tooltip, actions, run
   progress, run counts, last check, schedule, posts per run, destination
   folders and tags) and the Sources, History and Problems tables, with the
-  sticky header, hover rows and row buttons. Names rename in place, from the
+  sticky header, hover rows and row buttons. Opening a subscription
+  acknowledges its open issues (`subscriptions.issues.acknowledge`), so its
+  badge stops warning, as `refreshDetail` does. The schedule (the rail's
+  select and the menus' Schedule submenu, for one or several) and the
+  posts-per-run field save through `subscriptions.schedule` and
+  `subscriptions.posts_per_run`. Badges and table headings keep their
+  letter spacing (`ui::tracked`, which draws a shaped line glyph by glyph
+  with the spacing CSS adds). Names rename in place, from the
   card's menu or a double-click on the rail's name, through the library's
   published write. The reads are the application catalog's own, run through
   the library's consistent auxiliary read; the list and the query rows use
@@ -796,10 +835,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
   not its rounded corners.
-- The pickers: T, F, ⌘⇧J and the grid menu's Add Tags and Add to Folder
-  open the inspector's pickers, where production opens the separate
-  `TagSelectModal` and `FolderPickerModal` dialogs (with a pending selection
-  and Apply), which are not ported. With
+- The Add Tags and Folders dialogs: Tab in the folder dialog's search does
+  not move the keyboard to the next control as the browser does, the fold
+  chevron turns at once rather than over 120 ms, row highlights do not fade
+  over 60 ms, and a folder's own glyph is drawn as the plain folder (`TODO`).
+- The pickers: with
   several items selected, a picker starts from the tags or folders they all
   share (production starts from the details of the item last shown). The
   pickers' layout, counts, folded rail, pin and recent folders last for the
@@ -809,7 +849,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   printed).
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong (theme, zoom, language, the grid's wheel action, image rendering
+  belong (language, the grid's wheel action, image rendering
   and the transparency grid, notifications,
   imports, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
@@ -817,8 +857,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   localStorage.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
-  are downloaded and their storage) are drawn but not performed; every model
-  shows as not downloaded. Selects open by pointer only (no arrow keys or
+  are downloaded) are drawn but not performed; every model shows as not
+  downloaded, and only the storage they take is read (`ai.status`). An audio
+  tile's tint is the dark theme's in every theme, and the native
+  transparency themes (vibrancy, Liquid Glass, Mica, Acrylic) fall back to
+  Dark. Selects open by pointer only (no arrow keys or
   typeahead), there is no keyboard focus ring or tab order, the section
   headings' letter spacing is not drawn, the window can still be zoomed and
   made full screen, and a binding field cannot capture keys the app binds
@@ -827,14 +870,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Subscriptions: no run has been started from this app yet; failures and completions are not announced (no toasts or
   system notifications). Creating subscriptions, galleries and sources, and
   the per-source Run, Hold, Group, Edit and Delete, are drawn but not
-  performed. Also not built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
-  dialog, reset and delete confirmations, adding or removing destination
-  folders and tags, the source details and edit windows, the accounts
-  window and login warnings, the gallery progress total, and acknowledging
-  issues when a subscription is opened. Site names and example queries are
-  copied from the source catalog in `core`. Letter spacing on badges and
-  table headers, and the native `title` tooltips of truncated cells, are
-  not drawn.
+  performed. Also not built: the cover dialog, reset and delete
+  confirmations (their menu rows are drawn and do nothing yet), adding or
+  removing destination folders and tags, the source details and edit
+  windows, the accounts window and login warnings, and the gallery progress
+  total. Site names and example queries are copied from the source catalog
+  in `core`. The native `title` tooltips of truncated cells are not drawn.
+  A cover saved as a rendered crop shows here; production's media protocol
+  serves a thumbnail only for a hash that has an original, so it falls back
+  to the download glyph for those covers.
 - Drawn with their hover states and tooltips but not wired: the
   inspector's Export (for an item, a selection and a destination), and in
   the library switcher's popover
@@ -930,32 +974,31 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   MP3 with the visualizer, each with its controls. Not checked: timings,
   hover states, the volume and rate popups; what was checked headlessly is
   listed under Checks.
-- Collection members use previous/next controls, not the continuous collection
-  scroll surface (`GroupSurface`), in all three hosts: Quick Look shows a
-  collection's first member in the collection frame, and the detail window
-  steps its members with the strip.
+- Collection reader: no collection editor ("Edit group" does nothing yet,
+  so the breadcrumb never shows), no double-click opening a member alone,
+  no menu between members (Sort Contents, Ungroup...), and a member's menu
+  lacks "Remove from Group" and acts on the collection for its Trash row
+  only by a TODO. In the detail window members have no menu.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
-  corners do not clip a zoomed image. No right-click menu or Copy (the
-  file itself).
+  corners do not clip a zoomed image. No Copy (the file itself).
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
   the item. Space paging the grid jumps where production scrolls smoothly.
-- Detail window: no context menu, Copy (the file itself), per-image zoom
+- Detail window: its menu's Copy, Search by Image and More rows do nothing
+  yet; no Copy (the file itself) shortcut, per-image zoom
   memory, backdrop blur under the toolbar, or "Loading..." placeholder; the
   pinned button rests at full strength rather than production's 94%. Moving
   the window by its toolbar does not keep the toolbar showing as
   `picto:window-moved` does. Its size uses the primary display's work area,
   as production does, even when the main window is on another display.
   Always on top and the aspect lock are set through AppKit, on macOS only.
-- Context menus exist for grid items, empty grid space, the viewer, the
+- Context menus exist for grid items, empty grid space, the viewer (media view, Quick Look and detail window), the
   inspector's preview, the sidebar, the viewer's zoom percentage,
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
   the menu as a full-window layer; the menu itself chooses between its
-  pop-up windows and the in-window panel. Subscriptions' Schedule row stays
-  disabled rather than a submenu; `subscriptions.schedule`, which also sets
-  the next run time, is now reachable and is its `TODO`. The grid menus'
+  pop-up windows and the in-window panel. The grid menus'
   view options are rows that check inside "Layout", "Sort by" and "Display"
   submenus, kept open while they change, where the titlebar's View options
   shows production's panel. "Open With Other" is
@@ -973,8 +1016,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   organizer, Batch Rename, Auto Tag, Import Files, Import Folder and Paste
   Import, and Set as Thumbnail. "Add Tags", "Add to Folder" and "New Smart
   Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
-  `NewSmartFolder`, which open the inspector's pickers and the smart-folder
-  editor. "Open in New Window" opens the item alone in a detail window.
+  `NewSmartFolder`, which open the Add Tags and Folders dialogs (the
+  inspector's pickers from the viewer's menu) and the smart-folder editor.
+  "Open in New Window" opens the item alone in a detail window.
   "Add to “…”" appears once a folder has been used (the folder picker and
   this row record it; for the session only). Errors go to the
   console, not to notifications. Edits that change what the destination
@@ -1000,9 +1044,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - No import/export, cloud, localization or site login. The grid shown is
   not read again when background work (an import, a subscription run)
   changes it; going to another destination and back does.
-- Viewer: the breadcrumb and "Edit group" belong to the collection editor,
-  which does not exist yet, so neither is ever shown; collections step
-  through members with the bottom strip instead of the reader surface. No
+- Viewer: the breadcrumb belongs to the collection editor, which does not
+  exist yet. No
   transparency checkerboard (off by default in Picto), no per-image zoom
   memory, no copy shortcut and no Inbox review controls. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
@@ -1013,8 +1056,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
   Remove from Group, Toggle Grayscale, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
-  are not bound either. T, F and ⌘⇧J open the inspector's pickers rather than
-  production's picker dialogs; batch rename for several items is a `TODO`. Space scrolls the grid
+  are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
   itself. The application menu's accelerators that also work while a text

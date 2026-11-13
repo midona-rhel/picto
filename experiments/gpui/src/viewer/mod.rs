@@ -9,6 +9,7 @@ pub mod detail;
 pub mod document;
 pub mod flash;
 mod flash_controls;
+pub mod group;
 pub mod quick_look;
 mod strip;
 pub mod surface;
@@ -17,8 +18,7 @@ pub mod trigger;
 pub mod video;
 
 use crate::session::{Change, Session, Transition};
-use crate::theme::Text as _;
-use crate::{motion, theme, ui};
+use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::RootId;
@@ -44,10 +44,11 @@ actions!(
 );
 
 /// The viewer was right-clicked at this window position; `flash` says a
-/// Flash movie is showing.
+/// Flash movie is showing, `member` that a collection's member was.
 pub struct MenuRequested {
     pub position: Point<Pixels>,
     pub flash: bool,
+    pub member: bool,
 }
 
 impl EventEmitter<MenuRequested> for Viewer {}
@@ -124,7 +125,8 @@ impl Boundary {
                 .py(px(8.))
                 .rounded(px(theme::RADIUS_MD))
                 .bg(rgba(theme::VIEWER_NOTICE_BACKGROUND))
-                .text(theme::TEXT_MD)
+                .text_size(px(theme::TEXT_MD))
+                .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_INHERITED))
                 .text_color(theme.text_secondary())
                 .whitespace_nowrap()
                 .opacity(fade.value_with(motion::EASE))
@@ -154,7 +156,7 @@ impl Media {
         details.media.get(member).map(|media| Self {
             name: details.root.name.clone().into(),
             key: media.facts.content_hash.clone(),
-            thumbnail: session.thumbnail(&media.facts.content_hash),
+            thumbnail: thumbnail_file(session.thumbnail(&media.facts.content_hash)),
             natural: size_of(media.facts.width, media.facts.height),
             path: PathBuf::from(&media.file_path),
             mime: media.facts.mime.clone(),
@@ -172,6 +174,17 @@ impl Media {
             cx,
         )
     }
+}
+
+/// The thumbnail file that exists: the JPEG the library writes, or the PNG
+/// written for audio waveforms and captured frames, as the media protocol
+/// looks for `jpg` then `png`.
+pub fn thumbnail_file(jpeg: PathBuf) -> PathBuf {
+    if jpeg.exists() {
+        return jpeg;
+    }
+    let png = jpeg.with_extension("png");
+    if png.exists() { png } else { jpeg }
 }
 
 /// What the session's viewer shows: the bundled sample, or the shown member
@@ -198,7 +211,7 @@ fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx:
         session.selected_item().map(|item| {
             (
                 item.content_hash.clone(),
-                session.thumbnail(&item.content_hash),
+                thumbnail_file(session.thumbnail(&item.content_hash)),
                 size_of(item.width, item.height),
             )
         })
@@ -219,6 +232,7 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
         opens_actual: settings.image_default_zoom == "actual",
         scroll_pans: settings.viewer_trackpad_gestures,
         follows_resize,
+        member: false,
     }
     // TODO: `imageRendering: pixelated` draws images with nearest-neighbour
     // sampling and `showTransparencyGrid` draws the checkerboard behind
@@ -244,6 +258,8 @@ pub fn browsing_recent(session: &Session) -> bool {
 pub struct Viewer {
     session: Entity<Session>,
     surface: Entity<MediaSurface>,
+    /// A collection's members, while one is open.
+    group: Entity<group::GroupReader>,
     toolbar: Entity<ViewerToolbar>,
     focus: FocusHandle,
     /// Whether the viewer was open at the last change.
@@ -268,7 +284,11 @@ impl Viewer {
         });
         let viewer = cx.entity().downgrade();
         let toolbar = cx.new(|cx| ViewerToolbar::new(session.clone(), surface.clone(), viewer, cx));
+        let group = cx.new(|_| group::GroupReader::new(session.clone()));
         let subscriptions = vec![
+            cx.subscribe(&group, |this, _, event: &group::MemberMenu, cx| {
+                this.member_menu(event, cx)
+            }),
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 match change {
                     Change::Selection => {
@@ -325,6 +345,7 @@ impl Viewer {
         Self {
             session,
             surface,
+            group,
             toolbar,
             focus: cx.focus_handle(),
             open: false,
@@ -344,6 +365,21 @@ impl Viewer {
     /// The media surface, for the viewer's context menu.
     pub fn surface(&self) -> Entity<MediaSurface> {
         self.surface.clone()
+    }
+
+    /// A collection member was right-clicked: the viewer's menu for it.
+    fn member_menu(&mut self, event: &group::MemberMenu, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            let delta = event.member as isize - session.member as isize;
+            if delta != 0 {
+                session.step_member(delta, cx);
+            }
+        });
+        cx.emit(MenuRequested {
+            position: event.position,
+            flash: false,
+            member: true,
+        });
     }
 
     /// The viewer has the keyboard while it is open, so its shortcuts apply,
@@ -378,6 +414,26 @@ impl Viewer {
             )
         };
         self.recorded = viewing;
+        // A collection shows its members in the reader once its details
+        // are there (`GroupSurface`); the surface then shows nothing.
+        let collection = {
+            let session = self.session.read(cx);
+            session
+                .viewer
+                .then(|| shown_collection(session))
+                .flatten()
+                .cloned()
+        };
+        if let Some(details) = collection {
+            self.surface.update(cx, |surface, _| surface.stop());
+            self.group.update(cx, |group, cx| group.show(&details, cx));
+            return;
+        }
+        self.group.update(cx, |group, cx| {
+            if group.root().is_some() {
+                group.clear(cx)
+            }
+        });
         self.surface.update(cx, |surface, cx| match target {
             Some(media) => media.open(surface, cx),
             None => surface.stop(),
@@ -421,6 +477,24 @@ impl Viewer {
     }
 }
 
+/// Whether the selected item is a collection.
+pub fn collection_selected(session: &Session) -> bool {
+    session.demo.is_none()
+        && session
+            .selected_item()
+            .is_some_and(|item| item.kind == picto_library::RootKind::Collection)
+}
+
+/// The selected collection's details, once they have arrived.
+fn shown_collection(session: &Session) -> Option<&picto_library::RootDetails> {
+    if !collection_selected(session) {
+        return None;
+    }
+    session
+        .selected_details()
+        .filter(|details| details.root.kind == picto_library::RootKind::Collection)
+}
+
 /// An item's size in image pixels, when the library knows it.
 fn size_of(width: Option<u32>, height: Option<u32>) -> Option<camera::Size> {
     Some((width? as f32, height? as f32)).filter(|size| size.0 > 0. && size.1 > 0.)
@@ -432,21 +506,7 @@ impl Render for Viewer {
         if self.boundary.animating() {
             window.request_animation_frame();
         }
-        let (members, member) = {
-            let session = self.session.read(cx);
-            let members = if session.demo.is_some() {
-                1
-            } else {
-                session
-                    .details
-                    .as_ref()
-                    .map_or(1, |details| details.media.len())
-            };
-            (members, session.member)
-        };
-        // A document's footer or a player's controls keep the bottom edge;
-        // the member strip then takes a row below the surface.
-        let row = members > 1 && self.surface.read(cx).has_bottom_bar();
+        let collection = collection_selected(self.session.read(cx));
         // "Media" while the player shows, for its keys.
         let media = self.surface.read(cx).player().is_some();
         let pane = div()
@@ -482,57 +542,32 @@ impl Render for Viewer {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    // A collection's members have their own menu; the space
+                    // between them has the collection's, which the reader
+                    // does not offer yet.
+                    if collection_selected(this.session.read(cx)) {
+                        return;
+                    }
                     let flash = this.surface.read(cx).flash();
                     cx.emit(MenuRequested {
                         position: event.position,
                         flash,
+                        member: false,
                     });
                 }),
             )
-            .child(strip::surface_frame(row).child(self.surface.clone()));
+            .child(if collection {
+                self.group.clone().into_any_element()
+            } else {
+                self.surface.clone().into_any_element()
+            });
         let surface = self.surface.downgrade();
-        let mut pane = video::on_actions(pane, move |cx| {
+        video::on_actions(pane, move |cx| {
             surface
                 .upgrade()
                 .and_then(|surface| surface.read(cx).player())
         })
         .child(self.boundary.notice(End::First, cx))
-        .child(self.boundary.notice(End::Last, cx));
-        if members > 1 {
-            let member_step = |id: &'static str,
-                               icon: &'static str,
-                               label: &'static str,
-                               delta: isize,
-                               enabled: bool,
-                               cx: &mut Context<Self>| {
-                strip::strip_button(id, icon, ui::tip(label))
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.session
-                            .update(cx, |session, cx| session.step_member(delta, cx));
-                    }))
-            };
-            pane = pane.child(
-                strip::strip(row, cx)
-                    .child(member_step(
-                        "member-previous",
-                        "toolbar-chevron-left",
-                        "Previous",
-                        -1,
-                        member > 0,
-                        cx,
-                    ))
-                    .child(strip::counter(member + 1, members, cx))
-                    .child(member_step(
-                        "member-next",
-                        "toolbar-chevron-right",
-                        "Next",
-                        1,
-                        member + 1 < members,
-                        cx,
-                    )),
-            );
-        }
-        pane
+        .child(self.boundary.notice(End::Last, cx))
     }
 }

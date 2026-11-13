@@ -1226,7 +1226,7 @@ impl SmartFolderEditor {
                                 .bg(theme.glass())
                                 .border_t_1()
                                 .border_color(theme.glass_border_top())
-                                .shadow(theme::panel_shadow())
+                                .shadow(theme.panel_shadow())
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .child(open.editor.clone()),
                         ),

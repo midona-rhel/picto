@@ -256,13 +256,19 @@ impl Global for SettingsGlobal {}
 /// Views that follow a setting read it with [`model`].
 pub fn init(session: Entity<Session>, cx: &mut App) {
     let model = cx.new(|cx| SettingsModel::new(session, cx));
-    // Applied shortcut edits and keyboard presets rebind the keys at once.
+    // Applied shortcut edits and keyboard presets rebind the keys at once,
+    // and every window takes the applied theme.
     cx.subscribe(&model, |model, _: &Applied, cx| {
-        let (preset, overrides) = {
+        let (preset, overrides, scheme) = {
             let saved = &model.read(cx).saved;
-            (saved.keyboard, saved.shortcuts.clone())
+            (
+                saved.keyboard,
+                saved.shortcuts.clone(),
+                saved.app.color_scheme.clone(),
+            )
         };
         crate::keymap::install(preset, &overrides, cx);
+        crate::theme::show(&scheme, cx);
     })
     .detach();
     cx.set_global(SettingsGlobal {

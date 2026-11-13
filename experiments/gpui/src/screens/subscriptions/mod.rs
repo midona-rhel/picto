@@ -54,6 +54,11 @@ pub enum Command {
     Stop,
     /// Put future runs on hold, or release them.
     Hold(bool),
+    /// When the subscription runs by itself: `manual`, `daily`, `weekly` or
+    /// `monthly`.
+    Schedule(&'static str),
+    /// How many posts one run reads at most.
+    PostsPerRun(i64),
 }
 
 impl Command {
@@ -88,6 +93,17 @@ impl Command {
                 "subscriptions.hold",
                 serde_json::json!({ "subscription_id": subscription_id, "paused": paused }),
             ),
+            Command::Schedule(schedule) => (
+                "subscriptions.schedule",
+                serde_json::json!({ "subscription_id": subscription_id, "schedule": schedule }),
+            ),
+            Command::PostsPerRun(posts_per_run) => (
+                "subscriptions.posts_per_run",
+                serde_json::json!({
+                    "subscription_id": subscription_id,
+                    "posts_per_run": posts_per_run,
+                }),
+            ),
         }
     }
 
@@ -95,6 +111,46 @@ impl Command {
     fn starts(self) -> bool {
         matches!(self, Command::Run | Command::Resume)
     }
+}
+
+/// `SCHEDULES`: the stored value and its label.
+const SCHEDULES: [(&str, &str); 4] = [
+    ("manual", "Manual"),
+    ("daily", "Daily"),
+    ("weekly", "Weekly"),
+    ("monthly", "Monthly"),
+];
+
+/// A schedule's stored value, as the menu hands it back.
+fn schedule_named(value: &str) -> Option<&'static str> {
+    SCHEDULES
+        .iter()
+        .map(|(schedule, _)| *schedule)
+        .find(|schedule| *schedule == value)
+}
+
+/// The Schedule submenu: the current schedule ticked and not offered again.
+fn schedule_menu(current: Option<&str>) -> menu::Entry {
+    menu::submenu(
+        "Schedule",
+        SCHEDULES
+            .iter()
+            .map(|(value, label)| {
+                let chosen = current == Some(*value);
+                let item = menu::item("schedule", *label)
+                    .value(*value)
+                    .disabled(chosen);
+                if chosen {
+                    item.icon("menu-check")
+                } else {
+                    item
+                }
+                .into()
+            })
+            .collect(),
+    )
+    .icon("menu-clock")
+    .into()
 }
 
 /// The tabs of a subscription's data plane.
@@ -397,9 +453,29 @@ impl SubscriptionsScreen {
             let Ok(Ok(detail)) = answer.await else {
                 return;
             };
+            // `refreshDetail`: looking at a subscription acknowledges its
+            // open issues, so its badge stops warning; the Problems tab
+            // still lists them until they are resolved.
+            let Ok(acknowledged) = this.update(cx, |this, cx| {
+                this.session.read(cx).dispatch(
+                    "subscriptions.issues.acknowledge",
+                    serde_json::json!({ "subscription_id": id }),
+                )
+            }) else {
+                return;
+            };
+            let acknowledged = matches!(acknowledged.await, Ok(Ok(_)));
             let _ = this.update(cx, |this, cx| {
                 if this.detail_generation == generation {
                     this.detail = Some(detail);
+                    if acknowledged
+                        && let Some(entry) = this
+                            .list
+                            .as_mut()
+                            .and_then(|list| list.iter_mut().find(|entry| entry.id == id))
+                    {
+                        entry.open_issues = 0;
+                    }
                     cx.notify();
                 }
             });
@@ -649,18 +725,13 @@ impl SubscriptionsScreen {
                     // TODO: the cover dialog, to frame a downloaded image.
                     menu::item("cover", "Set Cover Photo…")
                         .icon("menu-photo-edit")
-                        .disabled(true)
                         .into(),
-                    // TODO: a submenu of Manual, Daily, Weekly and Monthly.
-                    menu::item("schedule", "Schedule")
-                        .icon("menu-clock")
-                        .disabled(true)
-                        .into(),
+                    schedule_menu(Some(subscription.schedule.as_str())),
                     menu::Entry::Separator,
                     // TODO: confirm, then clear the sync history.
                     menu::item("reset", "Reset Sync History…")
                         .icon("menu-refresh")
-                        .disabled(true)
+                        .disabled(active)
                         .into(),
                     menu::Entry::Separator,
                     // TODO: confirm, then delete the subscription; its files
@@ -668,32 +739,40 @@ impl SubscriptionsScreen {
                     menu::item("delete", "Delete Subscription…")
                         .icon("menu-trash")
                         .danger(true)
-                        .disabled(true)
                         .into(),
                 ]
             }
             several => {
                 let total = several.len();
-                // TODO: Schedule and Delete for several at once.
+                let any_active = several
+                    .iter()
+                    .any(|subscription| subscription.active_run_id.is_some());
+                // One schedule is ticked only when they all share it.
+                let first = several[0].schedule.as_str();
+                let shared = several
+                    .iter()
+                    .all(|subscription| subscription.schedule == first)
+                    .then_some(first);
                 vec![
                     menu::item("run-all", format!("Run {total} Now"))
                         .icon("menu-player-play")
+                        .disabled(any_active)
                         .into(),
                     menu::item("hold-all", format!("Hold {total}"))
                         .icon("menu-hand-stop")
+                        .disabled(any_active)
                         .into(),
                     menu::item("release-all", format!("Release Hold for {total}"))
                         .icon("menu-player-play")
+                        .disabled(any_active)
                         .into(),
-                    menu::item("schedule", "Schedule")
-                        .icon("menu-clock")
-                        .disabled(true)
-                        .into(),
+                    schedule_menu(shared),
                     menu::Entry::Separator,
+                    // TODO: confirm, then delete them; their files stay in the
+                    // library.
                     menu::item("delete", format!("Delete {total}…"))
                         .icon("menu-trash")
                         .danger(true)
-                        .disabled(true)
                         .into(),
                 ]
             }
@@ -701,8 +780,16 @@ impl SubscriptionsScreen {
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
         self.menu_targets = targets;
         self.menu
-            .open(menu, window, cx, |this, _, action, window, cx| {
+            .open(menu, window, cx, |this, menu, action, window, cx| {
                 let targets = this.menu_targets.clone();
+                if action == "schedule"
+                    && let Some(schedule) = menu
+                        .read(cx)
+                        .chosen_value()
+                        .and_then(|value| schedule_named(&value))
+                {
+                    this.perform(targets.clone(), |_| Command::Schedule(schedule), cx);
+                }
                 match (action, targets.as_slice()) {
                     ("run", [id]) => this.run_control(*id, cx),
                     ("hold", [id]) => this.hold_control(*id, cx),
@@ -890,5 +977,20 @@ mod tests {
                 serde_json::json!({ "subscription_id": 4, "paused": false })
             )
         );
+        assert_eq!(
+            Command::Schedule("weekly").request(4),
+            (
+                "subscriptions.schedule",
+                serde_json::json!({ "subscription_id": 4, "schedule": "weekly" })
+            )
+        );
+        assert_eq!(
+            Command::PostsPerRun(250).request(4),
+            (
+                "subscriptions.posts_per_run",
+                serde_json::json!({ "subscription_id": 4, "posts_per_run": 250 })
+            )
+        );
+        assert!(!Command::Schedule("daily").starts() && !Command::PostsPerRun(1).starts());
     }
 }

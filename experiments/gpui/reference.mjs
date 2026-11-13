@@ -100,7 +100,9 @@ async function key(stroke) {
     name.toUpperCase().charCodeAt(0),
     name.length === 1 ? name : undefined,
   ];
-  const base = { key: keyName, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers };
+  // No native key code: a Windows one given as the Mac's is another key there
+  // (65, the A key's, is one the app treats as Settings).
+  const base = { key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers };
   // With Command or Control held the key is a shortcut, not text.
   const typed = modifiers & 6 ? undefined : text;
   await send('Input.dispatchKeyEvent', { type: typed ? 'keyDown' : 'rawKeyDown', ...base, text: typed });
@@ -132,6 +134,7 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'down') await mouse('mousePressed', numbers[0], numbers[1], 'left', numbers[2] || 1);
   else if (kind === 'up') await mouse('mouseReleased', numbers[0], numbers[1], 'left', numbers[2] || 1);
+  else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'rdown') await mouse('mousePressed', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'rup') await mouse('mouseReleased', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'scroll')
@@ -139,6 +142,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);
-  if (!['wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
+  if (!['drag', 'wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
 }
 socket.close();

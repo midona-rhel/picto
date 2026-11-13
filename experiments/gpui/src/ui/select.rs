@@ -42,7 +42,7 @@ struct State {
     highlighted: Option<usize>,
     /// Where the button was last painted, which places the menu.
     button: Rc<Cell<Bounds<Pixels>>>,
-    /// The open menu's scroll, which its scrollbar follows.
+    /// The menu's list, which scrolls past seven choices.
     scroll: ScrollHandle,
 }
 
@@ -94,6 +94,8 @@ const LAYER: usize = 30;
 
 /// `--control-height-sm`, the height of the button and of each choice.
 const ROW: f32 = theme::CONTROL_SM;
+/// The choices the menu shows before it scrolls.
+const VISIBLE: usize = 7;
 
 /// Whether the menu opens above the button (`CmSelect`'s `flipUp`): when it
 /// does not fit below and there is more room above.
@@ -136,9 +138,14 @@ impl RenderOnce for Select {
             .choices
             .iter()
             .position(|choice| choice.value == self.value.as_ref());
-        let (open, highlighted, measured) = {
+        let (open, highlighted, measured, scroll) = {
             let state = state.read(cx);
-            (state.open, state.highlighted, state.button.clone())
+            (
+                state.open,
+                state.highlighted,
+                state.button.clone(),
+                state.scroll.clone(),
+            )
         };
         let has_icons = self.choices.iter().any(|choice| choice.icon.is_some());
 
@@ -210,6 +217,9 @@ impl RenderOnce for Select {
                 let open = open;
                 canvas(
                     move |bounds, window, _| {
+                        // The canvas fills the padding box; the button's
+                        // edge is its 1px border further out.
+                        let bounds = bounds.dilate(px(1.));
                         if measured.replace(bounds) != bounds && open {
                             window.refresh();
                         }
@@ -243,33 +253,35 @@ impl RenderOnce for Select {
             f32::from(viewport.height),
         );
         let handler = self.on_change.map(Rc::new);
-        // More than seven choices scroll, beside the scrollbar's gutter,
-        // which the menu's padding is inside.
-        let scrolls = self.choices.len() > 7;
-        let scroll = state.read(cx).scroll.clone();
-        let mut list = div()
+        // More than seven choices scroll, and the list gives the scrollbar's
+        // gutter room beside it, as `.drop`'s `overflow-y: auto` does.
+        let scrolls = self.choices.len() > VISIBLE;
+        let mut menu = div()
             .id(ElementId::NamedChild(
                 std::sync::Arc::new(self.id.clone()),
                 "menu".into(),
             ))
-            // Seven rows, their gaps and the padding, with 2px to spare.
-            .max_h(px(7. * ROW + 6. * 2. + 8. + 2.))
+            .w_full()
+            // Seven rows, their gaps and the padding, inside the border.
+            .max_h(px(VISIBLE as f32 * ROW + 6. * 2. + 12. - 2.))
             .overflow_y_scroll()
             .track_scroll(&scroll)
+            .when(scrolls, |list| list.mr(px(super::scrollbar::GUTTER)))
             .p(px(4.))
-            .when(scrolls, |list| list.pr(px(4. + super::scrollbar::GUTTER)))
             .flex()
             .flex_col()
             .gap(px(2.));
-        let mut menu_frame = div()
+        let frame = div()
             .occlude()
             .relative()
             .w(bounds.size.width)
+            .flex()
+            .flex_col()
             .rounded(px(theme::RADIUS_MD))
             .bg(theme.select_surface())
             .border_1()
             .border_color(theme.border_secondary())
-            .shadow(theme::panel_shadow())
+            .shadow(theme.panel_shadow())
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
             .text_color(theme.text())
@@ -291,7 +303,7 @@ impl RenderOnce for Select {
             let (hover_state, click_state) = (state.clone(), state.clone());
             let handler = handler.clone();
             let value = choice.value;
-            list = list.child(
+            menu = menu.child(
                 div()
                     .id(index)
                     .h(px(ROW))
@@ -339,16 +351,14 @@ impl RenderOnce for Select {
                     }),
             );
         }
-        let scrollbar = scrolls.then(|| {
-            super::scrollbar::scrollbar(
+        let frame = frame.child(menu).when(scrolls, |frame| {
+            frame.child(super::scrollbar::scrollbar(
                 ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "scrollbar".into()),
                 &scroll,
                 window,
                 cx,
-            )
+            ))
         });
-        menu_frame = menu_frame.child(list).children(scrollbar);
-        let menu = menu_frame;
         let origin = if upward {
             // Its bottom 4px above the button's top.
             point(bounds.left(), bounds.top() - px(4.))
@@ -365,7 +375,7 @@ impl RenderOnce for Select {
                         Anchor::TopLeft
                     })
                     .position(origin)
-                    .child(menu),
+                    .child(frame),
             )
             .with_priority(LAYER),
         )

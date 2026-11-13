@@ -1300,8 +1300,22 @@ impl TextInput {
         input.kind = Kind::Menu;
         input
     }
+    /// The search of the Add Tags and Folders dialogs (`.searchInput`): a
+    /// menu search's type with its own placeholder.
+    pub fn list_search(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::menu_search(cx);
+        input.placeholder = placeholder.into();
+        input
+    }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
+    /// The caret after the last character, where a browser leaves it in a
+    /// field given its value before it takes focus.
+    pub fn caret_to_end(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
         cx.notify();
     }
