@@ -85,9 +85,15 @@ pub struct TagsToolbar {
     _observe: Subscription,
 }
 
+impl TagsToolbar {
+    /// The search field, which `nav.search` gives the keyboard to, as
+    /// `TagsToolbar`'s shortcut scope does.
+    pub fn search_focus(&self, cx: &App) -> FocusHandle {
+        self.search.focus_handle(cx)
+    }
+}
+
 impl Render for TagsToolbar {
-    // TODO: `nav.search` (⌘F) should move the keyboard into this field, as
-    // `TagsToolbar`'s shortcut scope does; the app has no binding for it yet.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         div().w(px(SEARCH_WIDTH)).flex_none().child(

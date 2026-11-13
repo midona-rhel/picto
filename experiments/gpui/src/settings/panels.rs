@@ -1127,8 +1127,9 @@ impl SettingsWindow {
         let (app, grid) = (&state.draft.app, &state.draft.grid);
         let resetting = state.reset_views;
         const WIDTH: f32 = 220.;
-        // TODO: the grid's wheel, double-click, middle-click and Space
-        // actions follow these; today they are fixed at the defaults.
+        // TODO: the grid's wheel, double-click and middle-click actions
+        // follow these; today they are fixed at the defaults. (Space
+        // follows its setting.)
         let mouse = {
             let mut content = card(theme).child(title(theme, "Mouse")).child(row(
                 theme,

@@ -137,9 +137,10 @@ impl Item {
         self.icon = Some(icon);
         self
     }
-    /// The shortcut as the platform writes it, e.g. `⌘⌫`.
-    pub fn shortcut(mut self, shortcut: &'static str) -> Self {
-        self.shortcut = Some(shortcut.into());
+    /// The hint for a registry shortcut as it is bound now (`shortcutHint`),
+    /// so the row follows a rebinding.
+    pub fn shortcut_for(mut self, id: &str, cx: &App) -> Self {
+        self.shortcut = crate::keymap::hint(id, cx);
         self
     }
     /// The one destructive row of a menu, drawn in the negative colour.

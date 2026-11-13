@@ -3,6 +3,7 @@
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
 pub mod library;
+mod shortcuts;
 pub mod sidebar;
 pub mod toolbar;
 
@@ -230,16 +231,16 @@ impl Shell {
             entries.extend([
                 menu::item("open-default", "Open with Default App")
                     .icon("menu-external-link")
-                    .shortcut("⇧↩")
+                    .shortcut_for("file.openDefaultApp", cx)
                     .into(),
                 menu::item("reveal", "Reveal in Finder")
                     .icon("menu-brand-finder")
-                    .shortcut("⌘↩")
+                    .shortcut_for("file.revealInFolder", cx)
                     .into(),
                 menu::Entry::Separator,
                 menu::item("copy-path", "Copy File Path")
                     .icon("menu-clipboard-copy")
-                    .shortcut("⌘⌥C")
+                    .shortcut_for("edit.copyFilePath", cx)
                     .into(),
                 menu::item("copy-name", "Copy Name")
                     .icon("menu-clipboard-copy")
@@ -247,7 +248,7 @@ impl Shell {
                 menu::Entry::Separator,
                 menu::item("rename", "Rename")
                     .icon("menu-rename")
-                    .shortcut("⌃R")
+                    .shortcut_for("edit.rename", cx)
                     .into(),
                 menu::Entry::Separator,
             ]);
@@ -285,6 +286,7 @@ impl Shell {
                     several("Restore", format!("Restore {count} Items")),
                 )
                 .icon("menu-arrow-back-up")
+                .shortcut_for("file.restore", cx)
                 .into(),
             );
             // The one destructive row. This prototype borrows the library's
@@ -295,21 +297,22 @@ impl Shell {
                     several("Delete Permanently", format!("Delete {count} Permanently")),
                 )
                 .icon("menu-trash")
-                .shortcut("⌘⌫")
+                .shortcut_for("file.delete", cx)
                 .danger(true)
                 .disabled(true)
                 .into(),
             );
         } else {
-            entries.push(
-                menu::item(
-                    "trash",
-                    several("Move to Trash", format!("Move {count} to Trash")),
-                )
-                .icon("menu-trash")
-                .shortcut("⌘⌫")
-                .into(),
-            );
+            let mut row = menu::item(
+                "trash",
+                several("Move to Trash", format!("Move {count} to Trash")),
+            )
+            .icon("menu-trash");
+            // In a folder the key removes from the folder instead.
+            if self.scope_kind(cx).folder.is_none() {
+                row = row.shortcut_for("file.delete", cx);
+            }
+            entries.push(row.into());
         }
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
         self._menu =
@@ -434,13 +437,13 @@ impl Shell {
             )
             .child(
                 ui::icon_button("open-settings", "settings")
-                    .tip(ui::tip("Settings").keys(&["⌘", ","]))
+                    .tip(ui::tip("Settings").shortcut("file.settings", cx))
                     .on_click(|_, _, cx| crate::settings::open(cx)),
             )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
                     .glyph(14.)
-                    .tip(ui::tip("Toggle Panels").keys(&["⇥"]))
+                    .tip(ui::tip("Toggle Panels").shortcut("view.toggleBothPanels", cx))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
             )
     }
@@ -667,7 +670,12 @@ impl Render for Shell {
             // CSS `line-height: normal` for the system font.
             .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
-            .key_context("Browser")
+            // `Grid` while the grid itself shows: its shortcuts need it.
+            .key_context(if screen.is_none() && !viewer_open {
+                "Browser Grid"
+            } else {
+                "Browser"
+            })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some((from, width)) = this.resizing {
                     let wanted = width + f32::from(from - event.position.x);
@@ -705,20 +713,24 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &PageDown, window, cx| {
                 this.move_selection(nav::Move::PageDown, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &Preview, _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.toggle_viewer(cx));
-            }))
+            .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
                 // Escape closes the menu, else the viewer, else deselects.
                 if !this.close_menu(cx) {
-                    this.session.update(cx, |session, cx| {
+                    let handled = this.session.update(cx, |session, cx| {
                         if session.viewer {
-                            session.close_viewer(cx)
+                            session.close_viewer(cx);
+                            true
+                        } else if session.screen().is_none() && !session.selection.is_empty() {
+                            session.clear_selection(cx);
+                            true
                         } else {
-                            session.clear_selection(cx)
+                            false
                         }
                     });
+                    if !handled {
+                        cx.propagate();
+                    }
                 }
                 cx.notify();
             }))
@@ -750,6 +762,8 @@ impl Render for Shell {
             .child(titlebar)
             .child(body)
             .children(inspector);
+        // The registry's shortcuts that act on the window's content.
+        root = self.shortcut_actions(root, cx);
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.

@@ -393,6 +393,16 @@ impl GridView {
         cx.notify();
     }
 
+    /// Scrolls down by nine tenths of the visible height, as Space does when
+    /// the Controls setting has it scroll (`spaceKeyAction: 'scroll'`).
+    pub fn scroll_by_page(&mut self, cx: &mut Context<Self>) {
+        let height = f32::from(self.bounds.size.height);
+        let bottom = -f32::from(self.scroll.max_offset().y);
+        let top = (self.scroll_top() + height * 0.9).clamp(0., bottom.max(0.));
+        self.scroll.set_offset(point(px(0.), px(-top)));
+        cx.notify();
+    }
+
     /// Moves the selection as the Electron grid's keyboard navigation does and
     /// scrolls the new selection into view.
     pub fn move_selection(&mut self, action: nav::Move, extend: bool, cx: &mut Context<Self>) {
