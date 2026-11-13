@@ -219,14 +219,26 @@ pub fn site_label(site_id: &str) -> String {
         .map_or_else(|| site_id.to_owned(), |(_, name, _)| (*name).to_owned())
 }
 
+/// The sources a query can be added for, by id and name, sorted by name;
+/// galleries are added elsewhere.
+pub fn query_sites() -> Vec<(&'static str, &'static str)> {
+    let mut sites = SITES
+        .iter()
+        .filter(|(id, _, _)| *id != "ehentai")
+        .map(|(id, name, _)| (*id, *name))
+        .collect::<Vec<_>>();
+    sites.sort_by_key(|(_, name)| name.to_lowercase());
+    sites
+}
+
 /// The source the add-query bar starts on: the first by name, galleries
-/// aside, and its example query.
+/// aside, by id, and its example query.
 pub fn first_query_site() -> (&'static str, &'static str) {
     SITES
         .iter()
         .filter(|(id, _, _)| *id != "ehentai")
         .min_by_key(|(_, name, _)| name.to_lowercase())
-        .map(|(_, name, example)| (*name, *example))
+        .map(|(id, _, example)| (*id, *example))
         .unwrap_or(("", ""))
 }
 
@@ -650,7 +662,7 @@ mod tests {
         assert_eq!(describe_failure(None, None), None);
         assert_eq!(site_label("furaffinity"), "Fur Affinity");
         assert_eq!(site_label("unknown"), "unknown");
-        assert_eq!(first_query_site(), ("Danbooru", "1girl solo"));
+        assert_eq!(first_query_site(), ("danbooru", "1girl solo"));
     }
 
     #[test]

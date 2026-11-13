@@ -204,6 +204,34 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
   inspector lists. Its left edge drags between 260 and 550px.
+- The Settings window (`Settings.tsx`), opened by the titlebar's Settings
+  button, ⌘, and the app menu, as production opens it: a separate 900×650
+  window, no smaller, with the traffic lights hidden in favour of its own
+  close button, its section title and panel header moving the window. Every
+  section production has, in its order and wording, with every row: General,
+  Updates, Library (the library's statistics), Sidebar, Controls, Preview,
+  Shortcuts, Notifications, Auto-Import, Inbox & Deleting, Subscriptions,
+  Cloud (the library's `cloud_state`), AI Models and About, plus the settings
+  search, which lists the matching sections as production does. The
+  Shortcuts section lists the real registry (`settings/registry.rs`, ported
+  from `shortcuts.ts` with its groups, descriptions, default keys and the EU
+  preset), filters it, captures a new binding from the next key pressed,
+  clears one, and marks a conflicting row.
+- One settings model (`settings/`), loaded from the library's `setting`
+  row `application` and `view_pref` row `grid:defaults` with production's
+  defaults and per-field fallbacks. The window edits a draft; Save & Close and
+  Apply write it back as `settings.replace` and `settings.view.patch` do (and
+  clear every saved view after "Reset all views"), then the app follows it:
+  the sidebar's counts, tree guides, system rows and Folders and Smart Folders
+  sections, the inspector's tag prefixes, and the grid's default view and the
+  `gridSpacing` fallback, which the grid reads again. Writes go to the
+  disposable snapshot only.
+- Shared form controls in `ui/`, each once, to the production CSS with their
+  hover, pressed, focus and disabled states and timings: the Settings footer
+  and inline buttons as looks of the one action button,
+  toggle switch, checkbox and radio rows, select (`CmSelect`, sized to its
+  widest choice, menu below or above), compact number field with steppers,
+  range slider, and the window close button and rim.
 - Inspector with nothing selected, describing the destination as the
   Electron scope state does: the folder card (two peeking cards over a front
   card holding the first four covers on their palette colour, or a folder
@@ -290,11 +318,27 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
   not its rounded corners.
+- Settings: only the settings listed under Implemented change the app; the
+  others change the settings model and are saved, with a `TODO` where they
+  belong (theme, zoom, language, the grid's mouse and Space actions, preview,
+  notifications, imports, rejecting, subscriptions).
+  The keyboard preset, language, audio visualization and shortcut bindings
+  live for the session only, since production keeps them in the renderer's
+  localStorage; the app's own key bindings do not follow edited shortcuts.
+  Update checks, cloud sync, pause, snapshots, restore points and retention
+  writes, and the AI model runtime (download, optimize, delete, which models
+  are downloaded and their storage) are drawn but not performed; every model
+  shows as not downloaded. Selects open by pointer only (no arrow keys or
+  typeahead), there is no keyboard focus ring or tab order, the section
+  headings' letter spacing is not drawn, the window can still be zoomed and
+  made full screen, and a binding field cannot capture keys the app binds
+  (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
+  reload the model.
 - Subscriptions: running, pausing, holding, stopping, retrying and creating
   subscriptions, galleries and sources need the source runners, which live
   in `core`; their buttons and menu rows are drawn with hover states and
   tooltips but do nothing, and the menu rows are shown disabled. Also not
-  built: the schedule submenu and select, the posts-per-run field, the cover
+  built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
   dialog, reset and delete confirmations, adding or removing destination
   folders and tags, the source details and edit windows, the accounts
   window and login warnings, the gallery progress total, and acknowledging
@@ -302,7 +346,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   copied from the source catalog in `core`. Letter spacing on badges and
   table headers, and the native `title` tooltips of truncated cells, are
   not drawn.
-- Drawn with their hover states and tooltips but not wired: Settings, View
+- Drawn with their hover states and tooltips but not wired: View
   options, the inspector's Add to Folder,
   Add Tags, Export (for an item, a selection and a destination),
   source-address list and Pin, and in the library switcher's popover
@@ -336,8 +380,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   editor), Change Icon, Sort Folders, Sort by and Export (submenus). The
   visibility rows close the menu when chosen; the
   colour picker row and Remove Watched Folder are not drawn. Empty Trash is
-  shown disabled. Sidebar preferences, folded nodes and sections are kept in
-  memory in the Electron shape, not persisted or read from Settings.
+  shown disabled. Folded nodes and sections are kept in memory, not persisted.
+  The sidebar's preferences (which system rows and sections show, counts,
+  guides, the double-click action) come from the settings model; its
+  visibility menu writes through it to the library at once, as production
+  patches the settings.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
@@ -467,10 +514,13 @@ One model, separate views, shared components:
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu (with submenus and search), popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
-  field frame and text input, scrollbar, "Return to Top", badge, zoom
+  field frame and text input, scrollbar, "Return to Top", badge, toggle,
+  check row, select, number field, slider, window close button and rim, zoom
   control, empty state and the titlebar drag region. Views compose these.
 - `screens/` holds the destinations that are screens rather than a grid.
   A screen can hand the toolbar controls to show in the grid's place.
+- `settings/` is the settings model the app reads, the shortcut registry, and
+  the Settings window with its sections.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.
   `motion.rs` holds durations and easing. Views take colours, sizes and

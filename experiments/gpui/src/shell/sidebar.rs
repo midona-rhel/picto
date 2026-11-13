@@ -81,36 +81,45 @@ impl EventEmitter<ShowMenu> for Sidebar {}
 /// What a double-click on a folder does (`sidebarDoubleClickAction`).
 #[derive(Clone, Copy, PartialEq)]
 enum DoubleClick {
-    // Chosen in Settings, which this prototype does not read yet.
-    #[allow(dead_code)]
     Rename,
     Collapse,
 }
 
-/// `SidebarPreferences` in `state/navigation.ts`, with its defaults.
-// TODO: read and write these through the app settings (`showSidebarInbox`
-// and the rest, `sidebarDoubleClickAction`), as `settingsController` does.
+/// `SidebarPreferences` in `state/navigation.ts`, as `AppShell.tsx` derives
+/// them from the app settings. The settings model is their one owner; the
+/// sidebar reads them each time it draws and writes through the model.
 struct Preferences {
     visible_system: HashSet<&'static str>,
     show_quick_access: bool,
     show_folders: bool,
     show_smart_folders: bool,
+    show_counts: bool,
+    show_guides: bool,
     double_click: DoubleClick,
 }
 
-impl Default for Preferences {
-    fn default() -> Self {
+impl Preferences {
+    fn current(cx: &App) -> Self {
+        let settings = crate::settings::current(cx);
         Self {
-            visible_system: SYSTEM_ROWS.iter().map(|row| row.0).collect(),
-            show_quick_access: true,
-            show_folders: true,
-            show_smart_folders: true,
-            double_click: DoubleClick::Collapse,
+            visible_system: SYSTEM_ROWS
+                .iter()
+                .map(|row| row.0)
+                .filter(|id| settings.sidebar_shows(id))
+                .collect(),
+            show_quick_access: settings.show_sidebar_quick_access,
+            show_folders: settings.show_sidebar_folders,
+            show_smart_folders: settings.show_sidebar_smart_folders,
+            show_counts: settings.show_sidebar_counts,
+            show_guides: settings.show_tree_guides,
+            double_click: if settings.sidebar_double_click_action == "rename" {
+                DoubleClick::Rename
+            } else {
+                DoubleClick::Collapse
+            },
         }
     }
-}
 
-impl Preferences {
     fn shows(&self, section: Section) -> bool {
         match section {
             Section::Folders => self.show_folders,
@@ -212,7 +221,6 @@ pub struct Sidebar {
     /// sidebar's `picto-sidebar-collapsed` set.
     // TODO: persist across launches, as `usePersistedSet` does.
     collapsed: HashSet<String>,
-    prefs: Preferences,
     /// Rows chosen with Cmd or Shift, by id.
     selection: HashSet<String>,
     /// Where a Shift-click range starts.
@@ -272,6 +280,10 @@ impl Sidebar {
                     cx.notify();
                 }
             }),
+            cx.subscribe(
+                &crate::settings::model(cx),
+                |_, _, _: &crate::settings::Applied, cx| cx.notify(),
+            ),
         ];
         Self {
             session,
@@ -279,7 +291,6 @@ impl Sidebar {
             filter,
             home,
             collapsed: HashSet::new(),
-            prefs: Preferences::default(),
             selection: HashSet::new(),
             last_clicked: None,
             rendered: Default::default(),
@@ -1158,7 +1169,7 @@ impl Sidebar {
                     .disabled(count == 0)
                     .into(),
             ],
-            _ => visibility_menu(&self.prefs),
+            _ => visibility_menu(&Preferences::current(cx)),
         };
         self.open_menu(Target::System, entries, position, window, cx);
     }
@@ -1254,23 +1265,24 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The visibility rows.
-        if let Some((id, ..)) = SYSTEM_ROWS.iter().find(|row| row.0 == action) {
-            if !self.prefs.visible_system.remove(id) {
-                self.prefs.visible_system.insert(id);
-            }
-            cx.notify();
-            return;
-        }
-        let flag = match action {
-            "section:quick_access" => Some(&mut self.prefs.show_quick_access),
-            "section:folders" => Some(&mut self.prefs.show_folders),
-            "section:smart_folders" => Some(&mut self.prefs.show_smart_folders),
-            _ => None,
-        };
-        if let Some(flag) = flag {
-            *flag = !*flag;
-            cx.notify();
+        // The visibility rows and sections, saved as the Settings window
+        // saves them (`persistSystemVisibility`, `persistSectionVisibility`).
+        if crate::settings::current(cx)
+            .clone()
+            .sidebar_visibility(action)
+            .is_some()
+        {
+            let key = action.to_owned();
+            crate::settings::model(cx).update(cx, |model, cx| {
+                model.apply_now(
+                    |app| {
+                        if let Some(on) = app.sidebar_visibility(&key) {
+                            *on = !*on;
+                        }
+                    },
+                    cx,
+                )
+            });
             return;
         }
         match target {
@@ -1445,6 +1457,7 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let prefs = Preferences::current(cx);
         crate::stats::rendered(crate::stats::View::Sidebar);
         let theme = theme::theme(cx);
         let filter = self.filter.read(cx).value().trim().to_lowercase();
@@ -1512,8 +1525,7 @@ impl Render for Sidebar {
 
         // System rows, those the visibility menu leaves on.
         for (index, entry) in entries.iter().enumerate() {
-            if section(index).is_some() || !self.prefs.visible_system.contains(ids[index].as_str())
-            {
+            if section(index).is_some() || !prefs.visible_system.contains(ids[index].as_str()) {
                 continue;
             }
             list = list.child(
@@ -1522,7 +1534,7 @@ impl Render for Sidebar {
                     entry.icon.clone().unwrap_or_default(),
                     entry.label.clone(),
                 )
-                .count(entry.count)
+                .count(entry.count.filter(|_| prefs.show_counts))
                 .active(active == index)
                 .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
                 .drop_target(self.drop_target.as_ref() == Some(&ids[index]))
@@ -1542,7 +1554,7 @@ impl Render for Sidebar {
 
         let mut matches = 0;
         for which in SECTIONS {
-            if !self.prefs.shows(which) {
+            if !prefs.shows(which) {
                 self.rendered[which as usize].clear();
                 continue;
             }
@@ -1553,7 +1565,11 @@ impl Render for Sidebar {
             };
             list = list.child(
                 ui::section_header(element, which.label())
-                    .count(count_of(which))
+                    .count(if prefs.show_counts {
+                        count_of(which)
+                    } else {
+                        0
+                    })
                     .expanded(expanded)
                     .on_toggle(cx.listener(move |this, _, _, cx| {
                         let filtering = !this.filter.read(cx).value().trim().is_empty();
@@ -1638,7 +1654,7 @@ impl Render for Sidebar {
                     .child("No matching folders"),
             );
         }
-        let tree_filter = self.prefs.show_folders || self.prefs.show_smart_folders;
+        let tree_filter = prefs.show_folders || prefs.show_smart_folders;
         // The rail's edge is drawn over the app background, as the shell's
         // border is in the Electron layout, with the rail surface inside it.
         div()
@@ -1720,6 +1736,7 @@ impl Sidebar {
         branch: Branch,
         cx: &mut Context<Self>,
     ) -> ui::sidebar_row::SidebarRow {
+        let prefs = Preferences::current(cx);
         let expanded = filtering || !self.collapsed.contains(id);
         let group = entry.group;
         let in_section = section_of(&entry.scope, false).is_some();
@@ -1735,7 +1752,7 @@ impl Sidebar {
         }
         .to_owned();
         let node = id.to_owned();
-        let double_click = self.prefs.double_click;
+        let double_click = prefs.double_click;
         // Keyed by id, so a row keeps its state when the list is rebuilt.
         let mut row = ui::sidebar_row(
             ElementId::Name(id.to_owned().into()),
@@ -1744,7 +1761,8 @@ impl Sidebar {
         )
         .depth(entry.depth)
         .tint(entry.tint.map(rgb))
-        .count(entry.count)
+        .count(entry.count.filter(|_| prefs.show_counts))
+        .guides(prefs.show_guides)
         .active(active)
         .selected(!active && self.selection.contains(id))
         .context_highlight(!active && self.context.as_deref() == Some(id))

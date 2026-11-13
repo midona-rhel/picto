@@ -175,6 +175,16 @@ impl Theme {
     pub fn control_surface_half(&self) -> Rgba {
         rgba(0x0000001a)
     }
+    /// `--color-text-disabled`
+    pub fn text_disabled(&self) -> Rgba {
+        translucent(self.text, 22.)
+    }
+    /// `.shortcutConflict`: `var(--color-warning, #FFA500)`. No theme
+    /// defines `--color-warning`, and this rule's fallback differs from the
+    /// subscription styles' (`WARNING`).
+    pub fn shortcut_conflict(&self) -> Rgba {
+        rgb(0xffa500)
+    }
 }
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
@@ -329,6 +339,8 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-lg`
+pub const TEXT_LG: f32 = 14.;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
 /// `--font-size-title`

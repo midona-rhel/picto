@@ -282,6 +282,20 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                             })
                         };
                         saved("grid:defaults")
+                            .map(|mut defaults| {
+                                // A view without a spacing of its own takes
+                                // the `gridSpacing` setting (`gridSpacingAtom`).
+                                if defaults.get("spacing").is_none_or(|v| v.is_null())
+                                    && let Ok(Some(app)) =
+                                        library.read_auxiliary_json("setting", "application")
+                                    && let Ok(app) = serde_json::from_str::<serde_json::Value>(&app)
+                                    && let Some(spacing) = app.get("gridSpacing").cloned()
+                                    && let Some(defaults) = defaults.as_object_mut()
+                                {
+                                    defaults.insert("spacing".into(), spacing);
+                                }
+                                defaults
+                            })
                             .and_then(|defaults| {
                                 saved(&crate::grid::prefs::scope_key(&scope))
                                     .map(|overrides| (defaults, overrides))

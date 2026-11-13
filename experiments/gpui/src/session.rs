@@ -1062,6 +1062,7 @@ mod tests {
         let visit = |scope| Visit {
             scope,
             viewing: false,
+            place: None,
         };
         // Destinations 0..4; 2 was deleted and 3 moved up to 2.
         let moved = |index: usize| match index {

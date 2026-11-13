@@ -1781,7 +1781,11 @@ fn without_system_shadow(window: &Window) {
             sel_registerName(c"window".as_ptr()),
         );
         if !ns_window.is_null() {
-            send_bool(ns_window, sel_registerName(c"setHasShadow:".as_ptr()), false);
+            send_bool(
+                ns_window,
+                sel_registerName(c"setHasShadow:".as_ptr()),
+                false,
+            );
         }
     }
 }

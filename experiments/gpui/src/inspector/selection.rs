@@ -491,7 +491,7 @@ impl Inspector {
         let tagged = !tags.is_empty();
         for tag in &tags {
             let raw = super::tag_raw(tag);
-            chips = chips.child(super::tag_chip(tag).on_remove(cx.listener(
+            chips = chips.child(super::tag_chip(tag, cx).on_remove(cx.listener(
                 move |this, _, _, cx| {
                     let raw = raw.clone();
                     this.edit_selection(

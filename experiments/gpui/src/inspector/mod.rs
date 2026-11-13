@@ -71,9 +71,6 @@ pub fn tag_style(namespace: &str) -> (u32, u8) {
     }
 }
 
-/// The `showTagPrefixes` setting, at its default: a chip shows the tag
-/// without its namespace.
-const SHOW_TAG_PREFIXES: bool = false;
 /// A folder chip without a colour of its own.
 pub const FOLDER_COLOR: u32 = 0x868e96;
 /// The preview fits this square.
@@ -104,14 +101,16 @@ fn tag_raw(tag: &picto_library::TagRecord) -> String {
     }
 }
 
-/// A tag's chip in its namespace's colour (`TagChip`).
-fn tag_chip(tag: &picto_library::TagRecord) -> ui::Chip {
+/// A tag's chip in its namespace's colour (`TagChip`). With the
+/// `showTagPrefixes` setting off, it shows the tag without its group.
+fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
+    let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
     ui::chip(
         ("inspector-tag", tag.tag_id.0 as usize),
         tag.subname.clone(),
         tag_style(&tag.namespace).0,
     )
-    .namespace((SHOW_TAG_PREFIXES && !is_general(tag)).then(|| tag.namespace.clone().into()))
+    .namespace((show_prefixes && !is_general(tag)).then(|| tag.namespace.clone().into()))
 }
 
 /// A preview's size: the media scaled down to fit the square, never up.
@@ -209,6 +208,10 @@ impl Inspector {
                 |this, _, event: &text_input::Committed, cx| {
                     this.commit_scope(event.0, None, Some(event.1.clone()), cx);
                 },
+            ),
+            cx.subscribe(
+                &crate::settings::model(cx),
+                |_, _, _: &crate::settings::Applied, cx| cx.notify(),
             ),
             cx.subscribe(
                 &selection.notes,
@@ -882,9 +885,11 @@ impl Inspector {
         let tagged = !tags.is_empty();
         for tag in tags {
             let raw = tag_raw(&tag);
-            chips = chips.child(tag_chip(&tag).on_remove(cx.listener(move |this, _, _, cx| {
-                this.session.read(cx).remove_tag(id, raw.clone());
-            })));
+            chips = chips.child(tag_chip(&tag, cx).on_remove(cx.listener(
+                move |this, _, _, cx| {
+                    this.session.read(cx).remove_tag(id, raw.clone());
+                },
+            )));
         }
         let tags = Self::tags_row(chips, !tagged, window, cx);
         panel = panel.child(self.section("Tags", Some(tags), cx));

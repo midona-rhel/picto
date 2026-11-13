@@ -13,6 +13,13 @@ pub enum Look {
     SidebarFilter,
     /// `InspectorField.module.css`
     Inspector,
+    /// `Settings.module.css` `.sidebarSearch`, with room for its glyph.
+    SettingsSearch,
+    /// `ShortcutsPanel.module.css` `.searchInput`.
+    Form,
+    /// `GlassInput` as `CompactNumberInput` sizes it, with room on the
+    /// right for its stepper.
+    Number,
     /// `.renameInput`: a name edited in place, in a 20px box outlined in the
     /// primary colour over the app background.
     Rename,
@@ -73,6 +80,26 @@ impl Look {
                 left: 10.,
                 right: 10.,
                 drop: 1.,
+            },
+            Look::SettingsSearch | Look::Form => Frame {
+                height: theme::CONTROL_LG,
+                radius: theme::RADIUS_MD,
+                border: (theme.border(), theme.primary_at(60.)),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: Duration::ZERO,
+                left: if self == Look::Form { 12. } else { 30. },
+                right: if self == Look::Form { 12. } else { 8. },
+                drop: 0.,
+            },
+            Look::Number => Frame {
+                height: theme::CONTROL_SM,
+                radius: theme::RADIUS_SM,
+                border: (theme.border(), theme.primary_at(50.)),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: motion::STEPPER,
+                left: 8.,
+                right: 25.,
+                drop: 0.,
             },
             Look::Rename => Frame {
                 height: 20.,

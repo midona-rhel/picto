@@ -108,6 +108,12 @@ pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
+/// A settings row's or check row's highlight (`background 100ms ease`), and
+/// a theme swatch's outline.
+pub const ROW_HOVER: Duration = Duration::from_millis(100);
+/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`), and
+/// `GlassInput`'s border on focus.
+pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.

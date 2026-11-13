@@ -81,6 +81,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         let session = cx.new(|cx| Session::new(database, blobs, cx));
+        crate::settings::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -410,10 +411,10 @@ impl Shell {
             .children(
                 (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
             )
-            // TODO: open the settings window.
             .child(
                 ui::icon_button("open-settings", "settings")
-                    .tip(ui::tip("Settings").keys(&["⌘", ","])),
+                    .tip(ui::tip("Settings").keys(&["⌘", ","]))
+                    .on_click(|_, _, cx| crate::settings::open(cx)),
             )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
@@ -710,28 +711,8 @@ impl Render for Shell {
             }
         }
         root = root.children(self.menu.clone());
-        // `.shellMac::after`: the window's rim, over everything. Top 25%
-        // white, sides 15%, bottom 10%; one border has one colour, so the
-        // bottom's goes all the way round and the others are laid over it.
-        let over = |alpha: f32| Rgba {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a: alpha,
-        };
-        let edge = || div().absolute().inset_0().rounded(px(theme::WINDOW_RADIUS));
-        root = root.child(
-            deferred(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(edge().border_1().border_color(over(0.10)))
-                    // 1 − 0.9 × (1 − a) gives 0.15 at the sides, 0.25 on top.
-                    .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))
-                    .child(edge().border_t_1().border_color(over(0.1667))),
-            )
-            .with_priority(100),
-        );
+        // `.shellMac::after`: the window's rim, over everything.
+        root = root.child(ui::window_chrome::rim());
         // Keep painting while a rail slides.
         if self.rails.animating() {
             window.request_animation_frame();

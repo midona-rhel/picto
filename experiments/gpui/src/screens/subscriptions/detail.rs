@@ -466,14 +466,6 @@ impl SubscriptionsScreen {
                 .child(text)
                 .into_any_element()
         };
-        let schedule = match subscription.schedule.as_str() {
-            "manual" => "Manual",
-            "daily" => "Daily",
-            "weekly" => "Weekly",
-            "monthly" => "Monthly",
-            other => other,
-        }
-        .to_owned();
         div()
             .mx(px(16.))
             .pt(px(16.))
@@ -506,17 +498,30 @@ impl SubscriptionsScreen {
                     chrono::Local::now(),
                 )),
             ))
-            // TODO: open the schedule options and save the choice.
+            // TODO: save the chosen schedule (`setSchedule`).
             .child(row(
                 "Schedule",
-                ui::select("subscription-schedule", schedule, 100.).into_any_element(),
+                ui::select(
+                    "subscription-schedule",
+                    subscription.schedule.clone(),
+                    vec![
+                        ui::choice("manual", "Manual"),
+                        ui::choice("daily", "Daily"),
+                        ui::choice("weekly", "Weekly"),
+                        ui::choice("monthly", "Monthly"),
+                    ],
+                )
+                .width(100.)
+                .into_any_element(),
             ))
-            // TODO: edit the limit and save it.
+            // TODO: save the limit (`setPostsPerRun`).
             .child(row(
                 "Posts per run",
                 ui::number_input(
                     "subscription-posts-per-run",
-                    subscription.posts_per_run.to_string(),
+                    subscription.posts_per_run,
+                    1,
+                    10_000,
                 )
                 .disabled(format::running(subscription))
                 .into_any_element(),
@@ -1147,6 +1152,10 @@ impl SubscriptionsScreen {
     fn add_query_bar(cx: &App) -> Div {
         let theme = theme::theme(cx);
         let (site, example) = format::first_query_site();
+        let sites = format::query_sites()
+            .into_iter()
+            .map(|(id, name)| ui::choice(id, name))
+            .collect::<Vec<_>>();
         // TODO: choose the source, type the query with the site's tag
         // suggestions, and add it to the subscription.
         div()
@@ -1154,7 +1163,7 @@ impl SubscriptionsScreen {
             .flex()
             .items_center()
             .gap(px(8.))
-            .child(ui::select("add-query-site", site, 140.))
+            .child(ui::select("add-query-site", site, sites).width(140.))
             .child(
                 div()
                     .flex_1()

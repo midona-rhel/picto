@@ -15,6 +15,19 @@ pub enum Look {
     Standard,
     /// `.btn.btnPrimary`: the primary colour, at 60% under the pointer.
     Primary,
+    /// `Settings.module.css` `.footerBtn` and `.inlineButton`: 36px, regular
+    /// weight, no ring, deepening to the active surface over 150 ms `ease`.
+    Settings,
+    /// `Settings.module.css` `.footerBtnPrimary`: the primary colour,
+    /// semibold, lightening 5% toward white under the pointer.
+    SettingsPrimary,
+}
+
+impl Look {
+    /// The `.footerBtn` family rather than `.btn`.
+    fn settings(self) -> bool {
+        matches!(self, Look::Settings | Look::SettingsPrimary)
+    }
 }
 
 /// The shared action button (`actionButton.module.css`): a text button with
@@ -41,18 +54,23 @@ pub struct ActionButton {
 }
 
 pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
+    let settings = look.settings();
     ActionButton {
         id: id.into(),
         look,
         icon: None,
         label: None,
-        height: theme::ACTION_BUTTON,
+        height: if settings { 36. } else { theme::ACTION_BUTTON },
         width: None,
         full_width: false,
-        padding: 20.,
-        gap: 8.,
+        padding: if settings { 16. } else { 20. },
+        gap: if settings { 6. } else { 8. },
         text_size: theme::TEXT_MD,
-        weight: FontWeight::MEDIUM,
+        weight: match look {
+            Look::Standard | Look::Primary => FontWeight::MEDIUM,
+            Look::Settings => FontWeight::NORMAL,
+            Look::SettingsPrimary => FontWeight::SEMIBOLD,
+        },
         disabled: false,
         tip: None,
         on_click: None,
@@ -144,7 +162,13 @@ impl RenderOnce for ActionButton {
         }
         let (hover, animating) = {
             let fade = fade.read(cx);
-            (fade.value(), fade.animating())
+            // `.btn` eases on `--ease-default`, the Settings buttons on `ease`.
+            let curve = if self.look.settings() {
+                motion::EASE
+            } else {
+                motion::EASE_DEFAULT
+            };
+            (fade.value_with(curve), fade.animating())
         };
         if animating || hint.read(cx).animating() {
             window.request_animation_frame();
@@ -159,6 +183,21 @@ impl RenderOnce for ActionButton {
                 let color = theme::blend(theme.primary(), theme.primary_at(60.), hover);
                 (color, color, theme.on_primary())
             }
+            Look::Settings => (
+                theme::blend(theme.surface_hover(), theme.surface_active(), hover),
+                theme.border(),
+                theme.text(),
+            ),
+            // `color-mix(in srgb, var(--color-primary) 95%, #fff)`
+            Look::SettingsPrimary => (
+                theme::blend(
+                    theme.primary(),
+                    theme::blend(theme.primary(), theme.on_primary(), 0.05),
+                    hover,
+                ),
+                theme.primary(),
+                theme.on_primary(),
+            ),
         };
         let mut button = div()
             .id(self.id)
@@ -185,10 +224,12 @@ impl RenderOnce for ActionButton {
         } else if self.full_width {
             button = button.w_full().min_w_0();
         }
-        // `box-shadow: 0 0 0 1px var(--color-black-20)`
-        button = button.shadow(vec![
-            BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into()).spread_radius(px(1.)),
-        ]);
+        // `.btn`: `box-shadow: 0 0 0 1px var(--color-black-20)`.
+        if !self.look.settings() {
+            button = button.shadow(vec![
+                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into()).spread_radius(px(1.)),
+            ]);
+        }
         if let Some((icon, size)) = self.icon {
             button = button.child(super::icon(icon, size, text).flex_none());
         }
