@@ -142,6 +142,13 @@ impl Inspector {
         }
     }
 
+    /// Puts the caret in the name field, as Rename does.
+    pub fn edit_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.name.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        self.name.update(cx, |name, cx| name.select_everything(cx));
+    }
+
     fn property(label: &'static str, value: String, cx: &App) -> Div {
         div()
             .h(px(20.))

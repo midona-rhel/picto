@@ -283,6 +283,7 @@ impl Session {
                     self.details = Some(details);
                     cx.emit(Change::Details);
                 }
+                Reply::Changed => self.query(false, cx),
                 Reply::Error(error) => {
                     self.error = Some(error);
                     self.loading = false;
@@ -579,6 +580,25 @@ impl Session {
 
     pub fn remove_from_folder(&self, id: RootId, folder: picto_library::FolderId) {
         let _ = self.sender.send(Request::LeaveFolder(id, folder));
+    }
+
+    /// Moves the selected items to the trash, or back out of it, and
+    /// reloads the scope.
+    pub fn move_selection_to(
+        &mut self,
+        lifecycle: picto_library::Lifecycle,
+        cx: &mut Context<Self>,
+    ) {
+        let ids = self
+            .selection
+            .iter()
+            .filter_map(|index| self.items.get(*index))
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>();
+        if !ids.is_empty() {
+            self.close_viewer(cx);
+            let _ = self.sender.send(Request::Lifecycle(ids, lifecycle));
+        }
     }
 
     pub fn undo(&self) {

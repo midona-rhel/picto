@@ -4,6 +4,7 @@ mod action_row;
 mod chip;
 pub mod field;
 mod icon_button;
+pub mod menu;
 mod panel_section;
 mod scroll_to_top;
 pub mod scrollbar;

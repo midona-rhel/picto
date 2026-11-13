@@ -5,6 +5,8 @@
 //!     move 320 24
 //!     down 320 24
 //!     up 320 24
+//!     rdown 320 24
+//!     rup 320 24
 //!
 //! Coordinates are window points. Nothing is read when the variable is unset.
 use gpui::*;
@@ -40,6 +42,19 @@ fn parse(line: &str) -> Option<PlatformInput> {
         }),
         "up" => PlatformInput::MouseUp(MouseUpEvent {
             button: MouseButton::Left,
+            position,
+            modifiers,
+            click_count: 1,
+        }),
+        "rdown" => PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Right,
+            position,
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }),
+        "rup" => PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Right,
             position,
             modifiers,
             click_count: 1,

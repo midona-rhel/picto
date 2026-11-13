@@ -748,6 +748,11 @@ impl TextInput {
         input.kind = Kind::Sidebar;
         input
     }
+    pub fn select_everything(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
     }

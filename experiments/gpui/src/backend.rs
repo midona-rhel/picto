@@ -30,6 +30,7 @@ pub enum Request {
     /// Takes the named tag (`namespace:subtag`) off the item.
     Untag(RootId, String),
     LeaveFolder(RootId, picto_library::FolderId),
+    Lifecycle(Vec<RootId>, picto_library::Lifecycle),
     Undo(RootId),
     Redo(RootId),
 }
@@ -37,6 +38,8 @@ pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
     Page(u64, bool, RootPage, crate::grid::prefs::ViewPrefs),
     Details(RootId, RootDetails),
+    /// The results on screen may no longer be the scope's.
+    Changed,
     Error(String),
 }
 fn append_tree(
@@ -248,6 +251,12 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         )
                         .and_then(|_| library.details(id))
                         .map(|details| Reply::Details(id, details)),
+                    Request::Lifecycle(ids, lifecycle) => library
+                        .set_lifecycle(
+                            &picto_library::selection::SelectionTarget::Explicit { root_ids: ids },
+                            lifecycle,
+                        )
+                        .map(|_| Reply::Changed),
                     Request::Undo(id) => library
                         .undo()
                         .and_then(|_| library.details(id))

@@ -9,11 +9,12 @@ use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
+use crate::ui::menu::{self, Menu};
 use crate::viewer::Viewer;
 use crate::{motion, theme, ui};
 use gpui::*;
 use sidebar::Sidebar;
-use std::{path::PathBuf, time::Instant};
+use std::path::PathBuf;
 use toolbar::Toolbar;
 
 actions!(
@@ -41,9 +42,6 @@ actions!(
     ]
 );
 
-const MENU_WIDTH: f32 = 270.;
-const MENU_ACTIONS: [&str; 3] = ["Quick Look", "Copy Name", "Copy File Path"];
-
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -61,9 +59,9 @@ pub struct Shell {
     resizing: Option<(Pixels, f32)>,
     /// How far each rail has slid out of view.
     rails: motion::Fades,
-    menu: Option<Point<Pixels>>,
-    /// A dismissed menu, still on screen while it fades out.
-    menu_closing: Option<(Point<Pixels>, Instant)>,
+    /// The open context menu. It stays here while it fades out.
+    menu: Option<Entity<Menu>>,
+    _menu: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -86,11 +84,13 @@ impl Shell {
                     cx.notify();
                 }
             }),
-            cx.subscribe(&grid, |this, _, event: &grid::MenuRequested, cx| {
-                this.menu = Some(event.0);
-                this.menu_closing = None;
-                cx.notify();
-            }),
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, _, event: &grid::MenuRequested, window, cx| {
+                    this.open_menu(event.0, window, cx)
+                },
+            ),
         ];
         Self {
             sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
@@ -113,7 +113,7 @@ impl Shell {
             resizing: None,
             rails: motion::Fades::default(),
             menu: None,
-            menu_closing: None,
+            _menu: None,
             _subscriptions: subscriptions,
         }
     }
@@ -140,52 +140,154 @@ impl Shell {
         cx.notify();
     }
 
-    /// Dismisses the context menu, leaving it to fade out. Returns whether one
-    /// was open.
-    fn close_menu(&mut self) -> bool {
-        match self.menu.take() {
-            Some(position) => {
-                self.menu_closing = Some((position, Instant::now()));
+    /// Opens the grid's context menu for the selection, at the pointer. The
+    /// rows follow `gridContextMenu.tsx`, for the actions this prototype has.
+    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let (count, trash) = {
+            let session = self.session.read(cx);
+            let trash = session
+                .nav
+                .get(session.displayed)
+                .is_some_and(|entry| entry.label == "Trash");
+            (session.selection.len(), trash)
+        };
+        if count == 0 {
+            return;
+        }
+        let mut entries: Vec<menu::Entry> = Vec::new();
+        if count == 1 {
+            entries.extend([
+                menu::item("open-default", "Open with Default App")
+                    .icon("menu-external-link")
+                    .shortcut("⇧↩")
+                    .into(),
+                menu::item("reveal", "Reveal in Finder")
+                    .icon("menu-brand-finder")
+                    .shortcut("⌘↩")
+                    .into(),
+                menu::Entry::Separator,
+                menu::item("copy-path", "Copy File Path")
+                    .icon("menu-clipboard-copy")
+                    .shortcut("⌘⌥C")
+                    .into(),
+                menu::item("copy-name", "Copy Name")
+                    .icon("menu-clipboard-copy")
+                    .into(),
+                menu::Entry::Separator,
+                menu::item("rename", "Rename")
+                    .icon("menu-rename")
+                    .shortcut("⌃R")
+                    .into(),
+                menu::Entry::Separator,
+            ]);
+        }
+        let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
+        if trash {
+            entries.push(
+                menu::item(
+                    "restore",
+                    several("Restore", format!("Restore {count} Items")),
+                )
+                .icon("menu-arrow-back-up")
+                .into(),
+            );
+            // The one destructive row. This prototype borrows the library's
+            // files, so it never deletes them: the row is shown, not offered.
+            entries.push(
+                menu::item(
+                    "delete",
+                    several("Delete Permanently", format!("Delete {count} Permanently")),
+                )
+                .icon("menu-trash")
+                .shortcut("⌘⌫")
+                .danger(true)
+                .disabled(true)
+                .into(),
+            );
+        } else {
+            entries.push(
+                menu::item(
+                    "trash",
+                    several("Move to Trash", format!("Move {count} to Trash")),
+                )
+                .icon("menu-trash")
+                .shortcut("⌘⌫")
+                .into(),
+            );
+        }
+        let menu = cx.new(|cx| Menu::new(entries, position, cx));
+        self._menu =
+            Some(
+                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
+                    let menu::Event::Chosen(action) = event;
+                    this.run_menu_action(action, window, cx);
+                }),
+            );
+        window.focus(&menu.focus_handle(cx), cx);
+        self.menu = Some(menu);
+        cx.notify();
+    }
+
+    /// Dismisses the context menu, leaving it to fade out. Returns whether
+    /// one was open.
+    fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        match &self.menu {
+            Some(menu) if !menu.read(cx).finished() => {
+                menu.update(cx, |menu, cx| menu.dismiss(cx));
                 true
             }
-            None => false,
+            _ => false,
         }
     }
 
-    fn run_menu_action(&mut self, index: usize, cx: &mut Context<Self>) {
-        // A menu that is fading out no longer acts.
-        if !self.close_menu() {
-            return;
-        }
-        match index {
-            0 => self
-                .session
-                .update(cx, |session, cx| session.open_viewer(cx)),
-            1 => {
-                if let Some(name) = self
-                    .session
-                    .read(cx)
-                    .selected_item()
-                    .map(|item| item.name.clone())
-                {
-                    cx.write_to_clipboard(ClipboardItem::new_string(name));
+    fn run_menu_action(&mut self, action: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // The file the menu acts on: the shown member of the focused item.
+        let (name, path) = {
+            let session = self.session.read(cx);
+            (
+                session.selected_item().map(|item| item.name.clone()),
+                session
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.media.get(session.member))
+                    .map(|media| media.file_path.clone()),
+            )
+        };
+        match action {
+            "open-default" => {
+                if let Some(path) = path {
+                    cx.open_with_system(std::path::Path::new(&path));
                 }
             }
-            _ => {
-                let path = {
-                    let session = self.session.read(cx);
-                    session
-                        .details
-                        .as_ref()
-                        .and_then(|details| details.media.get(session.member))
-                        .map(|media| media.file_path.clone())
-                };
+            "reveal" => {
+                if let Some(path) = path {
+                    cx.reveal_path(std::path::Path::new(&path));
+                }
+            }
+            "copy-path" => {
                 if let Some(path) = path {
                     cx.write_to_clipboard(ClipboardItem::new_string(path));
                 }
             }
+            "copy-name" => {
+                if let Some(name) = name {
+                    cx.write_to_clipboard(ClipboardItem::new_string(name));
+                }
+            }
+            "rename" => {
+                self.inspector
+                    .update(cx, |inspector, cx| inspector.edit_name(window, cx));
+                return;
+            }
+            "trash" => self.session.update(cx, |session, cx| {
+                session.move_selection_to(picto_library::Lifecycle::Trash, cx)
+            }),
+            "restore" => self.session.update(cx, |session, cx| {
+                session.move_selection_to(picto_library::Lifecycle::Active, cx)
+            }),
+            _ => {}
         }
-        cx.notify();
+        window.focus(&self.focus, cx);
     }
 
     /// Moves the selection; with shift held, extends it instead.
@@ -234,48 +336,6 @@ impl Shell {
                     .tip(ui::tip("Toggle Panels").keys(&["⇥"]))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
             )
-    }
-
-    /// The floating glass surface of `surfaces.css`, without its blur.
-    fn context_menu(
-        &self,
-        position: Point<Pixels>,
-        opacity: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let theme = theme::theme(cx);
-        let size = window.viewport_size();
-        let mut menu = div()
-            .absolute()
-            .left(position.x.min(size.width - px(MENU_WIDTH + 8.)))
-            .top(position.y.min(size.height - px(120.)))
-            .w(px(MENU_WIDTH))
-            .p(px(4.))
-            .gap(px(2.))
-            .rounded(px(theme::RADIUS_LG))
-            .border_1()
-            .border_color(theme.glass_border())
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
-            .opacity(opacity)
-            .flex()
-            .flex_col();
-        for (index, label) in MENU_ACTIONS.into_iter().enumerate() {
-            menu = menu.child(
-                div()
-                    .id(("context-action", index))
-                    .h(px(theme::CONTROL_SM))
-                    .px(px(6.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(theme::RADIUS_MD))
-                    .hover(move |style| style.bg(theme.hover_overlay()))
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| this.run_menu_action(index, cx))),
-            );
-        }
-        menu
     }
 }
 
@@ -479,7 +539,7 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
                 // Escape closes the menu, else the viewer, else deselects.
-                if !this.close_menu() {
+                if !this.close_menu(cx) {
                     this.session.update(cx, |session, cx| {
                         if session.viewer {
                             session.close_viewer(cx)
@@ -519,35 +579,24 @@ impl Render for Shell {
             .child(body)
             .children(inspector);
 
-        // `menuOut`: a dismissed menu fades over 80 ms and takes no more input.
-        let closing = self.menu_closing.and_then(|(position, started)| {
-            let progress = motion::progress(started.elapsed(), motion::MENU_OUT);
-            (progress < 1.).then(|| (position, 1. - motion::EASE_IN.ease(progress)))
-        });
-        if closing.is_none() {
-            self.menu_closing = None;
+        // A dismissed menu stays until its 80 ms fade is over; the keyboard
+        // then goes back to the grid.
+        if self
+            .menu
+            .as_ref()
+            .is_some_and(|menu| menu.read(cx).finished())
+        {
+            self.menu = None;
+            self._menu = None;
+            // Unless its action moved the keyboard somewhere, such as into
+            // the name field.
+            if window.focused(cx).is_none() {
+                window.focus(&self.focus, cx);
+            }
         }
-        if let Some(position) = self.menu {
-            root = root
-                .child(
-                    div()
-                        .id("menu-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.close_menu();
-                                cx.notify();
-                            }),
-                        ),
-                )
-                .child(self.context_menu(position, 1., window, cx));
-        } else if let Some((position, opacity)) = closing {
-            root = root.child(self.context_menu(position, opacity, window, cx));
-        }
-        // Keep painting while a rail slides or a menu fades.
-        if self.rails.animating() || self.menu_closing.is_some() {
+        root = root.children(self.menu.clone());
+        // Keep painting while a rail slides.
+        if self.rails.animating() {
             window.request_animation_frame();
         }
         root

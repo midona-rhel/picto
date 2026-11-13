@@ -10,6 +10,8 @@ pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
+/// A context-menu row's highlight.
+pub const MENU_ROW: Duration = Duration::from_millis(30);
 /// `menuOut`: a dismissed context menu fades for this long.
 pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.

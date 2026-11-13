@@ -61,6 +61,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   headers (title pill, chevron, add button), the library switcher's highlight,
   chips, the inspector's sections and action rows, the scrollbar thumb, and
   pointer cursors on everything that takes a click.
+- The grid's context menu as `ContextMenu.tsx` draws it: glass panel at the
+  pointer with a 12px margin from the window's edges, icons, shortcut hints,
+  separators, a 30 ms row highlight shared by the pointer and the arrow keys,
+  Enter and Escape, and an 80 ms fade when dismissed. A press outside closes
+  it and goes no further. Its rows are the ones this prototype can perform:
+  open with the default app, reveal, copy path and name, rename, move to
+  trash, and restore in the Trash.
 - Tooltips as `KbdTooltip` draws them: below the control after 400 ms, with
   the shortcut's keys as badges.
 - Text fields with their focus states: the toolbar search, the sidebar filter
@@ -128,8 +135,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
-- No complete context menus (icons, shortcuts, separators, submenus, search,
-  keyboard), import/export, subscriptions, cloud, localization or site login.
+- Context menus have no submenus or search row yet, exist only for grid
+  items, and are drawn inside the window, so they cannot extend past its
+  edge. "Delete Permanently" is shown disabled: the prototype reads the
+  library's files in place and must never delete them.
+- No import/export, subscriptions, cloud, localization or site login.
   The viewer still has its own header instead of the titlebar's viewer
   toolbar.
 - Motion still to port: modal enter/exit, the inspector's fade when entering
@@ -184,8 +194,9 @@ fields 1.2%, inspector chips 4.9%. Part of that is state that differed (an
 enabled Back button, the pointer) and JPEG noise in the captures.
 
 `PICTO_GPUI_POINTER=<file or FIFO>` replays pointer events written to that
-file (`move X Y`, `down X Y`, `up X Y`, in window points), so hover, pressed
-and tooltip states can be captured without taking the real pointer. GPUI
+file (`move X Y`, `down X Y`, `up X Y`, `rdown X Y`, `rup X Y`, in window
+points), so hover, pressed, tooltip and menu states can be captured without
+taking the real pointer. GPUI
 stops painting a window that is fully covered, so the window has to be
 visible. `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
 width, and `PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
@@ -207,7 +218,7 @@ One model, separate views, shared components:
   movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
   presentation).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, sidebar row, section header, chip, inspector section, action row,
+  tooltip, context menu, sidebar row, section header, chip, inspector section, action row,
   field frame and text input, scrollbar, "Return to Top", badge, button, zoom
   control and the titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one

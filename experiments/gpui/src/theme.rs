@@ -14,6 +14,9 @@ pub struct Theme {
 
 impl Global for Theme {}
 
+/// `--color-negative`, the same in every theme.
+const NEGATIVE: u32 = 0xff4757;
+
 /// `:root` in `tokens.css`.
 pub const DARK: Theme = Theme {
     background: 0x18191c,
@@ -124,6 +127,14 @@ impl Theme {
     /// `--sidebar-tree-guide-color`: a quarter of the secondary text colour.
     pub fn tree_guide(&self) -> Rgba {
         translucent(self.text, 17.5)
+    }
+    /// `--color-negative`: the destructive row of a menu.
+    pub fn negative(&self) -> Rgba {
+        rgb(NEGATIVE)
+    }
+    /// `color-mix(in srgb, var(--color-negative) NN%, transparent)`
+    pub fn negative_at(&self, percent: f32) -> Rgba {
+        translucent(NEGATIVE, percent)
     }
     /// `--glass-border-side`
     pub fn glass_border(&self) -> Rgba {

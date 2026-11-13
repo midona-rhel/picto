@@ -97,6 +97,7 @@ fn main() {
             cx.set_global(theme::DARK);
             stats::start_reporting(cx);
             ui::text_input::bind(cx);
+            ui::menu::bind(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.set_menus(vec![

@@ -63,6 +63,14 @@ icons!(
     "group",
     // The grid's hover magnifier, as CanvasGrid.tsx draws it.
     "magnifier",
+    // Tabler icons at the 1.25 stroke every context-menu glyph has, and
+    // Picto's own rename glyph from sidebar-menu-icons.tsx.
+    "menu-external-link",
+    "menu-brand-finder",
+    "menu-clipboard-copy",
+    "menu-trash",
+    "menu-arrow-back-up",
+    "menu-rename",
 );
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
