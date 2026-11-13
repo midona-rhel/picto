@@ -3,6 +3,7 @@
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
 mod item_menu;
+pub(crate) use item_menu::media_link;
 pub mod library;
 mod shortcuts;
 pub mod sidebar;
@@ -163,7 +164,16 @@ impl Shell {
                 &viewer,
                 window,
                 |this, _, event: &crate::viewer::MenuRequested, window, cx| {
-                    this.open_viewer_menu(event.position, event.flash, window, cx)
+                    let surface = this.viewer.read(cx).surface();
+                    this.open_viewer_menu(event, surface, window, cx)
+                },
+            ),
+            cx.subscribe_in(
+                &quick_look,
+                window,
+                |this, _, event: &crate::viewer::MenuRequested, window, cx| {
+                    let surface = this.quick_look.read(cx).surface();
+                    this.open_viewer_menu(event, surface, window, cx)
                 },
             ),
             cx.subscribe_in(

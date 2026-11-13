@@ -1,9 +1,7 @@
 //! The previous / count / next strip along the bottom of the media
-//! (`QuickLookNavigation.tsx`): Quick Look's way through the results, and
-//! the media view's and detail window's through a collection's members.
+//! (`QuickLookNavigation.tsx`): Quick Look's way through the results.
 use crate::ui::tooltip::{self, Tip};
 use crate::{motion, theme, ui};
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -141,22 +139,9 @@ pub fn counter(current: usize, total: usize, cx: &App) -> Div {
 /// `.toolbar`'s height.
 const HEIGHT: f32 = 48.;
 
-/// The media surface's place in its pane: all of it, or all but the strip's
-/// row when `row` is set.
-pub fn surface_frame(row: bool) -> Div {
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom(px(if row { HEIGHT } else { 0. }))
-}
-
-/// `.toolbar`: the strip itself, 48px tall along the bottom, centred, 8px
-/// between its parts. It lies over the picture, except when the shown item
-/// has a bar of its own there (`row`): then it is a row below the surface.
-pub fn strip(row: bool, cx: &App) -> Div {
-    let theme = theme::theme(cx);
+/// `.toolbar`: the strip itself, 48px tall along the bottom, over the
+/// picture, centred, 8px between its parts.
+pub fn strip() -> Div {
     div()
         .absolute()
         .left_0()
@@ -167,10 +152,4 @@ pub fn strip(row: bool, cx: &App) -> Div {
         .items_center()
         .justify_center()
         .gap(px(8.))
-        .when(row, |strip| {
-            strip
-                .bg(theme.background())
-                .border_t_1()
-                .border_color(theme.border_secondary())
-        })
 }

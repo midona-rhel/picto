@@ -6,8 +6,9 @@
 //! pointer last moved. Several can be open at once, one per item.
 use super::{
     ActualSize, Boundary, End, FitToWindow, Media, NextItem, PreviousItem, ZoomIn, ZoomOut,
-    options, record_view, size_of, strip, surface::MediaSurface,
+    group::GroupReader, options, record_view, size_of, surface::MediaSurface,
 };
+use crate::grid::menu as rows;
 use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::tooltip;
@@ -187,12 +188,12 @@ pub struct DetailWindow {
     session: Entity<Session>,
     entries: Vec<Entry>,
     index: usize,
-    /// Opened on a collection (`GroupDetailWindow`): its members step with
-    /// the strip, and the toolbar has only the pin and close buttons.
+    /// Opened on a collection (`GroupDetailWindow`): its members in the
+    /// reader, and the toolbar has only the pin and close buttons.
     group: bool,
-    /// The shown entry's details, once they have arrived, and its member.
+    reader: Entity<GroupReader>,
+    /// The shown entry's details, once they have arrived.
     details: Option<RootDetails>,
-    member: usize,
     loading: Option<Task<()>>,
     surface: Entity<MediaSurface>,
     focus: FocusHandle,
@@ -202,6 +203,9 @@ pub struct DetailWindow {
     hide_at: Option<Instant>,
     boundary: Boundary,
     recorded: Option<RootId>,
+    /// The viewer's context menu, and the actions of its rows.
+    menu: ui::menu::Host,
+    menu_actions: Vec<rows::Action>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -243,21 +247,24 @@ impl DetailWindow {
             }),
         ];
         let group = entries.get(index).is_some_and(|entry| entry.collection);
+        let reader = cx.new(|_| GroupReader::new(session.clone()));
         let mut this = Self {
             session,
             entries,
             index,
             group,
+            reader,
             details: None,
-            member: 0,
             loading: None,
             surface,
-            focus,
+            focus: focus.clone(),
             on_top: false,
             toolbar: motion::Fade::default(),
             hide_at: None,
             boundary: Boundary::default(),
             recorded: None,
+            menu: ui::menu::Host::inline(ui::menu::Return::To(focus.clone())),
+            menu_actions: Vec::new(),
             _subscriptions: subscriptions,
         };
         this.load(window, cx);
@@ -297,7 +304,6 @@ impl DetailWindow {
                 let _ = this.update(cx, |this, cx| {
                     if this.entry().is_some_and(|entry| entry.root == root) {
                         this.details = Some(details);
-                        this.member = 0;
                         this.present(cx);
                     }
                 });
@@ -306,10 +312,18 @@ impl DetailWindow {
     }
 
     fn present(&mut self, cx: &mut Context<Self>) {
+        if self.group {
+            if let Some(details) = &self.details {
+                self.reader
+                    .update(cx, |reader, cx| reader.show(details, cx));
+            }
+            cx.notify();
+            return;
+        }
         let media = self
             .details
             .as_ref()
-            .and_then(|details| Media::of(self.session.read(cx), details, self.member));
+            .and_then(|details| Media::of(self.session.read(cx), details, 0));
         if let Some(media) = media {
             self.surface
                 .update(cx, |surface, cx| media.open(surface, cx));
@@ -329,18 +343,6 @@ impl DetailWindow {
         self.index = target as usize;
         self.load(window, cx);
         cx.notify();
-    }
-
-    fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let count = self
-            .details
-            .as_ref()
-            .map_or(1, |details| details.media.len());
-        self.member = self
-            .member
-            .saturating_add_signed(delta)
-            .min(count.saturating_sub(1));
-        self.present(cx);
     }
 
     /// `resetToolbarTimer`: shows the toolbar and hides it a second after
@@ -386,10 +388,117 @@ impl DetailWindow {
         let path = self
             .details
             .as_ref()
-            .and_then(|details| details.media.get(self.member))
+            .and_then(|details| details.media.first())
             .map(|media| media.file_path.clone());
         if let Some(path) = path {
             cx.write_to_clipboard(ClipboardItem::new_string(path));
+        }
+    }
+
+    /// The shown file: its path, content hash, type and name.
+    fn shown_file(&self) -> Option<(String, String, String, String)> {
+        let entry = self.entry()?;
+        let media = self.details.as_ref()?.media.first()?;
+        Some((
+            media.file_path.clone(),
+            media.facts.content_hash.clone(),
+            media.facts.mime.clone(),
+            entry.name.clone(),
+        ))
+    }
+
+    /// `useViewerEntityContextMenu` as the detail window calls it: on the
+    /// file alone, with no item to edit, so only the rows that open and
+    /// copy the file, search by it and set it as the library cover.
+    fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, hash, mime, name)) = self.shown_file() else {
+            return;
+        };
+        let description = rows::Description {
+            surface: rows::Surface::Viewer,
+            ai_tag_enabled: Some(false),
+            single: true,
+            single_hash: Some(hash),
+            single_kind: Some(rows::Kind::Media),
+            single_name: Some(name),
+            single_mime: Some(mime),
+            handlers: rows::Handlers {
+                open_default: true,
+                reveal: true,
+                open_new_window: true,
+                copy_file: true,
+                copy_path: true,
+                copy_name: true,
+                copy_link: true,
+                search_by_image: true,
+                regenerate: true,
+                library_cover: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let playback = rows::Playback {
+            flash: self.surface.read(cx).flash_playback(),
+            capture: self.surface.read(cx).flash(),
+        };
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
+        let built = rows::viewer_menu(&description, playback, &hints);
+        self.menu_actions = rows::actions(&built);
+        // The viewer's rows hold no view panels.
+        let entries = rows::entries(built, &mut |_| ui::menu::Entry::Separator);
+        let menu = cx.new(|cx| ui::menu::Menu::new(entries, position, cx).search(false));
+        self.menu
+            .open(menu, window, cx, |this, _, key, window, cx| {
+                let action = this
+                    .menu_actions
+                    .iter()
+                    .copied()
+                    .find(|action| action.key() == key);
+                if let Some(action) = action {
+                    this.run_menu_action(action, window, cx);
+                }
+            });
+    }
+
+    fn run_menu_action(
+        &mut self,
+        action: rows::Action,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use rows::Action;
+        let Some((path, hash, mime, name)) = self.shown_file() else {
+            return;
+        };
+        match action {
+            Action::OpenDefault => cx.open_with_system(std::path::Path::new(&path)),
+            Action::Reveal => cx.reveal_path(std::path::Path::new(&path)),
+            Action::OpenInNewWindow => {
+                // One window per file: this one, brought forward.
+                if let Some(entry) = self.entry().cloned() {
+                    open(self.session.clone(), vec![entry], 0, cx);
+                }
+            }
+            Action::CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(path)),
+            Action::CopyName => cx.write_to_clipboard(ClipboardItem::new_string(name)),
+            Action::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(
+                crate::shell::media_link(&hash, &mime),
+            )),
+            Action::FlashPlay | Action::FlashStop | Action::FlashMute => {
+                use super::flash::Flash;
+                let control: Box<dyn Fn(&mut Flash)> = match action {
+                    Action::FlashPlay => Box::new(Flash::toggle_play),
+                    Action::FlashStop => Box::new(Flash::stop),
+                    _ => Box::new(Flash::toggle_mute),
+                };
+                self.surface
+                    .update(cx, |surface, cx| surface.control_flash(control, cx));
+            }
+            _ => {
+                // TODO: Copy (the file itself), Search by Image, Regenerate
+                // Thumbnails, Set as Library Cover and Set as Thumbnail, as
+                // the main window's viewer menu will once they exist there.
+            }
         }
     }
 
@@ -515,14 +624,6 @@ impl Render for DetailWindow {
         if self.boundary.animating() || self.toolbar.animating() {
             window.request_animation_frame();
         }
-        let members = self
-            .details
-            .as_ref()
-            .filter(|_| self.group)
-            .map_or(1, |details| details.media.len());
-        // A document's footer or a player's controls keep the bottom edge;
-        // the member strip then takes a row below the surface.
-        let row = members > 1 && self.surface.read(cx).has_bottom_bar();
         let mut pane = div()
             .id("detail-window")
             .track_focus(&self.focus)
@@ -547,44 +648,25 @@ impl Render for DetailWindow {
                     .update(cx, |surface, cx| surface.step_zoom(false, cx));
             }))
             .map(|pane| super::document::handle_actions(pane, &self.surface))
-            // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
-            // on a right-click, Copy (the file to the clipboard) and the
-            // per-image zoom memory (`zoomCache`).
-            .child(strip::surface_frame(row).child(self.surface.clone()))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    // TODO: a collection's members have the tile menu on the
+                    // collection (`openMemberMenu`).
+                    if !this.group {
+                        this.open_menu(event.position, window, cx);
+                    }
+                }),
+            )
+            // TODO: Copy (the file to the clipboard) and the per-image zoom
+            // memory (`zoomCache`).
+            .child(if self.group {
+                self.reader.clone().into_any_element()
+            } else {
+                self.surface.clone().into_any_element()
+            })
             .child(self.boundary.notice(End::First, cx))
             .child(self.boundary.notice(End::Last, cx));
-        if members > 1 {
-            let member_step = |id: &'static str,
-                               icon: &'static str,
-                               label: &'static str,
-                               delta: isize,
-                               enabled: bool,
-                               cx: &mut Context<Self>| {
-                strip::strip_button(id, icon, ui::tip(label))
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, _, cx| this.step_member(delta, cx)))
-            };
-            pane = pane.child(
-                strip::strip(row, cx)
-                    .child(member_step(
-                        "detail-member-previous",
-                        "toolbar-chevron-left",
-                        "Previous",
-                        -1,
-                        self.member > 0,
-                        cx,
-                    ))
-                    .child(strip::counter(self.member + 1, members, cx))
-                    .child(member_step(
-                        "detail-member-next",
-                        "toolbar-chevron-right",
-                        "Next",
-                        1,
-                        self.member + 1 < members,
-                        cx,
-                    )),
-            );
-        }
         // Hidden, the toolbar takes no pointer (`pointer-events: none`).
         if self.toolbar.on() || self.toolbar.animating() {
             pane = pane.child(self.toolbar(window, cx));
@@ -610,6 +692,7 @@ impl Render for DetailWindow {
         )
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
         .child(pane)
+        .children(self.menu.layer(window, cx))
     }
 }
 

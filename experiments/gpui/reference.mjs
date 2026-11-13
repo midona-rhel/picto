@@ -130,6 +130,7 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   } else if (kind === 'move') await mouse('mouseMoved', numbers[0], numbers[1]);
   else if (kind === 'down') await mouse('mousePressed', numbers[0], numbers[1], 'left', numbers[2] || 1);
   else if (kind === 'up') await mouse('mouseReleased', numbers[0], numbers[1], 'left', numbers[2] || 1);
+  else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'rdown') await mouse('mousePressed', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'rup') await mouse('mouseReleased', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'scroll')
@@ -137,6 +138,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'key') await key(rest[0]);
   else if (kind === 'type') await send('Input.insertText', { text: rest.join(' ') });
   else throw new Error(`not a line: ${line}`);
-  if (!['wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
+  if (!['drag', 'wait', 'shot', 'js', 'size', 'reload', 'window'].includes(kind)) await sleep(200);
 }
 socket.close();

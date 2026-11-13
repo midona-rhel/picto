@@ -172,9 +172,11 @@ impl Render for ViewerToolbar {
                 session.total,
             )
         };
+        // A collection's reader has no zoom, and offers "Edit group".
+        let collection = super::collection_selected(self.session.read(cx));
         let (zoomable, percent) = {
             let surface = self.surface.read(cx);
-            (surface.zoomable(), surface.percent())
+            (surface.zoomable() && !collection, surface.percent())
         };
         let can_previous = index.is_some_and(|index| index > 0);
         let can_next = index.is_some_and(|index| (index as u64) + 1 < total);
@@ -268,8 +270,17 @@ impl Render for ViewerToolbar {
                         })),
                 );
         }
-        // TODO: an opened collection shows "Edit group" here, which opens
-        // the collection editor; the prototype has no collection editor.
+        if collection {
+            right = right.child(
+                ui::icon_button("viewer-edit-group", "menu-group-edit")
+                    .tip(ui::tip("Edit group"))
+                    .on_click(|_, _, _| {
+                        // TODO: switch the reader to the collection editor
+                        // (`setMode('editor')`): the members as a grid to
+                        // select, reorder and remove, with the breadcrumb.
+                    }),
+            );
+        }
         right = right.child(
             // `TitlebarControlGroup`
             div()
