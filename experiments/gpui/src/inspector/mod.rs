@@ -32,6 +32,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+/// The id of the destination showing, which outlives its position.
+fn displayed_id(session: &Session) -> Option<String> {
+    session.nav.get(session.displayed).map(|entry| entry.id())
+}
+
 /// What the rail describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -209,7 +214,7 @@ pub struct Inspector {
     _menu: Option<Subscription>,
     confirm: Option<Confirm>,
     /// The destination the pickers were opened on; they close when it changes.
-    picker_destination: usize,
+    picker_destination: Option<String>,
     /// The star under the pointer, which previews that rating.
     hovered_star: Option<usize>,
     scroll: ScrollHandle,
@@ -258,15 +263,18 @@ impl Inspector {
                 window,
                 |this, _, cx| this.save_source(cx),
             ),
-            // The pickers close when the destination changes.
+            // The pickers close when the destination changes. It is told by
+            // its id, which stays when the destination list is rebuilt.
             cx.subscribe_in(
                 &session,
                 window,
                 |this, session, change: &Change, window, cx| {
-                    if *change == Change::Navigation
-                        && session.read(cx).displayed != this.picker_destination
-                    {
-                        this.picker_destination = session.read(cx).displayed;
+                    if *change != Change::Navigation {
+                        return;
+                    }
+                    let displayed = displayed_id(session.read(cx));
+                    if displayed != this.picker_destination {
+                        this.picker_destination = displayed;
                         this.close_pickers(window, cx);
                     }
                 },
@@ -370,7 +378,7 @@ impl Inspector {
             menu_target: None,
             _menu: None,
             confirm: None,
-            picker_destination: 0,
+            picker_destination: None,
             _subscriptions: subscriptions,
         }
     }

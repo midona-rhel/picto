@@ -283,7 +283,7 @@ impl Inspector {
         let Some(target) = self.target(cx) else {
             return;
         };
-        self.picker_destination = self.session.read(cx).displayed;
+        self.picker_destination = super::displayed_id(self.session.read(cx));
         self.folder_picker
             .update(cx, |picker, cx| picker.close(window, cx));
         self.tag_picker.update(cx, |picker, cx| {
@@ -300,7 +300,7 @@ impl Inspector {
         let Some(target) = self.target(cx) else {
             return;
         };
-        self.picker_destination = self.session.read(cx).displayed;
+        self.picker_destination = super::displayed_id(self.session.read(cx));
         self.tag_picker
             .update(cx, |picker, cx| picker.close(window, cx));
         self.folder_picker.update(cx, |picker, cx| {
