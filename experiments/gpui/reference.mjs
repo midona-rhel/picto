@@ -33,7 +33,8 @@ const known = [];
 async function refresh() {
   const found = await pages();
   if (known.length === 0) {
-    const main = found.find((target) => new URL(target.url).hash.length <= 2 && !new URL(target.url).search) ?? found[0];
+    // Other windows load their own pages (`settings.html`, …).
+    const main = found.find((target) => ['/', '/index.html'].includes(new URL(target.url).pathname)) ?? found[0];
     if (!main) throw new Error('reference app not found');
     known.push(main.id);
   }
@@ -134,7 +135,6 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'down') await mouse('mousePressed', numbers[0], numbers[1], 'left', numbers[2] || 1);
   else if (kind === 'up') await mouse('mouseReleased', numbers[0], numbers[1], 'left', numbers[2] || 1);
-  else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });
   else if (kind === 'rdown') await mouse('mousePressed', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'rup') await mouse('mouseReleased', numbers[0], numbers[1], 'right', 1);
   else if (kind === 'scroll')

@@ -38,11 +38,29 @@ impl Line {
             }
             Line::Keys(keys) => {
                 for key in keys {
+                    // The system reports held modifiers before the key and
+                    // their release after it, which `Window::modifiers`
+                    // follows (Shift with an arrow extends the selection).
+                    let modifiers = key.modifiers;
+                    let held = modifiers != Modifiers::default();
+                    if held {
+                        window.dispatch_event(modifiers_changed(modifiers), cx);
+                    }
                     window.dispatch_keystroke(key, cx);
+                    if held {
+                        window.dispatch_event(modifiers_changed(Modifiers::default()), cx);
+                    }
                 }
             }
         }
     }
+}
+
+fn modifiers_changed(modifiers: Modifiers) -> PlatformInput {
+    PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+        modifiers,
+        capslock: Capslock::default(),
+    })
 }
 
 pub fn parse(line: &str) -> Option<Line> {

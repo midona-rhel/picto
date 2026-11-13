@@ -58,6 +58,37 @@ fn toggle_count(folder: bool) -> usize {
     7 + folder as usize + 2
 }
 
+/// `.toggleRow`'s 24px gap and the 32px switch after the label, and the
+/// 6px (`.customItem`) and 4px (the menu) either side of a panel.
+const TOGGLE_GAP: f32 = 24.;
+const SWITCH: f32 = 32.;
+const PANEL_INSET: f32 = 2. * 6. + 2. * 4.;
+
+/// The display panel's labels for a destination, in order.
+fn display_labels(folder: bool) -> Vec<&'static str> {
+    let mut labels = vec![
+        "Show Name",
+        "Show Resolution",
+        "Show Extension",
+        "Show File Type",
+        "Show Item Count",
+        "Compact",
+        "Fit Thumbnails",
+    ];
+    if folder {
+        labels.push("Show Subfolder Content");
+    }
+    labels.extend(["Show Sidebar", "Show Inspector"]);
+    labels
+}
+
+/// The display panel's width where it sets its own (the "Display"
+/// submenu, `width: auto`): its widest label, the gap and the switch, inside
+/// the panel's and the menu's padding.
+fn display_width(widest_label: f32) -> f32 {
+    (PANEL_INSET + widest_label + TOGGLE_GAP + SWITCH).ceil()
+}
+
 /// `.dirPill`: 24px buttons inside 2px of padding, taller than the select
 /// beside it.
 const DIRECTION_PILL: f32 = 28.;
@@ -106,6 +137,8 @@ pub struct Panels {
     pub display: Entity<ViewOptions>,
     scope: ItemScope,
     random: bool,
+    /// The display panel's own width, for the "Display" submenu.
+    display_width: f32,
 }
 
 impl Panels {
@@ -113,6 +146,7 @@ impl Panels {
         session: &Entity<Session>,
         sidebar_shown: bool,
         inspector_shown: bool,
+        window: &Window,
         cx: &mut App,
     ) -> Self {
         let (scope, random) = {
@@ -138,21 +172,28 @@ impl Panels {
                 }),
             })
         };
+        let widest = display_labels(is_folder(&scope))
+            .into_iter()
+            .map(|label| label_width(label, window))
+            .fold(0f32, f32::max);
         Self {
             layout: panel(Panel::Layout, cx),
             display: panel(Panel::Display, cx),
             scope,
             random,
+            display_width: display_width(widest),
         }
     }
 
     /// A panel as a menu entry, at its height for the destination.
     pub fn entry(&self, part: Panel) -> menu::Entry {
-        let view = match part {
-            Panel::Layout => self.layout.clone(),
-            Panel::Display => self.display.clone(),
+        // The menu's own width holds the panels at its top level; a
+        // submenu takes the width the display panel sets.
+        let (view, width) = match part {
+            Panel::Layout => (self.layout.clone(), WIDTH),
+            Panel::Display => (self.display.clone(), self.display_width),
         };
-        menu::view(view, WIDTH, height(part, &self.scope, self.random))
+        menu::view(view, width, height(part, &self.scope, self.random))
             .padded()
             .into()
     }
@@ -169,17 +210,36 @@ pub fn build(
     position: Point<Pixels>,
     sidebar_shown: bool,
     inspector_shown: bool,
+    window: &Window,
     cx: &mut App,
 ) -> (Entity<Menu>, Panels) {
-    let panels = Panels::new(session, sidebar_shown, inspector_shown, cx);
+    let panels = Panels::new(session, sidebar_shown, inspector_shown, window, cx);
     let entries = vec![
         panels.entry(Panel::Layout),
         menu::Entry::Separator,
         panels.entry(Panel::Display),
     ];
-    // The selects open over the window, so the menu draws in it.
-    let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false).in_window());
+    // A pop-up menu like the others: its selects open lists of their own.
+    let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
     (menu, panels)
+}
+
+/// A toggle label's width in the menu's text.
+fn label_width(label: &'static str, window: &Window) -> f32 {
+    let run = TextRun {
+        len: label.len(),
+        font: font(theme::FONT_UI),
+        color: black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(label.into(), px(theme::TEXT_MD), &[run], None)
+            .width,
+    )
 }
 
 impl ViewOptions {
@@ -387,7 +447,9 @@ impl ViewOptions {
                 });
             });
             let (row_act, switch_act) = (act.clone(), act);
-            let mut toggle = ui::toggle(("view-toggle", index), on).disabled(disabled);
+            // A disabled row is dimmed as a whole (`.toggleRowDisabled`);
+            // its switch is not dimmed again.
+            let mut toggle = ui::toggle(("view-toggle", index), on);
             if !disabled {
                 toggle = toggle.on_toggle(move |_, cx| switch_act(cx));
             }
@@ -445,10 +507,19 @@ impl Render for ViewOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::height;
+    use super::{display_labels, display_width, height};
     use crate::grid::menu::Panel;
     use picto_library::FolderId;
     use picto_library::query::ItemScope;
+
+    #[test]
+    fn the_display_submenu_is_as_wide_as_its_widest_row() {
+        // `width: auto`: 103.33px of label, the 24px gap, the 32px switch,
+        // 6px and 4px either side.
+        assert_eq!(display_width(103.33), 180.);
+        assert_eq!(display_labels(false).len(), 9);
+        assert!(display_labels(true).contains(&"Show Subfolder Content"));
+    }
 
     #[test]
     fn panel_heights_follow_their_rows() {

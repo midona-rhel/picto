@@ -87,12 +87,35 @@ pub struct GridView {
 /// "Return to Top" appears once the grid has scrolled this far.
 const RETURN_TO_TOP_AFTER: f32 = 200.;
 
+/// The canvas centres a tile's text rows on the middle of the font's em box
+/// (`textBaseline = 'middle'`) at fractional positions; GPUI centres the
+/// line's ascent and descent and lands half a point lower.
+const CANVAS_TEXT_LIFT: f32 = -0.5;
+
+/// A tile name's width in the grid's 13px UI font.
+fn name_width(text: &str, window: &Window) -> f32 {
+    let run = TextRun {
+        len: text.len(),
+        font: font(theme::FONT_UI),
+        color: black(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text.to_owned().into(), px(theme::TEXT_MD), &[run], None)
+            .width,
+    )
+}
+
 /// The item's aspect ratio when it is known. Audio without dimensions is
 /// drawn two to one.
-fn aspect(item: &RootSummary) -> Option<f32> {
+fn aspect(item: &RootSummary) -> Option<f64> {
     match (item.width, item.height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => {
-            Some(width as f32 / height as f32)
+            Some(f64::from(width) / f64::from(height))
         }
         _ if item.mime.starts_with("audio/") => Some(2.),
         _ => None,
@@ -139,6 +162,7 @@ fn media_rect(
     let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
     let rect = match aspect(item).filter(|_| contain) {
         Some(aspect) => {
+            let aspect = aspect as f32;
             let scale = (tile.w / aspect).min(image_height);
             let (w, h) = (aspect * scale, scale);
             ((tile.w - w) / 2., (image_height - h) / 2., w, h)
@@ -573,7 +597,14 @@ impl GridView {
     /// One grid tile, drawn to the rules of the Electron canvas grid
     /// (`drawBase.ts`): the media rect, its hairline ring, badges inside the
     /// rect, the selection stroke outside it, and optional text rows below.
-    fn tile(&mut self, data: TileData, prefs: &ViewPrefs, now: f64, cx: &mut Context<Self>) -> Div {
+    fn tile(
+        &mut self,
+        data: TileData,
+        prefs: &ViewPrefs,
+        now: f64,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = theme::theme(cx);
         let TileData {
             index,
@@ -726,7 +757,12 @@ impl GridView {
                         .child(ui::icon("group", 14., rgba(theme::BADGE_TEXT))),
                 );
             } else if !label.is_empty() {
-                cell = cell.child(ui::badge(4.).left(px(x + 5.)).top(px(y + 5.)).child(label));
+                cell = cell.child(
+                    ui::badge(4.)
+                        .left(px(x + 5.))
+                        .top(px(y + 5.))
+                        .child(ui::badge_text(label)),
+                );
             }
         }
         let animated = item.mime == "image/gif" && item.frame_count.unwrap_or(0) > 1;
@@ -735,7 +771,7 @@ impl GridView {
                 ui::badge(2.)
                     .right(px(tile.w - x - w + 5.))
                     .top(px(y + 5.))
-                    .child(format::format_duration(duration)),
+                    .child(ui::badge_text(format::format_duration(duration))),
             );
         }
         if prefs.show_item_count && collection {
@@ -743,7 +779,7 @@ impl GridView {
                 ui::badge(4.)
                     .left(px(x + 5.))
                     .top(px(y + h - 18. - 5.))
-                    .child(item.media_count.to_string()),
+                    .child(ui::badge_text(item.media_count.to_string())),
             );
         }
         if prefs.show_name {
@@ -757,19 +793,19 @@ impl GridView {
                     .flex()
                     .justify_center()
                     .child(
-                        // The name truncates to the tile less 8px; selected,
-                        // it is white on a pill of the selection colour.
+                        // The name truncates to the tile less 8px as the
+                        // canvas measures it; selected, it is white on a pill
+                        // of the selection colour 3px wider either side.
                         div()
-                            .max_w(px(tile.w - 2.))
                             .px(px(3.))
                             .rounded(px(2.))
                             .when(selected, |pill| {
                                 pill.bg(rgb(theme::GRID_SELECTION))
                                     .text_color(rgb(theme::BADGE_STRONG_TEXT))
                             })
-                            .truncate()
+                            .whitespace_nowrap()
                             .line_height(px(15.))
-                            .child({
+                            .child(div().relative().top(px(CANVAS_TEXT_LIFT)).child({
                                 let name = if item.name.is_empty() {
                                     "Untitled".to_owned()
                                 } else {
@@ -777,12 +813,15 @@ impl GridView {
                                 };
                                 // Show Extension adds `.EXT` after it.
                                 let extension = format::label_extension(&item.mime);
-                                if prefs.show_extension && !extension.is_empty() {
+                                let label = if prefs.show_extension && !extension.is_empty() {
                                     format!("{name}.{}", extension.to_uppercase())
                                 } else {
                                     name
-                                }
-                            }),
+                                };
+                                format::truncate_to(&label, tile.w - 8., |text| {
+                                    name_width(text, window)
+                                })
+                            })),
                     ),
             );
         }
@@ -805,7 +844,12 @@ impl GridView {
                     .text(theme::TEXT_CAPTION)
                     .line_height(px(15.))
                     .text_color(theme.text_tertiary())
-                    .child(format!("{width} × {height}")),
+                    .child(
+                        div()
+                            .relative()
+                            .top(px(CANVAS_TEXT_LIFT))
+                            .child(format!("{width} × {height}")),
+                    ),
             );
         }
         // The magnifier marks the hovered image, except on video and while
@@ -1170,6 +1214,9 @@ impl Render for GridView {
         .absolute()
         .size_full();
 
+        // Only the tiles scroll: an empty or failed grid has no scrollbar,
+        // whatever the last results left in the scroll handle.
+        let scrolls = matches!(surface, Surface::Tiles);
         let body = match surface {
             Surface::Error(error) => div()
                 .id("grid-error")
@@ -1243,7 +1290,7 @@ impl Render for GridView {
             Surface::Tiles => {
                 let mut content = div().relative().w_full().h(px(self.layout.total_height));
                 for data in tiles {
-                    content = content.child(self.tile(data, &prefs, now, cx));
+                    content = content.child(self.tile(data, &prefs, now, window, cx));
                 }
                 // `.marquee`: square corners, over the tiles.
                 if let Some(rect) = self.marquee.as_ref().and_then(|marquee| marquee.rect) {
@@ -1306,7 +1353,9 @@ impl Render for GridView {
             .size_full()
             .child(measure)
             .child(body)
-            .child(ui::scrollbar("grid-scrollbar", &self.scroll, window, cx))
+            .when(scrolls, |root| {
+                root.child(ui::scrollbar("grid-scrollbar", &self.scroll, window, cx))
+            })
             .children(ui::scroll_to_top(
                 "grid-return-to-top",
                 &self.scroll,

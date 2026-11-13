@@ -312,6 +312,9 @@ impl RenderOnce for OverlayShell {
             .relative()
             .w(px(width))
             .h(px(height))
+            // The glass edges are drawn over the panel; the 1px each takes
+            // in production's border box is kept clear here.
+            .p(px(1.))
             .flex()
             .flex_col()
             .overflow_hidden()

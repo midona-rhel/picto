@@ -288,7 +288,8 @@ impl DetailWindow {
             record_view(self.session.read(cx), entry.root);
         }
         if !entry.collection {
-            let thumbnail = super::thumbnail_file(self.session.read(cx).thumbnail(&entry.hash));
+            let thumbnail =
+                crate::grid::thumbnails::existing(self.session.read(cx).thumbnail(&entry.hash));
             let natural = size_of(entry.width, entry.height);
             self.surface.update(cx, |surface, cx| {
                 surface.show(entry.hash.clone(), thumbnail, natural, None, cx)

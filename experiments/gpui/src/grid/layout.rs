@@ -5,6 +5,8 @@
 /// The outer selection stroke reaches three pixels beyond the media rect.
 pub const SELECTION_EXTENT: f32 = 3.;
 pub const TEXT_ROW_HEIGHT: f32 = 20.;
+/// The selection extent in the layout's arithmetic.
+const EXTENT: f64 = SELECTION_EXTENT as f64;
 const PADDING_TOP: f32 = 16.;
 const PADDING_BOTTOM: f32 = 16.;
 /// Tiles are looked up by the horizontal bands they touch.
@@ -25,6 +27,20 @@ pub struct Tile {
     pub h: f32,
 }
 
+impl Tile {
+    /// A tile from the layout's double-precision arithmetic, which is
+    /// `layoutMath.ts`'s own: a column chosen by a near tie lands where
+    /// JavaScript's numbers put it.
+    fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
+        Self {
+            x: x as f32,
+            y: y as f32,
+            w: w as f32,
+            h: h as f32,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Layout {
     pub tiles: Vec<Tile>,
@@ -36,15 +52,15 @@ pub struct Layout {
 }
 
 struct Geometry {
-    used_width: f32,
+    used_width: f64,
     column_count: usize,
-    column_width: f32,
-    offset_x: f32,
-    snapped_size: f32,
-    item_gap: f32,
+    column_width: f64,
+    offset_x: f64,
+    snapped_size: f64,
+    item_gap: f64,
 }
 
-pub fn safe_aspect_ratio(value: f32) -> f32 {
+pub fn safe_aspect_ratio(value: f64) -> f64 {
     if !value.is_finite() || value <= 0. {
         return 1.5;
     }
@@ -52,20 +68,20 @@ pub fn safe_aspect_ratio(value: f32) -> f32 {
 }
 
 /// JavaScript's `Math.round`: halves round toward positive infinity.
-fn js_round(value: f32) -> f32 {
+fn js_round(value: f64) -> f64 {
     (value + 0.5).floor()
 }
 
-fn geometry(container_width: f32, target_size: f32, gap: f32) -> Geometry {
-    let snapped_size = (js_round(target_size / 50.) * 50.).max(50.) - 2. * SELECTION_EXTENT;
+fn geometry(container_width: f64, target_size: f64, gap: f64) -> Geometry {
+    let snapped_size = (js_round(target_size / 50.) * 50.).max(50.) - 2. * EXTENT;
     // Positions describe only the clickable media. The selection stroke lives
     // outside that rect, so reserve its full extent on both sides of every tile.
-    let outer_inset = gap + SELECTION_EXTENT;
-    let item_gap = gap + 2. * SELECTION_EXTENT;
+    let outer_inset = gap + EXTENT;
+    let item_gap = gap + 2. * EXTENT;
     let min_inner_width = container_width - 2. * outer_inset;
     let column_count =
         js_round((min_inner_width + item_gap) / (snapped_size + item_gap)).max(1.) as usize;
-    let columns = column_count as f32;
+    let columns = column_count as f64;
     let column_width = ((min_inner_width - (columns - 1.) * item_gap) / columns).floor();
     let used_width = columns * column_width + (columns - 1.) * item_gap;
     Geometry {
@@ -80,7 +96,7 @@ fn geometry(container_width: f32, target_size: f32, gap: f32) -> Geometry {
 
 impl Layout {
     pub fn compute(
-        aspect_ratios: &[f32],
+        aspect_ratios: &[f64],
         container_width: f32,
         target_size: f32,
         gap: f32,
@@ -90,17 +106,18 @@ impl Layout {
         if aspect_ratios.is_empty() || container_width <= 0. {
             return Self::default();
         }
-        let geometry = geometry(container_width, target_size, gap);
+        let geometry = geometry(container_width.into(), target_size.into(), gap.into());
+        let text_height = f64::from(text_height);
         let (mut tiles, height) = match mode {
             ViewMode::Grid => grid(aspect_ratios.len(), &geometry, text_height),
             ViewMode::Justified => justified(aspect_ratios, &geometry, text_height),
             ViewMode::Waterfall => waterfall(aspect_ratios, &geometry, text_height),
         };
         for tile in &mut tiles {
-            tile.x += geometry.offset_x;
+            tile.x += geometry.offset_x as f32;
             tile.y += PADDING_TOP;
         }
-        let total_height = height + PADDING_TOP + PADDING_BOTTOM;
+        let total_height = height as f32 + PADDING_TOP + PADDING_BOTTOM;
         let mut bands = vec![Vec::new(); (total_height / BAND) as usize + 1];
         for (index, tile) in tiles.iter().enumerate() {
             let first = (tile.y / BAND).max(0.) as usize;
@@ -140,10 +157,10 @@ impl Layout {
     }
 }
 
-fn waterfall(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (Vec<Tile>, f32) {
+fn waterfall(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (Vec<Tile>, f64) {
     let width = geometry.column_width;
     let gap = geometry.item_gap;
-    let mut heights = vec![0f32; geometry.column_count];
+    let mut heights = vec![0f64; geometry.column_count];
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
     for &aspect in aspect_ratios {
         let mut shortest = 0;
@@ -154,31 +171,28 @@ fn waterfall(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (V
         }
         let y = heights[shortest];
         let h = width / safe_aspect_ratio(aspect) + text_height;
-        tiles.push(Tile {
-            x: shortest as f32 * (width + gap),
-            y,
-            w: width,
-            h,
-        });
+        tiles.push(Tile::new(shortest as f64 * (width + gap), y, width, h));
         heights[shortest] = y + h + gap;
     }
-    let tallest = heights.iter().copied().fold(0., f32::max);
+    let tallest = heights.iter().copied().fold(0., f64::max);
     (tiles, (tallest - gap).max(0.))
 }
 
-fn grid(count: usize, geometry: &Geometry, text_height: f32) -> (Vec<Tile>, f32) {
+fn grid(count: usize, geometry: &Geometry, text_height: f64) -> (Vec<Tile>, f64) {
     let size = geometry.column_width;
     let gap = geometry.item_gap;
     let cell_height = size + text_height;
     let tiles = (0..count)
-        .map(|index| Tile {
-            x: (index % geometry.column_count) as f32 * (size + gap),
-            y: (index / geometry.column_count) as f32 * (cell_height + gap),
-            w: size,
-            h: cell_height,
+        .map(|index| {
+            Tile::new(
+                (index % geometry.column_count) as f64 * (size + gap),
+                (index / geometry.column_count) as f64 * (cell_height + gap),
+                size,
+                cell_height,
+            )
         })
         .collect();
-    let rows = count.div_ceil(geometry.column_count) as f32;
+    let rows = count.div_ceil(geometry.column_count) as f64;
     let height = if rows > 0. {
         rows * cell_height + (rows - 1.) * gap
     } else {
@@ -187,21 +201,21 @@ fn grid(count: usize, geometry: &Geometry, text_height: f32) -> (Vec<Tile>, f32)
     (tiles, height)
 }
 
-fn justified(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (Vec<Tile>, f32) {
+fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (Vec<Tile>, f64) {
     let container_width = geometry.used_width;
     let target_row_height = geometry.snapped_size;
     let gap = geometry.item_gap;
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
     let mut row_start = 0;
-    let mut y = 0f32;
+    let mut y = 0f64;
     while row_start < aspect_ratios.len() {
         let mut row_end = row_start;
-        let mut total_aspect = 0f32;
+        let mut total_aspect = 0f64;
         while row_end < aspect_ratios.len() {
             total_aspect += safe_aspect_ratio(aspect_ratios[row_end]);
             row_end += 1;
             let row_width =
-                total_aspect * target_row_height + (row_end - row_start - 1) as f32 * gap;
+                total_aspect * target_row_height + (row_end - row_start - 1) as f64 * gap;
             if row_width >= container_width {
                 break;
             }
@@ -211,7 +225,7 @@ fn justified(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (V
         // paint beyond the grid. Finish the preceding row and let the tile begin
         // a new final row instead.
         let target_width =
-            total_aspect * target_row_height + (row_end - row_start - 1) as f32 * gap;
+            total_aspect * target_row_height + (row_end - row_start - 1) as f64 * gap;
         if row_end == aspect_ratios.len()
             && row_end - row_start > 1
             && target_width > container_width
@@ -220,14 +234,14 @@ fn justified(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (V
             total_aspect -= safe_aspect_ratio(aspect_ratios[row_end]);
         }
         let last_row = row_end == aspect_ratios.len();
-        let gap_space = (row_end - row_start - 1) as f32 * gap;
+        let gap_space = (row_end - row_start - 1) as f64 * gap;
         let final_height = if last_row {
             target_row_height
         } else {
             ((container_width - gap_space) / total_aspect).min(target_row_height * 1.5)
         };
         let cell_height = final_height + text_height;
-        let mut x = 0f32;
+        let mut x = 0f64;
         for &aspect in &aspect_ratios[row_start..row_end] {
             let aspect = safe_aspect_ratio(aspect);
             let mut w = final_height * aspect;
@@ -236,7 +250,7 @@ fn justified(aspect_ratios: &[f32], geometry: &Geometry, text_height: f32) -> (V
                 w = container_width;
                 h = w / aspect + text_height;
             }
-            tiles.push(Tile { x, y, w, h });
+            tiles.push(Tile::new(x, y, w, h));
             x += w + gap;
         }
         y += cell_height + gap;
@@ -279,7 +293,7 @@ pub fn scroll_anchor(
 mod tests {
     use super::*;
 
-    fn aspects(count: usize) -> Vec<f32> {
+    fn aspects(count: usize) -> Vec<f64> {
         (0..count)
             .map(|i| [0.125, 8., 1., 0.5, 1.5][i % 5])
             .collect()
@@ -350,7 +364,7 @@ mod tests {
     #[test]
     fn extreme_and_invalid_aspect_ratios_are_bounded() {
         assert_eq!(safe_aspect_ratio(0.), 1.5);
-        assert_eq!(safe_aspect_ratio(f32::NAN), 1.5);
+        assert_eq!(safe_aspect_ratio(f64::NAN), 1.5);
         assert_eq!(safe_aspect_ratio(100.), 8.);
         assert_eq!(safe_aspect_ratio(0.001), 0.125);
     }

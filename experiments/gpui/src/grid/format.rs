@@ -114,9 +114,38 @@ pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
         | channel(x * 0.0557 + y * -0.204 + z * 1.057)
 }
 
+/// `truncateText`: the text whole when it fits in `max`, else as many of
+/// its characters as fit with "…" after them, measured by `measure`.
+pub fn truncate_to(text: &str, max: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= max {
+        return text.to_owned();
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut end = chars.len().saturating_sub(1);
+    let cut = |end: usize| chars[..end].iter().collect::<String>() + "…";
+    while end > 0 && measure(&cut(end)) > max {
+        end -= 1;
+    }
+    cut(end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_truncate_with_an_ellipsis_to_what_fits() {
+        // Ten units a character.
+        let measure = |text: &str| text.chars().count() as f32 * 10.;
+        assert_eq!(truncate_to("Tribal", 60., measure), "Tribal");
+        assert_eq!(
+            truncate_to("Main Four - Communal", 100., measure),
+            "Main Four…"
+        );
+        // A space before the cut stays, as `slice` keeps it.
+        assert_eq!(truncate_to("Main Four - C", 60., measure), "Main …");
+        assert_eq!(truncate_to("ab", 5., measure), "…");
+    }
 
     #[test]
     fn labels_match_the_electron_grid() {

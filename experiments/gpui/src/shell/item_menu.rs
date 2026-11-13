@@ -515,8 +515,9 @@ impl Shell {
     ) {
         self.items.actions = rows::actions(&built);
         self.items.target = Some(target);
-        // The grid's menus hold the view panels, whose selects open over
-        // the window, so those menus draw in it.
+        // The grid's menus hold the view panels. In pop-up windows their
+        // selects open lists of their own (`ui::select`), so these menus
+        // reach past the window's edge as the others do.
         let mut panels = None;
         let entries = rows::entries(built, &mut |panel| {
             panels
@@ -525,12 +526,12 @@ impl Shell {
                         &self.session,
                         !self.sidebar_collapsed,
                         !self.inspector_collapsed,
+                        window,
                         cx,
                     )
                 })
                 .entry(panel)
         });
-        let in_window = panels.is_some();
         // The viewer's menus give the keyboard back to the viewer or Quick
         // Look that opened them; the others to the shell.
         let viewer_menu = self.items.surface.is_some();
@@ -539,10 +540,7 @@ impl Shell {
         } else {
             ui::menu::Return::To(self.focus.clone())
         });
-        let menu = cx.new(|cx| {
-            let menu = Menu::new(entries, position, cx).search(search);
-            if in_window { menu.in_window() } else { menu }
-        });
+        let menu = cx.new(|cx| Menu::new(entries, position, cx).search(search));
         if let Some(panels) = panels {
             self.watch_view_panels(&menu, panels, cx);
         }

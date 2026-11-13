@@ -109,19 +109,41 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
         })
 }
 
-/// The grid's translucent label chip (`drawBadge` in `primitives.ts`).
+/// A badge's text, set 1px higher than GPUI centres its line, where the
+/// canvas's `textBaseline = 'middle'` puts it.
+pub fn badge_text(text: impl Into<SharedString>) -> Div {
+    div().relative().top(px(-1.)).child(text.into())
+}
+
+/// The grid's translucent label chip (`drawBadge` in `primitives.ts`): the
+/// box is text + 2 × padding, filled, then stroked 1px along its edge, so the
+/// stroke lies half over the fill and half outside it, as a canvas stroke
+/// does: a 0.5px border over the fill, and a 0.5px border on a ring just
+/// outside (a shadow would also darken the translucent fill, which GPUI
+/// draws over it).
 pub fn badge(padding: f32) -> Div {
+    let stroke = rgba(theme::BADGE_BORDER);
     div()
         .absolute()
         .h(px(18.))
-        // The 1px border is part of the padding: the box is text + 2 × padding.
-        .px(px((padding - 1.).max(0.)))
+        .px(px(padding - 0.5).max(px(0.)))
         .flex()
         .items_center()
         .rounded(px(theme::TILE_RADIUS))
         .bg(rgba(theme::BADGE_BACKGROUND))
-        .border_1()
-        .border_color(rgba(theme::BADGE_BORDER))
+        .border(px(0.5))
+        .border_color(stroke)
+        .child(
+            div()
+                .absolute()
+                .top(px(-1.))
+                .left(px(-1.))
+                .right(px(-1.))
+                .bottom(px(-1.))
+                .rounded(px(theme::TILE_RADIUS + 0.5))
+                .border(px(0.5))
+                .border_color(stroke),
+        )
         .text(theme::TEXT_XS)
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgba(theme::BADGE_TEXT))
