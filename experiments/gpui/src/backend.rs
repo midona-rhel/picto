@@ -24,6 +24,8 @@ pub struct Navigation {
     /// A smart folder with no rules of its own. It only holds others: it
     /// has no count and cannot be opened.
     pub group: bool,
+    /// A folder that watches a directory for new files.
+    pub watched: bool,
     pub depth: usize,
     pub parent: Option<usize>,
 }
@@ -141,6 +143,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
         icon: Some(String::from(icon)),
         tint: None,
         group: false,
+        watched: false,
         depth: 0,
         parent: None,
     };
@@ -202,6 +205,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     icon: f.icon,
                     tint: f.color.as_deref().and_then(hex_color),
                     group: false,
+                    watched: f.watch_enabled,
                     depth: 0,
                     parent: None,
                 },
@@ -228,6 +232,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     icon: f.icon,
                     tint: f.color.as_deref().and_then(hex_color),
                     group,
+                    watched: false,
                     depth: 0,
                     parent: None,
                 },
@@ -419,6 +424,7 @@ mod acceptance {
             icon: None,
             tint: None,
             group: false,
+            watched: false,
             depth: 0,
             parent: None,
         };
