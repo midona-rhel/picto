@@ -12,7 +12,7 @@ pub mod audio;
 #[cfg(target_os = "macos")]
 mod avf;
 pub mod backend;
-mod button;
+pub(super) mod button;
 mod dsp;
 mod ffmpeg;
 pub mod model;

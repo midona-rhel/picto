@@ -361,6 +361,34 @@ pub const BLACK_30: u32 = 0x0000004d;
 /// rgba(0, 0, 0, 0.1), the bottom edge of `EmptyState`'s inner frame.
 pub const BLACK_10: u32 = 0x0000001a;
 
+// The document viewers' page colours are fixed, not themed.
+/// `DocumentViewerShell.module.css` `.viewport`: `rgb(42, 42, 46)`.
+pub const DOCUMENT_BACKDROP: u32 = 0x2a2a2e;
+/// A page's paper, `#fff`.
+pub const DOCUMENT_PAPER: u32 = 0xffffff;
+/// `TextDocumentViewer.module.css` `.page`: text `#1f2023`, links
+/// `#2773c9`, quotes `#5b5e65` behind a `#c7c9cd` rule, code on `#eef0f2`.
+pub const DOCUMENT_TEXT: u32 = 0x1f2023;
+pub const DOCUMENT_LINK: u32 = 0x2773c9;
+pub const DOCUMENT_QUOTE: u32 = 0x5b5e65;
+pub const DOCUMENT_QUOTE_RULE: u32 = 0xc7c9cd;
+pub const DOCUMENT_CODE: u32 = 0xeef0f2;
+/// `ArchiveDocumentViewer.module.css` `.bookPage`: text `#222`.
+pub const BOOK_TEXT: u32 = 0x222222;
+/// `.bookPage`'s `Georgia, serif`.
+pub const FONT_BOOK: &str = "Georgia";
+
+/// `PdfViewer.module.css` `.page` and the text page:
+/// `0 8px 28px rgba(0, 0, 0, 0.34)`.
+pub fn page_shadow() -> Vec<BoxShadow> {
+    vec![BoxShadow::new(px(0.), px(8.), rgba(0x00000057).into()).blur_radius(px(28.))]
+}
+
+/// The comic, DjVu and book pages: `0 4px 18px rgba(0, 0, 0, .32)`.
+pub fn sheet_shadow() -> Vec<BoxShadow> {
+    vec![BoxShadow::new(px(0.), px(4.), rgba(0x00000052).into()).blur_radius(px(18.))]
+}
+
 // ── Typography ──────────────────────────────────────────────────
 /// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
 /// family, so Chromium draws the system font; this is the same face.

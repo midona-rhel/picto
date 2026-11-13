@@ -208,6 +208,15 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(Viewer, viewer::ZoomOut),
             to!(DetailWindow, viewer::ZoomOut),
         ],
+        // Document pages, in whichever host shows the document.
+        "document.previousPage" => vec![
+            to!(Viewer, viewer::document::PreviousPage),
+            to!(DetailWindow, viewer::document::PreviousPage),
+        ],
+        "document.nextPage" => vec![
+            to!(Viewer, viewer::document::NextPage),
+            to!(DetailWindow, viewer::document::NextPage),
+        ],
         "view.alwaysOnTop" => vec![to!(DetailWindow, viewer::detail::ToggleAlwaysOnTop)],
         "view.toggleSidebar" => vec![to!(App, shell::ToggleSidebar)],
         "view.toggleInspector" => vec![to!(App, shell::ToggleInspector)],
@@ -270,8 +279,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("view.toggleTileName", "deferred in production"),
     ("view.toggleTileMetadata", "deferred in production"),
     ("view.toggleLogs", "no log window"),
-    ("document.previousPage", "no document viewer"),
-    ("document.nextPage", "no document viewer"),
     (
         "video.fullscreen",
         "the shell cannot yet give the player the whole window",

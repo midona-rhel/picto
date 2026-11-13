@@ -1,0 +1,458 @@
+//! Paged documents rendered to pictures off the drawing thread: PDF through
+//! hayro, DjVu through djvu-rs, and comic archives (a zip of page images).
+//! Each open document lives on a thread of its own, which renders one page
+//! at a time at the size the viewer asks for; a newer request supersedes
+//! any still waiting.
+use super::geometry::PageSize;
+use super::kind::RendererKind;
+use anyhow::{Context as _, Result, anyhow, bail};
+use futures::channel::oneshot;
+use image::RgbaImage;
+use std::io::{Cursor, Read};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
+
+/// A document whose pages can be measured and drawn.
+pub trait PageSource {
+    fn page_count(&self) -> usize;
+    /// A page's natural size: PDF pages in points (CSS pixels at 100%),
+    /// DjVu pages and comic pages in pixels.
+    fn page_size(&mut self, index: usize) -> Result<PageSize>;
+    /// Draws a page at exactly `width` × `height` pixels.
+    fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage>;
+}
+
+/// Opens the paged document of this kind.
+pub fn open(kind: RendererKind, path: &Path) -> Result<Box<dyn PageSource>> {
+    Ok(match kind {
+        RendererKind::Pdf => Box::new(Pdf::open(path)?),
+        RendererKind::Djvu => Box::new(Djvu::open(path)?),
+        RendererKind::Cbz => Box::new(Comic::open(path)?),
+        other => bail!("{other:?} is not a paged document"),
+    })
+}
+
+// ── PDF ─────────────────────────────────────────────────────────
+
+pub struct Pdf {
+    pdf: hayro::hayro_syntax::Pdf,
+}
+
+impl Pdf {
+    pub fn open(path: &Path) -> Result<Self> {
+        let data = std::fs::read(path).context("read the PDF")?;
+        let pdf = hayro::hayro_syntax::Pdf::new(data).map_err(|error| match error {
+            hayro::hayro_syntax::LoadPdfError::Decryption(_) => {
+                anyhow!("This PDF is encrypted.")
+            }
+            hayro::hayro_syntax::LoadPdfError::Invalid => anyhow!("Could not open this PDF."),
+        })?;
+        if pdf.pages().is_empty() {
+            bail!("This PDF has no pages.");
+        }
+        Ok(Self { pdf })
+    }
+}
+
+impl PageSource for Pdf {
+    fn page_count(&self) -> usize {
+        self.pdf.pages().len()
+    }
+
+    fn page_size(&mut self, index: usize) -> Result<PageSize> {
+        let page = self
+            .pdf
+            .pages()
+            .get(index)
+            .ok_or_else(|| anyhow!("No page {}", index + 1))?;
+        Ok(page.render_dimensions())
+    }
+
+    fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage> {
+        let page = self
+            .pdf
+            .pages()
+            .get(index)
+            .ok_or_else(|| anyhow!("No page {}", index + 1))?;
+        let (natural_width, natural_height) = page.render_dimensions();
+        let cache = hayro::RenderCache::new();
+        let pixmap = hayro::render(
+            page,
+            &cache,
+            &hayro::hayro_interpret::InterpreterSettings::default(),
+            &hayro::RenderSettings::default(),
+            &hayro::PixmapSettings {
+                // hayro truncates the scaled size; a quarter pixel more
+                // makes it land on the size asked for.
+                x_scale: (width as f32 + 0.25) / natural_width,
+                y_scale: (height as f32 + 0.25) / natural_height,
+                // `.page { background: #fff }`
+                bg_color: hayro::vello_cpu::color::palette::css::WHITE,
+            },
+        );
+        let (out_width, out_height) = (pixmap.width() as u32, pixmap.height() as u32);
+        // On an opaque white page premultiplied and straight alpha agree.
+        RgbaImage::from_raw(out_width, out_height, pixmap.data_as_u8_slice().to_vec())
+            .ok_or_else(|| anyhow!("Could not render this PDF page."))
+    }
+}
+
+// ── DjVu ────────────────────────────────────────────────────────
+
+pub struct Djvu {
+    document: djvu_rs::Document,
+}
+
+impl Djvu {
+    pub fn open(path: &Path) -> Result<Self> {
+        let document = djvu_rs::Document::open(path)
+            .map_err(|error| anyhow!("Could not open this DjVu document: {error}"))?;
+        if document.page_count() == 0 {
+            bail!("This DjVu document has no pages.");
+        }
+        Ok(Self { document })
+    }
+}
+
+impl PageSource for Djvu {
+    fn page_count(&self) -> usize {
+        self.document.page_count()
+    }
+
+    /// The page at `max(96, dpi)`, as production renders it.
+    fn page_size(&mut self, index: usize) -> Result<PageSize> {
+        let page = self
+            .document
+            .page(index)
+            .map_err(|error| anyhow!("{error}"))?;
+        let dpi = page.dpi().max(96) as f32;
+        let (width, height) = page.size_at_dpi(dpi);
+        Ok((width as f32, height as f32))
+    }
+
+    fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage> {
+        let page = self
+            .document
+            .page(index)
+            .map_err(|error| anyhow!("{error}"))?;
+        let pixmap = page
+            .render_to_size(width, height)
+            .map_err(|error| anyhow!("Could not render this DjVu page: {error}"))?;
+        RgbaImage::from_raw(pixmap.width, pixmap.height, pixmap.data)
+            .ok_or_else(|| anyhow!("Could not render this DjVu page."))
+    }
+}
+
+// ── Comic archives ──────────────────────────────────────────────
+
+/// `IMAGE_EXTENSIONS` in `ArchiveDocumentViewer.tsx`.
+const COMIC_EXTENSIONS: [&str; 8] = ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"];
+
+pub struct Comic {
+    archive: zip::ZipArchive<std::fs::File>,
+    /// The archive's image entries in reading order.
+    pages: Vec<String>,
+    /// The last decoded page, kept so a size query and the render that
+    /// follows it decode once.
+    decoded: Option<(usize, Arc<RgbaImage>)>,
+}
+
+impl Comic {
+    pub fn open(path: &Path) -> Result<Self> {
+        let file = std::fs::File::open(path).context("read the comic archive")?;
+        let archive =
+            zip::ZipArchive::new(file).map_err(|_| anyhow!("Could not open this CBZ."))?;
+        let pages = comic_pages(archive.file_names());
+        if pages.is_empty() {
+            bail!("This CBZ has no readable pages.");
+        }
+        Ok(Self {
+            archive,
+            pages,
+            decoded: None,
+        })
+    }
+
+    fn decode(&mut self, index: usize) -> Result<Arc<RgbaImage>> {
+        if let Some((decoded, image)) = &self.decoded
+            && *decoded == index
+        {
+            return Ok(image.clone());
+        }
+        let name = self
+            .pages
+            .get(index)
+            .ok_or_else(|| anyhow!("No page {}", index + 1))?
+            .clone();
+        let mut bytes = Vec::new();
+        self.archive
+            .by_name(&name)
+            .map_err(|_| anyhow!("Could not read page {}", index + 1))?
+            .read_to_end(&mut bytes)?;
+        let image = Arc::new(decode_picture(&name, &bytes)?);
+        self.decoded = Some((index, image.clone()));
+        Ok(image)
+    }
+}
+
+/// The image entries of an archive, in natural order, ignoring case
+/// (`localeCompare` with `numeric: true, sensitivity: 'base'`).
+pub fn comic_pages<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut pages: Vec<String> = names
+        .filter(|name| !name.ends_with('/'))
+        .filter(|name| {
+            name.rsplit_once('.').is_some_and(|(_, extension)| {
+                COMIC_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+            })
+        })
+        .map(str::to_owned)
+        .collect();
+    pages.sort_by(|left, right| natural_compare(left, right));
+    pages
+}
+
+/// Compares runs of digits by value and everything else without case.
+pub fn natural_compare(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut left, mut right) = (left.chars().peekable(), right.chars().peekable());
+    loop {
+        match (left.peek().copied(), right.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => {
+                let number = |chars: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut digits = String::new();
+                    while let Some(digit) = chars.peek().copied().filter(char::is_ascii_digit) {
+                        digits.push(digit);
+                        chars.next();
+                    }
+                    digits
+                };
+                let (a, b) = (number(&mut left), number(&mut right));
+                let (a_trimmed, b_trimmed) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
+                let order = a_trimmed
+                    .len()
+                    .cmp(&b_trimmed.len())
+                    .then_with(|| a_trimmed.cmp(b_trimmed));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(a), Some(b)) => {
+                let order = a.to_lowercase().cmp(b.to_lowercase());
+                if order != Ordering::Equal {
+                    return order;
+                }
+                left.next();
+                right.next();
+            }
+        }
+    }
+}
+
+/// Decodes a page picture: raster formats through `image`, SVG through
+/// resvg at its own size.
+pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<RgbaImage> {
+    if name.to_ascii_lowercase().ends_with(".svg") {
+        let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())
+            .map_err(|error| anyhow!("Could not read this SVG page: {error}"))?;
+        let size = tree.size().to_int_size();
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
+            .ok_or_else(|| anyhow!("This SVG page is empty."))?;
+        resvg::render(&tree, Default::default(), &mut pixmap.as_mut());
+        let mut data = pixmap.take();
+        // tiny-skia's pixels are premultiplied.
+        for pixel in data.chunks_exact_mut(4) {
+            let alpha = pixel[3] as u32;
+            if alpha > 0 && alpha < 255 {
+                for channel in &mut pixel[..3] {
+                    *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+                }
+            }
+        }
+        return RgbaImage::from_raw(size.width(), size.height(), data)
+            .ok_or_else(|| anyhow!("Could not render this SVG page."));
+    }
+    Ok(image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()?
+        .decode()
+        .map_err(|error| anyhow!("Could not decode {name}: {error}"))?
+        .to_rgba8())
+}
+
+impl PageSource for Comic {
+    fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    fn page_size(&mut self, index: usize) -> Result<PageSize> {
+        let image = self.decode(index)?;
+        Ok((image.width() as f32, image.height() as f32))
+    }
+
+    fn render(&mut self, index: usize, width: u32, height: u32) -> Result<RgbaImage> {
+        let image = self.decode(index)?;
+        if (image.width(), image.height()) == (width, height) {
+            return Ok((*image).clone());
+        }
+        Ok(image::imageops::resize(
+            &*image,
+            width.max(1),
+            height.max(1),
+            image::imageops::FilterType::CatmullRom,
+        ))
+    }
+}
+
+// ── JPEG XL ─────────────────────────────────────────────────────
+
+/// A JPEG XL image decoded by jxl-oxide, the decoder `core/` makes its
+/// thumbnails with.
+pub fn decode_jpeg_xl(path: &Path) -> Result<RgbaImage> {
+    let file = std::fs::File::open(path).context("read the JPEG XL image")?;
+    let decoder = jxl_oxide::integration::JxlDecoder::new(file)
+        .map_err(|error| anyhow!("Could not open this JPEG XL image: {error}"))?;
+    Ok(image::DynamicImage::from_decoder(decoder)
+        .map_err(|error| anyhow!("Could not decode this JPEG XL image: {error}"))?
+        .to_rgba8())
+}
+
+// ── The document's thread ───────────────────────────────────────
+
+/// A drawn page: which, its natural size, and its pixels.
+pub struct RenderedPage {
+    pub index: usize,
+    pub natural: PageSize,
+    pub image: RgbaImage,
+}
+
+/// Chooses the pixel size to draw a page at from its natural size, or
+/// `None` while the page cannot be shown (an unmeasured viewport).
+pub type Plan = Box<dyn FnOnce(PageSize) -> Option<(u32, u32)> + Send>;
+
+struct Request {
+    index: usize,
+    plan: Plan,
+    reply: oneshot::Sender<Result<RenderedPage>>,
+}
+
+/// An open paged document on its own thread. Dropping it ends the thread.
+pub struct PageWorker {
+    requests: mpsc::Sender<Request>,
+}
+
+/// The largest side a page is drawn at, to bound memory at high zoom.
+pub const MAX_RENDER_SIDE: u32 = 8192;
+
+impl PageWorker {
+    /// Opens the document on a new thread; the answer is the worker and the
+    /// page count, or why the document cannot be shown.
+    pub fn open(
+        kind: RendererKind,
+        path: PathBuf,
+    ) -> oneshot::Receiver<Result<(PageWorker, usize)>> {
+        let (opened, answer) = oneshot::channel();
+        let (requests, inbox) = mpsc::channel::<Request>();
+        let spawned = std::thread::Builder::new()
+            .name("picto-document".into())
+            .spawn(move || {
+                let mut source = match open(kind, &path) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        let _ = opened.send(Err(error));
+                        return;
+                    }
+                };
+                let count = source.page_count();
+                if opened.send(Ok((PageWorker { requests }, count))).is_err() {
+                    return;
+                }
+                while let Ok(mut request) = inbox.recv() {
+                    // Only the newest waiting request matters.
+                    while let Ok(newer) = inbox.try_recv() {
+                        request = newer;
+                    }
+                    if request.reply.is_canceled() {
+                        continue;
+                    }
+                    let result = render_planned(source.as_mut(), request.index, request.plan);
+                    let _ = request.reply.send(result);
+                }
+            });
+        if let Err(error) = spawned {
+            log_spawn_failure(&error);
+        }
+        answer
+    }
+
+    /// Asks for a page; the answer comes when it is drawn.
+    pub fn render(&self, index: usize, plan: Plan) -> oneshot::Receiver<Result<RenderedPage>> {
+        let (reply, answer) = oneshot::channel();
+        let _ = self.requests.send(Request { index, plan, reply });
+        answer
+    }
+}
+
+fn log_spawn_failure(error: &std::io::Error) {
+    eprintln!("picto: could not start a document thread: {error}");
+}
+
+fn render_planned(source: &mut dyn PageSource, index: usize, plan: Plan) -> Result<RenderedPage> {
+    let natural = source.page_size(index)?;
+    let (width, height) = plan(natural).ok_or_else(|| anyhow!("The page has no room."))?;
+    let (width, height) = bound_render_size(width, height);
+    Ok(RenderedPage {
+        index,
+        natural,
+        image: source.render(index, width, height)?,
+    })
+}
+
+/// Shrinks a render size, keeping its proportions, so neither side passes
+/// [`MAX_RENDER_SIDE`].
+pub fn bound_render_size(width: u32, height: u32) -> (u32, u32) {
+    let longest = width.max(height).max(1);
+    if longest <= MAX_RENDER_SIDE {
+        return (width.max(1), height.max(1));
+    }
+    let scale = MAX_RENDER_SIDE as f32 / longest as f32;
+    (
+        ((width as f32 * scale).round() as u32).max(1),
+        ((height as f32 * scale).round() as u32).max(1),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bound_render_size, comic_pages, natural_compare};
+    use std::cmp::Ordering;
+
+    #[test]
+    fn comic_pages_are_images_in_natural_order() {
+        let pages = comic_pages(
+            [
+                "Page 10.png",
+                "page 2.JPG",
+                "notes.txt",
+                "folder/",
+                "Page 1.webp",
+                "cover.svg",
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            pages,
+            ["cover.svg", "Page 1.webp", "page 2.JPG", "Page 10.png"]
+        );
+        assert_eq!(natural_compare("a02", "a2"), Ordering::Equal);
+        assert_eq!(natural_compare("a9", "a10"), Ordering::Less);
+    }
+
+    #[test]
+    fn render_sizes_are_bounded() {
+        assert_eq!(bound_render_size(1000, 500), (1000, 500));
+        assert_eq!(bound_render_size(16384, 8192), (8192, 4096));
+        assert_eq!(bound_render_size(0, 0), (1, 1));
+    }
+}

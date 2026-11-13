@@ -48,6 +48,22 @@ ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev =
 ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 wgpu = "27.0.1"
+# Document viewers, all pure Rust so they build on every platform. PDF pages
+# are rasterized by hayro, DjVu by djvu-rs (the crate production runs as
+# WebAssembly), JPEG XL by jxl-oxide (the decoder core/ thumbnails with).
+hayro = "0.9"
+djvu-rs = "0.45"
+jxl-oxide = { version = "0.12.6", features = ["image"] }
+# SVG pages inside comic archives; the version GPUI already builds.
+resvg = { version = "0.46", default-features = false }
+# CBZ and EPUB are zip archives; EPUB's manifest and chapters are XML.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+roxmltree = "0.21"
+pulldown-cmark = { version = "0.13", default-features = false }
+# A font's family name, for loading it into GPUI's text system.
+ttf-parser = "0.25"
+# WOFF tables are zlib streams; the version zip already builds.
+flate2 = "1"
 # Audio playback for the media viewer: the audio output Ruffle already uses,
 # and pure-Rust decoders for the audio formats a library holds.
 cpal = "0.16"
@@ -55,6 +71,17 @@ symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "w
 rustfft = "6"
 # Round caps and joins for the visualizer's strokes; the tessellator GPUI uses.
 lyon_tessellation = "1"
+
+[dev-dependencies]
+# The format matrix draws the viewers off-screen through GPUI's headless
+# renderer, which only test builds include.
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11", "test-support"] }
+
+# The macOS text system, which unlike the platform can be made off the main
+# thread, for the off-screen checks.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_apple = { package = "gpui-pre-apple", version = "=0.3.12" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

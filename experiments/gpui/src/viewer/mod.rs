@@ -6,7 +6,9 @@
 //! takes the grid toolbar's place.
 pub mod camera;
 pub mod detail;
+pub mod document;
 pub mod flash;
+mod flash_controls;
 pub mod quick_look;
 mod strip;
 pub mod surface;
@@ -17,6 +19,7 @@ pub mod video;
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::RootId;
 use std::path::PathBuf;
@@ -130,8 +133,10 @@ impl Boundary {
     }
 }
 
-/// An item as a surface opens it: its key, thumbnail, size, file and type.
+/// An item as a surface opens it: its name, key, thumbnail, size, file and
+/// type.
 pub struct Media {
+    pub name: SharedString,
     pub key: String,
     pub thumbnail: PathBuf,
     pub natural: Option<camera::Size>,
@@ -147,6 +152,7 @@ impl Media {
         member: usize,
     ) -> Option<Self> {
         details.media.get(member).map(|media| Self {
+            name: details.root.name.clone().into(),
             key: media.facts.content_hash.clone(),
             thumbnail: session.thumbnail(&media.facts.content_hash),
             natural: size_of(media.facts.width, media.facts.height),
@@ -156,6 +162,7 @@ impl Media {
     }
 
     pub fn open(self, surface: &mut MediaSurface, cx: &mut Context<MediaSurface>) {
+        surface.set_display_name(self.name);
         surface.open(
             self.key,
             self.thumbnail,
@@ -172,6 +179,7 @@ impl Media {
 fn session_media(session: &Session) -> Option<Media> {
     if let Some((name, mime)) = session.demo {
         return Some(Media {
+            name: name.into(),
             key: name.to_owned(),
             thumbnail: PathBuf::new(),
             natural: None,
@@ -335,6 +343,11 @@ impl Viewer {
         self.toolbar.clone()
     }
 
+    /// The media surface, for the viewer's context menu.
+    pub fn surface(&self) -> Entity<MediaSurface> {
+        self.surface.clone()
+    }
+
     /// The viewer has the keyboard while it is open, so its shortcuts apply,
     /// and gives it back when it closes.
     fn take_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -464,6 +477,7 @@ impl Render for Viewer {
                 this.surface
                     .update(cx, |surface, cx| surface.step_zoom(false, cx));
             }))
+            .map(|pane| document::handle_actions(pane, &self.surface))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

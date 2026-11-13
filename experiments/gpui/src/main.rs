@@ -36,10 +36,13 @@ pub fn set_app_menus(cx: &mut App) {
         },
         Menu {
             name: "Media Examples".into(),
-            items: vec![
+            items: [
                 MenuItem::action("SVG", DemoSvg),
                 MenuItem::action("Flash (Ruffle)", DemoFlash),
-            ],
+            ]
+            .into_iter()
+            .chain(viewer::document::demos::menu_items())
+            .collect(),
             disabled: false,
         },
     ]);
@@ -110,6 +113,7 @@ fn main() {
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            viewer::document::bind(cx);
             // The registry's shortcuts, at their defaults until the
             // settings are read and applied.
             keymap::install(

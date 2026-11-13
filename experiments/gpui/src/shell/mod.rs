@@ -20,6 +20,7 @@ use crate::viewer::{
     trigger,
 };
 use crate::{motion, screens, theme, ui};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use sidebar::Sidebar;
 use std::path::PathBuf;
@@ -760,6 +761,7 @@ impl Render for Shell {
                     session.show_demo("interactive.swf", "application/x-shockwave-flash", cx)
                 });
             }))
+            .map(|root| crate::viewer::document::demos::handle(root, &self.session))
             .child(titlebar)
             .child(body)
             .children(inspector);

@@ -3,8 +3,12 @@
 //! over the thumbnail once decoded (`ImageCrossfadeFrame`). Images zoom and
 //! pan (`useImageZoom.ts`) and show the navigator while they overflow, and
 //! animated ones play; Flash plays through Ruffle and fills the pane; video
-//! and audio play in the media player (`video/`).
+//! and audio play in the media player (`video/`). What each item gets is
+//! decided by [`document::kind::renderer_kind`]: JPEG XL decodes onto the
+//! image camera, and documents, fonts and unviewable types show a
+//! [`Document`].
 use super::camera::{self, Camera, Glide, Size};
+use super::document::{self, Document, kind::RendererKind};
 use crate::{motion, theme};
 use gpui::*;
 use std::{
@@ -57,6 +61,9 @@ enum Mode {
     Image,
     /// Ruffle's frames, fitted to the pane.
     Flash,
+    /// A document viewer of its own (`DetailMediaRenderer`'s documents,
+    /// fonts and the unsupported view).
+    Document,
     /// Video and audio, in the media player.
     Media,
     /// No renderer yet: the thumbnail, fitted, with a note.
@@ -88,6 +95,17 @@ pub struct MediaSurface {
     full_task: Option<Task<()>>,
     flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
+    /// Flash's controls (`useMediaControlsVisibility`): their opacity, and a
+    /// count that lets only the latest reveal's timer hide them.
+    flash_controls: motion::Fade,
+    flash_reveal: u64,
+    document: Option<Document>,
+    _document_zoom: Option<Subscription>,
+    /// Whether the open document takes the toolbar's zoom, and its zoom in
+    /// percent, as it last reported them.
+    document_zoom: (bool, f32),
+    /// The item's name, which the font viewer shows as its title.
+    display_name: SharedString,
     player: Option<Entity<super::video::VideoPlayer>>,
     opened: String,
     error: Option<String>,
@@ -114,6 +132,8 @@ impl MediaSurface {
     pub fn stop(&mut self) {
         self.flash = None;
         self.flash_task = None;
+        self.document = None;
+        self._document_zoom = None;
         self.player = None;
     }
 
@@ -122,14 +142,26 @@ impl MediaSurface {
         self.player.clone()
     }
 
-    /// Whether the shown item has zoom controls: images do, Flash does not.
+    /// Whether the shown item has zoom controls: images and PDF pages do,
+    /// Flash and the other documents do not.
     pub fn zoomable(&self) -> bool {
-        self.mode == Mode::Image
+        match self.mode {
+            Mode::Image => true,
+            Mode::Document => self.document_zoom.0,
+            _ => false,
+        }
     }
 
     /// Whether a Flash movie is playing in the pane.
     pub fn flash(&self) -> bool {
         self.flash.is_some()
+    }
+
+    /// Whether the Flash movie plays and is muted, while one is shown.
+    pub fn flash_playback(&self) -> Option<(bool, bool)> {
+        self.flash
+            .as_ref()
+            .map(|flash| (flash.playback.playing, flash.playback.muted))
     }
 
     pub fn set_options(&mut self, options: Options, cx: &mut Context<Self>) {
@@ -156,7 +188,94 @@ impl MediaSurface {
 
     /// The zoom as the toolbar shows it, in percent.
     pub fn percent(&self) -> f32 {
-        self.camera.percent()
+        match self.mode {
+            Mode::Document => self.document_zoom.1,
+            _ => self.camera.percent(),
+        }
+    }
+
+    /// Takes the open document's zoom and tells the toolbar.
+    fn document_zoom_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = &self.document {
+            self.document_zoom = (document.zoomable(cx), document.percent(cx));
+        }
+        cx.emit(Event::Zoom);
+    }
+
+    /// Runs a control on the playing movie, and shows the controls again
+    /// (`revealControls`).
+    pub fn control_flash(
+        &mut self,
+        control: Box<dyn Fn(&mut super::flash::Flash)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(flash) = &mut self.flash {
+            control(flash);
+        }
+        self.reveal_flash_controls(cx);
+    }
+
+    /// Shows Flash's controls, and hides them once the pointer has rested
+    /// for [`super::flash_controls::HIDE_DELAY`].
+    fn reveal_flash_controls(&mut self, cx: &mut Context<Self>) {
+        use super::flash_controls as media_controls;
+        if self.flash.is_none() {
+            return;
+        }
+        // Already up, only the timer restarts, without a repaint for every
+        // pointer move.
+        let hidden = !self.flash_controls.on();
+        self.flash_controls.set(true, media_controls::FADE);
+        self.flash_reveal += 1;
+        let reveal = self.flash_reveal;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(media_controls::HIDE_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.flash_reveal == reveal {
+                    this.flash_controls.set(false, media_controls::FADE);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        if hidden {
+            cx.notify();
+        }
+    }
+
+    /// The name of the item about to be opened, for viewers that show it.
+    pub fn set_display_name(&mut self, name: SharedString) {
+        self.display_name = name;
+    }
+
+    /// The open document, while a document is shown.
+    fn document(&self) -> Option<&Document> {
+        self.document
+            .as_ref()
+            .filter(|_| self.mode == Mode::Document)
+    }
+
+    /// J: the previous page of a document.
+    pub fn previous_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.previous_page(cx);
+        }
+    }
+
+    /// L: the next page of a document.
+    pub fn next_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.next_page(cx);
+        }
+    }
+
+    /// Cmd+= and Cmd+−: the font preview's size.
+    pub fn preview_size(&mut self, larger: bool, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.preview_size(larger, cx);
+        }
     }
 
     fn pane(&self) -> Size {
@@ -203,6 +322,10 @@ impl MediaSurface {
 
     /// `fitToWindow`.
     pub fn fit(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.fit(cx);
+            return;
+        }
         if let Some(image) = self.image_size() {
             self.glide = None;
             let fitted = Camera::fit(image, self.pane());
@@ -212,12 +335,20 @@ impl MediaSurface {
 
     /// `fitActual`.
     pub fn actual_size(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.actual_size(cx);
+            return;
+        }
         self.glide = None;
         self.set_camera(Camera::actual(), cx);
     }
 
     /// The slider and the zoom menu: a scale, keeping the offset.
     pub fn set_percent(&mut self, percent: f32, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.set_percent(percent, cx);
+            return;
+        }
         self.glide = None;
         let camera = self.camera.zoomed(percent / 100., None);
         self.set_camera(camera, cx);
@@ -226,6 +357,10 @@ impl MediaSurface {
     /// Zoom in or out by one step, gliding. Steps pressed while a glide is
     /// under way build on where it is heading.
     pub fn step_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.step_zoom(zoom_in, cx);
+            return;
+        }
         if self.mode != Mode::Image {
             return;
         }
@@ -378,14 +513,13 @@ impl MediaSurface {
         self.opened = key.clone();
         self.error = None;
         self.stop();
-        let mode = if mime == "application/x-shockwave-flash" {
-            Mode::Flash
-        } else if mime.starts_with("image/") {
-            Mode::Image
-        } else if media.is_some() {
-            Mode::Media
-        } else {
-            Mode::Other
+        let kind = document::kind::renderer_kind(mime);
+        let mode = match kind {
+            RendererKind::Flash => Mode::Flash,
+            RendererKind::Image | RendererKind::JpegXl => Mode::Image,
+            RendererKind::Video | RendererKind::Audio if media.is_some() => Mode::Media,
+            kind if kind.is_document() => Mode::Document,
+            _ => Mode::Other,
         };
         if mode != self.mode {
             self.mode = mode;
@@ -394,6 +528,7 @@ impl MediaSurface {
         match mode {
             Mode::Flash => {
                 self.flash = Some(super::flash::Flash::open(path));
+                self.reveal_flash_controls(cx);
                 self.flash_task = Some(cx.spawn(async move |entity, cx| {
                     loop {
                         cx.background_executor()
@@ -434,7 +569,16 @@ impl MediaSurface {
                     }
                 }));
             }
+            Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
             Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
+            Mode::Document => {
+                let document = Document::open(kind, path, mime, self.display_name.clone(), cx);
+                self._document_zoom =
+                    document.observe_zoom(cx, |this, cx| this.document_zoom_changed(cx));
+                self.document = Some(document);
+                self.document_zoom_changed(cx);
+                cx.notify();
+            }
             Mode::Media => {
                 let kind = media.unwrap_or(super::video::model::Kind::Video);
                 let settings = crate::settings::current(cx);
@@ -504,6 +648,32 @@ impl MediaSurface {
                 });
             }));
         }
+    }
+
+    /// `JpegXlViewer.tsx`: the original decoded off the drawing thread
+    /// (jxl-oxide here, the jsquash decoder there) and shown on the image
+    /// camera, over its thumbnail until then.
+    fn decode_jpeg_xl(&mut self, key: String, path: PathBuf, cx: &mut Context<Self>) {
+        let decode = cx.background_executor().spawn(async move {
+            document::pages::decode_jpeg_xl(&path).map(document::render_image)
+        });
+        self.full_task = Some(cx.spawn(async move |entity, cx| {
+            let result = decode.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.key != key {
+                    return;
+                }
+                match result {
+                    Ok(image) => {
+                        this.full = Some(image);
+                        this.full_key = key.clone();
+                        this.present_key();
+                    }
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
     }
 
     /// The requested item is now the one on screen; it opens fitted.
@@ -781,7 +951,8 @@ impl Render for MediaSurface {
                 .absolute()
                 .size_full(),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.reveal_flash_controls(cx);
                 if let Some(flash) = &this.flash {
                     let (x, y) = this.flash_position(event.position);
                     let _ = flash
@@ -872,6 +1043,8 @@ impl Render for MediaSurface {
             if let Some(image) = image.filter(|_| pane.0 > 0. && !self.needs_fit) {
                 surface = surface.children(self.image_layers(image));
             }
+        } else if let Some(document) = self.document() {
+            surface = surface.child(document.element(self.thumbnail.clone(), cx));
         } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
             // The player shows the thumbnail until its first picture.
             let poster = self.thumbnail.clone();
@@ -909,6 +1082,22 @@ impl Render for MediaSurface {
                     .text_size(px(12.))
                     .child(error.clone()),
             );
+        }
+        // Hidden, the controls are left out, so they take no pointer.
+        if let Some(flash) = &self.flash
+            && (self.flash_controls.on() || self.flash_controls.animating())
+        {
+            if self.flash_controls.animating() {
+                window.request_animation_frame();
+            }
+            surface = surface.child(super::flash_controls::controls(
+                cx.entity().downgrade(),
+                &flash.playback,
+                // `disabled={!controller}`: nothing to control until the
+                // first frame has arrived.
+                self.full.is_some() && self.full_key == self.key,
+                self.flash_controls.value_with(motion::EASE),
+            ));
         }
         if let Some(flash) = &self.flash
             && let Some(trace) = flash.traces.lock().unwrap().back()

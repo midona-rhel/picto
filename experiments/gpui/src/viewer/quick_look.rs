@@ -11,6 +11,7 @@ use super::{
 };
 use crate::session::{Change, Session};
 use crate::{theme, ui};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::{RootId, RootKind};
 
@@ -264,6 +265,7 @@ impl Render for QuickLook {
             this.surface
                 .update(cx, |surface, cx| surface.step_zoom(false, cx));
         }))
+        .map(|pane| super::document::handle_actions(pane, &self.surface))
         // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
         // on a right-click, and the rating and copy shortcuts.
         .child(frame.child(self.surface.clone()))
