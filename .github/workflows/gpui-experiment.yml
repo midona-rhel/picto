@@ -52,8 +52,9 @@ jobs:
           workspaces: experiments/gpui -> target
           cache-on-failure: true
 
-      # GPUI's Linux backends (Wayland, X11, Vulkan, fontconfig) and the audio
-      # output Ruffle links against.
+      # GPUI's Linux backends (Wayland, X11, Vulkan, fontconfig), the audio
+      # output Ruffle links against, and what the application core needs
+      # (D-Bus for the keyring, libclang for its bindings).
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -63,6 +64,8 @@ jobs:
             clang \
             cmake \
             libasound2-dev \
+            libclang-dev \
+            libdbus-1-dev \
             libfontconfig-dev \
             libglib2.0-dev \
             libssl-dev \
