@@ -75,8 +75,12 @@ struct Confirmation {
     message: SharedString,
     label: SharedString,
     danger: bool,
-    run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
+    run: Run,
+    /// Run when the question is cancelled or closed.
+    cancelled: Option<Run>,
 }
+
+pub(super) type Run = Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
 
 /// `mediaLinkFor`: the link the Electron app serves a file at.
 pub(crate) fn media_link(hash: &str, mime: &str) -> String {
@@ -542,7 +546,22 @@ impl Shell {
         message: impl Into<SharedString>,
         label: impl Into<SharedString>,
         danger: bool,
-        run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
+        run: Run,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask_with(title, message, label, danger, run, None, cx);
+    }
+
+    /// The same, running `cancelled` when the question is turned down.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn ask_with(
+        &mut self,
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        danger: bool,
+        run: Run,
+        cancelled: Option<Run>,
         cx: &mut Context<Self>,
     ) {
         let confirmation = Confirmation {
@@ -551,9 +570,24 @@ impl Shell {
             label: label.into(),
             danger,
             run,
+            cancelled,
         };
-        let back = ui::menu::Return::To(self.focus.clone());
+        // Over a viewer the keyboard goes back to it, so its keys go on
+        // working; over the grid, to the grid.
+        let back = if self.viewing(cx) {
+            ui::menu::Return::Opener
+        } else {
+            ui::menu::Return::To(self.focus.clone())
+        };
         self.items.confirm.open(confirmation, back, cx);
+    }
+
+    /// Whether a question is waiting for an answer (`confirmModalAtom`).
+    pub(super) fn asking(&mut self) -> bool {
+        self.items
+            .confirm
+            .get_mut()
+            .is_some_and(|dialog| !dialog.presence.closing())
     }
 
     /// The open confirmation, drawn over everything. The keyboard goes back
@@ -566,14 +600,28 @@ impl Shell {
         let dialog = self.items.confirm.layer(window, cx)?;
         let confirm = &dialog.content;
         let run = confirm.run.clone();
-        let close = cx.listener(|this, _: &(), _, cx| this.items.confirm.dismiss(cx));
-        let cancel = cx.listener(|this, _: &(), _, cx| {
+        let refused = confirm.cancelled.clone();
+        let close = cx.listener({
+            let refused = refused.clone();
+            move |this, _: &(), window, cx| {
+                this.items.confirm.dismiss(cx);
+                if let Some(refused) = &refused {
+                    refused(this, window, cx);
+                }
+            }
+        });
+        let cancel = cx.listener(move |this, _: &(), window, cx| {
             // Cancel takes the dialog away at once.
             this.items.confirm.close(cx);
+            if let Some(refused) = &refused {
+                refused(this, window, cx);
+            }
         });
         let accept = cx.listener(move |this, _: &(), window, cx| {
             this.items.confirm.dismiss(cx);
-            window.focus(&this.focus, cx);
+            if !this.viewing(cx) {
+                window.focus(&this.focus, cx);
+            }
             run(this, window, cx);
         });
         Some(

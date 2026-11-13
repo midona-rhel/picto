@@ -501,6 +501,27 @@ pub const QUICK_LOOK_GLYPH: u32 = 0xf8f9fb;
 /// The detail window's toolbar: `rgba(0, 0, 0, 0.55)` (`DetailWindow.module.css`).
 pub const DETAIL_TOOLBAR_BACKGROUND: u32 = 0x0000008c;
 
+// The Inbox review pill's colours are fixed, not themed
+// (`InboxReviewControls.module.css`); alpha rounded to the nearest byte.
+/// `.action`'s `--glow`: `54, 220, 119` for Accept and `255, 75, 84` for
+/// Reject.
+pub const REVIEW_ACCEPT_GLOW: u32 = 0x36dc77;
+pub const REVIEW_REJECT_GLOW: u32 = 0xff4b54;
+/// The glyph while lit: `rgba(226, 255, 237, 0.98)` / `rgba(255, 230, 231,
+/// 0.98)`.
+pub const REVIEW_ACCEPT_TINT: u32 = 0xe2ffedfa;
+pub const REVIEW_REJECT_TINT: u32 = 0xffe6e7fa;
+/// `.divider`: `transparent`, `rgba(255, 255, 255, 0.25)` at 20%,
+/// `rgba(255, 255, 255, 0.16)` at 80%, `transparent`, and its
+/// `box-shadow: 1px 0 rgba(0, 0, 0, 0.18)`. The ends are white at no
+/// strength, as the gradient's premultiplied `transparent` blends.
+pub const REVIEW_DIVIDER_EDGE: u32 = 0xffffff00;
+pub const REVIEW_DIVIDER_TOP: u32 = 0xffffff40;
+pub const REVIEW_DIVIDER_BOTTOM: u32 = 0xffffff29;
+pub const REVIEW_DIVIDER_SHADE: u32 = 0x0000002e;
+/// `.action:focus-visible`'s outline: `rgba(255, 255, 255, 0.75)`.
+pub const REVIEW_FOCUS_RING: u32 = 0xffffffbf;
+
 // The media player's controls are fixed white on black, not themed
 // (`VideoPlayer.module.css`); alpha rounded to the nearest byte.
 /// `.root`: `#000` behind video.

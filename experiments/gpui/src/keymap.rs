@@ -174,9 +174,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
         "edit.pasteImport" => vec![to!(Grid, PasteImport)],
-        // Inbox.
-        "inbox.accept" => vec![to!(Grid, AcceptInbox)],
-        "inbox.reject" => vec![to!(Grid, RejectInbox)],
+        // Inbox. The viewer's review the item it shows.
+        "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
+        "inbox.reject" => vec![to!(Grid, RejectInbox), to!(Viewer, RejectInbox)],
         // Rating: the selection in the grid, the shown item in the viewer.
         "rate.0" => vec![to!(Grid, Rate0), to!(Viewer, Rate0)],
         "rate.1" => vec![to!(Grid, Rate1), to!(Viewer, Rate1)],

@@ -807,6 +807,11 @@ impl Session {
         cx.emit(Change::Results);
     }
 
+    /// Whether more of the destination follows the loaded items.
+    pub fn has_following(&self) -> bool {
+        self.cursor.is_some()
+    }
+
     /// Fetches the next page once the grid is scrolled near the end.
     pub fn load_more(&mut self, cx: &mut Context<Self>) {
         if self.cursor.is_some() && !self.loading {
@@ -1648,12 +1653,23 @@ impl Session {
         if !ids.is_empty() {
             self.close_viewer(cx);
             let target = self.target_for(ids);
-            let _ = self.edit(
-                move |library| library.set_lifecycle(&target, lifecycle),
-                Reread::RESULTS,
-                cx,
-            );
+            let _ = self.set_lifecycle(target, lifecycle, cx);
         }
+    }
+
+    /// Moves `target` to the trash, the Inbox or the library, and reads the
+    /// destination again in place. The answer says whether it went through.
+    pub fn set_lifecycle(
+        &mut self,
+        target: picto_library::selection::SelectionTarget,
+        lifecycle: picto_library::Lifecycle,
+        cx: &mut Context<Self>,
+    ) -> futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>> {
+        self.edit(
+            move |library| library.set_lifecycle(&target, lifecycle).map(|_| ()),
+            Reread::RESULTS,
+            cx,
+        )
     }
 
     /// Fetches the selected item's details again, after an edit changed

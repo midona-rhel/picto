@@ -1,6 +1,6 @@
 //! Permanent deletion of items: the confirmation that says whether it can
 //! be undone, Empty Trash, and the delete through the library.
-use super::item_menu::Target;
+use super::item_menu::{Run, Target};
 use crate::grid::format::grouped;
 use crate::session::Reread;
 use crate::shell::Shell;
@@ -18,6 +18,20 @@ struct Deletion {
     reject: bool,
     title: String,
     label: &'static str,
+    /// Told whether the delete went through, once it has or has not.
+    done: Option<Done>,
+}
+
+/// Hears whether a delete went through: false when it was cancelled or
+/// failed.
+pub(super) type Done = Rc<dyn Fn(&mut Shell, bool, &mut Window, &mut Context<Shell>)>;
+
+/// What tells `done` a delete was turned down.
+fn cancelled(done: &Option<Done>) -> Option<Run> {
+    let done = done.clone()?;
+    Some(Rc::new(move |this, window, cx| {
+        done(this, false, window, cx)
+    }))
 }
 
 /// `permanentDeleteMessage`.
@@ -56,9 +70,23 @@ impl Shell {
             target.selection(self.session.read(cx)),
             reject,
             false,
+            None,
             window,
             cx,
         );
+    }
+
+    /// `rejectTarget` when the setting deletes rejected items: deletes
+    /// `selection` as the Reject row does, asking first only when it cannot
+    /// be undone, and tells `done` whether it went through.
+    pub(super) fn reject_by_deleting(
+        &mut self,
+        selection: SelectionTarget,
+        done: Done,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_deletion(selection, true, false, Some(done), window, cx);
     }
 
     /// The sidebar's Empty Trash: everything in the Trash, after the same
@@ -71,7 +99,7 @@ impl Shell {
             },
             excluded_root_ids: Vec::new(),
         };
-        self.request_deletion(selection, false, true, window, cx);
+        self.request_deletion(selection, false, true, None, window, cx);
     }
 
     fn request_deletion(
@@ -79,6 +107,7 @@ impl Shell {
         selection: SelectionTarget,
         reject: bool,
         empty_trash: bool,
+        done: Option<Done>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -89,6 +118,9 @@ impl Shell {
             move |this, summary, window, cx| {
                 let count = summary.selected_count;
                 if count == 0 {
+                    if let Some(done) = &done {
+                        done(this, false, window, cx);
+                    }
                     return;
                 }
                 let undoable = undo_limit > 0 && summary.media_count <= undo_limit as u128;
@@ -107,13 +139,14 @@ impl Shell {
                     reject,
                     title,
                     label,
+                    done: done.clone(),
                 };
                 if reject && undoable {
                     this.delete_permanently(delete, undoable, window, cx);
                     return;
                 }
                 let message = permanent_delete_message(Some(summary.media_count), undo_limit);
-                this.ask(
+                this.ask_with(
                     delete.title.clone(),
                     message,
                     label,
@@ -121,6 +154,7 @@ impl Shell {
                     Rc::new(move |this, window, cx| {
                         this.delete_permanently(delete.clone(), undoable, window, cx)
                     }),
+                    cancelled(&done),
                     cx,
                 );
             },
@@ -138,12 +172,28 @@ impl Shell {
     ) {
         if !self.session.read(cx).disposable() {
             eprintln!("picto: refusing to delete from a library that is not a disposable copy");
+            if let Some(done) = &delete.done {
+                done(self, false, window, cx);
+            }
             return;
         }
         let undo_limit = crate::settings::current(cx).undo_delete_limit.max(0) as usize;
         let (selection, reject) = (delete.selection.clone(), delete.reject);
-        self.session
-            .update(cx, |session, cx| session.close_viewer(cx));
+        // The viewer closes when what it shows is deleted (`deleteTarget`);
+        // an Inbox review has already moved it on.
+        let shows_deleted = {
+            let session = self.session.read(cx);
+            match &selection {
+                SelectionTarget::Explicit { root_ids } => session
+                    .selected_item()
+                    .is_some_and(|item| root_ids.contains(&item.root_id)),
+                _ => true,
+            }
+        };
+        if shows_deleted {
+            self.session
+                .update(cx, |session, cx| session.close_viewer(cx));
+        }
         let answer = self.session.read(cx).run(move |library| {
             let deleted = if reject {
                 library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
@@ -164,14 +214,19 @@ impl Shell {
             let Ok(result) = answer.await else {
                 return;
             };
-            let _ = this.update_in(cx, move |this, _, cx| match result {
-                Ok(()) => this
-                    .session
-                    .update(cx, |session, cx| session.reread(Reread::RESULTS, cx)),
+            let _ = this.update_in(cx, move |this, window, cx| match result {
+                Ok(()) => {
+                    this.session
+                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
+                    if let Some(done) = &delete.done {
+                        done(this, true, window, cx);
+                    }
+                }
                 // The library resolved a different selection or limit: never
                 // drop the promise of undo silently; ask again.
                 Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
-                    this.ask(
+                    let cancel = cancelled(&delete.done);
+                    this.ask_with(
                         delete.title.clone(),
                         "This delete can no longer be undone. Delete permanently anyway?",
                         delete.label,
@@ -179,10 +234,16 @@ impl Shell {
                         Rc::new(move |this, window, cx| {
                             this.delete_permanently(delete.clone(), false, window, cx)
                         }),
+                        cancel,
                         cx,
                     );
                 }
-                Err(error) => eprintln!("picto: {error}"),
+                Err(error) => {
+                    eprintln!("picto: {error}");
+                    if let Some(done) = &delete.done {
+                        done(this, false, window, cx);
+                    }
+                }
             });
         })
         .detach();

@@ -7,6 +7,7 @@ mod import;
 mod item_menu;
 pub(crate) use item_menu::media_link;
 pub mod library;
+mod review;
 mod shortcuts;
 pub mod sidebar;
 pub mod toolbar;
@@ -108,6 +109,16 @@ pub struct Shell {
     /// Files dragged from the system over the window, until they are
     /// dropped or leave it.
     file_drag: Option<Vec<PathBuf>>,
+    /// The Inbox reviews in progress, the press flashing on the review
+    /// pill, a review waiting for the next page, and whether a review key
+    /// is held down.
+    reviewer: crate::viewer::review::Reviewer,
+    review_flash: Option<crate::viewer::review::Flash>,
+    pending_review: Option<review::Pending>,
+    review_keys: review::ReviewKeys,
+    /// The review button a click focused, and whether a key since has
+    /// made its focus ring show.
+    review_focus: Option<(crate::viewer::review::Decision, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -209,6 +220,22 @@ impl Shell {
                 window,
                 |this, _, _: &sidebar::EmptyTrash, window, cx| this.empty_trash(window, cx),
             ),
+            cx.observe_keystrokes(|this, event, _, cx| this.review_keystroke(event, cx)),
+            {
+                let shell = cx.entity().downgrade();
+                cx.intercept_keystrokes(move |event, _, cx| {
+                    let _ = shell.update(cx, |this, _| this.review_keystroke_coming(event));
+                })
+            },
+            // The Inbox review pill follows the item being viewed.
+            cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
+                if matches!(change, Change::Results) {
+                    this.review_items_changed(window, cx);
+                }
+                if matches!(change, Change::Selection | Change::Results) && this.viewing(cx) {
+                    cx.notify();
+                }
+            }),
         ];
         let duplicates = cx.new(|cx| {
             screens::duplicates::DuplicatesScreen::new(
@@ -291,6 +318,11 @@ impl Shell {
             items: Default::default(),
             imports,
             file_drag: None,
+            reviewer: Default::default(),
+            review_flash: None,
+            pending_review: None,
+            review_keys: Default::default(),
+            review_focus: None,
             _subscriptions: subscriptions,
         }
     }
@@ -838,6 +870,8 @@ impl Render for Shell {
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.resizing = None),
             )
+            // A review key reviews once per press, not per repeat.
+            .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| this.review_keys.released()))
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 this.move_selection(nav::Move::Right, window, cx)
             }))
@@ -942,6 +976,10 @@ impl Render for Shell {
 
         root = root.children(self.menu.layer(window, cx));
         root = root.children(self.confirmation(window, cx));
+        // The Inbox review pill, over the media view and Quick Look, and
+        // over the question a reject may ask, which it waits on
+        // (`--layer-modal`, after the dialog's).
+        root = root.children(self.review_controls(cx));
         // The inspector's tag and folder pickers float over everything.
         let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
