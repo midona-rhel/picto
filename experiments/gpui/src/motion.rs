@@ -68,6 +68,12 @@ impl CubicBezier {
         Self { x1, y1, x2, y2 }
     }
 
+    /// The two control points, as CSS and Core Animation write them.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn points(&self) -> (f32, f32, f32, f32) {
+        (self.x1, self.y1, self.x2, self.y2)
+    }
+
     fn axis(t: f32, p1: f32, p2: f32) -> f32 {
         let inverse = 1. - t;
         3. * inverse * inverse * t * p1 + 3. * inverse * t * t * p2 + t * t * t
