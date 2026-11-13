@@ -44,7 +44,9 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
-    field_key: Option<picto_library::RootId>,
+    /// What the stored value belongs to, as the view that owns the field
+    /// numbers it.
+    field_key: Option<u64>,
     original: SharedString,
     kind: Kind,
     /// How far the text is scrolled left to keep the caret in view.
@@ -69,19 +71,21 @@ pub enum Kind {
     /// A sidebar row renamed in place (`Sidebar.module.css` `.renameInput`):
     /// the row's own type, on a line that fits the 20px field.
     Rename,
+    /// The search at the top of a popover (`LibrarySwitcherPopover`).
+    Popover,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Popover => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector | Kind::Rename => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector | Kind::Rename => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Popover | Kind::Rename => crate::theme::TEXT_MD,
         }
     }
     fn line_height(self) -> f32 {
@@ -90,12 +94,22 @@ impl Kind {
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
             Kind::Rename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
+            Kind::Popover => 48.,
+        }
+    }
+    /// The popover's input has no `::placeholder` rule, so it keeps
+    /// Chromium's; the others set the tertiary text colour.
+    fn placeholder(self, theme: crate::theme::Theme) -> gpui::Hsla {
+        match self {
+            Kind::Popover => theme.placeholder().into(),
+            _ => theme.text_tertiary().into(),
         }
     }
 }
 
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
-pub struct Committed(pub picto_library::RootId, pub String);
+/// A stored field's new value, with the key it was set for.
+pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
 
 /// How an in-place rename ended: Enter or leaving the field commits the
@@ -503,6 +517,7 @@ impl Element for TextElement {
         let focused = input.focus_handle.is_focused(window);
         let marked_range = input.marked_range.clone();
         let placeholder = input.placeholder.clone();
+        let kind = input.kind;
         let previous_scroll = input.scroll;
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
@@ -547,7 +562,7 @@ impl Element for TextElement {
         };
 
         let (display_text, text_color) = if content.is_empty() {
-            (placeholder, theme.text_tertiary().into())
+            (placeholder, kind.placeholder(theme))
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -791,6 +806,13 @@ impl TextInput {
             Renamed::Cancel
         });
     }
+    /// The search field of a popover.
+    pub fn popover(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Popover;
+        input
+    }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
@@ -815,7 +837,7 @@ impl TextInput {
             .detach();
         input
     }
-    pub fn set_field(&mut self, key: picto_library::RootId, value: String, cx: &mut Context<Self>) {
+    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {
             return;
         }

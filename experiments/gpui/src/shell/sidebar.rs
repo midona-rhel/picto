@@ -2,6 +2,7 @@
 //! Electron order, then Folders and Smart Folders, over a tree filter. Rows
 //! take Cmd and Shift selection, open their context menus, and folders and
 //! smart folders are created, renamed in place and deleted here.
+use super::library::{LibraryPopover, Toggled};
 use crate::backend::{self, Navigation};
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
@@ -14,7 +15,9 @@ use crate::{motion, theme};
 use gpui::*;
 use picto_library::query::{ItemScope, RootQuery};
 use picto_library::{FolderId, Library, LibraryError, SmartFolderId, SmartFolderInput};
+use std::cell::Cell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Section {
@@ -228,7 +231,21 @@ pub struct Sidebar {
     drop_target: Option<String>,
     _menu: Vec<Subscription>,
     scroll: ScrollHandle,
+    /// The library switcher's popover, and the switcher's bounds it opens
+    /// under.
+    library_popover: Entity<LibraryPopover>,
+    switcher: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The library switcher's highlight and the pointer over it.
+#[derive(Default)]
+struct Switcher {
+    hovered: bool,
+    /// The highlight shows while hovered or open.
+    lit: motion::Fade,
+    /// Open: the highlight takes the active surface.
+    open: motion::Fade,
 }
 
 /// The list scrolls this far before "Return to Top" appears.
@@ -242,8 +259,14 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> Self {
         let filter = cx.new(|cx| TextInput::sidebar("Filter", cx));
+        let switcher = Rc::new(Cell::new(Bounds::default()));
+        let library_popover = cx.new(|cx| {
+            LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)
+        });
         let subscriptions = vec![
             cx.observe(&filter, |_, _, cx| cx.notify()),
+            // The switcher shows whether its popover is open.
+            cx.subscribe(&library_popover, |_, _, _: &Toggled, cx| cx.notify()),
             cx.subscribe(&session, |_, _, change: &Change, cx| {
                 if matches!(change, Change::Navigation) {
                     cx.notify();
@@ -267,13 +290,17 @@ impl Sidebar {
             drop_target: None,
             _menu: Vec::new(),
             scroll: ScrollHandle::new(),
+            library_popover,
+            switcher,
             _subscriptions: subscriptions,
         }
     }
 
     /// The library switcher (`LibrarySwitcherButton`): the cover, the
     /// library's name and a selector glyph, over a highlight shaped as the
-    /// cover's circle joined to a bar.
+    /// cover's circle joined to a bar. A click opens the library popover;
+    /// while it is open the highlight takes the active surface and the
+    /// glyph stays lit.
     fn library(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (cover, name) = {
@@ -283,35 +310,39 @@ impl Sidebar {
                 .unwrap_or_else(|| "No library".into());
             (session.library_cover.clone(), name)
         };
-        let fade = window.use_keyed_state("library-switcher", cx, |_, _| motion::Fade::default());
+        let open = self.library_popover.read(cx).is_open();
+        let state = window.use_keyed_state("library-switcher", cx, |_, _| Switcher::default());
         let hint = window.use_keyed_state("library-switcher-tip", cx, |_, _| {
             ui::tooltip::Hover::default()
         });
-        let hover = fade.read(cx).value();
-        if fade.read(cx).animating() || hint.read(cx).animating() {
+        state.update(cx, |state, _| {
+            state.lit.set(state.hovered || open, motion::SIDEBAR_HOVER);
+            state.open.set(open, motion::SIDEBAR_HOVER);
+        });
+        let (lit, active) = {
+            let state = state.read(cx);
+            (state.lit.value(), state.open.value())
+        };
+        if state.read(cx).lit.animating()
+            || state.read(cx).open.animating()
+            || hint.read(cx).animating()
+        {
             window.request_animation_frame();
         }
         // The cover stays decoded however far the grid scrolls.
         let pinned = cover.clone().map(|path| Resource::Path(path.into()));
         self.thumbnails
             .update(cx, |thumbnails, _| thumbnails.pin("library-cover", pinned));
-        let avatar = match cover {
-            Some(path) => img(path)
-                .image_cache(&self.thumbnails)
-                .size_full()
-                .rounded_full()
-                .object_fit(ObjectFit::Cover)
-                .into_any_element(),
-            None => ui::icon("books", 28., theme.text_secondary()).into_any_element(),
-        };
         // A canvas takes no opacity of its own, so the fade is in the colour.
         let fill = theme::blend(
             gpui::transparent_black().into(),
-            theme.surface_hover(),
-            hover,
+            theme::blend(theme.surface_hover(), theme.surface_active(), active),
+            lit,
         );
+        let bounds = self.switcher.clone();
         let highlight = canvas(
-            |_, _, _| {},
+            // The popover opens under the button's box, which this fills.
+            move |button, _, _| bounds.set(button),
             move |bounds, _, window, _| {
                 // A 24px-radius circle about the cover, and a 30px bar from
                 // the circle's centre to the right edge, drawn as one outline
@@ -347,7 +378,7 @@ impl Sidebar {
         )
         .absolute()
         .inset_0();
-        let entered = (fade, hint.clone());
+        let entered = (state, hint.clone());
         div()
             .id("library-switcher")
             .relative()
@@ -363,37 +394,20 @@ impl Sidebar {
             .gap(px(6.))
             .cursor_pointer()
             .on_hover(move |hovered, _, cx| {
-                entered.0.update(cx, |fade, cx| {
-                    fade.set(*hovered, motion::SIDEBAR_HOVER);
+                entered.0.update(cx, |state, cx| {
+                    state.hovered = *hovered;
                     cx.notify();
                 });
                 entered.1.update(cx, |hint, cx| hint.set(*hovered, cx));
             })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.library_popover
+                    .update(cx, |popover, cx| popover.toggle(window, cx));
+            }))
             .child(highlight)
-            .child(
-                // `LibraryAvatar`: the cover in a 39px disc with a soft edge.
-                div()
-                    .relative()
-                    .size(px(39.))
-                    .ml(px(4.5))
-                    .flex_none()
-                    .rounded_full()
-                    .overflow_hidden()
-                    .bg(theme.avatar_surface())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(avatar)
-                    // `.avatar::after`: the bevel that sets the cover into
-                    // the rail, darker at the top and lit along the bottom.
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded_full()
-                            .shadow(theme::avatar_bevel()),
-                    ),
-            )
+            .child(div().relative().ml(px(4.5)).flex_none().child(
+                ui::library_avatar("library-switcher-avatar", cover, 39.).cache(&self.thumbnails),
+            ))
             .child(
                 div()
                     .relative()
@@ -407,11 +421,11 @@ impl Sidebar {
                 ui::icon(
                     "selector",
                     14.,
-                    theme::blend(theme.text_tertiary(), theme.text(), hover),
+                    theme::blend(theme.text_tertiary(), theme.text(), lit),
                 )
                 .relative()
                 .flex_none()
-                .opacity(0.7 + 0.3 * hover),
+                .opacity(0.7 + 0.3 * lit),
             )
             .children(hint.read(cx).layer(&ui::tip("Switch Library"), 48., cx))
     }
@@ -419,15 +433,17 @@ impl Sidebar {
 
 // ── Menus ───────────────────────────────────────────────────────────
 
-/// `sidebarVisibilityEntries`: which system rows and sections show.
-// TODO: a check mark on each row that is shown, once the menu draws them,
-// and keep the menu open when one is toggled (`keepOpen`).
-fn visibility_menu() -> Vec<menu::Entry> {
+/// `sidebarVisibilityEntries`: which system rows and sections show, each
+/// with a check while it is shown.
+// TODO: keep the menu open when a row is toggled (`keepOpen`), once the
+// menu can.
+fn visibility_menu(prefs: &Preferences) -> Vec<menu::Entry> {
     let mut entries = SYSTEM_ROWS
         .iter()
         .map(|&(id, label, icon)| {
             menu::item(id, label)
                 .icon(icon)
+                .checked(ALWAYS_SHOWN.contains(&id) || prefs.visible_system.contains(id))
                 .disabled(ALWAYS_SHOWN.contains(&id))
                 .into()
         })
@@ -436,12 +452,15 @@ fn visibility_menu() -> Vec<menu::Entry> {
         menu::Entry::Separator,
         menu::item("section:quick_access", "Quick Access")
             .icon("menu-star")
+            .checked(prefs.show_quick_access)
             .into(),
         menu::item("section:smart_folders", "Smart Folders")
             .icon("menu-bookmark")
+            .checked(prefs.show_smart_folders)
             .into(),
         menu::item("section:folders", "Folders")
             .icon("menu-folder")
+            .checked(prefs.show_folders)
             .into(),
     ]);
     entries
@@ -1139,7 +1158,7 @@ impl Sidebar {
                     .disabled(count == 0)
                     .into(),
             ],
-            _ => visibility_menu(),
+            _ => visibility_menu(&self.prefs),
         };
         self.open_menu(Target::System, entries, position, window, cx);
     }
@@ -1636,6 +1655,12 @@ impl Render for Sidebar {
                     .flex()
                     .flex_col()
                     .child(self.library(window, cx))
+                    .children(
+                        self.library_popover
+                            .read(cx)
+                            .is_open()
+                            .then(|| self.library_popover.clone()),
+                    )
                     .child(
                         div()
                             .relative()

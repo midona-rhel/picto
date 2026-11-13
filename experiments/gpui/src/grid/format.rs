@@ -28,6 +28,17 @@ fn extension_for_subtype(subtype: &str) -> &str {
 }
 
 /// Compact grid label: four characters, except the five-letter JPGXL.
+/// The extension an original of this type is stored under.
+pub fn extension(mime: &str) -> String {
+    let subtype = mime.split_once('/').map_or("", |(_, subtype)| subtype);
+    match subtype.to_lowercase().as_str() {
+        // The file keeps the usual extension, not the grid label's spelling.
+        "jxl" => "jxl".to_owned(),
+        "woff2" => "woff2".to_owned(),
+        other => extension_for_subtype(other).to_owned(),
+    }
+}
+
 pub fn format_label(mime: &str) -> String {
     let Some((_, subtype)) = mime.split_once('/') else {
         return String::new();
