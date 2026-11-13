@@ -107,6 +107,8 @@ fn main() {
             stats::start_reporting(cx);
             ui::text_input::bind(cx);
             ui::menu::bind(cx);
+            ui::popover::bind(cx);
+            viewer::bind(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));

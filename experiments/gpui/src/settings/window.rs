@@ -6,7 +6,7 @@ use super::SettingsModel;
 use super::panels::{self, PANELS};
 use super::registry::Slot;
 use crate::theme::Text as _;
-use crate::ui::{self, button::Look, field::Look as FieldLook, text_input::TextInput};
+use crate::ui::{self, action_button::Look, field::Look as FieldLook, text_input::TextInput};
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -548,19 +548,15 @@ impl Render for SettingsWindow {
                     .children(error),
             )
             .child(
-                ui::button(
-                    "settings-save",
-                    if saving { "Saving…" } else { "Save & Close" },
-                    cx,
-                )
-                .look(Look::SettingsPrimary)
-                .disabled(saving)
-                .tip(ui::tip("Save settings and close Preferences"))
-                .on_click(cx.listener(|this, _, window, cx| this.save(true, window, cx))),
+                ui::action_button("settings-save", Look::SettingsPrimary)
+                    .label(if saving { "Saving…" } else { "Save & Close" })
+                    .disabled(saving)
+                    .tip(ui::tip("Save settings and close Preferences"))
+                    .on_click(cx.listener(|this, _, window, cx| this.save(true, window, cx))),
             )
             .child(
-                ui::button("settings-apply", "Apply", cx)
-                    .look(Look::Settings)
+                ui::action_button("settings-apply", Look::Settings)
+                    .label("Apply")
                     .disabled(saving)
                     .tip(ui::tip("Save settings and keep Preferences open"))
                     .on_click(cx.listener(|this, _, window, cx| this.save(false, window, cx))),

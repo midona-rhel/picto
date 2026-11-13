@@ -188,7 +188,7 @@ impl RenderOnce for NumberInput {
                     .flex_col()
                     .gap(px(1.))
                     .child(stepper("up", "stepper-up", 1, state.clone(), window, cx))
-                    .child(stepper("down", "stepper-down", -1, state, window, cx)),
+                    .child(stepper("down", "chevron-down", -1, state, window, cx)),
             )
     }
 }

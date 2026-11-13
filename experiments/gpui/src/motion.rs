@@ -6,10 +6,27 @@ use std::time::Duration;
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// CSS `ease-in`.
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// CSS `ease-out`.
+pub const EASE_OUT: CubicBezier = CubicBezier::new(0., 0., 0.58, 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// `--ease-scale-in`: popovers and menus growing in.
+pub const EASE_SCALE_IN: CubicBezier = CubicBezier::new(0., 0.89, 0.44, 1.);
+/// `--duration-menu-in`: a popover's scale-in.
+pub const MENU_IN: Duration = Duration::from_millis(70);
 /// CSS `ease`.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
+/// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
+/// and how long it stays up.
+pub const BOUNDARY_FADE: Duration = Duration::from_millis(200);
+pub const BOUNDARY_HOLD: Duration = Duration::from_millis(800);
+/// `NAVIGATOR_SHOW_DELAY_MS`: the viewer's navigator appears this long after
+/// the image first overflows the pane.
+pub const NAVIGATOR_DELAY: Duration = Duration::from_millis(80);
+/// `QuickLookNavigation`'s buttons: `transition: background 200ms ease`.
+pub const STRIP_BUTTON: Duration = Duration::from_millis(200);
+/// `--ease-standard`
+pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.
@@ -18,6 +35,10 @@ pub const MENU_ROW: Duration = Duration::from_millis(30);
 pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
+/// `HoverPreviewPortal.tsx`: the backdrop and the original fade in together.
+pub const HOVER_PREVIEW_FADE: Duration = Duration::from_millis(150);
+/// `EmptyState.module.css` `.action`: its background on hover.
+pub const EMPTY_ACTION_HOVER: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug)]
 pub struct CubicBezier {
@@ -68,6 +89,12 @@ pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
 pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
+
+/// Duplicate review: an original fades in over its thumbnail (`.fullImage`).
+pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
+/// `LOADING_MESSAGE_DELAY_MS`: a loading message waits this long, so a
+/// quick load shows none.
+pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);

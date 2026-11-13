@@ -1,14 +1,18 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
 //! Electron frontend. Views compose these and style nothing themselves.
+pub mod action_button;
 mod action_row;
-pub mod button;
+mod avatar;
 pub mod check;
 mod chip;
+mod empty_state;
 pub mod field;
 mod icon_button;
 pub mod menu;
 pub mod number_input;
 mod panel_section;
+pub mod popover;
+pub mod property_row;
 mod scroll_to_top;
 pub mod scrollbar;
 mod section_header;
@@ -21,14 +25,17 @@ pub mod tooltip;
 pub mod window_chrome;
 pub mod zoom;
 
+pub use action_button::action_button;
 pub use action_row::action_row;
-pub use button::button;
+pub use avatar::library_avatar;
 pub use check::check;
-pub use chip::chip;
+pub use chip::{Chip, chip};
+pub use empty_state::{empty_state, empty_state_action};
 pub use field::field;
 pub use icon_button::icon_button;
 pub use number_input::number_input;
 pub use panel_section::panel_section;
+pub use property_row::property_row;
 pub use scroll_to_top::scroll_to_top;
 pub use scrollbar::scrollbar;
 pub use section_header::section_header;
@@ -43,7 +50,7 @@ use crate::theme::Text as _;
 use gpui::*;
 
 /// A monochrome glyph from the embedded icon set.
-pub fn icon(name: &'static str, size: f32, color: impl Into<Hsla>) -> Svg {
+pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Svg {
     svg().path(name).size(px(size)).text_color(color.into())
 }
 

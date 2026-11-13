@@ -32,7 +32,9 @@ pub struct Branch {
 pub struct SidebarRow {
     id: ElementId,
     depth: usize,
-    icon: &'static str,
+    icon: SharedString,
+    /// The colour the user gave the row's folder, for its glyph.
+    tint: Option<Rgba>,
     label: SharedString,
     count: Option<u64>,
     active: bool,
@@ -47,13 +49,14 @@ pub struct SidebarRow {
 
 pub fn sidebar_row(
     id: impl Into<ElementId>,
-    icon: &'static str,
+    icon: impl Into<SharedString>,
     label: impl Into<SharedString>,
 ) -> SidebarRow {
     SidebarRow {
         id: id.into(),
         depth: 0,
-        icon,
+        icon: icon.into(),
+        tint: None,
         label: label.into(),
         count: None,
         active: false,
@@ -68,6 +71,10 @@ pub fn sidebar_row(
 impl SidebarRow {
     pub fn depth(mut self, depth: usize) -> Self {
         self.depth = depth;
+        self
+    }
+    pub fn tint(mut self, tint: Option<Rgba>) -> Self {
+        self.tint = tint;
         self
     }
     /// A count of zero is not shown.
@@ -300,8 +307,16 @@ impl RenderOnce for SidebarRow {
                     .items_center()
                     .justify_center()
                     .child(
-                        super::icon(self.icon, theme::SIDEBAR_ICON, theme.text())
-                            .opacity(if self.active || hovered { 1. } else { 0.8 }),
+                        super::icon(
+                            self.icon,
+                            theme::SIDEBAR_ICON,
+                            self.tint.unwrap_or(theme.text()),
+                        )
+                        .opacity(if self.active || hovered {
+                            1.
+                        } else {
+                            0.8
+                        }),
                     ),
             )
             .child(

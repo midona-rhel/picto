@@ -16,7 +16,14 @@ pub struct Navigation {
     pub screen: Option<Screen>,
     /// The All scope in a shuffled order.
     pub random: bool,
-    pub icon: Option<&'static str>,
+    /// The row's glyph: a system row's own, or the one the user chose for
+    /// a folder (a name from the icon picker's registry, such as `IconPhoto`).
+    pub icon: Option<String>,
+    /// The colour the user gave a folder, which tints its glyph.
+    pub tint: Option<u32>,
+    /// A smart folder with no rules of its own. It only holds others: it
+    /// has no count and cannot be opened.
+    pub group: bool,
     pub depth: usize,
     pub parent: Option<usize>,
 }
@@ -54,6 +61,19 @@ pub enum Reply {
     Changed,
     Error(String),
 }
+/// Whether a smart folder's filter has no rules, which makes it a group.
+fn is_empty_filter(filter: &FilterExpr) -> bool {
+    matches!(filter, FilterExpr::All(rules) if rules.is_empty())
+}
+
+/// `#rrggbb` as a number.
+fn hex_color(text: &str) -> Option<u32> {
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    (digits.len() == 6)
+        .then(|| u32::from_str_radix(digits, 16).ok())
+        .flatten()
+}
+
 fn append_tree(
     rows: &[(u32, Option<u32>, Navigation)],
     parent_key: Option<u32>,
@@ -93,7 +113,9 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                 scope,
                 screen: None,
                 random: false,
-                icon: Some(icon),
+                icon: Some(String::from(icon)),
+                tint: None,
+                group: false,
                 depth: 0,
                 parent: None,
             };
@@ -152,7 +174,9 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                             },
                             screen: None,
                             random: false,
-                            icon: None,
+                            icon: f.icon,
+                            tint: f.color.as_deref().and_then(hex_color),
+                            group: false,
                             depth: 0,
                             parent: None,
                         },
@@ -164,18 +188,21 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                 .smart_folders()?
                 .into_iter()
                 .map(|f| {
+                    let group = is_empty_filter(&f.view.filter);
                     (
                         f.smart_folder_id.0,
                         f.parent_id.map(|p| p.0),
                         Navigation {
                             label: f.name,
-                            count: Some(f.count),
+                            count: (!group).then_some(f.count),
                             scope: ItemScope::SmartFolder {
                                 smart_folder_id: f.smart_folder_id,
                             },
                             screen: None,
                             random: false,
-                            icon: None,
+                            icon: f.icon,
+                            tint: f.color.as_deref().and_then(hex_color),
+                            group,
                             depth: 0,
                             parent: None,
                         },
@@ -328,6 +355,15 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     #[test]
+    fn colours_and_groups_are_read_as_the_sidebar_needs_them() {
+        assert_eq!(hex_color("#3297ff"), Some(0x3297ff));
+        assert_eq!(hex_color("868e96"), Some(0x868e96));
+        assert_eq!(hex_color("#fff"), None);
+        assert_eq!(hex_color("#zzzzzz"), None);
+        assert!(is_empty_filter(&FilterExpr::default()));
+        assert!(!is_empty_filter(&text_filter("midna")));
+    }
+    #[test]
     fn short_search_does_not_empty_grid() {
         assert_eq!(text_filter(" ab "), FilterExpr::default());
         assert_eq!(text_filter(""), FilterExpr::default());
@@ -347,6 +383,8 @@ mod acceptance {
             screen: None,
             random: false,
             icon: None,
+            tint: None,
+            group: false,
             depth: 0,
             parent: None,
         };

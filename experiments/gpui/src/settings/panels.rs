@@ -6,7 +6,7 @@ use super::window::{CloudInfo, SettingsWindow};
 use super::{Settings, SettingsModel};
 use crate::grid::format::grouped;
 use crate::theme::Text as _;
-use crate::ui::{self, button::Look, choice};
+use crate::ui::{self, action_button::Look, choice};
 use crate::{motion, theme};
 use gpui::*;
 
@@ -877,7 +877,8 @@ impl SettingsWindow {
                             "Check for a newer version of Picto.",
                             div().flex().gap(px(8.)).child(
                                 // TODO: check the release feed and offer the download.
-                                ui::button("check-updates", "Check Now", cx).look(Look::Settings),
+                                ui::action_button("check-updates", Look::Settings)
+                                    .label("Check Now"),
                             ),
                         ))
                         .child(
@@ -1372,8 +1373,7 @@ impl SettingsWindow {
             .child(row(
                 theme,
                 "View overrides",
-                ui::button("reset-views", "Reset all views", cx)
-                    .look(Look::Settings)
+                ui::action_button("reset-views", Look::Settings).label("Reset all views")
                     .disabled(resetting)
                     .on_click({
                         let model = model.clone();
@@ -1673,26 +1673,22 @@ impl SettingsWindow {
                     .flex_wrap()
                     .gap(px(8.))
                     .child(
-                        ui::button("cloud-sync", "Sync now", cx)
-                            .look(Look::Settings)
+                        ui::action_button("cloud-sync", Look::Settings)
+                            .label("Sync now")
                             .disabled(!configured),
                     )
                     .child(
-                        ui::button(
-                            "cloud-pause",
-                            if info.state == "paused" {
+                        ui::action_button("cloud-pause", Look::Settings)
+                            .label(if info.state == "paused" {
                                 "Resume"
                             } else {
                                 "Pause"
-                            },
-                            cx,
-                        )
-                        .look(Look::Settings)
-                        .disabled(!configured),
+                            })
+                            .disabled(!configured),
                     )
                     .child(
-                        ui::button("cloud-snapshot", "Create snapshot", cx)
-                            .look(Look::Settings)
+                        ui::action_button("cloud-snapshot", Look::Settings)
+                            .label("Create snapshot")
                             .disabled(!configured),
                     ),
             );
@@ -1872,7 +1868,10 @@ impl SettingsWindow {
                             .justify_end()
                             .gap(px(10.))
                             .child(
-                                ui::button(("model-download", index), "Download", cx).width(92.),
+                                ui::action_button(("model-download", index), Look::Standard)
+                                    .label("Download")
+                                    .width(92.)
+                                    .padding(0.),
                             ),
                     ),
             );
@@ -2060,8 +2059,8 @@ impl SettingsWindow {
                                 theme,
                                 "Software updates",
                                 // TODO: check the release feed.
-                                ui::button("about-check-updates", "Check Now", cx)
-                                    .look(Look::Settings),
+                                ui::action_button("about-check-updates", Look::Settings)
+                                    .label("Check Now"),
                             ))
                             .child(separator(theme))
                             .child(row(theme, "License", value(theme, "MIT"))),
