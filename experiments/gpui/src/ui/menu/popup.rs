@@ -132,14 +132,15 @@ impl Menu {
                 None => return,
             },
         };
-        // `menuIn`: the root panel scales in about the corner at the
-        // pointer. Submenus appear at once.
+        // `menuIn`: the root panel scales in from where it was asked for.
+        // (Production's `transform-origin` is the panel's corner, which is
+        // its bottom edge whenever the panel was moved up to fit; the click
+        // itself reads better.) Submenus appear at once.
         let pop = match role {
             Role::Root => {
-                let rows = self.rows();
-                let panel = self.root_rect(&rows);
-                let corner = self.root_origin(&rows);
-                Some(pop_point(panel, corner, bounds))
+                let (_, pointer) = self.area();
+                let panel = self.root_rect(&self.rows());
+                Some(pop_point(pointer, panel, bounds))
             }
             Role::Submenu(_) => None,
         };
@@ -314,12 +315,13 @@ pub(crate) fn without_system_shadow(window: &Window) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn without_system_shadow(_: &Window) {}
 
-/// Where the corner `corner` (fractions of its width and height) of `panel`
-/// lies in the window `bounds`, from the window's centre with y upwards, as
-/// `appkit::pop_in` takes it.
-fn pop_point(panel: Rect, corner: (f32, f32), bounds: Rect) -> (f32, f32) {
-    let x = panel.x - bounds.x + corner.0 * panel.w;
-    let y = panel.y - bounds.y + corner.1 * panel.h;
+/// The point a menu asked for at `pointer` scales in about: the pointer,
+/// or the nearest point of its `panel` where the panel was moved away from
+/// it to fit. Given in the window `bounds` from the window's centre with y
+/// upwards, as `appkit::pop_in` takes it.
+fn pop_point(pointer: (f32, f32), panel: Rect, bounds: Rect) -> (f32, f32) {
+    let x = pointer.0.clamp(panel.x, panel.x + panel.w) - bounds.x;
+    let y = pointer.1.clamp(panel.y, panel.y + panel.h) - bounds.y;
     (x - bounds.w / 2., bounds.h / 2. - y)
 }
 
@@ -352,7 +354,7 @@ mod tests {
     use super::{Rect, pop_point};
 
     #[test]
-    fn a_menu_pops_in_about_the_corner_at_the_pointer() {
+    fn a_menu_pops_in_from_where_it_was_asked_for() {
         let bounds = Rect {
             x: 60.,
             y: 160.,
@@ -365,9 +367,12 @@ mod tests {
             w: 270.,
             h: 400.,
         };
-        // The top-left corner: left of and above the window's centre.
-        assert_eq!(pop_point(panel, (0., 0.), bounds), (-135., 200.));
-        // The bottom-right corner, where the menu was moved in from an edge.
-        assert_eq!(pop_point(panel, (1., 1.), bounds), (135., -200.));
+        // Opened below and right of the pointer: its top-left corner, left
+        // of and above the window's centre.
+        assert_eq!(pop_point((100., 200.), panel, bounds), (-135., 200.));
+        // Moved up to fit: the pointer is part-way down its left edge.
+        assert_eq!(pop_point((100., 500.), panel, bounds), (-135., -100.));
+        // Moved in from the right and bottom edges past the pointer.
+        assert_eq!(pop_point((900., 900.), panel, bounds), (135., -200.));
     }
 }
