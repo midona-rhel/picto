@@ -2,8 +2,11 @@
 //! item kept until the next one's thumbnail has decoded, the original laid
 //! over the thumbnail once decoded (`ImageCrossfadeFrame`). Images zoom and
 //! pan (`useImageZoom.ts`) and show the navigator while they overflow; Flash
-//! plays through Ruffle and fills the pane.
+//! plays through Ruffle and fills the pane. What each item gets is decided by
+//! [`document::kind::renderer_kind`]: JPEG XL decodes onto the image camera,
+//! and documents, fonts and unviewable types show a [`Document`].
 use super::camera::{self, Camera, Glide, Size};
+use super::document::{self, Document, kind::RendererKind};
 use crate::{motion, theme};
 use gpui::*;
 use std::{
@@ -30,6 +33,9 @@ enum Mode {
     Image,
     /// Ruffle's frames, fitted to the pane.
     Flash,
+    /// A document viewer of its own (`DetailMediaRenderer`'s documents,
+    /// fonts and the unsupported view).
+    Document,
     /// No renderer yet: the thumbnail, fitted, with a note.
     Other,
 }
@@ -59,6 +65,13 @@ pub struct MediaSurface {
     full_task: Option<Task<()>>,
     flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
+    document: Option<Document>,
+    _document_zoom: Option<Subscription>,
+    /// Whether the open document takes the toolbar's zoom, and its zoom in
+    /// percent, as it last reported them.
+    document_zoom: (bool, f32),
+    /// The item's name, which the font viewer shows as its title.
+    display_name: SharedString,
     opened: String,
     error: Option<String>,
     bounds: Bounds<Pixels>,
@@ -83,16 +96,67 @@ impl MediaSurface {
     pub fn stop(&mut self) {
         self.flash = None;
         self.flash_task = None;
+        self.document = None;
+        self._document_zoom = None;
     }
 
-    /// Whether the shown item has zoom controls: images do, Flash does not.
+    /// Whether the shown item has zoom controls: images and PDF pages do,
+    /// Flash and the other documents do not.
     pub fn zoomable(&self) -> bool {
-        self.mode == Mode::Image
+        match self.mode {
+            Mode::Image => true,
+            Mode::Document => self.document_zoom.0,
+            _ => false,
+        }
     }
 
     /// The zoom as the toolbar shows it, in percent.
     pub fn percent(&self) -> f32 {
-        self.camera.percent()
+        match self.mode {
+            Mode::Document => self.document_zoom.1,
+            _ => self.camera.percent(),
+        }
+    }
+
+    /// Takes the open document's zoom and tells the toolbar.
+    fn document_zoom_changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = &self.document {
+            self.document_zoom = (document.zoomable(cx), document.percent(cx));
+        }
+        cx.emit(Event::Zoom);
+    }
+
+    /// The name of the item about to be opened, for viewers that show it.
+    pub fn set_display_name(&mut self, name: SharedString) {
+        self.display_name = name;
+    }
+
+    /// The open document, while a document is shown.
+    fn document(&self) -> Option<&Document> {
+        self.document
+            .as_ref()
+            .filter(|_| self.mode == Mode::Document)
+    }
+
+    /// J: the previous page of a document.
+    pub fn previous_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.previous_page(cx);
+        }
+    }
+
+    /// L: the next page of a document.
+    pub fn next_page(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.next_page(cx);
+        }
+    }
+
+    /// Cmd+= and Cmd+−: the font preview's size.
+    pub fn preview_size(&mut self, larger: bool, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.preview_size(larger, cx);
+        }
     }
 
     fn pane(&self) -> Size {
@@ -139,6 +203,10 @@ impl MediaSurface {
 
     /// `fitToWindow`.
     pub fn fit(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.fit(cx);
+            return;
+        }
         if let Some(image) = self.image_size() {
             self.glide = None;
             let fitted = Camera::fit(image, self.pane());
@@ -148,12 +216,20 @@ impl MediaSurface {
 
     /// `fitActual`.
     pub fn actual_size(&mut self, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.actual_size(cx);
+            return;
+        }
         self.glide = None;
         self.set_camera(Camera::actual(), cx);
     }
 
     /// The slider and the zoom menu: a scale, keeping the offset.
     pub fn set_percent(&mut self, percent: f32, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.set_percent(percent, cx);
+            return;
+        }
         self.glide = None;
         let camera = self.camera.zoomed(percent / 100., None);
         self.set_camera(camera, cx);
@@ -162,6 +238,10 @@ impl MediaSurface {
     /// Zoom in or out by one step, gliding. Steps pressed while a glide is
     /// under way build on where it is heading.
     pub fn step_zoom(&mut self, zoom_in: bool, cx: &mut Context<Self>) {
+        if let Some(document) = self.document() {
+            document.step_zoom(zoom_in, cx);
+            return;
+        }
         if self.mode != Mode::Image {
             return;
         }
@@ -298,12 +378,12 @@ impl MediaSurface {
         self.opened = key.clone();
         self.error = None;
         self.stop();
-        let mode = if mime == "application/x-shockwave-flash" {
-            Mode::Flash
-        } else if mime.starts_with("image/") {
-            Mode::Image
-        } else {
-            Mode::Other
+        let kind = document::kind::renderer_kind(mime);
+        let mode = match kind {
+            RendererKind::Flash => Mode::Flash,
+            RendererKind::Image | RendererKind::JpegXl => Mode::Image,
+            kind if kind.is_document() => Mode::Document,
+            _ => Mode::Other,
         };
         if mode != self.mode {
             self.mode = mode;
@@ -352,7 +432,16 @@ impl MediaSurface {
                     }
                 }));
             }
+            Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
             Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
+            Mode::Document => {
+                let document = Document::open(kind, path, mime, self.display_name.clone(), cx);
+                self._document_zoom =
+                    document.observe_zoom(cx, |this, cx| this.document_zoom_changed(cx));
+                self.document = Some(document);
+                self.document_zoom_changed(cx);
+                cx.notify();
+            }
             Mode::Other => {
                 self.error = Some(format!("Native preview is not implemented for {mime}"));
             }
@@ -409,6 +498,32 @@ impl MediaSurface {
                 });
             }));
         }
+    }
+
+    /// `JpegXlViewer.tsx`: the original decoded off the drawing thread
+    /// (jxl-oxide here, the jsquash decoder there) and shown on the image
+    /// camera, over its thumbnail until then.
+    fn decode_jpeg_xl(&mut self, key: String, path: PathBuf, cx: &mut Context<Self>) {
+        let decode = cx.background_executor().spawn(async move {
+            document::pages::decode_jpeg_xl(&path).map(document::epub::render_image)
+        });
+        self.full_task = Some(cx.spawn(async move |entity, cx| {
+            let result = decode.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.key != key {
+                    return;
+                }
+                match result {
+                    Ok(image) => {
+                        this.full = Some(image);
+                        this.full_key = key.clone();
+                        this.present_key();
+                    }
+                    Err(error) => this.error = Some(error.to_string()),
+                }
+                cx.notify();
+            });
+        }));
     }
 
     /// The requested item is now the one on screen; it opens fitted.
@@ -761,6 +876,8 @@ impl Render for MediaSurface {
             if let Some(image) = image.filter(|_| pane.0 > 0. && !self.needs_fit) {
                 surface = surface.children(self.image_layers(image));
             }
+        } else if let Some(document) = self.document() {
+            surface = surface.child(document.element(self.thumbnail.clone(), cx));
         } else {
             if let Some(thumbnail) = &self.thumbnail {
                 surface = surface.child(

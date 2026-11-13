@@ -2,6 +2,7 @@
 //! The media fills the pane; its controls are in the titlebar, where
 //! [`toolbar::ViewerToolbar`] takes the grid toolbar's place.
 pub mod camera;
+pub mod document;
 pub mod flash;
 mod strip;
 pub mod surface;
@@ -48,6 +49,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("=", ZoomIn, viewer),
         KeyBinding::new("-", ZoomOut, viewer),
     ]);
+    document::bind(cx);
 }
 
 /// Which end of the results a step ran into.
@@ -186,6 +188,7 @@ impl Viewer {
                 None
             } else if let Some((name, mime)) = session.demo {
                 Some((
+                    SharedString::from(name),
                     name.to_owned(),
                     PathBuf::new(),
                     None,
@@ -199,6 +202,12 @@ impl Viewer {
                     .and_then(|details| details.media.get(session.member))
                     .map(|media| {
                         (
+                            SharedString::from(
+                                session
+                                    .details
+                                    .as_ref()
+                                    .map_or(String::new(), |details| details.root.name.clone()),
+                            ),
                             media.facts.content_hash.clone(),
                             session.thumbnail(&media.facts.content_hash),
                             size_of(media.facts.width, media.facts.height),
@@ -209,7 +218,8 @@ impl Viewer {
             }
         };
         self.surface.update(cx, |surface, cx| match target {
-            Some((key, thumbnail, natural, path, mime)) => {
+            Some((name, key, thumbnail, natural, path, mime)) => {
+                surface.set_display_name(name);
                 surface.open(key, thumbnail, natural, path, &mime, cx)
             }
             None => surface.stop(),
@@ -346,6 +356,21 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
                 this.surface
                     .update(cx, |surface, cx| surface.step_zoom(false, cx));
+            }))
+            .on_action(cx.listener(|this, _: &document::PreviousPage, _, cx| {
+                this.surface
+                    .update(cx, |surface, cx| surface.previous_page(cx));
+            }))
+            .on_action(cx.listener(|this, _: &document::NextPage, _, cx| {
+                this.surface.update(cx, |surface, cx| surface.next_page(cx));
+            }))
+            .on_action(cx.listener(|this, _: &document::PreviewLarger, _, cx| {
+                this.surface
+                    .update(cx, |surface, cx| surface.preview_size(true, cx));
+            }))
+            .on_action(cx.listener(|this, _: &document::PreviewSmaller, _, cx| {
+                this.surface
+                    .update(cx, |surface, cx| surface.preview_size(false, cx));
             }))
             .child(self.surface.clone())
             .child(self.notice(End::First, cx))

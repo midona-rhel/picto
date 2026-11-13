@@ -14,6 +14,7 @@ pub struct Slider {
     min: f64,
     max: f64,
     step: f64,
+    width: f32,
     on_change: Option<ChangeHandler>,
 }
 
@@ -24,11 +25,18 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         min,
         max,
         step,
+        width: WIDTH,
         on_change: None,
     }
 }
 
 impl Slider {
+    /// The track's length, for the few sliders that are not 200px.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
     /// Called with each new value while the thumb moves.
     pub fn on_change(mut self, handler: impl Fn(f64, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -41,8 +49,8 @@ const THUMB: f32 = 12.;
 
 /// The value at `x` pixels along the track, snapped to the step. The thumb's
 /// centre travels from half a thumb in at each end, as Chromium draws it.
-pub fn value_at(x: f32, min: f64, max: f64, step: f64) -> f64 {
-    let travel = WIDTH - THUMB;
+fn value_along(x: f32, width: f32, min: f64, max: f64, step: f64) -> f64 {
+    let travel = width - THUMB;
     let along = ((x - THUMB / 2.) / travel).clamp(0., 1.) as f64;
     let raw = min + along * (max - min);
     let snapped = min + ((raw - min) / step).round() * step;
@@ -62,11 +70,12 @@ impl RenderOnce for Slider {
         };
         let (min, max, step, value) = (self.min, self.max, self.step, self.value);
         let handler = self.on_change;
+        let width = self.width;
         div()
             .id(self.id)
             .occlude()
             .relative()
-            .w(px(WIDTH))
+            .w(px(width))
             .h(px(THUMB))
             .flex_none()
             .cursor_pointer()
@@ -84,7 +93,7 @@ impl RenderOnce for Slider {
                 div()
                     .absolute()
                     .top_0()
-                    .left(px((WIDTH - THUMB) * along))
+                    .left(px((width - THUMB) * along))
                     .size(px(THUMB))
                     .rounded_full()
                     .bg(theme.text()),
@@ -96,7 +105,13 @@ impl RenderOnce for Slider {
                         let report = {
                             let handler = handler.clone();
                             move |x: Pixels, cx: &mut App| {
-                                let next = value_at(f32::from(x - bounds.left()), min, max, step);
+                                let next = value_along(
+                                    f32::from(x - bounds.left()),
+                                    width,
+                                    min,
+                                    max,
+                                    step,
+                                );
                                 if let Some(handler) = &handler
                                     && next != value
                                 {
@@ -137,7 +152,11 @@ impl RenderOnce for Slider {
 
 #[cfg(test)]
 mod tests {
-    use super::value_at;
+    use super::{WIDTH, value_along};
+
+    fn value_at(x: f32, min: f64, max: f64, step: f64) -> f64 {
+        value_along(x, WIDTH, min, max, step)
+    }
 
     #[test]
     fn the_track_maps_to_stepped_values() {

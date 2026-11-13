@@ -1,0 +1,649 @@
+//! The font viewer (`FontViewer.tsx`): the file loaded into GPUI's text
+//! system, then a page with its name, four modes (a sample, a waterfall of
+//! sizes, the glyphs, and facts about the file), five paper colours and a
+//! size control floating at the bottom.
+use crate::theme::Text as _;
+use crate::{theme, ui};
+use anyhow::{Result, anyhow, bail};
+use gpui::prelude::FluentBuilder as _;
+use gpui::*;
+use std::borrow::Cow;
+use std::path::PathBuf;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tab {
+    Preview,
+    Waterfall,
+    Glyphs,
+    Information,
+}
+
+const TABS: [(Tab, &str); 4] = [
+    (Tab::Preview, "Preview"),
+    (Tab::Waterfall, "Waterfall"),
+    (Tab::Glyphs, "Glyphs"),
+    (Tab::Information, "Information"),
+];
+
+/// The page's colours (`data-preview-theme`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Paper {
+    Auto,
+    Light,
+    Dark,
+    Purple,
+    Yellow,
+}
+
+const PAPERS: [Paper; 5] = [
+    Paper::Auto,
+    Paper::Light,
+    Paper::Dark,
+    Paper::Purple,
+    Paper::Yellow,
+];
+
+const WATERFALL_SIZES: [f32; 11] = [72., 64., 56., 48., 38., 30., 24., 20., 16., 14., 12.];
+const GLYPH_GROUPS: [(&str, &str); 4] = [
+    ("Uppercase", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+    ("Lowercase", "abcdefghijklmnopqrstuvwxyz"),
+    ("Numbers", "0123456789"),
+    (
+        "Punctuation",
+        ".,:;!?@#$%&*()[]{}+-=/\\_\u{2014}\u{2013}\u{201c}\u{201d}\u{2018}\u{2019}",
+    ),
+];
+
+/// The preview's size, from 50% to 300% in 10% steps.
+pub const MIN_SCALE: f32 = 0.5;
+pub const MAX_SCALE: f32 = 3.;
+const SCALE_STEP: f32 = 0.1;
+
+/// `fontFormat`
+pub fn format_name(mime: &str) -> &'static str {
+    match mime {
+        "font/collection" => "TrueType Collection",
+        "font/otf" => "OpenType",
+        "font/woff" => "Web Open Font Format",
+        _ => "TrueType",
+    }
+}
+
+/// A font file ready for the text system: its tables (a WOFF unpacked) and
+/// the family names it may be registered under, most specific first.
+pub struct LoadedFont {
+    pub data: Vec<u8>,
+    pub families: Vec<String>,
+}
+
+/// Reads a font file and the names of its first face.
+pub fn load(path: &std::path::Path) -> Result<LoadedFont> {
+    let bytes = std::fs::read(path)?;
+    let data = if bytes.starts_with(b"wOFF") {
+        unpack_woff(&bytes)?
+    } else if bytes.starts_with(b"wOF2") {
+        // TODO: unpack WOFF2 (Brotli and transformed tables) so these
+        // fonts preview; Picto does not import WOFF2 today.
+        bail!("WOFF2 fonts cannot be previewed yet.")
+    } else {
+        bytes
+    };
+    let face = ttf_parser::Face::parse(&data, 0).map_err(|_| anyhow!("Not a font file."))?;
+    let mut families = Vec::new();
+    for id in [
+        ttf_parser::name_id::TYPOGRAPHIC_FAMILY,
+        ttf_parser::name_id::FAMILY,
+    ] {
+        for name in face.names().into_iter().filter(|name| name.name_id == id) {
+            if let Some(text) = name.to_string()
+                && !families.contains(&text)
+            {
+                families.push(text);
+            }
+        }
+    }
+    if families.is_empty() {
+        bail!("This font has no family name.");
+    }
+    Ok(LoadedFont { data, families })
+}
+
+/// A WOFF 1.0 file as the sfnt it wraps: the table directory rebuilt and
+/// each table inflated where it was compressed.
+pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let read_u16 = |at: usize| -> Result<u16> {
+        Ok(u16::from_be_bytes(
+            woff.get(at..at + 2)
+                .ok_or_else(|| anyhow!("The WOFF file is cut short."))?
+                .try_into()?,
+        ))
+    };
+    let read_u32 = |at: usize| -> Result<u32> {
+        Ok(u32::from_be_bytes(
+            woff.get(at..at + 4)
+                .ok_or_else(|| anyhow!("The WOFF file is cut short."))?
+                .try_into()?,
+        ))
+    };
+    let flavor = read_u32(4)?;
+    let count = read_u16(12)? as usize;
+    let mut entry_selector = 0u16;
+    while (2usize << entry_selector) <= count {
+        entry_selector += 1;
+    }
+    let search_range = (1u16 << entry_selector) * 16;
+    let mut out = Vec::new();
+    out.extend_from_slice(&flavor.to_be_bytes());
+    out.extend_from_slice(&(count as u16).to_be_bytes());
+    out.extend_from_slice(&search_range.to_be_bytes());
+    out.extend_from_slice(&entry_selector.to_be_bytes());
+    out.extend_from_slice(&((count as u16) * 16 - search_range).to_be_bytes());
+    let mut tables = Vec::with_capacity(count);
+    for index in 0..count {
+        let at = 44 + index * 20;
+        let (tag, offset, compressed, length, checksum) = (
+            read_u32(at)?,
+            read_u32(at + 4)? as usize,
+            read_u32(at + 8)? as usize,
+            read_u32(at + 12)? as usize,
+            read_u32(at + 16)?,
+        );
+        let raw = woff
+            .get(offset..offset + compressed)
+            .ok_or_else(|| anyhow!("The WOFF file is cut short."))?;
+        let table = if compressed < length {
+            let mut inflated = Vec::with_capacity(length);
+            flate2::read::ZlibDecoder::new(raw).read_to_end(&mut inflated)?;
+            inflated
+        } else {
+            raw.to_vec()
+        };
+        tables.push((tag, checksum, table));
+    }
+    let mut offset = 12 + 16 * count;
+    for (tag, checksum, table) in &tables {
+        out.extend_from_slice(&tag.to_be_bytes());
+        out.extend_from_slice(&checksum.to_be_bytes());
+        out.extend_from_slice(&(offset as u32).to_be_bytes());
+        out.extend_from_slice(&(table.len() as u32).to_be_bytes());
+        offset += table.len().next_multiple_of(4);
+    }
+    for (_, _, table) in tables {
+        let padded = table.len().next_multiple_of(4);
+        out.extend_from_slice(&table);
+        out.resize(out.len() + padded - table.len(), 0);
+    }
+    Ok(out)
+}
+
+enum Status {
+    Loading,
+    Ready(SharedString),
+    Failed,
+}
+
+pub struct FontViewer {
+    name: SharedString,
+    mime: String,
+    status: Status,
+    tab: Tab,
+    paper: Paper,
+    scale: f32,
+    scroll: ScrollHandle,
+    _task: Task<()>,
+}
+
+impl FontViewer {
+    pub fn new(path: PathBuf, name: SharedString, mime: String, cx: &mut Context<Self>) -> Self {
+        let read = cx.background_executor().spawn(async move { load(&path) });
+        let task = cx.spawn(async move |this, cx| {
+            let loaded = read.await;
+            let _ = this.update(cx, |this, cx| {
+                this.status = match loaded.and_then(|font| register(font, cx)) {
+                    Ok(family) => Status::Ready(family),
+                    Err(_) => Status::Failed,
+                };
+                cx.notify();
+            });
+        });
+        Self {
+            name,
+            mime,
+            status: Status::Loading,
+            tab: Tab::Preview,
+            paper: Paper::Auto,
+            scale: 1.,
+            scroll: ScrollHandle::new(),
+            _task: task,
+        }
+    }
+
+    /// Cmd+= and Cmd+−: the preview grows or shrinks by 10%.
+    pub fn step_scale(&mut self, larger: bool, cx: &mut Context<Self>) {
+        let step = if larger { SCALE_STEP } else { -SCALE_STEP };
+        self.set_scale(self.scale + step, cx);
+    }
+
+    /// Cmd+0: the preview at its own size.
+    pub fn reset_scale(&mut self, cx: &mut Context<Self>) {
+        self.set_scale(1., cx);
+    }
+
+    fn set_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
+        self.scale = ((scale * 10.).round() / 10.).clamp(MIN_SCALE, MAX_SCALE);
+        cx.notify();
+    }
+
+    /// The family the preview is drawn in, once loaded.
+    pub fn family(&self) -> Option<SharedString> {
+        match &self.status {
+            Status::Ready(family) => Some(family.clone()),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn settled(&self) -> bool {
+        !matches!(self.status, Status::Loading)
+    }
+
+    /// `--font-page-bg` and `--font-page-fg`.
+    fn colors(&self, cx: &App) -> (Rgba, Rgba) {
+        let app = theme::theme(cx);
+        match self.paper {
+            Paper::Auto => (app.background(), app.text()),
+            Paper::Light => (rgb(0xf7f8f8), rgb(0x242529)),
+            Paper::Dark => (rgb(0x18191c), rgb(0xf8f9fb)),
+            Paper::Purple => (rgb(0x2b2140), rgb(0xfbf7ff)),
+            Paper::Yellow => (rgb(0xf5df91), rgb(0x312b1d)),
+        }
+    }
+}
+
+/// Adds the font to the text system and finds the family name it answers to.
+fn register(font: LoadedFont, cx: &mut App) -> Result<SharedString> {
+    let text_system = cx.text_system().clone();
+    text_system.add_fonts(vec![Cow::Owned(font.data)])?;
+    font.families
+        .into_iter()
+        .map(SharedString::from)
+        .find(|family| {
+            // A family the text system cannot load resolves to a fallback,
+            // which is cached under another font.
+            let id = text_system.resolve_font(&gpui::font(family.clone()));
+            text_system
+                .get_font_for_id(id)
+                .is_some_and(|resolved| resolved.family == *family)
+        })
+        .ok_or_else(|| anyhow!("The text system did not take this font."))
+}
+
+/// `color-mix(in srgb, <fg> N%, transparent)`.
+fn faded(color: Rgba, percent: f32) -> Rgba {
+    Rgba {
+        a: color.a * percent / 100.,
+        ..color
+    }
+}
+
+impl Render for FontViewer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let app = theme::theme(cx);
+        let (paper, ink) = self.colors(cx);
+        let family = self.family();
+        let preview_font = family
+            .clone()
+            .unwrap_or_else(|| SharedString::from(theme::FONT_UI));
+        let scale = self.scale;
+
+        let header = div()
+            .pt(px(4.))
+            .pb(px(12.))
+            .child(
+                div()
+                    .font_family(preview_font.clone())
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_size(px(32.))
+                    .line_height(px(48.))
+                    .truncate()
+                    .child(self.name.clone()),
+            )
+            .child(
+                div()
+                    .text_size(px(theme::TEXT_XL))
+                    .line_height(px(24.))
+                    .text_color(faded(ink, 60.))
+                    .child(format_name(&self.mime)),
+            );
+
+        let tabs = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .children(TABS.map(|(tab, label)| {
+                let selected = self.tab == tab;
+                div()
+                    .id(label)
+                    .h(px(32.))
+                    .px(px(12.))
+                    .rounded(px(theme::RADIUS_MD))
+                    .flex()
+                    .items_center()
+                    .text_size(px(theme::TEXT_MD))
+                    .line_height(px(32.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .cursor_pointer()
+                    .text_color(if selected { ink } else { faded(ink, 68.) })
+                    .when(selected, |tab| tab.bg(faded(ink, 10.)))
+                    .when(!selected, |tab| {
+                        tab.hover(move |style| style.bg(faded(ink, 5.)).text_color(ink))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tab = tab;
+                        cx.notify();
+                    }))
+                    .child(label)
+            }));
+        let papers = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .children(PAPERS.map(|choice| {
+                let (fill, glyph): (Background, Rgba) = match choice {
+                    Paper::Auto => (
+                        linear_gradient(
+                            135.,
+                            linear_color_stop(rgb(0xf7f8f8), 0.5),
+                            linear_color_stop(rgb(0x25262a), 0.5),
+                        ),
+                        rgb(0x888888),
+                    ),
+                    Paper::Light => (rgb(0xf7f8f8).into(), rgb(0x35363a)),
+                    Paper::Dark => (rgb(0x25262a).into(), rgba(0xffffffd1)),
+                    Paper::Purple => (rgb(0x6e4ea2).into(), rgba(0xffffffd1)),
+                    Paper::Yellow => (rgb(0xd3a82e).into(), rgb(0x3a3017)),
+                };
+                let pressed = self.paper == choice;
+                let ring = if pressed {
+                    vec![
+                        BoxShadow::new(px(0.), px(0.), paper.into()).spread_radius(px(2.)),
+                        BoxShadow::new(px(0.), px(0.), faded(ink, 70.).into())
+                            .spread_radius(px(3.)),
+                    ]
+                } else {
+                    vec![
+                        BoxShadow::new(px(0.), px(0.), rgba(0xffffff1f).into())
+                            .spread_radius(px(1.))
+                            .inset(),
+                    ]
+                };
+                div()
+                    .id(SharedString::from(format!("paper-{choice:?}")))
+                    .size(px(20.))
+                    .rounded(px(theme::RADIUS_SM))
+                    .bg(fill)
+                    .shadow(ring)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(theme::TEXT_CAPTION))
+                    .line_height(px(20.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(glyph)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.paper = choice;
+                        cx.notify();
+                    }))
+                    .child("A")
+            }));
+        let toolbar = div()
+            .h(px(60.))
+            .flex()
+            .items_center()
+            .justify_between()
+            .border_b_1()
+            .border_color(faded(ink, 8.))
+            .child(tabs)
+            .child(papers);
+
+        let message = |text: &'static str| {
+            div()
+                .min_h(px(240.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(faded(ink, 60.))
+                .child(text)
+        };
+        let content: AnyElement = match (&self.status, self.tab) {
+            (_, Tab::Information) => {
+                let row = |label: &'static str, value: SharedString| {
+                    div()
+                        .min_h(px(36.))
+                        .flex()
+                        .items_center()
+                        .border_b_1()
+                        .border_color(faded(ink, 8.))
+                        .child(
+                            div()
+                                .w(px(160.))
+                                .flex_none()
+                                .text_color(faded(ink, 60.))
+                                .child(label),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child(value))
+                };
+                div()
+                    .text_size(px(theme::TEXT_MD))
+                    .line_height(px((theme::TEXT_MD * 1.4).round()))
+                    .child(row("File name", self.name.clone()))
+                    .child(row("Format", format_name(&self.mime).into()))
+                    .child(row("Preview engine", "GPUI text system".into()))
+                    .into_any_element()
+            }
+            (Status::Loading, _) => message("Loading font…").into_any_element(),
+            (Status::Failed, _) => message("This font cannot be previewed.").into_any_element(),
+            (Status::Ready(family), Tab::Preview) => {
+                let size = 38. * scale;
+                let body = 18. * scale;
+                // TODO: the sample is editable in production
+                // (`contentEditable`); it is fixed text here.
+                div()
+                    .font_family(family.clone())
+                    .child(
+                        div()
+                            .mb(px(24.))
+                            .text_size(px(size))
+                            .line_height(px(size * 1.25))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("The quick brown fox jumps over the lazy dog."),
+                    )
+                    .child(
+                        div()
+                            .mb(px(20.))
+                            .text_size(px(body))
+                            .line_height(px(body * 1.6))
+                            .child(
+                                "Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers.",
+                            ),
+                    )
+                    .child(
+                        div()
+                            .mb(px(20.))
+                            .text_size(px(body))
+                            .line_height(px(body * 1.6))
+                            .child("ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789"),
+                    )
+                    .into_any_element()
+            }
+            (Status::Ready(family), Tab::Waterfall) => div()
+                .font_family(family.clone())
+                .flex()
+                .flex_col()
+                .children(WATERFALL_SIZES.map(|size| {
+                    let size = size * scale;
+                    div()
+                        .py(px(4.))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_size(px(size))
+                        .line_height(px(size * 1.35))
+                        .child("Hamburgefontsiv 0123456789")
+                }))
+                .into_any_element(),
+            (Status::Ready(family), Tab::Glyphs) => div()
+                .children(GLYPH_GROUPS.map(|(label, glyphs)| {
+                    div()
+                        .mb(px(28.))
+                        .child(
+                            div()
+                                .mb(px(10.))
+                                .text_size(px(theme::TEXT_MD))
+                                .line_height(px(20.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(faded(ink, 60.))
+                                .child(label),
+                        )
+                        .child(div().flex().flex_wrap().gap(px(1.)).children(
+                            glyphs.chars().enumerate().map(|(index, glyph)| {
+                                // TODO: production also scales the hovered
+                                // glyph to 135%; GPUI cannot scale an element.
+                                div()
+                                    .id(SharedString::from(format!("{label}-{index}")))
+                                    .size(px(50.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(3.))
+                                    .bg(faded(ink, 5.))
+                                    .font_family(family.clone())
+                                    .text_size(px(24. * scale))
+                                    .hover(move |style| {
+                                        style.bg(paper).shadow(vec![
+                                            BoxShadow::new(px(0.), px(8.), rgba(0x00000059).into())
+                                                .blur_radius(px(22.)),
+                                            BoxShadow::new(px(0.), px(0.), faded(ink, 16.).into())
+                                                .spread_radius(px(1.)),
+                                        ])
+                                    })
+                                    .child(glyph.to_string())
+                            }),
+                        ))
+                }))
+                .into_any_element(),
+        };
+
+        // `.zoom`: a glass bar fixed at the bottom centre while a mode
+        // that uses the size is shown.
+        let zoom = (self.tab != Tab::Information).then(|| {
+            let step =
+                |id: &'static str, icon: &'static str, larger: bool, cx: &mut Context<Self>| {
+                    ui::icon_button(id, icon)
+                        .glyph(14.)
+                        .on_click(cx.listener(move |this, _, _, cx| this.step_scale(larger, cx)))
+                };
+            div()
+                .absolute()
+                .bottom(px(12.))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("font-zoom")
+                        .occlude()
+                        .w(px(164.))
+                        .h(px(32.))
+                        .px(px(4.))
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .rounded(px(theme::RADIUS_MD))
+                        .bg(app.glass())
+                        .border_1()
+                        .border_color(app.glass_border())
+                        .border_t_1()
+                        .shadow(theme::panel_shadow())
+                        .child(step("font-smaller", "minus", false, cx))
+                        .child(
+                            div().flex_1().flex().justify_center().child(
+                                ui::slider(
+                                    "font-size",
+                                    (self.scale * 100.).round() as f64,
+                                    50.,
+                                    300.,
+                                    1.,
+                                )
+                                .width(96.)
+                                .on_change({
+                                    let entity = cx.entity().downgrade();
+                                    move |value, cx| {
+                                        let _ = entity.update(cx, |this, cx| {
+                                            this.set_scale(value as f32 / 100., cx)
+                                        });
+                                    }
+                                }),
+                            ),
+                        )
+                        .child(step("font-larger", "plus", true, cx)),
+                )
+        });
+
+        div()
+            .absolute()
+            .inset_0()
+            .bg(app.background())
+            .text_color(app.text())
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_MD)
+            .child(
+                div()
+                    .id("font-scroll")
+                    .track_scroll(&self.scroll)
+                    .overflow_y_scroll()
+                    .size_full()
+                    .child(
+                        // `.page`: 900px at most, 48px from the window's
+                        // sides, 24px from the top.
+                        div()
+                            .mx_auto()
+                            .my(px(24.))
+                            .w(relative(1.))
+                            .max_w(px(900.))
+                            .min_h_full()
+                            .px(px(48.))
+                            .pb(px(72.))
+                            .bg(paper)
+                            .text_color(ink)
+                            .child(header)
+                            .child(toolbar)
+                            .child(div().pt(px(20.)).child(content)),
+                    ),
+            )
+            .child(ui::scrollbar("font-scrollbar", &self.scroll, window, cx))
+            .children(zoom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_name, load};
+
+    #[test]
+    fn formats_are_named_as_production_names_them() {
+        assert_eq!(format_name("font/collection"), "TrueType Collection");
+        assert_eq!(format_name("font/otf"), "OpenType");
+        assert_eq!(format_name("font/woff"), "Web Open Font Format");
+        assert_eq!(format_name("font/ttf"), "TrueType");
+    }
+
+    #[test]
+    fn the_bundled_font_names_its_family() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/FiraMono.ttf");
+        let font = load(&path).unwrap();
+        assert!(font.families.iter().any(|family| family == "Fira Mono"));
+    }
+}
