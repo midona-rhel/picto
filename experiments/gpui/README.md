@@ -114,7 +114,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   to a row, each with its tooltip, the chosen one marked); the colour row
   (`ui::color_picker`, `FOLDER_COLORS`) for one node or the selection; a
   smart folder's Move to... submenu (Top Level and every smart folder that
-  is not the node or under it); Add to and Remove from Quick Access; Set
+  is not the node or under it); a folder's or folder selection's Move
+  to..., which opens the shared folder picker (`inspector/folder_picker.rs`)
+  in its move mode at the menu's position: the Library row for the top
+  level, only the folders that are neither moving nor under a moving one,
+  the shared parent chosen, and Move moving the topmost folders there; Add to and Remove from Quick Access; Set
   Auto Tags...; Attach Watched Folder... and Remove Watched Folder (with
   its confirmation); Edit Smart Folder..., Edit Rules..., New Smart Folder
   and New Child Smart Folder. The visibility menu's rows stay open and their
@@ -623,9 +627,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot; Move to... for
-  folders, which opens the folder picker in its move mode (the row is shown
-  and does nothing, with a `TODO`); Import Folder (Here)... and Export
+- Not in the sidebar yet: the Subscriptions activity dot; Import Folder
+  (Here)... and Export
   (`TODO`s); watching a directory, which needs the application backend (the
   watch is stored, the watcher is a `TODO`, and the dialog does not check the
   folder's structure); Empty Trash, shown disabled. Tab from the grid

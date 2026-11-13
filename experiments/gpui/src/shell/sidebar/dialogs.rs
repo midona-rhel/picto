@@ -1,6 +1,6 @@
 //! The sidebar's dialogs: the confirmations (`ConfirmModal`) before deleting
 //! folders and smart folders and before removing a watched folder.
-use super::{Sidebar, folder_id};
+use super::{Sidebar, folder_id, tree};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::tag_token_input::{self, Found, TagTokenInput};
@@ -675,19 +675,67 @@ mod tests {
 }
 
 impl Sidebar {
-    /// "Move to..." for folders: production opens the folder picker in its
-    /// move mode (`FolderPickerPanel` with `onApplyFolderParent`), offering
-    /// Library and every folder that is neither moving nor under a moving
-    /// one (`tree::move_targets`), with the folders' shared parent chosen,
-    /// and its Move button moves the topmost of them there
-    /// (`foldersController.moveMany`, as `drag::move_folders` does).
-    // TODO: open that picker once the shared folder picker is in this
-    // branch; the row does nothing until then.
+    /// "Move to..." for folders (`FolderPickerPanel` with
+    /// `onApplyFolderParent`): the folder picker in its move mode at the
+    /// menu's position, offering Library and every folder that is neither
+    /// moving nor under a moving one, with the folders' shared parent
+    /// chosen; Move moves the topmost of them there.
     pub(super) fn pick_folder_parent(
         &mut self,
-        _: Vec<String>,
-        _: &mut Window,
-        _: &mut Context<Self>,
+        nodes: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
+        let tree = tree::nodes(&self.session.read(cx).nav, "folder:");
+        let moving = tree::top_level(&tree, &nodes);
+        let available = tree::move_targets(&tree, &moving)
+            .iter()
+            .filter_map(|id| folder_id(id))
+            .collect::<Vec<_>>();
+        let parents = moving
+            .iter()
+            .map(|id| {
+                tree.iter()
+                    .find(|node| node.id == *id)
+                    .and_then(|node| node.parent.as_deref().and_then(folder_id))
+            })
+            .collect::<Vec<_>>();
+        let current = parents
+            .first()
+            .copied()
+            .flatten()
+            .filter(|first| parents.iter().all(|parent| *parent == Some(*first)));
+        self.moving_folders = moving.iter().filter_map(|id| folder_id(id)).collect();
+        let anchor = point(
+            f32::from(self.menu_position.x),
+            f32::from(self.menu_position.y),
+        );
+        self.folder_picker.update(cx, |picker, cx| {
+            picker.open_for_parent(Some(anchor), available, current, window, cx)
+        });
+    }
+
+    /// The picker's Move: `foldersController.moveMany` with no new order.
+    pub(super) fn move_folders_to(
+        &mut self,
+        parent: Option<FolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let moving = std::mem::take(&mut self.moving_folders);
+        if moving.is_empty() {
+            return;
+        }
+        self.edit(
+            move |library| {
+                for id in moving {
+                    library.move_folder(id, parent)?;
+                }
+                Ok(())
+            },
+            |_, (), _, _| {},
+            window,
+            cx,
+        );
     }
 }

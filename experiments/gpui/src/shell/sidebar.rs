@@ -269,6 +269,11 @@ pub struct Sidebar {
     _drags: Option<Subscription>,
     /// The open dialog.
     dialog: Option<dialogs::Layer>,
+    /// The folder picker "Move to..." opens, the folders it moves, and
+    /// where the last context menu opened, which it opens at.
+    folder_picker: Entity<crate::inspector::FolderPicker>,
+    moving_folders: Vec<FolderId>,
+    menu_position: Point<Pixels>,
     /// The smart-folder editor, while open.
     smart_editor: Option<(Entity<smart_folder::SmartFolderEditor>, Subscription)>,
     /// The open context menu, whose checks follow what its rows toggle.
@@ -307,6 +312,7 @@ impl Sidebar {
         let library_popover = cx.new(|cx| {
             LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)
         });
+        let folder_picker = cx.new(|cx| crate::inspector::FolderPicker::new(session.clone(), cx));
         let subscriptions = vec![
             cx.observe(&filter, |_, _, cx| cx.notify()),
             // The switcher shows whether its popover is open.
@@ -346,6 +352,9 @@ impl Sidebar {
             _drags: None,
             dialog: None,
             smart_editor: None,
+            folder_picker,
+            moving_folders: Vec::new(),
+            menu_position: Point::default(),
             menu: None,
             _menu: Vec::new(),
             scroll: ScrollHandle::new(),
@@ -1565,6 +1574,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.menu_position = position;
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
         let chosen = target.clone();
         // The subscriptions of a menu replaced by this one go first, so its
@@ -2073,8 +2083,18 @@ impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = Preferences::current(cx);
         crate::stats::rendered(crate::stats::View::Sidebar);
-        // The grid's drags are followed from the first frame on.
+        // The grid's drags are followed from the first frame on, and the
+        // folder picker's Move.
         if self._drags.is_none() {
+            self._subscriptions.push(cx.subscribe_in(
+                &self.folder_picker,
+                window,
+                |this, _, event: &crate::inspector::folder_picker::Event, window, cx| {
+                    if let crate::inspector::folder_picker::Event::MoveTo(parent) = event {
+                        this.move_folders_to(*parent, window, cx);
+                    }
+                },
+            ));
             let drags = crate::grid::drag::model(cx);
             self._drags = Some(cx.subscribe_in(
                 &drags,
@@ -2442,6 +2462,7 @@ impl Render for Sidebar {
             )
             .children(dialog)
             .children(smart_editor)
+            .child(self.folder_picker.clone())
             .children(self.drag_capture(cx))
             .children(self.drag_ghost(window, cx))
     }
