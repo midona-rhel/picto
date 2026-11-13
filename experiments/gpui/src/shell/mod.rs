@@ -12,7 +12,11 @@ use crate::inspector::Inspector;
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
-use crate::viewer::Viewer;
+use crate::viewer::{
+    Viewer, detail,
+    quick_look::{self, QuickLook},
+    trigger,
+};
 use crate::{motion, screens, theme, ui};
 use gpui::*;
 use sidebar::Sidebar;
@@ -32,6 +36,8 @@ actions!(
         PageDown,
         Preview,
         ClosePreview,
+        ToggleQuickLook,
+        OpenInNewWindow,
         SelectAll,
         ToggleSidebar,
         ToggleInspector,
@@ -54,6 +60,8 @@ pub struct Shell {
     grid: Entity<GridView>,
     inspector: Entity<Inspector>,
     viewer: Entity<Viewer>,
+    /// Quick Look, drawn over the whole window while it is open.
+    quick_look: Entity<QuickLook>,
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
@@ -100,7 +108,16 @@ impl Shell {
         let sidebar =
             cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
         let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
+        let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
+            cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, _, event: &grid::Activated, window, cx| {
+                    this.activate(event.index, event.middle, window, cx)
+                },
+            ),
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
             cx.subscribe(&session, |this, session, change: &Change, cx| {
@@ -155,6 +172,7 @@ impl Shell {
             toolbar,
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
             viewer,
+            quick_look,
             tags,
             subscriptions: cx.new(|cx| {
                 screens::subscriptions::SubscriptionsScreen::new(
@@ -235,6 +253,10 @@ impl Shell {
                 menu::item("reveal", "Reveal in Finder")
                     .icon("menu-brand-finder")
                     .shortcut("⌘↩")
+                    .into(),
+                menu::item("open-window", "Open in New Window")
+                    .icon("menu-app-window")
+                    .shortcut("⌘O")
                     .into(),
                 menu::Entry::Separator,
                 menu::item("copy-path", "Copy File Path")
@@ -374,6 +396,12 @@ impl Shell {
                     cx.write_to_clipboard(ClipboardItem::new_string(name));
                 }
             }
+            "open-window" => {
+                let focus = self.session.read(cx).focus;
+                if let Some(index) = focus {
+                    self.open_in_window(vec![index], index, cx);
+                }
+            }
             "rename" => {
                 self.inspector
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
@@ -397,9 +425,122 @@ impl Shell {
         window.focus(&self.focus, cx);
     }
 
+    /// What the grid has open, for deciding what a key or click does.
+    fn trigger_state(&self, cx: &App) -> trigger::State {
+        let session = self.session.read(cx);
+        trigger::State {
+            media_view: session.viewer,
+            quick_look: self.quick_look.read(cx).is_open(),
+            single: session.selection.len() == 1 && session.focus.is_some(),
+        }
+    }
+
+    /// A double- or middle-click on the tile at `index`, under the Controls
+    /// settings (`onTileDoubleClick`, `onTileMiddleClick`).
+    fn activate(
+        &mut self,
+        index: usize,
+        middle: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let collection = self
+            .session
+            .read(cx)
+            .items
+            .get(index)
+            .is_some_and(|item| item.kind == picto_library::RootKind::Collection);
+        let settings = crate::settings::current(cx);
+        let action = if middle {
+            trigger::middle_click(settings.grid_middle_click_action)
+        } else {
+            trigger::double_click(settings.grid_double_click_action, collection)
+        };
+        match action {
+            // A middle-click opens the clicked item alone.
+            trigger::Action::OpenWindow => self.open_in_window(vec![index], index, cx),
+            trigger::Action::OpenDefault => self.open_default(index, cx),
+            action => self.perform(action, window, cx),
+        }
+    }
+
+    /// Carries out what a key asked for.
+    fn perform(&mut self, action: trigger::Action, window: &mut Window, cx: &mut Context<Self>) {
+        match action {
+            trigger::Action::OpenMediaView => self
+                .session
+                .update(cx, |session, cx| session.open_viewer(cx)),
+            trigger::Action::CloseMediaView => self
+                .session
+                .update(cx, |session, cx| session.close_viewer(cx)),
+            trigger::Action::OpenQuickLook => self
+                .quick_look
+                .update(cx, |quick_look, cx| quick_look.open(window, cx)),
+            trigger::Action::CloseQuickLook => self
+                .quick_look
+                .update(cx, |quick_look, cx| quick_look.close(window, cx)),
+            trigger::Action::ScrollPage { down } => {
+                self.grid.update(cx, |grid, cx| grid.scroll_page(down, cx))
+            }
+            trigger::Action::OpenWindow
+            | trigger::Action::OpenDefault
+            | trigger::Action::Nothing => {}
+        }
+    }
+
+    /// `openGridItemInWindow`: opens the item at `start` in a detail window
+    /// that steps through the items at `indices`.
+    fn open_in_window(&mut self, indices: Vec<usize>, start: usize, cx: &mut Context<Self>) {
+        let (entries, at) = {
+            let session = self.session.read(cx);
+            let entries = indices
+                .iter()
+                .filter_map(|index| session.items.get(*index))
+                .map(detail::Entry::from)
+                .collect::<Vec<_>>();
+            let at = indices.iter().position(|index| *index == start);
+            (entries, at)
+        };
+        if let Some(at) = at {
+            detail::open(self.session.clone(), entries, at, cx);
+        }
+    }
+
+    /// `openDefaultAppForHash`: the item's file in the system's application.
+    fn open_default(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(root) = self
+            .session
+            .read(cx)
+            .items
+            .get(index)
+            .map(|item| item.root_id)
+        else {
+            return;
+        };
+        let read = self.session.read(cx).run(move |library| {
+            library
+                .details(root)
+                .ok()
+                .and_then(|details| details.media.first().map(|media| media.file_path.clone()))
+        });
+        cx.spawn(async move |_, cx| {
+            if let Ok(Some(path)) = read.await {
+                cx.update(|cx| cx.open_with_system(std::path::Path::new(&path)));
+            }
+        })
+        .detach();
+    }
+
     /// Moves the selection; with shift held, extends it instead.
     fn move_selection(&mut self, action: nav::Move, window: &Window, cx: &mut Context<Self>) {
-        let extend = window.modifiers().shift;
+        // Quick Look keeps the grid's own keys from it and steps only to the
+        // previous and next item, as the media view does.
+        let stepping = matches!(action, nav::Move::Left | nav::Move::Right);
+        let peeking = self.quick_look.read(cx).is_open();
+        if peeking && !stepping {
+            return;
+        }
+        let extend = window.modifiers().shift && !peeking;
         self.grid
             .update(cx, |grid, cx| grid.move_selection(action, extend, cx));
     }
@@ -705,13 +846,41 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &PageDown, window, cx| {
                 this.move_selection(nav::Move::PageDown, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &Preview, _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.toggle_viewer(cx));
+            .on_action(cx.listener(|this, _: &Preview, window, cx| {
+                let action = trigger::enter(this.trigger_state(cx));
+                this.perform(action, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
-                // Escape closes the menu, else the viewer, else deselects.
-                if !this.close_menu(cx) {
+            .on_action(cx.listener(|this, _: &ToggleQuickLook, window, cx| {
+                let setting = crate::settings::current(cx).space_key_action;
+                let action =
+                    trigger::space(setting, window.modifiers().shift, this.trigger_state(cx));
+                this.perform(action, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenInNewWindow, _, cx| {
+                // `file.openNewWindow`: the shown item, with the rest of the
+                // selection to step through. The grid's shortcuts are off
+                // while a viewer is open.
+                let state = this.trigger_state(cx);
+                if state.media_view || state.quick_look {
+                    return;
+                }
+                let (indices, start) = {
+                    let session = this.session.read(cx);
+                    let indices = session.selection.iter().copied().collect::<Vec<_>>();
+                    (indices.clone(), session.focus.or(indices.first().copied()))
+                };
+                if let Some(start) = start {
+                    this.open_in_window(indices, start, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ClosePreview, window, cx| {
+                // Escape closes the menu, else Quick Look, else the viewer,
+                // else deselects.
+                if this.close_menu(cx) {
+                } else if this.quick_look.read(cx).is_open() {
+                    this.quick_look
+                        .update(cx, |quick_look, cx| quick_look.close(window, cx));
+                } else {
                     this.session.update(cx, |session, cx| {
                         if session.viewer {
                             session.close_viewer(cx)
@@ -723,6 +892,9 @@ impl Render for Shell {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                if this.quick_look.read(cx).is_open() {
+                    return;
+                }
                 this.session
                     .update(cx, |session, cx| session.select_all(cx));
             }))
@@ -750,6 +922,11 @@ impl Render for Shell {
             .child(titlebar)
             .child(body)
             .children(inspector);
+        // Quick Look covers the whole window, titlebar and rails included,
+        // below the context menus (`--layer-overlay`).
+        if self.quick_look.read(cx).is_open() {
+            root = root.child(self.quick_look.clone());
+        }
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.

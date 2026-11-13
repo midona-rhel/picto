@@ -48,8 +48,12 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-alt-1", ToggleSidebar, Some("Browser")),
         KeyBinding::new("cmd-alt-2", ToggleInspector, Some("Browser")),
         KeyBinding::new("tab", TogglePanels, grid),
-        KeyBinding::new("space", Preview, grid),
+        // view.quicklook (Space; with Shift it pages up when Space scrolls),
+        // view.detailView and file.openNewWindow.
+        KeyBinding::new("space", ToggleQuickLook, grid),
+        KeyBinding::new("shift-space", ToggleQuickLook, grid),
         KeyBinding::new("enter", Preview, grid),
+        KeyBinding::new("cmd-o", OpenInNewWindow, grid),
         KeyBinding::new("escape", ClosePreview, Some("Browser")),
         KeyBinding::new("cmd-q", Quit, None),
         // file.settings, in every window.

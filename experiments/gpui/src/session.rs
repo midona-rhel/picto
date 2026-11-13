@@ -941,14 +941,6 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.close_viewer(cx)
-        } else {
-            self.open_viewer(cx)
-        }
-    }
-
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
         let count = self
             .details

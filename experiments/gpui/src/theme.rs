@@ -300,6 +300,10 @@ pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
 pub const NAVIGATOR_VIEWPORT_BORDER: u32 = 0xf8f9fbe6;
 pub const NAVIGATOR_VIEWPORT_FILL: u32 = 0xf8f9fb0f;
 pub const NAVIGATOR_SHADE: u32 = 0x00000094;
+/// Quick Look's close button: `color: #f8f9fb` (`QuickLookHost.module.css`).
+pub const QUICK_LOOK_GLYPH: u32 = 0xf8f9fb;
+/// The detail window's toolbar: `rgba(0, 0, 0, 0.55)` (`DetailWindow.module.css`).
+pub const DETAIL_TOOLBAR_BACKGROUND: u32 = 0x0000008c;
 /// `.marquee` in `CanvasGrid.module.css`: the rubber band's fill,
 /// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
 pub const MARQUEE_FILL: u32 = 0x339af01f;
