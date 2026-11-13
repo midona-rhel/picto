@@ -176,8 +176,10 @@ impl Inspector {
                 notes: notes.unwrap_or_default(),
                 total: session.total,
                 size: session.total_size_bytes,
+                // The destination's first items, wherever the grid's window
+                // is (`queryHeadItems`).
                 covers: session
-                    .items
+                    .head
                     .iter()
                     .take(COVERS)
                     .map(|item| Cover {

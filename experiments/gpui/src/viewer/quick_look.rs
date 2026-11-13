@@ -78,7 +78,7 @@ impl QuickLook {
                         // no longer one item: nothing to peek at.
                         let single = {
                             let session = this.session.read(cx);
-                            session.selection.len() == 1 && session.selected_item().is_some()
+                            session.selection_count() == 1 && session.selected_item().is_some()
                         };
                         if !single {
                             this.close(window, cx);
@@ -129,7 +129,7 @@ impl QuickLook {
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let single = {
             let session = self.session.read(cx);
-            session.selection.len() == 1 && session.selected_item().is_some()
+            session.selection_count() == 1 && session.selected_item().is_some()
         };
         if self.open || !single {
             return;
@@ -194,26 +194,23 @@ impl QuickLook {
     /// `navigate`: steps through the results by moving the grid's selection;
     /// a step past either end does nothing.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let (index, total, loaded) = {
+        let (index, total) = {
             let session = self.session.read(cx);
-            let Some(index) = session.focus else {
+            let Some(index) = session.focus_ordinal() else {
                 return;
             };
-            (index, session.total as usize, session.items.len())
+            (index, session.total as usize)
         };
         let target = index as isize + delta;
         if target < 0 || target as usize >= total {
             return;
         }
-        if target as usize + 1 >= loaded {
-            self.session.update(cx, |session, cx| session.load_more(cx));
-        }
-        if (target as usize) < loaded {
-            if delta < 0 {
-                window.dispatch_action(Box::new(crate::shell::Previous), cx);
-            } else {
-                window.dispatch_action(Box::new(crate::shell::Next), cx);
-            }
+        // The grid's move reads the item's window first when it is not
+        // held; what is shown stays until it arrives.
+        if delta < 0 {
+            window.dispatch_action(Box::new(crate::shell::Previous), cx);
+        } else {
+            window.dispatch_action(Box::new(crate::shell::Next), cx);
         }
     }
 }
@@ -224,7 +221,7 @@ impl Render for QuickLook {
         let (index, total, collection) = {
             let session = self.session.read(cx);
             (
-                session.focus.unwrap_or(0),
+                session.focus_ordinal().unwrap_or(0),
                 session.total as usize,
                 session
                     .selected_item()

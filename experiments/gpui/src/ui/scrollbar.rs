@@ -6,7 +6,10 @@ use std::{cell::Cell, rc::Rc};
 pub const GUTTER: f32 = 8.;
 /// The thumb is inset by a 2px transparent border on each side.
 const INSET: f32 = 2.;
-const MINIMUM_THUMB: f32 = 24.;
+/// Chromium's shortest thumb for a styled scrollbar, border included: a
+/// destination of thousands of items shows a 22px thumb inside its 2px
+/// borders.
+const MINIMUM_THUMB: f32 = 26.;
 
 /// What survives between frames: whether the pointer is over the thumb and,
 /// while the thumb is dragged, how far into the thumb it was grabbed.

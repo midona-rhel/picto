@@ -411,13 +411,7 @@ impl Inspector {
 
     /// The grid's selected items, in grid order.
     fn selected_ids(&self, cx: &App) -> Vec<RootId> {
-        let session = self.session.read(cx);
-        session
-            .selection
-            .iter()
-            .filter_map(|index| session.items.get(*index))
-            .map(|item| item.root_id)
-            .collect()
+        self.session.read(cx).selected_ids()
     }
 
     /// T and the grid menu's Add Tags (`TagSelectModal`): the dialog checks
