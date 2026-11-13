@@ -49,6 +49,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   space clears. Only the image takes the pointer, not the text rows under it.
   The hovered image shows the magnifier corner, except on video and while
   scrolling. "Return to Top" rises once the grid has scrolled 200px.
+- Rubber-band selection as `CanvasGrid.tsx` does it: a left press on empty
+  space (gaps and the text rows under images count) shows the square-cornered
+  rectangle after 5px, selects the images whose image rect it overlaps with
+  the rings updating while dragging, keeps the existing selection when Shift
+  or Cmd was held at the press, follows the pointer anywhere in the window,
+  scrolls within 50px of the top or bottom edge at 12 × (1 − distance / 50)
+  px per frame while the rectangle keeps tracking, commits on release, and
+  swallows the click that release makes.
+- The hover preview of `HoverPreviewPortal.tsx`: resting 200 ms on the
+  magnifier opens the original (not for video) over the whole window, within
+  48px of its edges, with radius 8 and its shadow. Nothing shows until it has
+  decoded and 150 ms have passed; the backdrop and image then fade in over
+  150 ms. Leaving the magnifier closes it after 90 ms, any scroll at once. It
+  takes no pointer events.
+- Empty and error states from `GridScreen.tsx`: each scope's title and
+  description, a search or filter explained first, the framed glyph of the
+  shared `EmptyState` (`ui::empty_state`) with its Import Files and Import
+  Folder buttons where the scope has them, and a failed query's message with
+  Retry. A loading grid shows nothing.
+- Tile states from `drawBase.ts`: a thumbnail that could not be read or
+  decoded shows the torn page on the placeholder colour; fonts draw their
+  "Aa" card instead of loading a thumbnail; audio draws a faint tint with its
+  cover art in grey at half strength.
 - Sidebar with the Electron row order (All, Inbox, Recently Viewed,
   Uncategorized, Untagged, Tags, Random, Subscriptions, Duplicates, Trash),
   Folders and Smart Folders sections with counts, hierarchy with tree guide
@@ -170,9 +193,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - With nothing selected the inspector is empty; the Electron one describes
   the scope. With several items selected it shows the last one, not the
   stacked summary.
-- Not in the grid yet: rubber-band selection, dragging items out or to
-  reorder, the hover preview of the original, broken-thumbnail, font and
-  audio tiles, inline rename, and the scope-specific empty states.
+- Not in the grid yet: dragging items out or to reorder, middle-click,
+  inline rename, the empty grid's context menu, and the subfolder tiles a
+  folder shows above its items (an empty folder with subfolders shows the
+  empty state). The Import buttons are drawn with a `TODO`. The audio tile's
+  radial gradient is approximated by a linear one and its `brightness(1.5)`
+  is not applied; the hover preview does not apply EXIF orientation.
 - Not in the sidebar yet: the Subscriptions activity dot, rename in place,
   context menus, multi-selection and drag reorder.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
@@ -231,7 +257,9 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
 The regular tests cover the three layout modes against hand-computed geometry,
 the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
 logarithmic zoom track,
-banded visibility against a full scan of 20,000 tiles in every mode, view
+banded visibility against a full scan of 20,000 tiles in every mode, the
+rubber band's hit geometry and auto-scroll speed, the hover preview's timing
+and fit, the empty-state copy, the broken and font artwork as rendered, view
 preference fallbacks, grid labels, popover placement, the known-library
 order and name search, the reveal timeline, the easing curve
 against the sampled bezier, tree ordering and the text-search gates. The
@@ -254,13 +282,13 @@ share is mostly originals the Electron grid loads for large tiles; part of
 the rest is state that differed and JPEG noise in the captures.
 
 `PICTO_GPUI_POINTER=<file or FIFO>` replays pointer events written to that
-file (`move X Y`, `down X Y [clicks]`, `up X Y [clicks]`, `rdown X Y`,
-`rup X Y`, `scroll X Y DISTANCE`, in window points), so hover, pressed,
-tooltip, menu and navigation states can be checked without taking the real
-pointer. GPUI
-stops painting a window that is fully covered, so the window has to be
-visible. `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
-width, and `PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
+file (`move X Y`, `drag X Y` with the button held, `down X Y [clicks]`,
+`up X Y [clicks]`, `rdown X Y`, `rup X Y`, `scroll X Y DISTANCE`, in window
+points), so hover, pressed, tooltip, menu, rubber-band and navigation states
+can be checked without taking the real pointer. GPUI stops painting a window
+that is fully covered, so the window has to be visible.
+`PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored width, and
+`PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap
@@ -276,14 +304,15 @@ One model, separate views, shared components:
 - Each part of the window is its own cached view that repaints only for the
   changes it shows: `shell/` (the root, the sidebar, the library popover, the toolbar), `grid/`
   (the grid view with its layout, saved view, labels, reveal, keyboard
-  movement and thumbnail cache), `inspector.rs` and `viewer/` (the media
-  surface with its zoom and pan arithmetic in `camera.rs`, Flash, and the
-  viewer toolbar the titlebar shows).
+  movement, rubber band, hover preview, tile artwork and thumbnail cache),
+  `inspector.rs` and `viewer/` (the media surface with its zoom and pan
+  arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
+  shows).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, popover, library avatar, sidebar row, section
-  header, chip, inspector section, action row,
-  field frame and text input, scrollbar, "Return to Top", badge, zoom
-  control and the titlebar drag region. Views compose these.
+  header, chip, inspector section, action row, field frame and text input,
+  scrollbar, "Return to Top", badge, zoom control, empty state and the
+  titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.
   `motion.rs` holds durations and easing. Views take colours, sizes and

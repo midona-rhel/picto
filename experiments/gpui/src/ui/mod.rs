@@ -3,6 +3,7 @@
 mod action_row;
 mod avatar;
 mod chip;
+mod empty_state;
 pub mod field;
 mod icon_button;
 pub mod menu;
@@ -19,6 +20,7 @@ pub mod zoom;
 pub use action_row::action_row;
 pub use avatar::library_avatar;
 pub use chip::chip;
+pub use empty_state::{empty_state, empty_state_action};
 pub use field::field;
 pub use icon_button::icon_button;
 pub use panel_section::panel_section;
