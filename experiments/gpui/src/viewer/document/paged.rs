@@ -566,6 +566,8 @@ impl Render for PagedViewer {
                         this.frame = frame;
                         this.in_view = Some(in_view);
                         cx.notify();
+                        // Notified while drawing: ask for the frame too.
+                        window.request_animation_frame();
                     }
                 });
             },
