@@ -124,7 +124,7 @@ impl Inspector {
         if ids.is_empty() {
             return;
         }
-        let selection = SelectionTarget::Explicit { root_ids: ids };
+        let selection = self.session.read(cx).target_for(ids);
         let reread = Reread {
             results: self.changes_results(touches, cx),
             navigation,
@@ -433,7 +433,7 @@ impl Inspector {
                 .map(name)
                 .collect()
         };
-        let selected = self.session.read(cx).selection.len();
+        let selected = self.session.read(cx).selection_count() as usize;
         self.tag_dialog
             .update(cx, |dialog, cx| dialog.open(names, selected, cx));
     }
@@ -446,7 +446,7 @@ impl Inspector {
             .iter()
             .flat_map(|item| item.folder_ids.iter().copied())
             .collect();
-        let selected = self.session.read(cx).selection.len();
+        let selected = self.session.read(cx).selection_count() as usize;
         self.folder_dialog
             .update(cx, |dialog, cx| dialog.open(members, selected, cx));
     }

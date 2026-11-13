@@ -161,7 +161,7 @@ impl Shell {
         reload: bool,
         cx: &mut Context<Self>,
     ) {
-        let target = SelectionTarget::Explicit { root_ids: ids };
+        let target = self.session.read(cx).target_for(ids);
         let reread = if reload {
             Reread::RESULTS
         } else {

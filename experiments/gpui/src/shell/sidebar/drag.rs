@@ -9,7 +9,6 @@ use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
 use picto_library::query::ItemScope;
-use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, Lifecycle, SmartFolderId};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -158,9 +157,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selection = SelectionTarget::Explicit {
-            root_ids: items.roots.clone(),
-        };
+        let selection = self.session.read(cx).target_for(items.roots.clone());
         let activate = matches!(items.source, ItemScope::Inbox | ItemScope::Trash);
         self.edit_reading(
             move |library| {
