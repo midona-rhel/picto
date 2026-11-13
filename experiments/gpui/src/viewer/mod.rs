@@ -6,6 +6,7 @@ pub mod flash;
 mod strip;
 pub mod surface;
 pub mod toolbar;
+pub mod video;
 
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
@@ -48,6 +49,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("=", ZoomIn, viewer),
         KeyBinding::new("-", ZoomOut, viewer),
     ]);
+    video::bind(cx);
 }
 
 /// Which end of the results a step ran into.
@@ -322,10 +324,12 @@ impl Render for Viewer {
             };
             (members, session.member)
         };
-        let mut pane = div()
+        // "Media" while the player shows, for its keys.
+        let media = self.surface.read(cx).player().is_some();
+        let pane = div()
             .id("viewer")
             .track_focus(&self.focus)
-            .key_context("Viewer")
+            .key_context(if media { "Viewer Media" } else { "Viewer" })
             .relative()
             .size_full()
             .overflow_hidden()
@@ -347,9 +351,15 @@ impl Render for Viewer {
                 this.surface
                     .update(cx, |surface, cx| surface.step_zoom(false, cx));
             }))
-            .child(self.surface.clone())
-            .child(self.notice(End::First, cx))
-            .child(self.notice(End::Last, cx));
+            .child(self.surface.clone());
+        let surface = self.surface.downgrade();
+        let mut pane = video::on_actions(pane, move |cx| {
+            surface
+                .upgrade()
+                .and_then(|surface| surface.read(cx).player())
+        })
+        .child(self.notice(End::First, cx))
+        .child(self.notice(End::Last, cx));
         if members > 1 {
             let member_step = |id: &'static str,
                                icon: &'static str,

@@ -8,6 +8,9 @@ use gpui::*;
 pub struct Tip {
     label: SharedString,
     keys: Vec<SharedString>,
+    /// Opens above the control, where Mantine flips a tooltip that would
+    /// leave the window below it.
+    above: bool,
 }
 
 pub fn tip(label: impl Into<SharedString>) -> Tip {
@@ -40,7 +43,14 @@ impl Tip {
         Self {
             label: label.into(),
             keys: Vec::new(),
+            above: false,
         }
+    }
+
+    /// Opens above the control: for controls along the window's bottom edge.
+    pub fn above(mut self) -> Self {
+        self.above = true;
+        self
     }
 
     /// The shortcut's keys as the platform writes them, e.g. `["⌘", ","]`.
@@ -160,15 +170,17 @@ impl Hover {
                     .child(key.clone()),
             );
         }
-        let slot = div()
-            .absolute()
-            .top(px(extent + motion::TOOLTIP_OFFSET + below))
-            .left(relative(0.5));
+        let (top, anchor) = if tip.above {
+            (-motion::TOOLTIP_OFFSET + below, Anchor::BottomCenter)
+        } else {
+            (extent + motion::TOOLTIP_OFFSET + below, Anchor::TopCenter)
+        };
+        let slot = div().absolute().top(px(top)).left(relative(0.5));
         Some(
             slot.child(
                 deferred(
                     anchored()
-                        .anchor(Anchor::TopCenter)
+                        .anchor(anchor)
                         .snap_to_window_with_margin(px(5.))
                         .child(bubble),
                 )

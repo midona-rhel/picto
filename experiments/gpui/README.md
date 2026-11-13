@@ -335,6 +335,42 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Tags screen's group menu, in both presentations.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
+- Animated GIFs and animated WebP play in the viewer (GPUI's image element
+  animates a multi-frame image that has an id); the grid keeps the still
+  thumbnail, as production does.
+- Video and audio play in the viewer's media player (`viewer/video/`, from
+  `VideoPlayer.tsx` and its parts): the picture fitted on black, or for audio
+  the visualizer of the Preview setting (spectrum, oscilloscope, orbit or
+  none) on the app background; the controls over a dark gradient that hide
+  2.5 s after the pointer stops and fade over 300 ms, held while the
+  scrubber is dragged; the scrubber with buffered and played ranges, 4px
+  growing to 6px under the pointer, and the time under the pointer (for
+  audio, the thumbnail's waveform, dim ahead and bright behind, with a
+  cursor); play and pause, 5 s skips, the time, the speed menu (0.25× to
+  3×), loop, the volume slider over the mute button (shown on hover, gone
+  300 ms after), and the volume display the arrow keys bring up for 800 ms.
+  A click on the picture plays or pauses. Keys while the viewer shows media:
+  K, J, L, ↑, ↓, M, O, ], [ and `\`. As `MediaView` has it, video starts with the
+  Preview settings' autoplay and loop and muted, audio plays at once, loops
+  and has sound; volume starts at 90% and speed at 1× for every item.
+  Playback failures are written to standard error in production's
+  `media.playback` diagnostic shape.
+- Decoding never runs on the drawing thread, behind one small trait
+  (`video/backend.rs`). On macOS, QuickTime and MPEG-4 play through
+  AVFoundation: an `AVPlayer` decodes in hardware, plays the sound, keeps
+  sync, seeks exactly and changes speed with the pitch kept, and an
+  `AVPlayerItemVideoOutput` hands over CoreVideo buffers that GPUI's
+  `surface` draws without a copy. GPUI's surface shader takes only
+  full-range 4:2:0 and converts with the BT.601 matrix, so the item plays
+  through a video composition that writes BT.601 (and applies a track's
+  rotation). WebM, Matroska, and any file AVFoundation refuses, play
+  through the `ffmpeg` binary Picto already bundles for thumbnails
+  (`vendor/ffmpeg`, found as `core` finds it): raw BGRA frames uploaded as
+  images, following the clock of the sound. Audio files decode in-process
+  (Symphonia: MP3, WAV, FLAC, Ogg Vorbis, AAC, AIFF) and play through CPAL,
+  the output Ruffle uses; speed changes keep the pitch (WSOLA time
+  stretching), and the visualizer reads the samples being played through a
+  port of the Web Audio analyser.
 
 ## Not yet equivalent to Picto
 
@@ -422,7 +458,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   guides, the double-click action) come from the settings model; its
   visibility menu writes through it to the library at once, as production
   patches the settings.
-- No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
+- Media player: Fullscreen (the button, F and production's double-click)
+  is drawn with its tooltip but does nothing yet (`TODO`), since the shell
+  cannot yet give the pane the whole window. The rate menu is production's
+  own small black list (`.rateMenu`), not the shared context menu. The
+  frame steps exist as actions without keys, as in production. The EU
+  preset's alternative keys (Shift+. , Shift+, and Shift+R) and edited
+  bindings are not followed. The volume display fades in but cannot grow
+  from 90%. The visualizer's reflection blurs the spectrum's bars (drawn as
+  shadows) but draws the oscilloscope and orbit's blur as three faint
+  copies; the radial glow is concentric discs. On Windows and Linux video
+  goes through the bundled `ffmpeg` and audio through Symphonia and CPAL;
+  neither has been built or run there. An APNG plays as a still image (GPUI
+  decodes PNG as one frame). A video's picture is uploaded per frame where
+  `ffmpeg` decodes it; only the AVFoundation path is zero-copy. Not seen
+  running: the whole player, its timings, hover states and the pictures on
+  screen; what was checked headlessly is listed under Checks.
+- No PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
@@ -459,8 +511,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which does not exist yet, so neither is ever shown; collections step
   through members with the bottom strip instead of the reader surface. No
   transparency checkerboard (off by default in Picto), no per-image zoom
-  memory, no viewer context menu, rating or copy shortcuts, and no video
-  shortcuts (there is no video playback). Next stops at the last loaded item
+  memory, no viewer context menu, and no rating or copy shortcuts. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Motion: GPUI cannot scale an element's contents, so where production
@@ -473,7 +524,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   production sets `pointer-events: none`. Still to port with the features
   they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
   no notification host yet), the task and progress dialogs, the inbox review
-  controls, video controls, the inspector field's expansion (`fieldExpand`),
+  controls, the inspector field's expansion (`fieldExpand`),
   a subscription's run progress fading in (no run can start here), the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
   and the progress and spinner loops. A scope change does not yet restore the previous
@@ -514,8 +565,26 @@ preference fallbacks, grid labels, popover placement, the known-library
 order and name search, the reveal timeline, the easing curve
 against the sampled bezier, scaled frames about their origin, the corner a
 menu grows from, the menu's, tooltip's and dialog's enter and exit values,
-delayed fades, tree ordering and the text-search gates. The
-ignored tests need a real snapshot or a GPU and are run explicitly.
+delayed fades, tree ordering and the text-search gates, and the media
+player's time format, scrubber and volume arithmetic, skips, frame steps,
+speed steps, seek display, the controls' hide timing, the frame-rate
+snapping, the analyser's conversions, resampling and pitch-keeping time
+stretching. The ignored tests need a real snapshot, a GPU, media files or
+an audio device and are run explicitly:
+
+```sh
+PICTO_GPUI_TEST_WEBM=/path/to/video.webm PICTO_GPUI_TEST_AUDIO=/path/to/audio.mp3 \
+  cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored \
+  real_webm decodes_and_seeks plays_through
+PICTO_GPUI_TEST_VIDEO=/path/to/video.mov \
+  cargo test --manifest-path experiments/gpui/Cargo.toml --test avfoundation_frames
+```
+
+The last is a plain program (`tests/avfoundation_frames.rs`), since
+AVFoundation reports to the main thread, which the test harness does not
+give a test; it skips without the variable. It checks that frames come as
+the buffers GPUI draws, of the item's size, with the BT.601 matrix, at
+advancing times, and that a seek and a paused picture arrive.
 
 `pixel_diff.py` compares two captures of the same size using only the Python
 standard library, and reports the share of differing pixels for the whole
@@ -559,8 +628,8 @@ One model, separate views, shared components:
   reveal, keyboard movement, rubber band, hover preview, tile artwork,
   thumbnail cache and originals), `inspector/` (one item, several items, and
   the destination), `viewer/` (the media surface with its zoom and pan
-  arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
-  shows) and `screens/` (the destinations that are screens of their own).
+  arithmetic in `camera.rs`, Flash, the media player in `video/`, and the
+  viewer toolbar the titlebar shows) and `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu (with submenus, search and swatches), dialog, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,

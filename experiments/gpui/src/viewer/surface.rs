@@ -1,8 +1,9 @@
 //! The media area of the viewer (`MediaView.tsx`): full-bleed, the previous
 //! item kept until the next one's thumbnail has decoded, the original laid
 //! over the thumbnail once decoded (`ImageCrossfadeFrame`). Images zoom and
-//! pan (`useImageZoom.ts`) and show the navigator while they overflow; Flash
-//! plays through Ruffle and fills the pane.
+//! pan (`useImageZoom.ts`) and show the navigator while they overflow, and
+//! animated ones play; Flash plays through Ruffle and fills the pane; video
+//! and audio play in the media player (`video/`).
 use super::camera::{self, Camera, Glide, Size};
 use crate::{motion, theme};
 use gpui::*;
@@ -30,6 +31,8 @@ enum Mode {
     Image,
     /// Ruffle's frames, fitted to the pane.
     Flash,
+    /// Video and audio, in the media player.
+    Media,
     /// No renderer yet: the thumbnail, fitted, with a note.
     Other,
 }
@@ -59,6 +62,7 @@ pub struct MediaSurface {
     full_task: Option<Task<()>>,
     flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
+    player: Option<Entity<super::video::VideoPlayer>>,
     opened: String,
     error: Option<String>,
     bounds: Bounds<Pixels>,
@@ -83,6 +87,12 @@ impl MediaSurface {
     pub fn stop(&mut self) {
         self.flash = None;
         self.flash_task = None;
+        self.player = None;
+    }
+
+    /// The media player, while a video or audio item is shown.
+    pub fn player(&self) -> Option<Entity<super::video::VideoPlayer>> {
+        self.player.clone()
     }
 
     /// Whether the shown item has zoom controls: images do, Flash does not.
@@ -291,10 +301,14 @@ impl MediaSurface {
         mime: &str,
         cx: &mut Context<Self>,
     ) {
-        if self.opened == key && (mime != "application/x-shockwave-flash" || self.flash.is_some()) {
+        let media = super::video::kind_of(mime);
+        if self.opened == key
+            && (mime != "application/x-shockwave-flash" || self.flash.is_some())
+            && (media.is_none() || self.player.is_some())
+        {
             return;
         }
-        self.show(key.clone(), thumbnail, natural, None, cx);
+        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
         self.opened = key.clone();
         self.error = None;
         self.stop();
@@ -302,6 +316,8 @@ impl MediaSurface {
             Mode::Flash
         } else if mime.starts_with("image/") {
             Mode::Image
+        } else if media.is_some() {
+            Mode::Media
         } else {
             Mode::Other
         };
@@ -353,6 +369,19 @@ impl MediaSurface {
                 }));
             }
             Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
+            Mode::Media => {
+                let kind = media.unwrap_or(super::video::model::Kind::Video);
+                let settings = crate::settings::current(cx);
+                let options = super::video::model::Options::for_item(
+                    kind,
+                    settings.video_auto_play,
+                    settings.video_loop,
+                );
+                let mime = mime.to_owned();
+                self.player = Some(cx.new(|cx| {
+                    super::video::VideoPlayer::new(kind, path, &mime, options, Some(thumbnail), cx)
+                }));
+            }
             Mode::Other => {
                 self.error = Some(format!("Native preview is not implemented for {mime}"));
             }
@@ -445,8 +474,13 @@ impl MediaSurface {
     /// the camera's place and scale.
     fn image_layers(&self, image: Size) -> Vec<AnyElement> {
         let (left, top, width, height) = self.camera.image_rect(image, self.pane());
+        let key = self.shown.clone();
         let place = |source: Arc<RenderImage>| {
+            // An image with several frames (GIF, animated WebP) animates only
+            // with an id, which keeps its frame between draws.
+            let id = ElementId::Name(format!("viewer-image-{key}").into());
             img(source)
+                .id(id)
                 .absolute()
                 .left(px(left))
                 .top(px(top))
@@ -761,6 +795,11 @@ impl Render for MediaSurface {
             if let Some(image) = image.filter(|_| pane.0 > 0. && !self.needs_fit) {
                 surface = surface.children(self.image_layers(image));
             }
+        } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
+            // The player shows the thumbnail until its first picture.
+            let poster = self.thumbnail.clone();
+            player.update(cx, |player, cx| player.set_poster(poster, cx));
+            surface = surface.child(div().absolute().inset_0().child(player));
         } else {
             if let Some(thumbnail) = &self.thumbnail {
                 surface = surface.child(
