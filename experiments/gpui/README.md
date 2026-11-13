@@ -102,8 +102,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   16px glyphs, and native editable search (selection, clipboard, IME). Fewer
   than three trimmed characters leave filtering off. Query generations prevent
   an old result replacing a newer query.
-- Real paginated results (500 per page, loaded near the end), viewport-only
-  tiles, bounded thumbnail cache (192 entries, four concurrent decodes).
+- Real paginated results (500 per page, loaded near the end) and
+  viewport-only tiles. Thumbnails load six at a time in the order of
+  `thumbnailPlan.ts`: the viewport before the margin around it, nearest its
+  middle first. A load for a tile that scrolled away is abandoned. Decoded
+  thumbnails beyond the visible band are kept for scrolling back, up to 192,
+  and one that a view is showing is never let go.
 - Keyboard movement by the rules of `useGridArrowNav.ts`: arrows and WASD,
   Home and End, Page Up and Page Down, and scrolling the target into view.
 - Sidebar rows fade their highlight over 50 ms and icon buttons over 150 ms.
@@ -167,9 +171,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
-- The grid is still one element tree per tile. The thumbnail cache has no
-  cancellation or priority and never loads an original for a tile larger than
-  its thumbnail. The media surface still carries colours of its own.
+- The grid is still one element tree per tile, and never loads an original
+  for a tile larger than its thumbnail. The media surface still carries
+  colours of its own.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
 - Windows and Linux are not built or tested. The Ruffle frame path reads back

@@ -507,6 +507,17 @@ impl Render for GridView {
         }
 
         let tile_count = tiles.len();
+        // Thumbnails load from the middle of the viewport outward.
+        let spans = tiles
+            .iter()
+            .map(|data| (data.tile.y, data.tile.h))
+            .collect::<Vec<_>>();
+        let wanted = thumbnails::load_order(&spans, top, viewport)
+            .into_iter()
+            .map(|at| Resource::Path(tiles[at].thumbnail.clone().into()))
+            .collect();
+        self.thumbnails
+            .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
         let decoded = {
             let thumbnails = self.thumbnails.read(cx);
             tiles
