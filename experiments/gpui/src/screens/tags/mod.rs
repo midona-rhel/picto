@@ -146,9 +146,8 @@ pub struct TagsScreen {
     bounds: Bounds<Pixels>,
     clock: Instant,
 
-    menu: Option<Entity<Menu>>,
+    menu: menu::Host,
     menu_target: Option<MenuTarget>,
-    _menu: Option<Subscription>,
     /// Open dialogs, the topmost last.
     layers: Vec<Layer>,
     /// The keyboard should move to the topmost dialog, or back to the list.
@@ -196,10 +195,11 @@ impl TagsScreen {
                 this.showing = showing;
             }),
         ];
+        let focus = cx.focus_handle();
         let mut screen = Self {
             session,
             _thumbnails: thumbnails,
-            focus: cx.focus_handle(),
+            focus: focus.clone(),
             toolbar,
             query: String::new(),
             namespaces: Vec::new(),
@@ -225,9 +225,8 @@ impl TagsScreen {
             rail_scroll: ScrollHandle::new(),
             bounds: Bounds::default(),
             clock: Instant::now(),
-            menu: None,
+            menu: menu::Host::deferred(30, menu::Return::To(focus)),
             menu_target: None,
-            _menu: None,
             layers: Vec::new(),
             refocus: false,
             showing: false,
@@ -737,19 +736,12 @@ impl TagsScreen {
         cx: &mut Context<Self>,
     ) {
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu = Some(cx.subscribe_in(
-            &menu,
-            window,
-            |this, menu, event: &menu::Event, window, cx| {
-                let menu::Event::Chosen(action) = event;
+        self.menu
+            .open(menu, window, cx, |this, menu, action, window, cx| {
                 let value = menu.read(cx).chosen_value();
                 this.run_menu_action(action, value, window, cx);
-            },
-        ));
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+            });
         self.menu_target = Some(target);
-        cx.notify();
     }
 
     /// `openTagContextMenu`, with `buildCommonTagContextEntries`.
@@ -1598,18 +1590,11 @@ impl Render for TagsScreen {
                 None => window.focus(&self.focus, cx),
             }
         }
-        // A dismissed menu stays until its fade is over.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-            if self.layers.is_empty() && window.focused(cx).is_none() {
-                window.focus(&self.focus, cx);
-            }
+        // Until the last has gone, a dialog leaving keeps this repainting.
+        if self.layers.iter().any(|layer| layer.presence.closing()) {
+            window.request_animation_frame();
         }
+        let menu = self.menu.layer(window, cx);
 
         let mut root = div()
             .relative()
@@ -1638,18 +1623,7 @@ impl Render for TagsScreen {
             let element = self.layer(index, layer, window, cx);
             root = root.child(element);
         }
-        if let Some(menu) = self.menu.clone() {
-            let view = window.viewport_size();
-            root = root.child(
-                deferred(
-                    anchored()
-                        .position(point(px(0.), px(0.)))
-                        .child(div().w(view.width).h(view.height).child(menu)),
-                )
-                .with_priority(30),
-            );
-        }
-        root
+        root.children(menu)
     }
 }
 

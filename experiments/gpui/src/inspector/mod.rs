@@ -21,8 +21,7 @@ use crate::theme::Text as _;
 use crate::ui::{
     self,
     field::Look,
-    menu::Menu,
-    modal::Presence,
+    menu, modal,
     text_input::{self, TextInput},
 };
 use gpui::*;
@@ -185,8 +184,6 @@ enum Overwrite {
 struct Confirm {
     overwrite: Overwrite,
     count: u64,
-    presence: Presence,
-    focus: FocusHandle,
 }
 
 pub struct Inspector {
@@ -210,10 +207,9 @@ pub struct Inspector {
     /// drawn, in window coordinates, to open the pickers beside them.
     places: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
     sources: sources::SourcesState,
-    menu: Option<Entity<Menu>>,
+    menu: menu::Host,
     menu_target: Option<ChipMenu>,
-    _menu: Option<Subscription>,
-    confirm: Option<Confirm>,
+    confirm: modal::Host<Confirm>,
     /// The destination the pickers were opened on; they close when it changes.
     picker_destination: Option<String>,
     /// The star under the pointer, which previews that rating.
@@ -379,10 +375,9 @@ impl Inspector {
             folder_picker,
             places: Rc::new(RefCell::new(HashMap::new())),
             sources,
-            menu: None,
+            menu: menu::Host::deferred(30, menu::Return::Opener),
             menu_target: None,
-            _menu: None,
-            confirm: None,
+            confirm: modal::Host::default(),
             picker_destination: None,
             _subscriptions: subscriptions,
         }
@@ -1194,24 +1189,7 @@ impl Render for Inspector {
             (Mode::Selection, true) => self.selection_body(window, cx),
             (mode, false) => self.skeleton(mode, window, cx),
         };
-        // A dismissed menu stays until its fade is over.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-        }
-        let menu = self.menu.clone().map(|menu| {
-            let view = window.viewport_size();
-            deferred(
-                anchored()
-                    .position(point(px(0.), px(0.)))
-                    .child(div().w(view.width).h(view.height).child(menu)),
-            )
-            .with_priority(30)
-        });
+        let menu = self.menu.layer(window, cx);
         let confirm = self.confirm_dialog(window, cx);
         div()
             .relative()

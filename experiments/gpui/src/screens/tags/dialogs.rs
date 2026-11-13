@@ -352,35 +352,35 @@ impl TagsScreen {
                 .layer(10 + index)
                 .on_close(move |window, cx| dismiss(&(), window, cx))
         };
-        // `ConfirmModal`: a message and Cancel beside the confirming button.
+        // `ConfirmModal`, run by this screen: Cancel takes it away at once,
+        // and both buttons wait while an edit is running.
         let confirm = |title: &'static str,
                        message: String,
                        label: &'static str,
                        danger: bool,
                        action: Box<dyn Fn(&mut Self, &mut Context<Self>)>,
                        cx: &mut Context<Self>| {
-            dialog(title, Size::Small)
-                .child(
-                    div()
-                        .text(theme::TEXT_MD)
-                        .line_height(px(19.5))
-                        .text_color(theme.text_secondary())
-                        .child(message),
-                )
-                .footer(cancel_button(cx))
-                .footer(
-                    ui::action_button(
-                        ("confirm", index),
-                        if danger {
-                            ButtonLook::Danger
-                        } else {
-                            ButtonLook::Primary
-                        },
-                    )
-                    .label(label)
-                    .disabled(busy)
-                    .on_click(cx.listener(move |this, _, _, cx| action(this, cx))),
-                )
+            let dismiss = dismiss.clone();
+            let cancel = {
+                let focus = focus.clone();
+                cx.listener(move |this, _: &(), _, cx| this.cancel(&focus, cx))
+            };
+            let accept = cx.listener(move |this, _: &(), _, cx| action(this, cx));
+            ui::confirm::confirm(
+                ("tags-dialog", index),
+                title,
+                message,
+                label,
+                layer.presence,
+            )
+            .danger(danger)
+            .busy(busy)
+            .focus(&focus)
+            .layer(10 + index)
+            .on_close(move |window, cx| dismiss(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
+            .on_confirm(move |window, cx| accept(&(), window, cx))
+            .into_any_element()
         };
         let element = match &layer.dialog {
             Dialog::Editor { tag, name, .. } => {
@@ -590,7 +590,7 @@ impl TagsScreen {
             }
             Dialog::DeleteTag { tag } => {
                 let id = tag.tag_id;
-                confirm(
+                return confirm(
                     "Delete tag",
                     format!(
                         "Delete {}? Existing media will remain untouched.",
@@ -600,11 +600,11 @@ impl TagsScreen {
                     true,
                     Box::new(move |this, cx| this.delete_tag(id, cx)),
                     cx,
-                )
+                );
             }
             Dialog::DeleteGroup { group } => {
                 let deleted = group.clone();
-                confirm(
+                return confirm(
                     "Delete tag group",
                     format!(
                         "Delete the {} group? Its tags will move to General; no tags or media assignments will be deleted.",
@@ -614,12 +614,12 @@ impl TagsScreen {
                     false,
                     Box::new(move |this, cx| this.delete_group(deleted.clone(), cx)),
                     cx,
-                )
+                );
             }
             Dialog::Cleanup => {
                 let count = self.unused;
                 let focus = focus.clone();
-                confirm(
+                return confirm(
                     "Delete unused tags",
                     format!(
                         "Delete {} {} with no assignments anywhere in the library? Tags used by Inbox or Trash items are kept.",
@@ -633,7 +633,7 @@ impl TagsScreen {
                         this.delete_unused(cx);
                     }),
                     cx,
-                )
+                );
             }
             Dialog::RenameGroup { group, name, .. } => {
                 let ready = group_name(name, Some(&group.name), cx).is_some();

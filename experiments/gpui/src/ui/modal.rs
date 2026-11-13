@@ -5,6 +5,9 @@ use crate::{motion, theme};
 use gpui::*;
 use std::{rc::Rc, time::Instant};
 
+mod host;
+pub use host::{Dialog, Host};
+
 actions!(modal, [Close]);
 
 pub fn bind(cx: &mut App) {
