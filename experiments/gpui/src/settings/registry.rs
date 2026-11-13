@@ -326,6 +326,22 @@ fn resolve(def: &ShortcutDef, preset: KeyboardPreset, overrides: &Overrides) -> 
     }
 }
 
+/// One shortcut by id, the preset and overrides applied (`getShortcut`).
+pub fn shortcut(id: &str, preset: KeyboardPreset, overrides: &Overrides) -> Option<Shortcut> {
+    SHORTCUT_DEFS
+        .iter()
+        .find(|def| def.id == id)
+        .map(|def| resolve(def, preset, overrides))
+}
+
+/// Every shortcut, the preset and overrides applied, in registry order.
+pub fn all(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Shortcut> {
+    SHORTCUT_DEFS
+        .iter()
+        .map(|def| resolve(def, preset, overrides))
+        .collect()
+}
+
 pub struct Group {
     pub name: &'static str,
     pub items: Vec<Shortcut>,

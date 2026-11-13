@@ -2,12 +2,15 @@
 //! selections the grid, the viewer and the preview open the menu on.
 use super::{
     Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Playback, Row, ScopeKind,
-    Status, Surface, empty_menu, hint, preview_menu, tile_menu, viewer_menu,
+    Status, Surface, empty_menu, preview_menu, tile_menu, viewer_menu,
 };
+use crate::settings::registry;
 use picto_library::ContentSortField;
 
+/// `shortcutHint` with the default bindings: none for a deferred shortcut.
 fn shortcut(id: &str) -> Option<String> {
-    hint(id, &Default::default())
+    let def = registry::SHORTCUT_DEFS.iter().find(|def| def.id == id)?;
+    (!def.deferred).then(|| registry::display(def.keys))
 }
 
 fn tile(d: &Description) -> Vec<Row> {

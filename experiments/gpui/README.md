@@ -276,8 +276,75 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   once decoded, as `ImageCrossfadeFrame` swaps them.
 - A collection's members step with the bottom strip of
   `QuickLookNavigation` (48×32 buttons, monospace counter).
-- Space, Enter or a double-click opens and closes the viewer, Escape closes
-  it. Originals decode off the drawing thread; stale loads are fenced.
+- Enter or a double-click opens the media view on the one selected item;
+  Enter, Space or Escape close it. Originals decode off the drawing thread;
+  stale loads are fenced.
+- One keyboard, from the shortcut registry (`keymap.rs`): every binding the
+  app makes for a registry shortcut is built from the registry's current
+  keys, both slots, the EU preset and the user's overrides, and rebuilt when
+  Settings applies a change; tooltips and menu rows read their keys from it
+  too. Each id maps to actions in the key context of production's scope:
+  `Browser` for the app-wide keys (Back and Forward on both bindings, ⌘1–⌘4
+  to All, Inbox, Untagged and Trash, ⌘F into the grid's or the Tags
+  screen's search, the rail toggles, Undo and Redo, New Folder, New
+  Subfolder, Rename into the inspector's name field, Copy File Path),
+  `Grid` while the grid shows (movement with Shift extending, Select All,
+  Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
+  Open with Default App, Reveal in Finder, ⌘⌫ by scope as
+  `gridRemovalAction` decides, Restore in the Trash, Accept and Reject in the
+  Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which reach the
+  shell where the pickers will open), `Viewer` (previous, next, fit, actual
+  size, zoom, close, ratings for the shown item, in the media view and Quick
+  Look), `DetailWindow` (the viewer's keys except that only Escape closes,
+  ⇧T and Copy File Path) and `Duplicates`. None of them fires while a text
+  field, a context menu, a popover or a dialog has the keyboard; Escape goes
+  to the menu, then the popover, the dialog, the viewer and the selection.
+  ⌘, works in every window. The ids the app cannot perform yet are listed
+  in `keymap::NOT_YET`, and a test keeps every id either bound or listed.
+- One media surface, three hosts: the media view, Quick Look and the detail
+  window all show items through `viewer/surface.rs`, which takes per-host
+  options (navigator, resize following) and the Preview settings: an image
+  opens at 100% under `imageDefaultZoom: actual`, and under
+  `viewerTrackpadGestures` on macOS scrolling pans while a pinch zooms.
+- Quick Look as `GridQuickLook.tsx` draws it: an overlay over the whole
+  window, titlebar and rails included, on the app background, below the
+  context menus. The media sits 48px from the top and bottom and 16px from
+  the sides (a collection `clamp(32px, 16vw, 280px)` from the sides), with
+  no navigator; the 32px close button in the top-right corner over
+  `--color-surface-hover` in 200 ms, and the previous / count / next strip
+  along the bottom, disabled at the ends of the results. Space toggles it
+  for a single selected item (`spaceKeyAction`, or pages the grid by 90% of
+  its height when that is `scroll`); Space, Enter and Escape close it; the arrows and A/D step through the results by moving
+  the grid's selection, which it follows; zoom keys work as in the media
+  view, ratings rate its item. While it is open the shell drops its `Grid`
+  key context, so the grid's other keys are held back.
+- The detail window (`DetailWindow.tsx`, `open_in_new_window`): a window of
+  its own, sized by `calcDetailWindowSize` (the media's shape within 85% of
+  the display's work area, at least 400×300), centred, frameless with the
+  traffic lights hidden, and kept to the media's aspect ratio while
+  resized, the image keeping its framing. Its toolbar (38px, the title with
+  the size, "n / total" when several items were selected, zoom percentage,
+  Actual size, Fit, Always on top and Close) lies over the media at 55%
+  black, moves the window, shows on focus and pointer movement and fades
+  out over 250 ms a second later, or at once when the window loses focus.
+  Escape closes it, ←/→ step through the items it was given with the
+  "First item" / "Last item" notices, ⇧T pins it above other windows,
+  ⌘⌥C copies the file's path. It has the navigator. Several can be open at
+  once; opening an item already open brings its window forward. A
+  collection opens as `GroupDetailWindow`: its name, the pin and close
+  buttons, and its members on the strip.
+- Opening triggers per the Controls settings: a double-click opens the
+  media view, or the default application under `gridDoubleClickAction:
+  external` (media only); a middle-click opens the tile in a detail window
+  under `gridMiddleClickAction: new_window` (the default); ⌘O opens the
+  shown item with the rest of the selection; the grid menu's "Open in New
+  Window" row sits after Reveal in Finder, as `buildEntityOpenContextEntries`
+  places it. Production's grid menu has no "Quick Look" row, so none is
+  added.
+- Every viewer records the item it opens for Recently Viewed
+  (`useRecordMediaView`, `record_recent_view`); the media view and Quick
+  Look do not while Recently Viewed itself is being browsed, as production
+  passes `recordItemId: null` there.
 - The Duplicates screen, from `DuplicatesScreen.tsx`: the review queue of
   `picto_library`'s duplicate candidates, one pair at a time, side by side
   with each file's facts (resolution, size, format, rating, tags, dates,
@@ -361,7 +428,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
-- Tags screen: ⌘F does not move to its search; a failed save of the tag
+- Tags screen: a failed save of the tag
   preferences is held as the settings model's error, not shown as a toast; the editor's
   name field is dimmed while an edit runs but still takes typing; Undo does
   not reach tag edits; tag and group changes made elsewhere show when the
@@ -380,11 +447,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   not its rounded corners.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong (theme, zoom, language, the grid's mouse and Space actions, preview,
-  notifications, imports, rejecting, subscriptions).
+  belong (theme, zoom, language, the grid's wheel action, image rendering
+  and the transparency grid, video autoplay and loop, notifications,
+  imports, subscriptions). Rejecting with "Delete" chosen does nothing,
+  since the prototype never deletes library files.
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
-  localStorage; the app's own key bindings do not follow edited shortcuts.
+  localStorage.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
   are downloaded and their storage) are drawn but not performed; every model
@@ -422,8 +491,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   loading skeleton are not ported, and a selection's covers follow the order
   items were chosen in this session, not the Electron query-selection order
   for ranges and Select All.
-- Not in the grid yet: dragging items out or to reorder, middle-click,
-  inline rename, and the subfolder tiles a
+- Not in the grid yet: dragging items out or to reorder, inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
@@ -431,8 +499,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
   drops from the grid (the rows have the drop looks; nothing drives them),
   Quick Access, keyboard movement through the rows (the focused look is
-  there; nothing moves focus to a row), the New Folder and New Subfolder
-  shortcuts, and the confirmation before deleting a folder (it deletes at
+  there; nothing moves focus to a row), the Set Folder Auto Tags shortcut,
+  and the confirmation before deleting a folder (it deletes at
   once). Menu rows shown but not performed yet, each
   with a `TODO`: Add to Quick Access, Move to..., Set Auto Tags..., Import
   Folder (Here)..., Attach Watched Folder..., Edit Smart Folder..., Edit
@@ -449,7 +517,24 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
-  scroll surface. Preview is embedded, not the three production shells.
+  scroll surface (`GroupSurface`), in all three hosts: Quick Look shows a
+  collection's first member in the collection frame, and the detail window
+  steps its members with the strip.
+- Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
+  corners do not clip a zoomed image. No right-click menu or Copy (the
+  file itself), and no video, audio or document players (the surface has
+  none yet).
+  Its counter follows the selection at once, where production's trails until
+  the next image has decoded. Stepping scrolls the grid only enough to show
+  the item, not to its centre, and closing does not scroll the grid back to
+  the item. Space paging the grid jumps where production scrolls smoothly.
+- Detail window: no context menu, Copy (the file itself), per-image zoom
+  memory, backdrop blur under the toolbar, or "Loading..." placeholder; the
+  pinned button rests at full strength rather than production's 94%. Moving
+  the window by its toolbar does not keep the toolbar showing as
+  `picto:window-moved` does. Its size uses the primary display's work area,
+  as production does, even when the main window is on another display.
+  Always on top and the aspect lock are set through AppKit, on macOS only.
 - Context menus exist for grid items, empty grid space, the viewer, the
   inspector's preview, the sidebar, the viewer's zoom percentage,
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
@@ -476,9 +561,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Group (the collection editor), Group when the selection needs the group
   organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
   editor), Import Files, Import Folder and Paste Import, Flash's Play,
-  Stop and Mute, and Set as Thumbnail. "Open in New Window", "Add Tags" and
-  "Add to Folder" dispatch the `item::OpenInNewWindow`, `item::AddTags` and
-  `item::AddToFolder` actions from the shell for their owners to receive.
+  Stop and Mute, and Set as Thumbnail. "Add Tags" and "Add to Folder"
+  dispatch the shortcuts' `AddTags` and `AddToFolder`, which wait for the
+  pickers. "Open in New Window" opens the item alone in a detail window.
+  Quick Look and the detail window have no context menu yet.
   "Add to “…”" appears once a folder has been used, which only the folder
   picker will record. Show Extension and Show Subfolder Content are saved
   but the grid does not follow them yet. Delete Permanently leaves the files
@@ -507,10 +593,25 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which does not exist yet, so neither is ever shown; collections step
   through members with the bottom strip instead of the reader surface. No
   transparency checkerboard (off by default in Picto), no per-image zoom
-  memory, no rating or copy shortcuts, and no video
-  shortcuts (there is no video playback). Next stops at the last loaded item
+  memory, no copy shortcut, no Inbox review
+  controls, and no video shortcuts (there is no video playback). Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
+- Shortcuts not performed yet, bound to nothing and listed with their
+  reasons in `keymap::NOT_YET`: Import, Export and Export As, Paste Import,
+  New Smart Folder, Set Folder Auto Tags, Regenerate Thumbnail, Open in New
+  Window, Auto-Tag, Copy (⌘C copies files, which GPUI's macOS clipboard
+  cannot hold), Remove from Group, Toggle Grayscale, Always on Top, Toggle
+  Logs, the document pages, every video key, and the duplicate review's
+  Keep Left, Keep Right and Smart Merge; production's deferred ids are not
+  bound either. ⌘⌫ in the Trash (Delete Permanently) and Reject with
+  "Delete" chosen are bound but do nothing, so no library file is ever
+  deleted. T, F and ⌘⇧J reach the shell with a `TODO` until the pickers
+  exist; batch rename for several items is a `TODO`. Space scrolls the grid
+  at once rather than smoothly, and `+` also answers to Shift+= (GPUI
+  matches the typed character), where production's `+` needs the key
+  itself. The application menu's accelerators that also work while a text
+  field has the keyboard in production (⌘1–⌘4, ⌃R, ⌘⌥C) do not here.
 - Motion: GPUI cannot scale an element's contents, so where production
   scales a panel (menus, the library popover, dialogs, tooltips) the panel's
   surface, border and shadow are drawn in the scaled rectangle about the
@@ -553,7 +654,9 @@ The regular tests cover the Tags screen's sections, rows, ordering, search
 ranking, shimmer and starred-tag edits, the dialogs' timing, the context menu's search ranking, separator
 cleaning, keyboard stepping and placement and flip arithmetic, the duplicate review's linked zoom, queue order,
 labels and difference picture, the three layout modes against hand-computed geometry,
-the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
+the viewer's fit, focal zoom, pan, glide, resize and navigator arithmetic,
+the detail window's size and aspect ratio, which viewer action each key and
+click maps to under each Controls setting, the
 logarithmic zoom track,
 banded visibility against a full scan of 20,000 tiles in every mode, the
 rubber band's hit geometry and auto-scroll speed, the hover preview's timing
@@ -607,8 +710,10 @@ One model, separate views, shared components:
   reveal, keyboard movement, rubber band, hover preview, tile artwork,
   thumbnail cache and originals), `inspector/` (one item, several items, and
   the destination), `viewer/` (the media surface with its zoom and pan
-  arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
-  shows) and `screens/` (the destinations that are screens of their own).
+  arithmetic in `camera.rs`, Flash, and its three hosts: the media view
+  with the viewer toolbar the titlebar shows, Quick Look and the detail
+  window, with `trigger.rs` deciding which a key or click opens) and
+  `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu (with submenus, search and swatches), dialog, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,

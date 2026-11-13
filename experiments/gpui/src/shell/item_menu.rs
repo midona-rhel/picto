@@ -51,10 +51,11 @@ struct Target {
 
 #[derive(Clone)]
 struct File {
+    /// The item it belongs to, whose details say where it is.
+    root: RootId,
     hash: String,
     mime: String,
     name: String,
-    path: PathBuf,
 }
 
 impl Target {
@@ -147,12 +148,6 @@ fn now_ms() -> i64 {
 impl Shell {
     // ── Opening ─────────────────────────────────────────────────
 
-    /// The shortcut texts, with the user's own bindings.
-    fn hints(&self, cx: &App) -> impl Fn(&str) -> Option<String> + 'static {
-        let overrides = crate::settings::model(cx).read(cx).saved.shortcuts.clone();
-        move |id: &str| rows::hint(id, &overrides)
-    }
-
     /// The view panel's choices: the grid's saved view and the rails.
     fn view_state(&self, cx: &App) -> ViewState {
         let prefs = &self.session.read(cx).prefs;
@@ -189,6 +184,54 @@ impl Shell {
         }
     }
 
+    /// The grid's selection, in grid order, with the one item's cover file.
+    fn selection_target(&self, cx: &App) -> Option<Target> {
+        let session = self.session.read(cx);
+        let items: Vec<RootSummary> = session
+            .selection
+            .iter()
+            .filter_map(|index| session.items.get(*index).cloned())
+            .collect();
+        let file = match items.as_slice() {
+            [] => return None,
+            [item] => Some(File {
+                root: item.root_id,
+                hash: item.content_hash.clone(),
+                mime: item.mime.clone(),
+                name: item.name.clone(),
+            }),
+            _ => None,
+        };
+        Some(Target {
+            items,
+            file,
+            folder: self.grid_scope(cx).2,
+        })
+    }
+
+    /// Performs a row's action without its menu, for a shortcut: on the
+    /// item the viewer shows while it is open, else on the selection.
+    pub(super) fn act_on_selection(
+        &mut self,
+        action: Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = if self.session.read(cx).viewer {
+            self.shown_item(true, cx).map(|(item, file)| Target {
+                items: vec![item],
+                file: Some(file),
+                folder: None,
+            })
+        } else {
+            self.selection_target(cx)
+        };
+        if let Some(target) = target {
+            self.items.target = Some(target);
+            self.run_item_action(action, None, window, cx);
+        }
+    }
+
     /// A tile was right-clicked: the selection's menu. The grid has already
     /// made the tile the selection when it was outside it.
     pub(super) fn open_tile_menu(
@@ -198,27 +241,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let (scope, scope_kind, folder) = self.grid_scope(cx);
-        let (items, file) = {
-            let session = self.session.read(cx);
-            let items: Vec<RootSummary> = session
-                .selection
-                .iter()
-                .filter_map(|index| session.items.get(*index).cloned())
-                .collect();
-            let file = match items.as_slice() {
-                [item] => Some(File {
-                    hash: item.content_hash.clone(),
-                    mime: item.mime.clone(),
-                    name: item.name.clone(),
-                    path: session.original(&item.content_hash, &item.mime),
-                }),
-                _ => None,
-            };
-            (items, file)
-        };
-        if items.is_empty() {
+        let Some(Target { items, file, .. }) = self.selection_target(cx) else {
             return;
-        }
+        };
         let count = items.len();
         let collections = items
             .iter()
@@ -310,7 +335,7 @@ impl Shell {
             last_folder_name,
             ..Default::default()
         };
-        let hints = self.hints(cx);
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::tile_menu(&description, &hints);
         let target = Target {
             items,
@@ -362,7 +387,7 @@ impl Shell {
             },
             ..Default::default()
         };
-        let hints = self.hints(cx);
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::empty_menu(&description, &hints);
         let target = Target {
             folder,
@@ -393,7 +418,7 @@ impl Shell {
             None => (item.content_hash.clone(), item.mime.clone()),
         };
         let file = File {
-            path: session.original(&hash, &mime),
+            root: item.root_id,
             name: item.name.clone(),
             hash,
             mime,
@@ -461,7 +486,7 @@ impl Shell {
             flash: flash.then_some((true, false)),
             capture: flash,
         };
-        let hints = self.hints(cx);
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
         let target = Target {
             items: vec![item],
@@ -492,7 +517,7 @@ impl Shell {
             },
             ..Default::default()
         };
-        let hints = self.hints(cx);
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::preview_menu(&description, &hints);
         let target = Target {
             items: vec![item],
@@ -527,7 +552,7 @@ impl Shell {
                     .copied()
                     .find(|action| action.key() == *key);
                 if let Some(action) = action {
-                    this.run_item_action(action, menu, window, cx);
+                    this.run_item_action(action, Some(menu), window, cx);
                 }
             },
         ));
@@ -551,7 +576,7 @@ impl Shell {
     fn run_item_action(
         &mut self,
         action: Action,
-        menu: &Entity<Menu>,
+        menu: Option<&Entity<Menu>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -564,17 +589,27 @@ impl Shell {
             // ── Opening ──
             Action::OpenDefault => {
                 if let Some(file) = file {
-                    cx.open_with_system(&file.path);
+                    self.with_path(file, |path, cx| cx.open_with_system(&path), window, cx);
                 }
             }
             Action::Reveal => {
                 if let Some(file) = file {
-                    cx.reveal_path(&file.path);
+                    self.with_path(file, |path, cx| cx.reveal_path(&path), window, cx);
                 }
             }
             Action::OpenInNewWindow => {
-                self.dispatch(Box::new(rows::OpenInNewWindow), window, cx);
-                return;
+                // The item alone, as production's detail window opens it
+                // from a single selection, the viewer and the preview.
+                let index = target.items.first().and_then(|item| {
+                    self.session
+                        .read(cx)
+                        .items
+                        .iter()
+                        .position(|each| each.root_id == item.root_id)
+                });
+                if let Some(index) = index {
+                    self.open_in_window(vec![index], index, cx);
+                }
             }
             Action::OpenWithOther => {
                 // TODO: list the applications that open this type (macOS
@@ -588,7 +623,12 @@ impl Shell {
             // ── Copying ──
             Action::CopyPath => {
                 if let Some(file) = file {
-                    write_text(file.path.to_string_lossy().into_owned(), cx);
+                    self.with_path(
+                        file,
+                        |path, cx| write_text(path.to_string_lossy().into_owned(), cx),
+                        window,
+                        cx,
+                    );
                 }
             }
             Action::CopyName => {
@@ -616,23 +656,26 @@ impl Shell {
                 write_text(names.join("\n"), cx);
             }
             Action::CopySelectionPaths | Action::CopySelectionLinks => {
+                // `resolveTargetFilePaths`: every file of the selection,
+                // collection members included, in order.
                 let links = action == Action::CopySelectionLinks;
-                let blobs = self.session.read(cx).blobs().to_owned();
                 self.library(
                     Box::new(move |library| {
                         let mut lines = Vec::new();
                         for id in ids {
                             for media in library.details(id)?.media {
-                                let (hash, mime) = (media.facts.content_hash, media.facts.mime);
                                 lines.push(if links {
+                                    let extension = std::path::Path::new(&media.file_path)
+                                        .extension()
+                                        .map_or("bin".into(), |extension| {
+                                            extension.to_string_lossy().into_owned()
+                                        });
                                     format!(
-                                        "media://localhost/file/{hash}.{}",
-                                        crate::grid::format::extension(&mime)
+                                        "media://localhost/file/{}.{extension}",
+                                        media.facts.content_hash
                                     )
                                 } else {
-                                    original(&blobs, &hash, &mime)
-                                        .to_string_lossy()
-                                        .into_owned()
+                                    media.file_path
                                 });
                             }
                         }
@@ -667,7 +710,7 @@ impl Shell {
             }
             // ── Folders ──
             Action::AddToFolder => {
-                self.dispatch(Box::new(rows::AddToFolder), window, cx);
+                self.dispatch(Box::new(crate::keymap::AddToFolder), window, cx);
                 return;
             }
             Action::AddToLastFolder => {
@@ -684,14 +727,14 @@ impl Shell {
             Action::NewFolderWithSelection => {
                 let selection = target.selection();
                 self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.new_folder(None, Some(selection), window, cx)
+                    sidebar.new_folder_in(None, Some(selection), window, cx)
                 });
                 return;
             }
             Action::NewFolder => {
                 let parent = target.folder;
                 self.sidebar.update(cx, |sidebar, cx| {
-                    sidebar.new_folder(parent, None, window, cx)
+                    sidebar.new_folder_in(parent, None, window, cx)
                 });
                 return;
             }
@@ -729,6 +772,9 @@ impl Shell {
             }
             // ── Names and tags ──
             Action::Rename => {
+                if self.inspector_collapsed {
+                    self.toggle_rails(false, true, cx);
+                }
                 self.inspector
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
@@ -737,7 +783,7 @@ impl Shell {
                 // TODO: open the batch rename dialog for these items.
             }
             Action::AddTags => {
-                self.dispatch(Box::new(rows::AddTags), window, cx);
+                self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
             }
             Action::AutoTag => {
@@ -868,8 +914,40 @@ impl Shell {
         window.dispatch_action(action, cx);
     }
 
-    fn check(&self, menu: &Entity<Menu>, action: Action, checked: bool, cx: &mut App) {
-        menu.update(cx, |menu, cx| menu.set_checked(action.key(), checked, cx));
+    /// `resolveFilePath`: where the library keeps the file, from the item's
+    /// details, then `then` with it.
+    fn with_path(
+        &mut self,
+        file: File,
+        then: impl FnOnce(PathBuf, &mut App) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let File { root, hash, .. } = file;
+        self.library(
+            Box::new(move |library| {
+                Ok(library
+                    .details(root)?
+                    .media
+                    .into_iter()
+                    .find(|media| media.facts.content_hash == hash)
+                    .map(|media| PathBuf::from(media.file_path)))
+            }),
+            |_, path, _, cx| {
+                if let Some(path) = path {
+                    then(path, cx);
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Checks or unchecks a row of the open menu.
+    fn check(&self, menu: Option<&Entity<Menu>>, action: Action, checked: bool, cx: &mut App) {
+        if let Some(menu) = menu {
+            menu.update(cx, |menu, cx| menu.set_checked(action.key(), checked, cx));
+        }
     }
 
     /// Runs `work` on the library's thread and hands its answer to `then`.
@@ -916,6 +994,8 @@ impl Shell {
     /// the grid's results as far as `reread` says.
     fn refresh(&mut self, reread: Reread, window: &mut Window, cx: &mut Context<Self>) {
         self.session.read(cx).refresh_details();
+        self.inspector
+            .update(cx, |inspector, cx| inspector.selection_edited(cx));
         if reread == Reread::Item {
             return;
         }
@@ -1372,18 +1452,6 @@ impl Shell {
             cx.notify();
         }
     }
-}
-
-/// Where the blob store keeps an original (`Session::original`).
-fn original(blobs: &std::path::Path, hash: &str, mime: &str) -> PathBuf {
-    if hash.len() < 4 {
-        return PathBuf::new();
-    }
-    blobs
-        .join("f")
-        .join(&hash[..2])
-        .join(&hash[2..4])
-        .join(format!("{hash}.{}", crate::grid::format::extension(mime)))
 }
 
 fn write_text(text: String, cx: &mut App) {

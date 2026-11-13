@@ -483,15 +483,16 @@ fn folder_menu(
     has_children: bool,
     any_expanded: bool,
     any_expandable: bool,
+    cx: &App,
 ) -> Vec<menu::Entry> {
     vec![
         menu::item("new-folder", "New Folder")
             .icon("menu-folder-plus")
-            .shortcut("⌘⇧N")
+            .shortcut_for("file.newFolder", cx)
             .into(),
         menu::item("new-subfolder", "New Subfolder")
             .icon("menu-new-subfolder")
-            .shortcut("⌥N")
+            .shortcut_for("file.newSubfolder", cx)
             .into(),
         menu::Entry::Separator,
         // Nothing is in Quick Access here, so the row always offers to add.
@@ -500,7 +501,7 @@ fn folder_menu(
             .into(),
         menu::item("rename", "Rename")
             .icon("menu-rename")
-            .shortcut("⌃R")
+            .shortcut_for("edit.rename", cx)
             .into(),
         menu::item("move-to", "Move to...")
             .icon("menu-folder-open")
@@ -510,7 +511,7 @@ fn folder_menu(
             .into(),
         menu::item("auto-tags", "Set Auto Tags...")
             .icon("menu-auto-tags")
-            .shortcut("⌘⇧R")
+            .shortcut_for("folder.autoTags", cx)
             .into(),
         menu::Entry::Separator,
         menu::item("import-here", "Import Folder Here...")
@@ -666,7 +667,12 @@ fn expand_all_row(noun: &str, any_expanded: bool, any_expandable: bool) -> menu:
 }
 
 /// `openBulkMenu`: several folders, several smart folders, or a mix.
-fn bulk_menu(nodes: &[String], has_collapsed: bool, has_expanded: bool) -> Vec<menu::Entry> {
+fn bulk_menu(
+    nodes: &[String],
+    has_collapsed: bool,
+    has_expanded: bool,
+    cx: &App,
+) -> Vec<menu::Entry> {
     let all_folders = nodes.iter().all(|id| id.starts_with("folder:"));
     let all_smart = nodes.iter().all(|id| id.starts_with("smart:"));
     let count = nodes.len();
@@ -688,7 +694,7 @@ fn bulk_menu(nodes: &[String], has_collapsed: bool, has_expanded: bool) -> Vec<m
         entries.push(
             menu::item("auto-tags", "Set Auto Tags...")
                 .icon("menu-auto-tags")
-                .shortcut("⌘⇧R")
+                .shortcut_for("folder.autoTags", cx)
                 .into(),
         );
     }
@@ -814,6 +820,38 @@ impl Sidebar {
         .detach();
     }
 
+    /// `file.newFolder`: a top-level folder, renamed in place.
+    pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_folder(None, window, cx);
+    }
+
+    /// `file.newSubfolder`: a subfolder of the folder chosen in the sidebar,
+    /// or of the open folder when none is chosen. Returns false, creating
+    /// nothing, unless that is exactly one folder.
+    pub fn new_subfolder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut targets: Vec<FolderId> = self
+            .selection
+            .iter()
+            .filter_map(|node| folder_id(node))
+            .collect();
+        if targets.is_empty() {
+            let session = self.session.read(cx);
+            targets.extend(
+                session
+                    .nav
+                    .get(session.scope)
+                    .and_then(|entry| folder_id(&entry.id())),
+            );
+        }
+        match targets.as_slice() {
+            [folder] => {
+                self.create_folder(Some(*folder), window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// `createFolderAndRename`: a folder named "New Folder", revealed and
     /// renamed in place.
     fn create_folder(
@@ -835,7 +873,7 @@ impl Sidebar {
     /// A folder named "New Folder" under `parent`, revealed and renamed in
     /// place, holding `members` when given (the grid's "New Folder" and "New
     /// Folder with Selection").
-    pub fn new_folder(
+    pub fn new_folder_in(
         &mut self,
         parent: Option<FolderId>,
         members: Option<picto_library::selection::SelectionTarget>,
@@ -1228,7 +1266,7 @@ impl Sidebar {
             let folding = nodes.iter().filter(|id| parents.contains(id));
             let has_collapsed = folding.clone().any(|id| self.collapsed.contains(id));
             let has_expanded = folding.clone().any(|id| !self.collapsed.contains(id));
-            let menu = bulk_menu(&nodes, has_collapsed, has_expanded);
+            let menu = bulk_menu(&nodes, has_collapsed, has_expanded, cx);
             self.open_menu(Target::Bulk(nodes), menu, position, window, cx);
             return;
         }
@@ -1241,7 +1279,9 @@ impl Sidebar {
         let has_children = all.contains(&node);
         let expanded = !self.collapsed.contains(&node);
         let menu = match section {
-            Section::Folders => folder_menu(expanded, has_children, any_expanded, !all.is_empty()),
+            Section::Folders => {
+                folder_menu(expanded, has_children, any_expanded, !all.is_empty(), cx)
+            }
             Section::SmartFolders => smart_folder_menu(
                 entries[index].group,
                 expanded,
@@ -1265,7 +1305,7 @@ impl Sidebar {
             Section::Folders => vec![
                 menu::item("new-folder", "New Folder")
                     .icon("menu-folder-plus")
-                    .shortcut("⌘⇧N")
+                    .shortcut_for("file.newFolder", cx)
                     .into(),
                 menu::item("import-folder", "Import Folder...")
                     .icon("menu-folder-plus")
@@ -1586,7 +1626,10 @@ impl Render for Sidebar {
             }
             let expanded = filtering || !self.collapsed.contains(which.id());
             let (tip, element) = match which {
-                Section::Folders => (ui::tip("New Folder").keys(&["⌘", "⇧", "N"]), "folders"),
+                Section::Folders => (
+                    ui::tip("New Folder").shortcut("file.newFolder", cx),
+                    "folders",
+                ),
                 Section::SmartFolders => (ui::tip("New Smart Folder or Group"), "smart-folders"),
             };
             list = list.child(

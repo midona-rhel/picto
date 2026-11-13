@@ -30,6 +30,13 @@ pub struct MenuRequested(pub Point<Pixels>);
 /// Empty grid space was right-clicked at this window position.
 pub struct EmptyMenuRequested(pub Point<Pixels>);
 
+/// A tile was double-clicked (after selecting it) or middle-clicked; the
+/// shell opens it as the Controls settings say.
+pub struct Activated {
+    pub index: usize,
+    pub middle: bool,
+}
+
 pub struct GridView {
     session: Entity<Session>,
     thumbnails: Entity<Thumbnails>,
@@ -86,6 +93,8 @@ fn aspect(item: &RootSummary) -> Option<f32> {
 
 impl EventEmitter<MenuRequested> for GridView {}
 impl EventEmitter<EmptyMenuRequested> for GridView {}
+
+impl EventEmitter<Activated> for GridView {}
 
 /// Where a tile's thumbnail is.
 #[derive(Clone, Copy, PartialEq)]
@@ -398,6 +407,16 @@ impl GridView {
         cx.notify();
     }
 
+    /// Scrolls down by nine tenths of the visible height, as Space does when
+    /// the Controls setting has it scroll (`spaceKeyAction: 'scroll'`).
+    pub fn scroll_by_page(&mut self, cx: &mut Context<Self>) {
+        let height = f32::from(self.bounds.size.height);
+        let bottom = -f32::from(self.scroll.max_offset().y);
+        let top = (self.scroll_top() + height * 0.9).clamp(0., bottom.max(0.));
+        self.scroll.set_offset(point(px(0.), px(-top)));
+        cx.notify();
+    }
+
     /// Moves the selection as the Electron grid's keyboard navigation does and
     /// scrolls the new selection into view.
     pub fn move_selection(&mut self, action: nav::Move, extend: bool, cx: &mut Context<Self>) {
@@ -706,13 +725,26 @@ impl GridView {
                             session.toggle(index, cx);
                         } else {
                             session.select(index, cx);
-                            if open {
-                                session.open_viewer(cx);
-                            }
                         }
                     });
                     window.focus(&this.focus, cx);
+                    if open && !modifiers.shift && !modifiers.platform {
+                        cx.emit(Activated {
+                            index,
+                            middle: false,
+                        });
+                    }
                 }))
+                .on_mouse_down(
+                    MouseButton::Middle,
+                    cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(Activated {
+                            index,
+                            middle: true,
+                        });
+                    }),
+                )
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {

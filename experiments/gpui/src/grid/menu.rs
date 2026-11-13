@@ -9,17 +9,9 @@
 //! [`Action`].
 use crate::grid::format::grouped;
 use crate::grid::layout::ViewMode;
-use crate::settings::registry::{self, Overrides};
 use crate::ui::menu;
-use gpui::actions;
 use picto_library::ContentSortField;
 use picto_library::predicate::{SortDirection, SortField};
-
-// Actions for the item commands other parts of the app own: the detail
-// window and the tag and folder pickers. The menu dispatches them from the
-// shell, about the selection (or, from the viewer and the preview, the item
-// shown).
-actions!(item, [OpenInNewWindow, AddTags, AddToFolder]);
 
 /// Where the menu was opened (`GridMenuContext.surface`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -508,21 +500,6 @@ fn submenu(label: impl Into<String>, icon: Option<&'static str>, children: Vec<R
         icon,
         children,
     }
-}
-
-/// `shortcutHint`: a shortcut as the Mac writes it, with the user's own
-/// binding, or nothing for a deferred shortcut or an unknown id.
-pub fn hint(id: &str, overrides: &Overrides) -> Option<String> {
-    let def = registry::SHORTCUT_DEFS.iter().find(|def| def.id == id)?;
-    if def.deferred {
-        return None;
-    }
-    let keys = overrides
-        .get(def.id)
-        .and_then(|changed| changed.keys.clone())
-        .unwrap_or_else(|| def.keys.to_owned());
-    let shown = registry::display(&keys);
-    (!shown.is_empty()).then_some(shown)
 }
 
 /// Builds the rows; `hint` gives each shortcut's text.
