@@ -410,8 +410,22 @@ impl Render for GridView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Grid);
         let build_started = std::time::Instant::now();
-        self.session
-            .update(cx, |session, cx| session.advance_transition(cx));
+        // The session moves its scope change along, hears how far this grid
+        // is scrolled, and says where a restored grid should open.
+        let scrolled = -f32::from(self.scroll.offset().y);
+        let epoch = self.epoch;
+        let restore = self.session.update(cx, |session, cx| {
+            session.advance_transition(cx);
+            if session.results_epoch == epoch {
+                session.grid_scroll = scrolled;
+                None
+            } else {
+                Some(session.restore_scroll.take().unwrap_or(0.))
+            }
+        });
+        if let Some(offset) = restore {
+            self.scroll.set_offset(point(px(0.), px(-offset)));
+        }
         let theme = theme::theme(cx);
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
         // The scrollbar's gutter is not grid: tiles lay out beside it.
@@ -425,7 +439,6 @@ impl Render for GridView {
             let session = self.session.read(cx);
             if session.results_epoch != self.epoch {
                 self.epoch = session.results_epoch;
-                self.scroll.set_offset(point(px(0.), px(0.)));
                 self.layout_key = None;
             }
             let prefs = session.prefs.clone();

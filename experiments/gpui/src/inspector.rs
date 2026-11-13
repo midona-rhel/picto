@@ -521,6 +521,13 @@ impl Inspector {
                 cover_thumbnail,
             )
         };
+        // The preview stays decoded while the grid scrolls past it.
+        let pinned = cover_thumbnail
+            .clone()
+            .map(|path| Resource::Path(path.into()));
+        self.thumbnails.update(cx, |thumbnails, _| {
+            thumbnails.pin("inspector-preview", pinned)
+        });
         if let Some((name, mime)) = demo {
             return scroller.child(
                 panel

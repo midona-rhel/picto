@@ -181,6 +181,24 @@ pub fn panel_shadow_small() -> Vec<BoxShadow> {
     ]
 }
 
+/// `LibraryAvatar.module.css` `.avatar::after`: its inset shadows.
+pub fn avatar_bevel() -> Vec<BoxShadow> {
+    let inset = |x: f32, y: f32, blur: f32, color: u32| {
+        BoxShadow::new(px(x), px(y), rgba(color).into())
+            .blur_radius(px(blur))
+            .inset()
+    };
+    vec![
+        inset(0., 2., 3., 0x0000006b),
+        inset(2., 0., 2., 0x00000029),
+        inset(0., -1.5, 1., 0xffffff33),
+        inset(-1., 0., 1., 0xffffff17),
+        BoxShadow::new(px(0.), px(0.), rgba(0xffffff0f).into())
+            .spread_radius(px(1.))
+            .inset(),
+    ]
+}
+
 /// `font-variant-numeric: tabular-nums slashed-zero`
 pub fn tabular_figures() -> FontFeatures {
     FontFeatures(std::sync::Arc::new(vec![
@@ -249,6 +267,8 @@ pub const CONTROL_MD: f32 = 28.;
 pub const CONTROL_LG: f32 = 32.;
 /// `--icon-button-size`
 pub const ICON_BUTTON: f32 = 24.;
+/// The macOS window's corner radius, which its rim follows.
+pub const WINDOW_RADIUS: f32 = 10.;
 /// `--titlebar-height`
 pub const TITLEBAR_HEIGHT: f32 = 48.;
 /// `--sidebar-width`

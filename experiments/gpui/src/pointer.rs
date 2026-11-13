@@ -7,8 +7,11 @@
 //!     up 320 24
 //!     rdown 320 24
 //!     rup 320 24
+//!     down 320 24 2
+//!     scroll 600 400 -900
 //!
-//! Coordinates are window points. Nothing is read when the variable is unset.
+//! Coordinates are window points. A fourth number is the click count for
+//! `down` and `up`, and the distance in points for `scroll`. Nothing is read when the variable is unset.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
@@ -21,6 +24,8 @@ fn parse(line: &str) -> Option<PlatformInput> {
         px(parts.next()?.parse().ok()?),
         px(parts.next()?.parse().ok()?),
     );
+    let extra = parts.next().and_then(|value| value.parse::<f32>().ok());
+    let click_count = extra.map_or(1, |count| count as usize);
     let modifiers = Modifiers::default();
     Some(match kind {
         "move" => PlatformInput::MouseMove(MouseMoveEvent {
@@ -37,14 +42,14 @@ fn parse(line: &str) -> Option<PlatformInput> {
             button: MouseButton::Left,
             position,
             modifiers,
-            click_count: 1,
+            click_count,
             first_mouse: false,
         }),
         "up" => PlatformInput::MouseUp(MouseUpEvent {
             button: MouseButton::Left,
             position,
             modifiers,
-            click_count: 1,
+            click_count,
         }),
         "rdown" => PlatformInput::MouseDown(MouseDownEvent {
             button: MouseButton::Right,
@@ -58,6 +63,13 @@ fn parse(line: &str) -> Option<PlatformInput> {
             position,
             modifiers,
             click_count: 1,
+        }),
+        "scroll" => PlatformInput::Scroll(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.), px(extra?))),
+            modifiers,
+            touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         }),
         _ => return None,
     })

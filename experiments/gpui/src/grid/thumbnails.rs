@@ -9,6 +9,10 @@ use std::{
 pub struct Thumbnails {
     entries: HashMap<Resource, ImageCacheItem>,
     recent: VecDeque<Resource>,
+    /// Images a view outside the grid is showing, which stay decoded. Such a
+    /// view does not repaint as the grid scrolls, so if its image were
+    /// evicted it would go on drawing whatever took the freed texture.
+    pins: HashMap<&'static str, Resource>,
     pub hits: u64,
     pub loads: u64,
 }
@@ -28,12 +32,22 @@ impl Thumbnails {
         Self {
             entries: HashMap::new(),
             recent: VecDeque::new(),
+            pins: HashMap::new(),
             hits: 0,
             loads: 0,
         }
     }
 }
 impl Thumbnails {
+    /// Keeps the image a view shows from being evicted, replacing the one
+    /// it kept before. `None` releases it.
+    pub fn pin(&mut self, holder: &'static str, resource: Option<Resource>) {
+        match resource {
+            Some(resource) => self.pins.insert(holder, resource),
+            None => self.pins.remove(holder),
+        };
+    }
+
     /// Whether this thumbnail is decoded and ready to paint.
     pub fn is_loaded(&self, resource: &Resource) -> bool {
         self.entries
@@ -64,14 +78,25 @@ impl ImageCache for Thumbnails {
         if pending >= CONCURRENCY {
             return None;
         }
+        // Evict the least recently used images that no view has pinned.
+        let mut kept = Vec::new();
         while self.entries.len() >= CAPACITY {
-            let oldest = self.recent.pop_front()?;
+            let Some(oldest) = self.recent.pop_front() else {
+                break;
+            };
+            if self.pins.values().any(|pinned| *pinned == oldest) {
+                kept.push(oldest);
+                continue;
+            }
             if let Some(item) = self.entries.remove(&oldest)
                 && let Some(Ok(image)) = item.get()
             {
                 cx.drop_image(image, Some(window));
                 crate::stats::thumbnail_evicted();
             }
+        }
+        for pinned in kept.into_iter().rev() {
+            self.recent.push_front(pinned);
         }
         crate::stats::thumbnail_read();
         let item = ImageCacheItem::new(resource, cx);

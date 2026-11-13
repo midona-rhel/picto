@@ -90,6 +90,10 @@ impl Sidebar {
         if fade.read(cx).animating() || hint.read(cx).animating() {
             window.request_animation_frame();
         }
+        // The cover stays decoded however far the grid scrolls.
+        let pinned = cover.clone().map(|path| Resource::Path(path.into()));
+        self.thumbnails
+            .update(cx, |thumbnails, _| thumbnails.pin("library-cover", pinned));
         let avatar = match cover {
             Some(path) => img(path)
                 .image_cache(&self.thumbnails)
@@ -179,13 +183,14 @@ impl Sidebar {
                     .items_center()
                     .justify_center()
                     .child(avatar)
+                    // `.avatar::after`: the bevel that sets the cover into
+                    // the rail, darker at the top and lit along the bottom.
                     .child(
                         div()
                             .absolute()
                             .inset_0()
                             .rounded_full()
-                            .border_1()
-                            .border_color(theme.border_secondary()),
+                            .shadow(theme::avatar_bevel()),
                     ),
             )
             .child(

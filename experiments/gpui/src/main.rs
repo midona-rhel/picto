@@ -1,5 +1,6 @@
 mod assets;
 mod backend;
+mod cover;
 mod demo;
 mod grid;
 mod inspector;
@@ -91,6 +92,10 @@ fn main() {
             cx.text_system()
                 .add_fonts(vec![
                     std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto.ttf")),
+                    // Static weights cut from the same variable font, which
+                    // loads from memory at its default weight only.
+                    std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-Medium.ttf")),
+                    std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-SemiBold.ttf")),
                     std::borrow::Cow::Borrowed(include_bytes!("../assets/FiraMono.ttf")),
                 ])
                 .expect("load bundled inspector font");

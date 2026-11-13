@@ -58,6 +58,29 @@ pub enum Change {
     Viewer,
 }
 
+/// One step of Back and Forward.
+#[derive(Clone, Copy, PartialEq)]
+struct Visit {
+    scope: usize,
+    /// The viewer, opened on an item of this destination.
+    viewing: bool,
+}
+
+/// A destination's grid as it was left.
+struct SavedGrid {
+    items: Vec<RootSummary>,
+    total: u64,
+    cursor: Option<String>,
+    prefs: ViewPrefs,
+    tile: f32,
+    selection: std::collections::BTreeSet<usize>,
+    focus: Option<usize>,
+    scroll: f32,
+    /// The search and filter the results were for.
+    search_text: String,
+    filter: Option<FilterExpr>,
+}
+
 pub struct Session {
     sender: Sender<Request>,
     receiver: Receiver<Reply>,
@@ -68,9 +91,19 @@ pub struct Session {
     /// The destination shown in the grid and title; trails `scope` while the
     /// previous one fades out.
     pub displayed: usize,
-    /// Visited destinations, for Back and Forward.
-    history: Vec<usize>,
+    /// Visited places, for Back and Forward: each destination's grid, and
+    /// each item opened from one.
+    history: Vec<Visit>,
     history_index: usize,
+    /// What each destination's grid held when it was last left, so going
+    /// back shows it where it was.
+    saved: HashMap<usize, SavedGrid>,
+    /// A saved grid to show once the surface has faded out.
+    pending_restore: Option<SavedGrid>,
+    /// How far the grid is scrolled, which the grid reports as it paints.
+    pub grid_scroll: f32,
+    /// Where the grid should scroll to when it lays out the restored results.
+    pub restore_scroll: Option<f32>,
     pub transition: Transition,
     /// A destination's first page that arrived before the fade-out finished.
     pending_page: Option<(RootPage, ViewPrefs)>,
@@ -124,12 +157,10 @@ impl Session {
             }
         })
         .detach();
-        let library_cover = blobs.parent().and_then(|root| {
-            ["jpg", "png"]
-                .into_iter()
-                .map(|ext| root.join(format!(".picto-library-cover.{ext}")))
-                .find(|path| path.is_file())
-        });
+        let fixtures = crate::demo::fixtures().expect("create disposable media fixtures");
+        let library_cover = blobs
+            .parent()
+            .and_then(|library| crate::cover::prepare(library, fixtures.path()));
         Self {
             sender,
             receiver,
@@ -137,8 +168,15 @@ impl Session {
             tags: HashMap::new(),
             scope: 0,
             displayed: 0,
-            history: vec![0],
+            history: vec![Visit {
+                scope: 0,
+                viewing: false,
+            }],
             history_index: 0,
+            saved: HashMap::new(),
+            pending_restore: None,
+            grid_scroll: 0.,
+            restore_scroll: None,
             transition: Transition::Idle,
             pending_page: None,
             items: Vec::new(),
@@ -162,7 +200,7 @@ impl Session {
             filter: None,
             blobs,
             library_cover,
-            fixtures: crate::demo::fixtures().expect("create disposable media fixtures"),
+            fixtures,
         }
     }
 
@@ -179,6 +217,16 @@ impl Session {
 
     pub fn selected_item(&self) -> Option<&RootSummary> {
         self.items.get(self.focus?)
+    }
+
+    /// The details of the selected item, once they have arrived. `details`
+    /// itself keeps the previous item's until then, so the inspector never
+    /// shows an empty frame between two items.
+    pub fn selected_details(&self) -> Option<&RootDetails> {
+        let id = self.selected_item()?.root_id;
+        self.details
+            .as_ref()
+            .filter(|details| details.root.root_id == id)
     }
 
     // ── Results ─────────────────────────────────────────────────
@@ -283,7 +331,11 @@ impl Session {
                     self.details = Some(details);
                     cx.emit(Change::Details);
                 }
-                Reply::Changed => self.query(false, cx),
+                Reply::Changed => {
+                    // What other destinations held may no longer be true.
+                    self.saved.clear();
+                    self.query(false, cx)
+                }
                 Reply::Error(error) => {
                     self.error = Some(error);
                     self.loading = false;
@@ -331,13 +383,26 @@ impl Session {
     // ── Navigation ──────────────────────────────────────────────
 
     /// Opens a sidebar destination and records it for Back and Forward.
+    /// Choosing the destination already showing does nothing, unless the
+    /// viewer is over it, which this closes.
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.history.get(self.history_index) != Some(&index) {
-            self.history.truncate(self.history_index + 1);
-            self.history.push(index);
-            self.history_index = self.history.len() - 1;
+        if index == self.scope {
+            self.close_viewer(cx);
+            return;
         }
-        self.open(index, cx);
+        self.record(Visit {
+            scope: index,
+            viewing: false,
+        });
+        // A destination chosen afresh opens at its top.
+        self.open(index, None, cx);
+    }
+
+    /// Adds a place after the current one, dropping any Forward steps.
+    fn record(&mut self, visit: Visit) {
+        self.history.truncate(self.history_index + 1);
+        self.history.push(visit);
+        self.history_index = self.history.len() - 1;
     }
 
     pub fn can_step_history(&self, delta: isize) -> bool {
@@ -350,16 +415,92 @@ impl Session {
         let Some(target) = self.history_index.checked_add_signed(delta) else {
             return;
         };
-        if let Some(&index) = self.history.get(target) {
-            self.history_index = target;
-            self.open(index, cx);
+        let Some(&visit) = self.history.get(target) else {
+            return;
+        };
+        self.history_index = target;
+        if visit.scope == self.scope {
+            // The same destination: only the viewer opens or closes, and the
+            // grid stays where it was.
+            let viewing = visit.viewing && self.focus.is_some();
+            if self.viewer != viewing {
+                self.viewer = viewing;
+                cx.emit(Change::Viewer);
+            }
+            cx.emit(Change::Navigation);
+            return;
         }
+        // Another destination comes back as it was left, when nothing has
+        // changed what it would show.
+        let saved = self
+            .saved
+            .remove(&visit.scope)
+            .filter(|saved| saved.search_text == self.search_text && saved.filter == self.filter);
+        self.open(visit.scope, saved, cx);
     }
 
-    fn open(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// What the current grid holds, to return to.
+    fn save_grid(&mut self) {
+        if self
+            .nav
+            .get(self.displayed)
+            .is_none_or(|entry| entry.screen)
+            || self.items.is_empty()
+        {
+            return;
+        }
+        self.saved.insert(
+            self.displayed,
+            SavedGrid {
+                items: self.items.clone(),
+                total: self.total,
+                cursor: self.cursor.clone(),
+                prefs: self.prefs.clone(),
+                tile: self.tile,
+                selection: self.selection.clone(),
+                focus: self.focus,
+                scroll: self.grid_scroll,
+                search_text: self.search_text.clone(),
+                filter: self.filter.clone(),
+            },
+        );
+    }
+
+    /// Puts a saved grid on the hidden surface and fades it in.
+    fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
+        self.items = saved.items;
+        self.total = saved.total;
+        self.cursor = saved.cursor;
+        self.prefs = saved.prefs;
+        self.prefs_scope = Some(self.scope);
+        self.tile = saved.tile;
+        self.loading = false;
+        self.results_epoch += 1;
+        self.restore_scroll = Some(saved.scroll);
+        self.selection = saved.selection;
+        self.anchor = saved.focus;
+        self.displayed = self.scope;
+        self.transition = Transition::FadingIn(Instant::now());
+        self.focus_on(saved.focus, cx);
+        // An entry that was the viewer opens it again on the same item.
+        let viewing = self.history[self.history_index].viewing && self.focus.is_some();
+        if self.viewer != viewing {
+            self.viewer = viewing;
+            cx.emit(Change::Viewer);
+        }
+        cx.emit(Change::Navigation);
+        cx.emit(Change::Results);
+    }
+
+    fn open(&mut self, index: usize, saved: Option<SavedGrid>, cx: &mut Context<Self>) {
+        self.save_grid();
         self.scope = index;
         self.pending_page = None;
-        self.close_viewer(cx);
+        self.pending_restore = None;
+        if self.viewer {
+            self.viewer = false;
+            cx.emit(Change::Viewer);
+        }
         let screen = self.nav.get(index).is_some_and(|entry| entry.screen);
         self.transition = match self.transition {
             // Further clicks while the surface is fading out or already hidden
@@ -379,6 +520,16 @@ impl Session {
             self.loading = false;
             if matches!(self.transition, Transition::Waiting) {
                 self.commit_screen();
+            }
+        } else if let Some(saved) = saved {
+            // Nothing to fetch: the saved grid goes on once the surface is
+            // hidden, and a reply still on its way no longer applies.
+            self.generation += 1;
+            self.loading = false;
+            if matches!(self.transition, Transition::Waiting) {
+                self.restore_grid(saved, cx);
+            } else {
+                self.pending_restore = Some(saved);
             }
         } else {
             self.query(false, cx);
@@ -407,6 +558,8 @@ impl Session {
                     self.commit_screen();
                     cx.emit(Change::Results);
                     cx.emit(Change::Selection);
+                } else if let Some(saved) = self.pending_restore.take() {
+                    self.restore_grid(saved, cx);
                 } else if let Some((page, prefs)) = self.pending_page.take() {
                     self.apply_page(false, page, prefs, cx);
                 }
@@ -430,14 +583,24 @@ impl Session {
         self.details = None;
     }
 
-    /// Shows `index` in the inspector, or nothing.
+    /// Shows `index` in the inspector, or nothing. The previous item's
+    /// details stay up until this one's arrive, and choosing the item already
+    /// shown asks for nothing.
     fn focus_on(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
         self.demo = None;
-        self.member = 0;
-        self.details = None;
-        self.focus = index.filter(|index| *index < self.items.len());
-        if let Some(item) = self.selected_item() {
-            let _ = self.sender.send(Request::Details(item.root_id));
+        let index = index.filter(|index| *index < self.items.len());
+        let showing = self.selected_details().map(|details| details.root.root_id);
+        self.focus = index;
+        match self.selected_item().map(|item| item.root_id) {
+            Some(id) if showing == Some(id) => {}
+            Some(id) => {
+                self.member = 0;
+                let _ = self.sender.send(Request::Details(id));
+            }
+            None => {
+                self.member = 0;
+                self.details = None;
+            }
         }
         cx.emit(Change::Selection);
     }
@@ -522,23 +685,46 @@ impl Session {
 
     // ── Viewer ──────────────────────────────────────────────────
 
+    /// Opens the selected item. It is a place of its own: Back returns to
+    /// the grid it was opened from, where that was scrolled to.
     pub fn open_viewer(&mut self, cx: &mut Context<Self>) {
         if !self.viewer && self.focus.is_some() {
             self.viewer = true;
+            self.record(Visit {
+                scope: self.scope,
+                viewing: true,
+            });
             cx.emit(Change::Viewer);
+            cx.emit(Change::Navigation);
         }
     }
 
+    /// Returns to the grid. Closing an item opened from this grid is the
+    /// same as going back from it.
     pub fn close_viewer(&mut self, cx: &mut Context<Self>) {
-        if self.viewer {
-            self.viewer = false;
-            cx.emit(Change::Viewer);
+        if !self.viewer {
+            return;
         }
+        self.viewer = false;
+        let grid = Visit {
+            scope: self.scope,
+            viewing: false,
+        };
+        if self.history_index > 0 && self.history[self.history_index - 1] == grid {
+            self.history_index -= 1;
+        } else if self.history[self.history_index] != grid {
+            self.record(grid);
+        }
+        cx.emit(Change::Viewer);
+        cx.emit(Change::Navigation);
     }
 
     pub fn toggle_viewer(&mut self, cx: &mut Context<Self>) {
-        self.viewer = !self.viewer;
-        cx.emit(Change::Viewer);
+        if self.viewer {
+            self.close_viewer(cx)
+        } else {
+            self.open_viewer(cx)
+        }
     }
 
     pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {

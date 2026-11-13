@@ -247,8 +247,7 @@ impl Shell {
             (
                 session.selected_item().map(|item| item.name.clone()),
                 session
-                    .details
-                    .as_ref()
+                    .selected_details()
                     .and_then(|details| details.media.get(session.member))
                     .map(|media| media.file_path.clone()),
             )
@@ -595,6 +594,28 @@ impl Render for Shell {
             }
         }
         root = root.children(self.menu.clone());
+        // `.shellMac::after`: the window's rim, over everything. Top 25%
+        // white, sides 15%, bottom 10%; one border has one colour, so the
+        // bottom's goes all the way round and the others are laid over it.
+        let over = |alpha: f32| Rgba {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a: alpha,
+        };
+        let edge = || div().absolute().inset_0().rounded(px(theme::WINDOW_RADIUS));
+        root = root.child(
+            deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(edge().border_1().border_color(over(0.10)))
+                    // 1 − 0.9 × (1 − a) gives 0.15 at the sides, 0.25 on top.
+                    .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))
+                    .child(edge().border_t_1().border_color(over(0.1667))),
+            )
+            .with_priority(100),
+        );
         // Keep painting while a rail slides.
         if self.rails.animating() {
             window.request_animation_frame();

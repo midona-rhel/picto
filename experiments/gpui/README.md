@@ -81,6 +81,19 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The app owns titlebar dragging on macOS. The titlebar strips move the
   window and controls inside them do not, as the Electron shell's drag
   regions work.
+- Back and Forward step through places as a browser does. An opened item is
+  a place: Back returns to the grid it was opened from, scrolled where it
+  was. A destination gone back to shows what it held and where it was
+  scrolled; one chosen afresh opens at its top. Choosing the destination
+  already showing does nothing.
+- No empty frames while data is on its way: the inspector keeps the previous
+  item until the next one's details arrive, selecting the selected item asks
+  for nothing, and a destination's grid stays hidden behind its fade until
+  its first page is there.
+- The window's rim (`.shellMac::after`), the library cover cropped to the
+  frame stored beside it and set into the rail with its bevel, and Roboto's
+  medium and semibold as static files cut from the bundled variable font
+  (`assets/Roboto-*.ttf`, made with fontTools' instancer).
 - Toolbar with Back and Forward over visited destinations, zoom, Picto's own
   16px glyphs, and native editable search (selection, clipboard, IME). Fewer
   than three trimmed characters leave filtering off. Query generations prevent
@@ -119,11 +132,6 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - With nothing selected the inspector is empty; the Electron one describes
   the scope. With several items selected it shows the last one, not the
   stacked summary.
-- The inspector's section titles are regular weight. The bundled Roboto is a
-  variable font and only its default instance loads from memory, so the
-  semibold needs a static font file.
-- The Electron window has a one-pixel light rim that this window does not.
-  The library cover lacks its bevel and its focus and zoom crop.
 - Not in the grid yet: rubber-band selection, dragging items out or to
   reorder, the hover preview of the original, broken-thumbnail, font and
   audio tiles, inline rename, and the scope-specific empty states.
@@ -187,16 +195,18 @@ make sizes agree. `--shift` moves the candidate first, which tells a uniform
 offset from real differences.
 
 On 13 November 2026, at 1213×865 with the same item selected in both apps,
-4.7% of the window's pixels differed from the Electron capture by more than
-16 levels: titlebar buttons 2.4%, toolbar 2.4%, library header 7.2%, system
-rows 1.8%, section headers 2.5%, sidebar filter 4.3%, grid 5.3%, inspector
-fields 1.2%, inspector chips 4.9%. Part of that is state that differed (an
-enabled Back button, the pointer) and JPEG noise in the captures.
+4.4% of the window's pixels differed from the Electron capture by more than
+16 levels: titlebar buttons 0.2%, toolbar 0.2%, library header 1.1%, system
+rows 1.4%, section headers 2.2%, sidebar filter 1.6%, grid 5.2%, inspector
+fields 0.9%, inspector chips 4.3%, and the window's edges none. The grid's
+share is mostly originals the Electron grid loads for large tiles; part of
+the rest is state that differed and JPEG noise in the captures.
 
 `PICTO_GPUI_POINTER=<file or FIFO>` replays pointer events written to that
-file (`move X Y`, `down X Y`, `up X Y`, `rdown X Y`, `rup X Y`, in window
-points), so hover, pressed, tooltip and menu states can be captured without
-taking the real pointer. GPUI
+file (`move X Y`, `down X Y [clicks]`, `up X Y [clicks]`, `rdown X Y`,
+`rup X Y`, `scroll X Y DISTANCE`, in window points), so hover, pressed,
+tooltip, menu and navigation states can be checked without taking the real
+pointer. GPUI
 stops painting a window that is fully covered, so the window has to be
 visible. `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
 width, and `PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
