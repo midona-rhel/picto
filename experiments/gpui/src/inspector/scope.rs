@@ -404,10 +404,15 @@ impl Inspector {
             // `.collage`: 8px gaps between cells with 8px corners, each
             // showing its cover over the cover's colour.
             let cell = |cover: Option<&Cover>| {
+                // The cover is laid over the cell, so its own size cannot
+                // stretch the grid.
                 let mut cell = div()
+                    .relative()
                     .flex_1()
                     .min_w_0()
+                    .min_h_0()
                     .h_full()
+                    .overflow_hidden()
                     .rounded(px(theme::RADIUS_LG))
                     .bg(theme.contrast(5.));
                 if let Some(cover) = cover {
@@ -417,6 +422,8 @@ impl Inspector {
                     cell = cell.child(
                         img(cover.thumbnail.clone())
                             .image_cache(&self.thumbnails)
+                            .absolute()
+                            .inset_0()
                             .size_full()
                             .rounded(px(theme::RADIUS_LG))
                             .object_fit(ObjectFit::Cover),
