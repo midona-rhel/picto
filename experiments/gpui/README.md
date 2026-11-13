@@ -375,6 +375,13 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   sections, the inspector's tag prefixes, and the grid's default view and the
   `gridSpacing` fallback, which the grid reads again. Writes go to the
   disposable copy only.
+- Themes (`theme.rs`, from `tokens.css`): Auto, Light, Light Gray, Gray,
+  Dark, Blue and Purple, with the light themes' stronger borders, white
+  control surfaces, glass and softer panel shadows. A swatch shows its theme
+  in every window at once, as `previewTheme` does; Save & Close or Apply
+  keep it, and closing Settings without saving puts the saved one back. Auto
+  follows the system's appearance as it changes. Every window repaints.
+  The Zoom Level setting is saved and, as in production, not applied.
 - Shared form controls in `ui/`, each once, to the production CSS with their
   hover, pressed, focus and disabled states and timings: the Settings footer
   and inline buttons as looks of the one action button,
@@ -806,7 +813,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   printed).
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong (theme, zoom, language, the grid's wheel action, image rendering
+  belong (language, the grid's wheel action, image rendering
   and the transparency grid, notifications,
   imports, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
@@ -814,8 +821,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   localStorage.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
-  are downloaded and their storage) are drawn but not performed; every model
-  shows as not downloaded. Selects open by pointer only (no arrow keys or
+  are downloaded) are drawn but not performed; every model shows as not
+  downloaded, and only the storage they take is read (`ai.status`). An audio
+  tile's tint is the dark theme's in every theme, and the native
+  transparency themes (vibrancy, Liquid Glass, Mica, Acrylic) fall back to
+  Dark. Selects open by pointer only (no arrow keys or
   typeahead), there is no keyboard focus ring or tab order, the section
   headings' letter spacing is not drawn, the window can still be zoomed and
   made full screen, and a binding field cannot capture keys the app binds

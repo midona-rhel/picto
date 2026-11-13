@@ -168,6 +168,9 @@ impl SettingsWindow {
                 cx.listener(move |this, _, window, cx| {
                     this.capturing = Some((id, slot, None));
                     window.focus(&this.capture_focus, cx);
+                    // The window's root takes the focus on a press unless
+                    // told the press was handled.
+                    window.prevent_default();
                     cx.notify();
                 }),
             );
@@ -176,11 +179,19 @@ impl SettingsWindow {
         } else {
             input.text_color(theme.text())
         };
-        if listening.is_some() {
+        // The field chosen to listen holds the keyboard focus from the frame
+        // after the press; a focus handle no element tracks is let go.
+        let chosen = self
+            .capturing
+            .as_ref()
+            .is_some_and(|(at, on, _)| *at == id && *on == slot);
+        if chosen {
             input = input
-                .bg(theme.control_surface())
                 .track_focus(&self.capture_focus)
                 .on_key_down(cx.listener(Self::captured));
+        }
+        if listening.is_some() {
+            input = input.bg(theme.control_surface());
         }
         let mut wrap = div().relative().w_full().child(input);
         if !keys.is_empty() {
@@ -331,6 +342,8 @@ impl SettingsWindow {
                     .mb(px(8.))
                     .flex()
                     .text(theme::TEXT_SM)
+                    // Mantine's body `line-height: 1.55`.
+                    .line_height(px(theme::TEXT_SM * 1.55))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary())
                     .child(format!("{} ", group.name))
@@ -358,9 +371,13 @@ impl SettingsWindow {
                     .px(px(12.))
                     .overflow_hidden()
                     .child(
+                        // Mantine's body `line-height: 1.55` for both lines,
+                        // which overflow the 36px row evenly when there is a
+                        // description.
                         div()
                             .truncate()
                             .text(theme::TEXT_MD)
+                            .line_height(px(theme::TEXT_MD * 1.55))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text())
                             .child(item.label),
@@ -370,6 +387,7 @@ impl SettingsWindow {
                         div()
                             .truncate()
                             .text(theme::TEXT_CAPTION)
+                            .line_height(px(theme::TEXT_CAPTION * 1.55))
                             .text_color(theme.text_secondary())
                             .opacity(0.8)
                             .child(description),

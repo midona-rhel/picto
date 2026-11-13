@@ -381,16 +381,37 @@ impl RenderOnce for Field {
             div()
                 .size_full()
                 .pl(px(frame.left))
-                .pr(px(if clear && self.look != Look::TitlebarSearch {
-                    26.
-                } else {
-                    frame.right
-                }))
+                .pr(px(
+                    if clear && !matches!(self.look, Look::TitlebarSearch | Look::SettingsSearch) {
+                        26.
+                    } else {
+                        frame.right
+                    },
+                ))
                 // The input centres its line, so twice the drop above it.
                 .pt(px(2. * frame.drop))
                 .child(self.input.clone()),
         );
-        if clear && self.look == Look::TitlebarSearch {
+        if clear && self.look == Look::SettingsSearch {
+            // `type="search"`: Chromium's own cancel button, a bold cross
+            // 8.5px square centred 16.5px in from the right edge.
+            let input = self.input;
+            field = field.child(
+                div()
+                    .id("clear")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(12.))
+                    .w(px(9.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(super::icon("search-cancel", 8.5, theme.text()))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| input.update(cx, |input, cx| input.clear(cx))),
+            );
+        } else if clear && self.look == Look::TitlebarSearch {
             // `.titlebarSearch button`: 24px, 1px in from the right edge, with
             // its own hover fill.
             let input = self.input;

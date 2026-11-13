@@ -125,6 +125,11 @@ impl Shell {
             cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx));
         let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
+            // The "Auto" theme follows the system's appearance as it changes.
+            cx.observe_window_appearance(window, |_, _, cx| {
+                let scheme = crate::settings::current(cx).color_scheme.clone();
+                crate::theme::show(&scheme, cx);
+            }),
             cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
             cx.subscribe_in(
                 &grid,
