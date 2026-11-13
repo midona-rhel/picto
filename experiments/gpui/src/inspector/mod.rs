@@ -226,14 +226,10 @@ impl Inspector {
                 },
             ),
             cx.subscribe(&name, |this, _, event: &text_input::Committed, cx| {
-                this.session
-                    .read(cx)
-                    .rename(RootId(event.0 as u32), event.1.clone());
+                this.rename_item(RootId(event.0 as u32), event.1.clone(), cx);
             }),
             cx.subscribe(&notes, |this, _, event: &text_input::Committed, cx| {
-                this.session
-                    .read(cx)
-                    .set_notes(RootId(event.0 as u32), event.1.clone());
+                this.set_item_notes(RootId(event.0 as u32), event.1.clone(), cx);
             }),
             cx.subscribe(&scope.name, |this, _, event: &text_input::Committed, cx| {
                 this.commit_scope(event.0, Some(event.1.clone()), None, cx);
@@ -282,6 +278,7 @@ impl Inspector {
                         this.sync_item(true, cx);
                         cx.notify();
                     }
+                    Change::Edited => this.selection_edited(cx),
                     Change::Viewer => {
                         this.sync_item(false, cx);
                         this.ensure_summary(cx);
@@ -853,7 +850,7 @@ impl Inspector {
                             picto_library::Rating::ALL[if value == current { 0 } else { value }];
                         match target {
                             Rate::Item(id) => {
-                                this.session.read(cx).rate(id, next);
+                                this.rate_item(id, next, cx);
                                 // A pinned item is not the selection, whose
                                 // details the session reads back.
                                 if this.pinned {

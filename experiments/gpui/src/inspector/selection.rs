@@ -5,6 +5,7 @@
 use super::stack::{self, Stack};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
 use crate::grid::format;
+use crate::session::Reread;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, field::Look, text_input::TextInput};
@@ -221,22 +222,14 @@ impl Inspector {
             return;
         };
         let target = SelectionTarget::Explicit { root_ids: ids };
-        let job = self
-            .session
-            .read(cx)
-            .run(move |library| work(library, &target).map(|_| ()));
+        // The focused item was edited with the rest.
+        let job = self.session.update(cx, |session, cx| {
+            session.edit(move |library| work(library, &target), Reread::DETAILS, cx)
+        });
         cx.spawn(async move |this, cx| {
-            let Ok(result) = job.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                if let Err(error) = result {
-                    eprintln!("inspector: editing the selection failed: {error}");
-                }
-                // The focused item was edited with the rest.
-                this.session.read(cx).refresh_details();
-                this.reread_summary(cx);
-            });
+            if job.await.is_ok() {
+                let _ = this.update(cx, |this, cx| this.reread_summary(cx));
+            }
         })
         .detach();
     }

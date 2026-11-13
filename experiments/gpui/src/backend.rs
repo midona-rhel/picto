@@ -1,6 +1,6 @@
 use picto_library::predicate::{FilterClause, FilterExpr, TextField};
 use picto_library::query::{ItemScope, PageRequest, RootPage, RootQuery};
-use picto_library::{Library, RootDetails, RootId, TagRecord};
+use picto_library::{Library, TagRecord};
 use std::sync::{
     Arc,
     mpsc::{self, Receiver, Sender},
@@ -71,20 +71,10 @@ pub enum Request {
     Job(Job),
     /// Generation, scope, filter, cursor, and whether to shuffle.
     Query(u64, ItemScope, FilterExpr, Option<String>, bool),
-    Details(RootId),
-    Rate(RootId, picto_library::Rating),
-    Name(RootId, String),
-    Notes(RootId, String),
-    Lifecycle(Vec<RootId>, picto_library::Lifecycle),
-    Undo(RootId),
-    Redo(RootId),
 }
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
     Page(u64, bool, RootPage, crate::grid::prefs::ViewPrefs),
-    Details(RootId, RootDetails),
-    /// The results on screen may no longer be the scope's.
-    Changed,
     Error(String),
 }
 /// Whether a smart folder's filter has no rules, which makes it a group.
@@ -119,7 +109,7 @@ pub fn text_filter(text: &str) -> FilterExpr {
 }
 /// The sidebar's destinations in the Electron order: the system rows, then
 /// the folder tree, then the smart-folder tree; and the tags. Built when the
-/// library opens, and again after the sidebar edits a folder.
+/// library opens, and again whenever the library reports they changed.
 pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, Vec<TagRecord>)> {
     let counts = library.sidebar_counts()?;
     let tags = library.tags()?;
@@ -247,29 +237,11 @@ pub fn start(
             // One seed per session keeps a random sort stable while paging.
             let seed = crate::now_ms().to_string();
             for request in requests {
-                let request = match request {
+                let result = match request {
                     Request::Job(job) => {
                         job(library);
                         continue;
                     }
-                    other => other,
-                };
-                let result = match request {
-                    Request::Job(_) => unreachable!("jobs are run above"),
-                    Request::Name(id, name) => library
-                        .rename_root(id, &name, crate::now_ms())
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::Notes(id, notes) => library
-                        .set_notes(
-                            &picto_library::selection::SelectionTarget::Explicit {
-                                root_ids: vec![id],
-                            },
-                            Some(notes),
-                            crate::now_ms(),
-                        )
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
                     Request::Query(generation, scope, filter, cursor, shuffle) => {
                         let append = cursor.is_some();
                         // The scope's saved view decides the sort, exactly as it
@@ -332,32 +304,6 @@ pub fn start(
                                     .map(|page| Reply::Page(generation, append, page, prefs))
                             })
                     }
-                    Request::Rate(id, rating) => library
-                        .set_rating(
-                            &picto_library::selection::SelectionTarget::Explicit {
-                                root_ids: vec![id],
-                            },
-                            rating,
-                        )
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::Lifecycle(ids, lifecycle) => library
-                        .set_lifecycle(
-                            &picto_library::selection::SelectionTarget::Explicit { root_ids: ids },
-                            lifecycle,
-                        )
-                        .map(|_| Reply::Changed),
-                    Request::Undo(id) => library
-                        .undo()
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::Redo(id) => library
-                        .redo()
-                        .and_then(|_| library.details(id))
-                        .map(|details| Reply::Details(id, details)),
-                    Request::Details(id) => library
-                        .details(id)
-                        .map(|details| Reply::Details(id, details)),
                 };
                 replies.send(result.unwrap_or_else(|error| Reply::Error(error.to_string())))?;
             }

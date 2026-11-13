@@ -6,7 +6,7 @@ pub mod model;
 
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
-use crate::session::{Change, Session};
+use crate::session::{Change, Reread, Session};
 use crate::tags::Preferences;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -465,7 +465,9 @@ impl TagsScreen {
     ) {
         self.busy = true;
         self.error = None;
-        let answer = self.session.read(cx).run(work);
+        let answer = self
+            .session
+            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
         cx.spawn(async move |this, cx| {
             let result = answer
                 .await

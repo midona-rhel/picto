@@ -122,6 +122,8 @@ pub struct ColorEditor {
     value: Option<String>,
     delta_e: f32,
     sensitivity: bool,
+    /// The "no colour" swatch (`allowClear`).
+    clear: bool,
     settle: Option<Task<()>>,
     drag: Rc<Cell<Option<Drag>>>,
     _subscriptions: Vec<Subscription>,
@@ -166,10 +168,18 @@ impl ColorEditor {
             value,
             delta_e,
             sensitivity,
+            clear: true,
             settle: None,
             drag: Rc::new(Cell::new(None)),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Without the "no colour" swatch (`allowClear={false}`), for a colour
+    /// that must be one.
+    pub fn without_clear(mut self) -> Self {
+        self.clear = false;
+        self
     }
 
     /// Follows a colour set elsewhere, as the component's effect on `value`
@@ -460,7 +470,8 @@ impl Render for ColorEditor {
         }
         // `.presets`: "no colour" then the twelve, seven to a row.
         let none_active = self.value.is_none();
-        let mut swatches = vec![
+        let mut swatches = Vec::new();
+        swatches.extend(self.clear.then(|| {
             div()
                 .id("color-none")
                 .relative()
@@ -486,8 +497,8 @@ impl Render for ColorEditor {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.has_color = false;
                     this.commit_now(None, cx);
-                })),
-        ];
+                }))
+        }));
         for (index, preset) in PRESETS.into_iter().enumerate() {
             let active = self.shown == format!("#{preset:06X}");
             swatches.push(

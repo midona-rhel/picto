@@ -5,9 +5,10 @@
 //! saved after each change, 100 ms later, so the grid shows what they match,
 //! and Cancel writes the rules it opened with back.
 use super::rules::{self, Group, Rule, ValueType};
-use crate::session::Session;
+use crate::session::{Reread, Session};
 use crate::theme;
 use crate::theme::Text as _;
+use crate::ui::color_editor::{ColorCommitted, ColorEditor};
 use crate::ui::field::Look;
 use crate::ui::tag_token_input::{self, TagTokenInput};
 use crate::ui::text_input::{Submitted, TextInput};
@@ -50,6 +51,11 @@ impl EventEmitter<Event> for SmartFolderEditor {}
 const PREVIEW_DELAY: Duration = Duration::from_millis(100);
 /// `.rulesModal`: `min(760px, 100vw - 48px)`.
 const RULES_WIDTH: f32 = 760.;
+/// The pop-ups the dialog opens draw above it.
+const POPOVER_LAYER: usize = 20;
+/// `.colorPickerPopover`: its width and the height it is placed by.
+const COLOR_POPOVER_WIDTH: f32 = 230.;
+const COLOR_POPOVER_HEIGHT: f32 = 286.;
 
 /// One rule's editor: the rule and the fields its values are typed in.
 struct RuleRow {
@@ -57,8 +63,20 @@ struct RuleRow {
     value: Entity<TextInput>,
     value2: Entity<TextInput>,
     tags: Entity<TagTokenInput>,
-    color: Entity<TextInput>,
+    /// A colour rule's `#rrggbb`, chosen in its popover.
+    color: String,
+    /// Where the colour's trigger is, to open its popover under it.
+    color_trigger: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// `ColorRuleInput`'s open popover: the rule it edits and its editor.
+struct ColorPopover {
+    group: usize,
+    rule: usize,
+    editor: Entity<ColorEditor>,
+    trigger: Bounds<Pixels>,
+    _subscription: Subscription,
 }
 
 struct GroupRows {
@@ -87,6 +105,7 @@ pub struct SmartFolderEditor {
     /// The icon picker's popover, and the trigger it opens under.
     icon_picker: Option<Entity<ui::icon_picker::IconPicker>>,
     icon_trigger: Rc<Cell<Bounds<Pixels>>>,
+    color_popover: Option<ColorPopover>,
     preview: Option<Task<()>>,
     /// Closing waits for the rules it opened with to be written back.
     closing: bool,
@@ -188,6 +207,7 @@ impl SmartFolderEditor {
             focus,
             icon_picker: None,
             icon_trigger: Rc::new(Cell::new(Bounds::default())),
+            color_popover: None,
             preview: None,
             closing: false,
             _subscriptions: subscriptions,
@@ -228,28 +248,17 @@ impl SmartFolderEditor {
             rule.value.clone(),
             match rules::field(rule.field).kind {
                 ValueType::FileSize => "Size",
-                ValueType::Date => "YYYY-MM-DD",
                 _ => "Value",
             },
             cx,
         );
-        let value2 = field(
-            rule.value2.clone().unwrap_or_default(),
-            match rules::field(rule.field).kind {
-                ValueType::Date => "YYYY-MM-DD",
-                _ => "Max",
-            },
-            cx,
-        );
-        let color = field(
-            rule.values
-                .first()
-                .cloned()
-                .filter(|_| rule.field == "color")
-                .unwrap_or("#808080".into()),
-            "#808080",
-            cx,
-        );
+        let value2 = field(rule.value2.clone().unwrap_or_default(), "Max", cx);
+        let color = rule
+            .values
+            .first()
+            .cloned()
+            .filter(|_| rule.field == "color")
+            .unwrap_or("#808080".into());
         let search = crate::tags::token_search(self.session.clone());
         let values = if rule.field == "tags" {
             rule.values.clone()
@@ -262,7 +271,7 @@ impl SmartFolderEditor {
                 this.changed(cx)
             }),
         ];
-        for input in [&value, &value2, &color] {
+        for input in [&value, &value2] {
             subscriptions.extend(watch_input(input, window, cx));
         }
         RuleRow {
@@ -271,6 +280,7 @@ impl SmartFolderEditor {
             value2,
             tags,
             color,
+            color_trigger: Rc::new(Cell::new(Bounds::default())),
             _subscriptions: subscriptions,
         }
     }
@@ -308,7 +318,7 @@ impl SmartFolderEditor {
                         rule.value2 = rule.value2.as_ref().map(|_| row.value2.read(cx).value());
                         rule.values = match rule.field {
                             "tags" => row.tags.read(cx).values().to_vec(),
-                            "color" => vec![row.color.read(cx).value()],
+                            "color" => vec![row.color.clone()],
                             _ => Vec::new(),
                         };
                         rule
@@ -384,13 +394,13 @@ impl SmartFolderEditor {
             let Ok(Ok(input)) = this.update(cx, |this, cx| this.input(cx)) else {
                 return;
             };
-            let answer = session.update(cx, |session, _| {
-                session.run(move |library| library.update_smart_folder(id, input).map(|_| ()))
+            let _ = session.update(cx, |session, cx| {
+                session.edit(
+                    move |library| library.update_smart_folder(id, input),
+                    Reread::RESULTS_ONLY,
+                    cx,
+                )
             });
-            if let Ok(Err(error)) = answer.await {
-                eprintln!("smart folder preview: {error}");
-            }
-            let _ = session.update(cx, |session, cx| session.reload(cx));
         }));
     }
 
@@ -411,19 +421,19 @@ impl SmartFolderEditor {
             return;
         };
         self.closing = true;
-        let answer = self
-            .session
-            .read(cx)
-            .run(move |library| library.update_smart_folder(id, original).map(|_| ()));
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit(
+                move |library| library.update_smart_folder(id, original),
+                Reread::RESULTS_ONLY,
+                cx,
+            )
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = answer.await;
             let _ = this.update(cx, |this, cx| {
                 this.closing = false;
                 match result {
-                    Ok(Ok(())) => {
-                        this.presence.close();
-                        this.session.update(cx, |session, cx| session.reload(cx));
-                    }
+                    Ok(Ok(_)) => this.presence.close(),
                     // The previewed rules are still saved, so the dialog stays.
                     Ok(Err(error)) => {
                         this.error = Some(format!("Could not restore smart folder rules: {error}"))
@@ -454,24 +464,26 @@ impl SmartFolderEditor {
             Target::Create { .. } => None,
             Target::Edit { id, .. } => Some(*id),
         };
-        let answer = self.session.read(cx).run(move |library| {
-            let result = match target {
-                Some(id) => library.update_smart_folder(id, input).map(|_| id),
-                None => library.create_smart_folder(input).map(|(id, _)| id),
-            };
-            (result, crate::backend::navigation(library))
+        // A created folder is revealed in the sidebar, which needs it among
+        // the destinations at once.
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit(
+                move |library| match target {
+                    Some(id) => library.update_smart_folder(id, input).map(|_| id),
+                    None => library.create_smart_folder(input).map(|(id, _)| id),
+                },
+                Reread {
+                    navigation: true,
+                    ..Reread::RESULTS_ONLY
+                },
+                cx,
+            )
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Ok((result, navigation)) = answer.await else {
+            let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                if let Ok((nav, tags)) = navigation {
-                    this.session.update(cx, |session, cx| {
-                        session.replace_navigation(nav, tags, cx);
-                        session.reload(cx);
-                    });
-                }
                 match result {
                     Ok(id) => {
                         if target.is_none() {
@@ -567,6 +579,63 @@ impl SmartFolderEditor {
         self.changed(cx);
     }
 
+    /// A date rule's day, from its picker.
+    fn set_date(&mut self, group: usize, rule: usize, second: bool, day: String, cx: &mut App) {
+        let Some(row) = self
+            .groups
+            .get(group)
+            .and_then(|group| group.rules.get(rule))
+        else {
+            return;
+        };
+        let input = if second { &row.value2 } else { &row.value };
+        // The field's observer previews the change.
+        input.update(cx, |input, cx| input.set_text(day, cx));
+    }
+
+    /// Opens the colour popover under a colour rule's trigger, or closes it
+    /// when it is open there.
+    fn toggle_color(&mut self, group: usize, rule: usize, cx: &mut Context<Self>) {
+        if self
+            .color_popover
+            .take()
+            .is_some_and(|open| (open.group, open.rule) == (group, rule))
+        {
+            cx.notify();
+            return;
+        }
+        let Some(row) = self
+            .groups
+            .get(group)
+            .and_then(|group| group.rules.get(rule))
+        else {
+            return;
+        };
+        let (color, trigger) = (row.color.clone(), row.color_trigger.get());
+        let editor = cx.new(|cx| ColorEditor::new(Some(color), 0., false, cx).without_clear());
+        let subscription = cx.subscribe(&editor, move |this, _, event: &ColorCommitted, cx| {
+            let ColorCommitted(Some(color), _) = event else {
+                return;
+            };
+            if let Some(row) = this
+                .groups
+                .get_mut(group)
+                .and_then(|group| group.rules.get_mut(rule))
+            {
+                row.color = color.clone();
+                this.changed(cx);
+            }
+        });
+        self.color_popover = Some(ColorPopover {
+            group,
+            rule,
+            editor,
+            trigger,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
     fn add_rule(
         &mut self,
         group: usize,
@@ -585,6 +654,7 @@ impl SmartFolderEditor {
     }
 
     fn remove_rule(&mut self, group: usize, rule: usize, cx: &mut Context<Self>) {
+        self.color_popover = None;
         if let Some(group) = self.groups.get_mut(group)
             && group.rules.len() > 1
             && rule < group.rules.len()
@@ -604,6 +674,7 @@ impl SmartFolderEditor {
     }
 
     fn remove_group(&mut self, group: usize, cx: &mut Context<Self>) {
+        self.color_popover = None;
         if self.groups.len() > 1 && group < self.groups.len() {
             self.groups.remove(group);
         }
@@ -697,7 +768,6 @@ impl SmartFolderEditor {
         can_remove: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = theme::theme(cx);
         let rule = &row.rule;
         let def = rules::field(rule.field);
         let between = rule.op == "between";
@@ -752,30 +822,7 @@ impl SmartFolderEditor {
         let value = row.value.read(cx).value();
         let value_element: AnyElement = match def.kind {
             ValueType::Tags => row.tags.clone().into_any_element(),
-            ValueType::Color => {
-                let hex = row.color.read(cx).value();
-                // TODO: open the colour editor popover (`ColorFilterEditor`)
-                // from the swatch; the hex is typed here instead.
-                div()
-                    .h(px(theme::CONTROL_SM))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .child(
-                        div()
-                            .size(px(14.))
-                            .flex_none()
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(rgba(theme::COLOR_SWATCH_RING))
-                            .bg(theme::parse_hex(&hex)
-                                .map(rgb)
-                                .unwrap_or(theme.text_tertiary())),
-                    )
-                    .child(text_field(&row.color, "color"))
-                    .into_any_element()
-            }
+            ValueType::Color => self.color_trigger(group, index, row, cx).into_any_element(),
             ValueType::Select => choice(
                 Slot::Value,
                 if value.is_empty() {
@@ -840,19 +887,31 @@ impl SmartFolderEditor {
                 })
                 .children(def.unit.map(|unit| inline_label(unit, cx)))
                 .into_any_element(),
-            // TODO: the date picker button (`DatePickerButton`); the date is
-            // typed as YYYY-MM-DD here.
-            ValueType::Date => div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(text_field(&row.value, "date"))
-                .when(between, |row_element| {
-                    row_element
-                        .child(and())
-                        .child(text_field(&row.value2, "date2"))
-                })
-                .into_any_element(),
+            ValueType::Date => {
+                let date = |second: bool, input: &Entity<TextInput>, name: &str| {
+                    let entity = entity.clone();
+                    div().flex_1().min_w_0().child(
+                        ui::date_picker::date_picker(key(name), input.read(cx).value())
+                            .layer(POPOVER_LAYER)
+                            .on_change(move |day, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.set_date(group, index, second, day, cx)
+                                });
+                            }),
+                    )
+                };
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(date(false, &row.value, "date"))
+                    .when(between, |row_element| {
+                        row_element
+                            .child(and())
+                            .child(date(true, &row.value2, "date2"))
+                    })
+                    .into_any_element()
+            }
             ValueType::Text => text_field(&row.value, "text").into_any_element(),
         };
         let remove = condition_button(key("remove"), false, "Remove rule", can_remove, cx).when(
@@ -1065,6 +1124,121 @@ impl SmartFolderEditor {
             }))
     }
 
+    /// `ColorRuleInput`'s trigger (`.colorTrigger`): the swatch and the code
+    /// in capitals, which opens the colour popover.
+    fn color_trigger(
+        &self,
+        group: usize,
+        index: usize,
+        row: &RuleRow,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = theme::theme(cx);
+        let bounds = row.color_trigger.clone();
+        let swatch = theme::parse_hex_code(&row.color)
+            .map(rgb)
+            .unwrap_or(theme.text_tertiary());
+        div()
+            .id(SharedString::from(format!("rule-{group}-{index}-color")))
+            .relative()
+            .w_full()
+            .h(px(theme::CONTROL_SM))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(7.))
+            .rounded(px(theme::RADIUS_MD))
+            .border_1()
+            .border_color(theme.text_at(14.))
+            .bg(theme.control_surface())
+            .text_color(theme.text())
+            .cursor_pointer()
+            .hover(move |style| {
+                style
+                    .border_color(theme.text_at(22.))
+                    .bg(theme.surface_hover())
+            })
+            .child(
+                // `.colorSwatch`
+                div()
+                    .size(px(14.))
+                    .flex_none()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(rgba(theme::COLOR_SWATCH_RING))
+                    .bg(swatch)
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(1.), rgba(0xffffff2e).into()).inset(),
+                    ]),
+            )
+            .child(
+                // `.colorValue`
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(theme::FONT_MONO)
+                    .text(theme::TEXT_SM)
+                    .child(row.color.to_uppercase()),
+            )
+            .child(
+                canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_color(group, index, cx)))
+    }
+
+    /// `.colorPickerPopover`: the colour editor, 230px wide below the
+    /// trigger (above it without room), over a backdrop that closes it.
+    fn color_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self.color_popover.as_ref()?;
+        let theme = theme::theme(cx);
+        let viewport = window.viewport_size();
+        let (left, top) = ui::date_picker::place_sized(
+            open.trigger,
+            viewport,
+            COLOR_POPOVER_WIDTH,
+            COLOR_POPOVER_HEIGHT,
+        );
+        Some(
+            deferred(
+                anchored().position(point(px(0.), px(0.))).child(
+                    div()
+                        .id("color-popover-backdrop")
+                        .occlude()
+                        .w(viewport.width)
+                        .h(viewport.height)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, _, cx| {
+                                this.color_popover = None;
+                                cx.notify();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .id("color-popover")
+                                .absolute()
+                                .left(px(left))
+                                .top(px(top))
+                                .w(px(COLOR_POPOVER_WIDTH))
+                                .min_h(px(COLOR_POPOVER_HEIGHT))
+                                .p(px(7.))
+                                .rounded(px(theme::RADIUS_LG))
+                                .bg(theme.glass())
+                                .border_t_1()
+                                .border_color(theme.glass_border_top())
+                                .shadow(theme::panel_shadow())
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(open.editor.clone()),
+                        ),
+                ),
+            )
+            .with_priority(POPOVER_LAYER)
+            .into_any_element(),
+        )
+    }
+
     /// The icon picker's popover: 260×308 below the trigger, kept on screen,
     /// over a backdrop that closes it.
     fn icon_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1106,7 +1280,7 @@ impl SmartFolderEditor {
                         ),
                 ),
             )
-            .with_priority(20)
+            .with_priority(POPOVER_LAYER)
             .into_any_element(),
         )
     }
@@ -1218,6 +1392,9 @@ impl Render for SmartFolderEditor {
             let available = f32::from(window.viewport_size().width) - 48.;
             dialog = dialog.width(RULES_WIDTH.min(available));
         }
-        div().child(dialog).children(self.icon_popover(window, cx))
+        div()
+            .child(dialog)
+            .children(self.icon_popover(window, cx))
+            .children(self.color_popover(window, cx))
     }
 }

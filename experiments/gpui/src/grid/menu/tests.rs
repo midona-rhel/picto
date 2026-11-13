@@ -1,8 +1,8 @@
 //! The cases of `gridContextMenu.test.tsx`, and the full row order for the
 //! selections the grid, the viewer and the preview open the menu on.
 use super::{
-    Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Playback, Row, ScopeKind,
-    Status, Surface, empty_menu, preview_menu, tile_menu, viewer_menu,
+    Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Panel, Playback, Row,
+    ScopeKind, Status, Surface, empty_menu, preview_menu, tile_menu, viewer_menu,
 };
 
 /// The row that shows the file in the system's file manager.
@@ -55,6 +55,8 @@ fn labels(rows: &[Row]) -> Vec<String> {
             Row::Item(item) => item.label.clone(),
             Row::Separator => "-".to_owned(),
             Row::Submenu { label, .. } => format!("{label} >"),
+            Row::Panel(Panel::Layout) => "[view panel]".to_owned(),
+            Row::Panel(Panel::Display) => "[display panel]".to_owned(),
         })
         .collect()
 }
@@ -234,12 +236,14 @@ fn empty_space_offers_creation_and_import() {
             "Import Folder...",
             "Paste Import",
             "-",
-            "Layout >",
-            "Sort by >",
+            "[view panel]",
             "-",
             "Display >",
         ]
     );
+    // `buildContextMenuViewEntries`: the display switches are a panel of
+    // their own inside "Display".
+    assert_eq!(labels(children(&rows, "Display")), ["[display panel]"]);
     // Another import running blocks the three import rows.
     d.import_blocked = true;
     let rows = empty(&d);
@@ -268,7 +272,6 @@ fn no_creation_in_smart_folder_results() {
 #[test]
 fn empty_space_in_a_folder_sorts_its_contents() {
     let mut d = empty_space(Some(ScopeKind::Folder));
-    d.fixed_order = true;
     d.handlers.sort_contents = true;
     let rows = empty(&d);
     let size = find(children(&rows, "Sort by"), "Size").unwrap();
@@ -284,10 +287,11 @@ fn empty_space_in_a_folder_sorts_its_contents() {
             "Notes"
         ]
     );
-    // A folder keeps its own order, so the view panel offers no sort.
+    // The folder's own sort, then the view panel (which offers no sort of
+    // the view in a folder).
     assert_eq!(
         labels(&rows),
-        ["Sort by >", "-", "Layout >", "-", "Display >"]
+        ["Sort by >", "-", "[view panel]", "-", "Display >"]
     );
 }
 
@@ -296,7 +300,6 @@ fn a_selection_in_a_folder_can_sort_its_contents() {
     let mut d = single("hash");
     d.single_kind = Some(Kind::Media);
     d.scope = Some(ScopeKind::Folder);
-    d.fixed_order = true;
     d.handlers.sort_contents = true;
     let rows = tile(&d);
     assert_eq!(
@@ -317,6 +320,7 @@ fn the_viewer_offers_no_sorting_or_view_options() {
     let rows = tile(&d);
     assert!(!has_submenu(&rows, "Sort by"));
     assert!(!has_submenu(&rows, "Display"));
+    assert!(!rows.iter().any(|row| matches!(row, Row::Panel(_))));
     assert!(find(&rows, "Grayscale").is_none());
 }
 
@@ -666,8 +670,7 @@ fn one_picture_in_all_has_every_row_in_order() {
             REVEAL,
             "Open in New Window",
             "-",
-            "Layout >",
-            "Sort by >",
+            "[view panel]",
             "-",
             "Display >",
             "Grayscale",

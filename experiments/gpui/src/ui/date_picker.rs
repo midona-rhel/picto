@@ -27,6 +27,7 @@ pub struct DatePicker {
     id: ElementId,
     value: SharedString,
     on_change: Option<ChangeHandler>,
+    layer: usize,
 }
 
 pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> DatePicker {
@@ -34,10 +35,17 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
         id: id.into(),
         value: value.into(),
         on_change: None,
+        layer: 3,
     }
 }
 
 impl DatePicker {
+    /// The calendar's drawing order, above a dialog the picker sits in.
+    pub fn layer(mut self, priority: usize) -> Self {
+        self.layer = priority;
+        self
+    }
+
     /// Called with the day chosen, or an empty key for Clear.
     pub fn on_change(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -68,17 +76,28 @@ fn add_months(month: NaiveDate, delta: i32) -> NaiveDate {
 /// `.popover`'s place: under the button's left edge, kept 8px inside the
 /// window, or above the button when it does not fit below.
 pub fn place(button: Bounds<Pixels>, viewport: Size<Pixels>) -> (f32, f32) {
+    place_sized(button, viewport, WIDTH, HEIGHT)
+}
+
+/// [`place`] for a popover of another size, as the smart-folder rules'
+/// colour popover is placed the same way.
+pub fn place_sized(
+    button: Bounds<Pixels>,
+    viewport: Size<Pixels>,
+    popover_width: f32,
+    popover_height: f32,
+) -> (f32, f32) {
     let (left, top, bottom) = (
         f32::from(button.left()),
         f32::from(button.top()),
         f32::from(button.bottom()),
     );
     let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
-    let x = left.min(width - WIDTH - MARGIN).max(MARGIN);
-    let y = if bottom + HEIGHT <= height - MARGIN {
+    let x = left.min(width - popover_width - MARGIN).max(MARGIN);
+    let y = if bottom + popover_height <= height - MARGIN {
         bottom + 5.
     } else {
-        (top - HEIGHT - 5.).max(MARGIN)
+        (top - popover_height - 5.).max(MARGIN)
     };
     (x, y)
 }
@@ -414,14 +433,14 @@ impl RenderOnce for DatePicker {
                             .child(popover),
                     ),
             )
-            .with_priority(3),
+            .with_priority(self.layer),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{add_months, calendar_days, parse_day, place};
+    use super::{add_months, calendar_days, parse_day, place, place_sized};
     use chrono::NaiveDate;
     use gpui::{Bounds, point, px, size};
 
@@ -461,5 +480,9 @@ mod tests {
         assert_eq!(place(button, viewport), (1000. - 278. - 8., 131.));
         let low = Bounds::new(point(px(20.), px(700.)), size(px(140.), px(26.)));
         assert_eq!(place(low, viewport), (20., 700. - 340. - 5.));
+        // A smaller popover (the rules' colour, 230×286) fits below there.
+        let middle = Bounds::new(point(px(20.), px(480.)), size(px(140.), px(26.)));
+        assert_eq!(place_sized(middle, viewport, 230., 286.), (20., 511.));
+        assert_eq!(place(middle, viewport), (20., 480. - 340. - 5.));
     }
 }
