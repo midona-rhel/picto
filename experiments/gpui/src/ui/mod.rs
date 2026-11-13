@@ -30,7 +30,7 @@ use crate::theme::Text as _;
 use gpui::*;
 
 /// A monochrome glyph from the embedded icon set.
-pub fn icon(name: &'static str, size: f32, color: impl Into<Hsla>) -> Svg {
+pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Svg {
     svg().path(name).size(px(size)).text_color(color.into())
 }
 

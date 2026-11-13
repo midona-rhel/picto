@@ -56,6 +56,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   fold their section. The filter keeps each matching folder with its
   ancestors and opens every branch. Random shuffles the All scope with one
   seed per session.
+- Smart-folder groups (a smart folder with no rules) as the Electron sidebar
+  shows them: the grid glyph, no count, and a click that folds the group
+  rather than opening it. Folders and smart folders show the icon and colour
+  the user chose, from the icon picker's registry (`assets/Icon*.svg`).
 - Hover and pressed states from the Electron styles, with their timings: icon
   buttons (hover, pressed, toggled, disabled), sidebar rows and section
   headers (title pill, chevron, add button), the library switcher's highlight,
@@ -135,9 +139,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Not in the grid yet: rubber-band selection, dragging items out or to
   reorder, the hover preview of the original, broken-thumbnail, font and
   audio tiles, inline rename, and the scope-specific empty states.
-- Not in the sidebar yet: the Subscriptions activity dot, smart-folder groups
-  and custom folder icons and colours, rename in place, context menus,
-  multi-selection and drag reorder.
+- Not in the sidebar yet: the Subscriptions activity dot, rename in place,
+  context menus, multi-selection and drag reorder.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.

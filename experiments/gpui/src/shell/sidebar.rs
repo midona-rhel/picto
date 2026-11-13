@@ -326,11 +326,18 @@ impl Render for Sidebar {
             let has_children =
                 (0..entries.len()).any(|other| entries[other].parent == Some(index) && kept[other]);
             let expanded = filtering || !self.collapsed.contains(&index);
-            let icon = entry.icon.unwrap_or(match entry.scope {
-                ItemScope::SmartFolder { .. } if entry.parent.is_none() => "layout-grid",
-                _ if has_children && expanded => "folder-open",
-                _ => "folder",
-            });
+            let group = entry.group;
+            // `NodeIcon`: the glyph the user chose, else the group's grid, else
+            // a folder that opens with its branch. A name the icon picker no
+            // longer has falls back to the folder.
+            let icon = match &entry.icon {
+                Some(name) if slot.is_none() || crate::assets::has_icon(name) => name.as_str(),
+                Some(_) => "folder",
+                None if entry.group => "layout-grid",
+                None if has_children && expanded => "folder-open",
+                None => "folder",
+            }
+            .to_owned();
             // Each ancestor's vertical guide continues through this row while
             // that ancestor has siblings still to come.
             let mut continues = vec![false; entry.depth];
@@ -344,6 +351,7 @@ impl Render for Sidebar {
             }
             let mut row = ui::sidebar_row(index, icon, entry.label.clone())
                 .depth(entry.depth)
+                .tint(entry.tint.map(rgb))
                 .count(entry.count)
                 .active(active == index)
                 .disclosure(has_children.then_some(expanded))
@@ -352,6 +360,14 @@ impl Render for Sidebar {
                     last_child: !has_next_sibling(index),
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    // A group is not a destination: a click folds or opens it.
+                    if group {
+                        if has_children && !filtering && !this.collapsed.remove(&index) {
+                            this.collapsed.insert(index);
+                        }
+                        cx.notify();
+                        return;
+                    }
                     this.session
                         .update(cx, |session, cx| session.navigate(index, cx));
                 }));
