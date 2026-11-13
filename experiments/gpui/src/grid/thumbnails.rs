@@ -13,7 +13,8 @@ pub struct Thumbnails {
     pub loads: u64,
 }
 const CAPACITY: usize = 192;
-const CONCURRENCY: usize = 4;
+/// `thumbnailDecodeWorker.ts` runs six loads at once.
+const CONCURRENCY: usize = 6;
 impl Thumbnails {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.on_release(|cache, cx| {

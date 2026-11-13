@@ -37,6 +37,17 @@ icons!(
     "copy",
     "settings",
     "selector",
+    "x",
+    "pin",
+    "pin-filled",
+    "link",
+    "star",
+    "star-filled",
+    "arrow-up",
+    "chevron-section",
+    "plus",
+    // Picto's own sidebar disclosure triangle (a 7×5 CSS border triangle).
+    "triangle-down",
     // Picto's own 16px toolbar glyphs, from src/shared/ui/icons/toolbar-icons.tsx.
     "toolbar-filter",
     "toolbar-layout",
@@ -45,6 +56,13 @@ icons!(
     "history-forward",
     "toolbar-plus",
     "toolbar-minus",
+    "inspector-remove",
+    "inspector-add",
+    "inspector-export",
+    // The group glyph of src/shared/ui/icons/group-icons.tsx.
+    "group",
+    // The grid's hover magnifier, as CanvasGrid.tsx draws it.
+    "magnifier",
 );
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {

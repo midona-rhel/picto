@@ -4898,6 +4898,9 @@ name = "picto-gpui-spike"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
  "futures",
  "gpui-pre",
  "gpui-pre-platform",

@@ -1,16 +1,31 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
 //! Electron frontend. Views compose these and style nothing themselves.
+mod action_row;
+mod chip;
+pub mod field;
 mod icon_button;
+mod panel_section;
+mod scroll_to_top;
 pub mod scrollbar;
-mod sidebar_row;
+mod section_header;
+pub mod sidebar_row;
 pub mod text_input;
+pub mod tooltip;
 pub mod zoom;
 
+pub use action_row::action_row;
+pub use chip::chip;
+pub use field::field;
 pub use icon_button::icon_button;
+pub use panel_section::panel_section;
+pub use scroll_to_top::scroll_to_top;
 pub use scrollbar::scrollbar;
+pub use section_header::section_header;
 pub use sidebar_row::sidebar_row;
+pub use tooltip::tip;
 
 use crate::theme;
+use crate::theme::Text as _;
 use gpui::*;
 
 /// A monochrome glyph from the embedded icon set.
@@ -72,31 +87,15 @@ pub fn badge(padding: f32) -> Div {
     div()
         .absolute()
         .h(px(18.))
-        .px(px(padding))
+        // The 1px border is part of the padding: the box is text + 2 × padding.
+        .px(px((padding - 1.).max(0.)))
         .flex()
         .items_center()
         .rounded(px(theme::TILE_RADIUS))
         .bg(rgba(theme::BADGE_BACKGROUND))
         .border_1()
         .border_color(rgba(theme::BADGE_BORDER))
-        .text_size(px(theme::TEXT_XS))
+        .text(theme::TEXT_XS)
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgba(theme::BADGE_TEXT))
-}
-
-/// A sidebar section title, with its item count when it has any.
-pub fn section_header(label: &'static str, count: usize, cx: &App) -> Div {
-    let mut header = div()
-        .pl(px(theme::SIDEBAR_INSET + theme::SIDEBAR_SECTION_INSET))
-        .mt(px(8.))
-        .h(px(24.))
-        .flex()
-        .items_center()
-        .text_size(px(theme::TEXT_SM))
-        .text_color(theme::theme(cx).text_tertiary())
-        .child(label);
-    if count > 0 {
-        header = header.child(format!("({count})"));
-    }
-    header
 }

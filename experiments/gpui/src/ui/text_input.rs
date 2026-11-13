@@ -46,8 +46,49 @@ pub struct TextInput {
     is_selecting: bool,
     field_key: Option<picto_library::RootId>,
     original: SharedString,
-    inspector: bool,
+    kind: Kind,
+    /// How far the text is scrolled left to keep the caret in view.
+    scroll: Pixels,
+    /// When the caret last moved; it shows for 500 ms from then, and blinks.
+    blink: std::time::Instant,
+    blink_task: Option<gpui::Task<()>>,
 }
+
+/// Which of the app's text fields this is, which decides its type. The frame
+/// around it (fill, border, padding) is `ui::field`.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    /// The toolbar search.
+    Search,
+    /// The sidebar's tree filter.
+    Sidebar,
+    /// The inspector's name and notes.
+    Inspector,
+}
+
+impl Kind {
+    fn font(self) -> &'static str {
+        match self {
+            Kind::Search => crate::theme::FONT_UI,
+            Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
+        }
+    }
+    fn size(self) -> f32 {
+        match self {
+            Kind::Search => crate::theme::TEXT_SM,
+            Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+        }
+    }
+    fn line_height(self) -> f32 {
+        match self {
+            Kind::Search => 22.,
+            Kind::Sidebar => 26.,
+            Kind::Inspector => 20.,
+        }
+    }
+}
+
+const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
 pub struct Committed(pub picto_library::RootId, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
 
@@ -162,6 +203,7 @@ impl TextInput {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.blink = std::time::Instant::now();
         cx.notify()
     }
 
@@ -188,7 +230,7 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
-        line.closest_index_for_x(position.x - bounds.left())
+        line.closest_index_for_x(position.x - bounds.left() + self.scroll)
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -201,6 +243,7 @@ impl TextInput {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        self.blink = std::time::Instant::now();
         cx.notify()
     }
 
@@ -315,6 +358,7 @@ impl EntityInputHandler for TextInput {
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.blink = std::time::Instant::now();
         cx.notify();
     }
 
@@ -360,11 +404,11 @@ impl EntityInputHandler for TextInput {
         let range = self.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
             point(
-                bounds.left() + last_layout.x_for_index(range.start),
+                bounds.left() + last_layout.x_for_index(range.start) - self.scroll,
                 bounds.top(),
             ),
             point(
-                bounds.left() + last_layout.x_for_index(range.end),
+                bounds.left() + last_layout.x_for_index(range.end) - self.scroll,
                 bounds.bottom(),
             ),
         ))
@@ -380,7 +424,7 @@ impl EntityInputHandler for TextInput {
         let last_layout = self.last_layout.as_ref()?;
 
         assert_eq!(last_layout.text, self.content);
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        let utf8_index = last_layout.index_for_x(point.x - line_point.x + self.scroll)?;
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -393,6 +437,7 @@ struct PrepaintState {
     line: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
+    scroll: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -441,13 +486,54 @@ impl Element for TextElement {
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
+        let focused = input.focus_handle.is_focused(window);
+        let marked_range = input.marked_range.clone();
+        let placeholder = input.placeholder.clone();
+        let previous_scroll = input.scroll;
         let style = window.text_style();
+        let theme = crate::theme::theme(cx);
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let shape = |text: SharedString, color: gpui::Hsla, window: &mut Window| {
+            let run = TextRun {
+                len: text.len(),
+                font: style.font(),
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let runs = match marked_range.as_ref() {
+                Some(marked) if marked.end <= text.len() => vec![
+                    TextRun {
+                        len: marked.start,
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: marked.end - marked.start,
+                        underline: Some(UnderlineStyle {
+                            color: Some(run.color),
+                            thickness: px(1.0),
+                            wavy: false,
+                        }),
+                        ..run.clone()
+                    },
+                    TextRun {
+                        len: text.len() - marked.end,
+                        ..run
+                    },
+                ]
+                .into_iter()
+                .filter(|run| run.len > 0)
+                .collect(),
+                _ => vec![run],
+            };
+            window
+                .text_system()
+                .shape_line(text, font_size, &runs, None)
+        };
 
         let (display_text, text_color) = if content.is_empty() {
-            (
-                input.placeholder.clone(),
-                crate::theme::theme(cx).text_tertiary().into(),
-            )
+            (placeholder, theme.text_tertiary().into())
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -457,75 +543,62 @@ impl Element for TextElement {
                 style.color,
             )
         } else {
-            (content, style.color)
+            (content.clone(), style.color)
         };
+        let mut line = shape(display_text.clone(), text_color, window);
 
-        let run = TextRun {
-            len: display_text.len(),
-            font: style.font(),
-            color: text_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
-            vec![
-                TextRun {
-                    len: marked_range.start,
-                    ..run.clone()
-                },
-                TextRun {
-                    len: marked_range.end - marked_range.start,
-                    underline: Some(UnderlineStyle {
-                        color: Some(run.color),
-                        thickness: px(1.0),
-                        wavy: false,
-                    }),
-                    ..run.clone()
-                },
-                TextRun {
-                    len: display_text.len() - marked_range.end,
-                    ..run
-                },
-            ]
-            .into_iter()
-            .filter(|run| run.len > 0)
-            .collect()
+        // A field that is not being edited shows its start and an ellipsis,
+        // as `text-overflow: ellipsis` does.
+        if !focused && line.width > bounds.size.width && !content.is_empty() {
+            let ellipsis = shape("…".into(), text_color, window).width;
+            let fits = display_text
+                .grapheme_indices(true)
+                .map(|(index, _)| index)
+                .take_while(|index| line.x_for_index(*index) + ellipsis <= bounds.size.width)
+                .last()
+                .unwrap_or(0);
+            let clipped = SharedString::from(format!("{}…", &display_text[..fits]));
+            line = shape(clipped, text_color, window);
+        }
+
+        // While editing, the text scrolls just far enough to show the caret.
+        let cursor_x = line.x_for_index(cursor.min(line.len()));
+        let caret_room = bounds.size.width - px(1.);
+        let scroll = if !focused || line.width <= caret_room {
+            px(0.)
         } else {
-            vec![run]
+            previous_scroll
+                .min(cursor_x)
+                .max(cursor_x - caret_room)
+                .min(line.width - caret_room)
+                .max(px(0.))
         };
+        if scroll != previous_scroll {
+            self.input.update(cx, |input, _| input.scroll = scroll);
+        }
 
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(display_text, font_size, &runs, None);
-
-        let cursor_pos = line.x_for_index(cursor);
-        let (selection, cursor) = if selected_range.is_empty() {
+        // Chromium's caret: one pixel wide and as tall as the glyphs.
+        let glyphs = line.ascent + line.descent;
+        let caret_top = bounds.top() + (bounds.size.height - glyphs) / 2.;
+        let left = bounds.left() - scroll;
+        let (selection, cursor) = if !focused {
+            (None, None)
+        } else if selected_range.is_empty() {
             (
                 None,
                 Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
-                    ),
-                    crate::theme::theme(cx).text(),
+                    Bounds::new(point(left + cursor_x, caret_top), size(px(1.), glyphs)),
+                    theme.text(),
                 )),
             )
         } else {
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.start),
-                            bounds.top(),
-                        ),
-                        point(
-                            bounds.left() + line.x_for_index(selected_range.end),
-                            bounds.bottom(),
-                        ),
+                        point(left + line.x_for_index(selected_range.start), bounds.top()),
+                        point(left + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    crate::theme::theme(cx).selection(),
+                    theme.selection(),
                 )),
                 None,
             )
@@ -534,6 +607,7 @@ impl Element for TextElement {
             line: Some(line),
             cursor,
             selection,
+            scroll,
         }
     }
 
@@ -553,29 +627,41 @@ impl Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection)
-        }
         let line = prepaint.line.take().unwrap();
-        line.paint(
-            bounds.origin,
-            window.line_height(),
-            gpui::TextAlign::Left,
-            None,
-            window,
-            cx,
-        )
-        .unwrap();
+        let (selection, cursor) = (prepaint.selection.take(), prepaint.cursor.take());
+        let origin = point(bounds.left() - prepaint.scroll, bounds.top());
+        let line_height = window.line_height();
+        // The caret is on for the first half of each second since it moved.
+        let since_move = self.input.read(cx).blink.elapsed();
+        let caret_on = (since_move.as_millis() / BLINK.as_millis()) % 2 == 0;
+        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+            if let Some(selection) = selection {
+                window.paint_quad(selection)
+            }
+            line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+                .unwrap();
+            if let Some(cursor) = cursor.filter(|_| caret_on) {
+                window.paint_quad(cursor);
+            }
+        });
 
-        if focus_handle.is_focused(window)
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
-
-        self.input.update(cx, |input, _cx| {
+        let focused = focus_handle.is_focused(window);
+        self.input.update(cx, |input, cx| {
             input.last_layout = Some(line);
             input.last_bounds = Some(bounds);
+            // Repaint at the caret's next change for as long as it shows.
+            if focused && input.blink_task.is_none() {
+                let wait = BLINK.as_millis() - since_move.as_millis() % BLINK.as_millis();
+                input.blink_task = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(wait as u64 + 1))
+                        .await;
+                    let _ = this.update(cx, |this: &mut TextInput, cx| {
+                        this.blink_task = None;
+                        cx.notify();
+                    });
+                }));
+            }
         });
     }
 }
@@ -583,7 +669,9 @@ impl Element for TextElement {
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .size_full()
             .flex()
+            .items_center()
             .key_context("TextInput")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
@@ -605,7 +693,14 @@ impl Render for TextInput {
                 window.blur(cx);
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
-                this.content = this.original.clone();
+                // The sidebar filter empties on Escape; a stored field goes
+                // back to its saved value.
+                this.content = if this.kind == Kind::Sidebar {
+                    "".into()
+                } else {
+                    this.original.clone()
+                };
+                this.selected_range = 0..0;
                 window.blur(cx);
                 cx.notify();
             }))
@@ -613,26 +708,10 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(crate::theme::theme(cx).control_surface())
-            .font_family(if self.inspector {
-                crate::theme::FONT_INSPECTOR
-            } else {
-                crate::theme::FONT_UI
-            })
-            .line_height(px(if self.inspector { 20. } else { 22. }))
-            .text_size(px(if self.inspector {
-                crate::theme::TEXT_MD
-            } else {
-                crate::theme::TEXT_SM
-            }))
-            .child(
-                div()
-                    .h(px(if self.inspector { 32. } else { 24. }))
-                    .w_full()
-                    .px(px(if self.inspector { 10. } else { 6. }))
-                    .py(px(if self.inspector { 6. } else { 0. }))
-                    .child(TextElement { input: cx.entity() }),
-            )
+            .font_family(self.kind.font())
+            .line_height(px(self.kind.line_height()))
+            .text_size(px(self.kind.size()))
+            .child(TextElement { input: cx.entity() })
     }
 }
 
@@ -656,19 +735,34 @@ impl TextInput {
             is_selecting: false,
             field_key: None,
             original: "".into(),
-            inspector: false,
+            kind: Kind::Search,
+            scroll: px(0.),
+            blink: std::time::Instant::now(),
+            blink_task: None,
         }
+    }
+    /// The sidebar's tree filter.
+    pub fn sidebar(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Sidebar;
+        input
+    }
+    pub fn is_empty(&self) -> bool {
+        self.content.is_empty()
+    }
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.content = "".into();
+        self.selected_range = 0..0;
+        cx.notify();
     }
     pub fn value(&self) -> String {
         self.content.to_string()
     }
-    pub fn set_placeholder(&mut self, value: &'static str) {
-        self.placeholder = value.into();
-    }
     pub fn field(placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
-        input.inspector = true;
+        input.kind = Kind::Inspector;
         cx.on_blur(&input.focus_handle, window, |this, _, cx| this.commit(cx))
             .detach();
         input

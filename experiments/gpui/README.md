@@ -41,11 +41,32 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   window size, tiles land where the Electron grid puts them.
 - Tiles drawn to the rules of `drawBase.ts`: media rect with hairline ring,
   format, duration and collection-count badges, selection stroke outside the
-  rect, optional name and resolution rows.
+  rect, optional name and resolution rows. Only the grid mode letterboxes by
+  choice; an item of unknown shape lays out as 3:2 and fills its tile.
+- Grid selection as the Electron grid has it: nothing selected when a scope
+  opens, a click selects one, Cmd-click toggles, Shift-click and Shift with a
+  move select a range, Cmd+A selects all, and Escape or a click on empty
+  space clears. Only the image takes the pointer, not the text rows under it.
+  The hovered image shows the magnifier corner, except on video and while
+  scrolling. "Return to Top" rises once the grid has scrolled 200px.
 - Sidebar with the Electron row order (All, Inbox, Recently Viewed,
   Uncategorized, Untagged, Tags, Random, Subscriptions, Duplicates, Trash),
-  Folders and Smart Folders sections with counts, hierarchy, collapse controls
-  and a filter. Random shuffles the All scope with one seed per session.
+  Folders and Smart Folders sections with counts, hierarchy with tree guide
+  lines, disclosure triangles that turn over 200 ms, and section headers that
+  fold their section. The filter keeps each matching folder with its
+  ancestors and opens every branch. Random shuffles the All scope with one
+  seed per session.
+- Hover and pressed states from the Electron styles, with their timings: icon
+  buttons (hover, pressed, toggled, disabled), sidebar rows and section
+  headers (title pill, chevron, add button), the library switcher's highlight,
+  chips, the inspector's sections and action rows, the scrollbar thumb, and
+  pointer cursors on everything that takes a click.
+- Tooltips as `KbdTooltip` draws them: below the control after 400 ms, with
+  the shortcut's keys as badges.
+- Text fields with their focus states: the toolbar search, the sidebar filter
+  with its clear button, and the inspector's name and notes. One-pixel
+  blinking caret, text that scrolls to keep the caret in view, and an
+  ellipsis when a field is not being edited.
 - The Electron shell's layout: a 48px titlebar row whose left block keeps the
   sidebar's width, over a body whose rails slide away (sidebar 50 ms,
   inspector 100 ms) while the grid takes the freed width at once. The panel
@@ -69,7 +90,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   then fades out. Changing destination follows `WorkspaceSurface.tsx`: 170 ms
   fade-out on `--ease-default`, hidden until the first page is ready, 170 ms
   fade-in; clicks during the fade-out retarget it.
-- Metadata inspector: dimensions, MIME, size, media count, tags, notes, rating.
+- Inspector for the selected item: fitted preview with its format badge,
+  colour palette (a click adds that colour to the grid's filters), name,
+  notes, source address, folders and tags as chips that can be removed, a
+  rating that previews under the pointer, and the properties the Electron
+  inspector lists. Its left edge drags between 260 and 550px.
 - Space/Enter/double-click preview, Escape back, previous/next item, and
   navigation through members of a collection. Thumbnail-first preview with
   asynchronous full decode; stale loads are fenced.
@@ -78,16 +103,35 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
-- Tags, Subscriptions and Duplicates are sidebar rows without screens. The
-  toolbar's view-options and filter buttons and the settings button are drawn
-  but not wired.
+- Tags, Subscriptions and Duplicates are sidebar rows without screens.
+- Drawn with their hover states and tooltips but not wired: Settings, View
+  options, the section headers' add buttons, the inspector's Add to Folder,
+  Add Tags, Export, source-address list and Pin, and the library switcher.
+  Each has a `TODO` where its action belongs. The Filter button only clears a
+  filter the inspector set; there is no filter bar.
+- With nothing selected the inspector is empty; the Electron one describes
+  the scope. With several items selected it shows the last one, not the
+  stacked summary.
+- The inspector's section titles are regular weight. The bundled Roboto is a
+  variable font and only its default instance loads from memory, so the
+  semibold needs a static font file.
+- The Electron window has a one-pixel light rim that this window does not.
+  The library cover lacks its bevel and its focus and zoom crop.
+- Not in the grid yet: rubber-band selection, dragging items out or to
+  reorder, the hover preview of the original, broken-thumbnail, font and
+  audio tiles, inline rename, and the scope-specific empty states.
+- Not in the sidebar yet: the Subscriptions activity dot, smart-folder groups
+  and custom folder icons and colours, rename in place, context menus,
+  multi-selection and drag reorder.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
-- No drag and drop, range or multi-selection, complete context menus,
-  import/export, subscriptions, cloud, localization or site login.
+- No complete context menus (icons, shortcuts, separators, submenus, search,
+  keyboard), import/export, subscriptions, cloud, localization or site login.
+  The viewer still has its own header instead of the titlebar's viewer
+  toolbar.
 - Motion still to port: modal enter/exit, the inspector's fade when entering
   the grid from the viewer, toasts, the viewer's
   thumbnail-to-original crossfade and its zoom and pan tween, smooth paging,
@@ -97,14 +141,14 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   renderer patch; two open-source implementations exist to port. GPUI cannot
   scale or rotate arbitrary elements, so the menu and modal scale-in needs a
   substitute.
-- Sidebar expansion, sidebar width, hidden rails and view changes are not
-  persisted. The rails cannot be resized.
+- Sidebar expansion, rail widths, hidden rails and view changes are not
+  persisted. The sidebar cannot be resized.
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
-- The grid is still one element tree per tile, the thumbnail cache has no
-  cancellation or priority, and the text input and media surface still carry
-  colours of their own.
+- The grid is still one element tree per tile. The thumbnail cache has no
+  cancellation or priority and never loads an original for a tile larger than
+  its thumbnail. The media surface still carries colours of its own.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
 - Windows and Linux are not built or tested. The Ruffle frame path reads back
@@ -132,6 +176,20 @@ the same content, scroll, selection and focus; do not stretch a capture to
 make sizes agree. `--shift` moves the candidate first, which tells a uniform
 offset from real differences.
 
+On 13 November 2026, at 1213×865 with the same item selected in both apps,
+4.7% of the window's pixels differed from the Electron capture by more than
+16 levels: titlebar buttons 2.4%, toolbar 2.4%, library header 7.2%, system
+rows 1.8%, section headers 2.5%, sidebar filter 4.3%, grid 5.3%, inspector
+fields 1.2%, inspector chips 4.9%. Part of that is state that differed (an
+enabled Back button, the pointer) and JPEG noise in the captures.
+
+`PICTO_GPUI_POINTER=<file or FIFO>` replays pointer events written to that
+file (`move X Y`, `down X Y`, `up X Y`, in window points), so hover, pressed
+and tooltip states can be captured without taking the real pointer. GPUI
+stops painting a window that is fully covered, so the window has to be
+visible. `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
+width, and `PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
+
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap
 between grid frames, and how many thumbnail files were read.
@@ -149,8 +207,9 @@ One model, separate views, shared components:
   movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
   presentation).
 - `ui/` holds the shared components, one implementation each: icon button,
-  sidebar row, section header, badge, button, text input, zoom control and the
-  titlebar drag region. Views compose these.
+  tooltip, sidebar row, section header, chip, inspector section, action row,
+  field frame and text input, scrollbar, "Return to Top", badge, button, zoom
+  control and the titlebar drag region. Views compose these.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.
   `motion.rs` holds durations and easing. Views take colours, sizes and
@@ -161,7 +220,7 @@ and events rather than growing a second application backend.
 
 ## Attribution
 
-`input.rs` adapts GPUI 0.2.2's official `examples/input.rs`, Apache-2.0; see
+`ui/text_input.rs` adapts GPUI 0.2.2's official `examples/input.rs`, Apache-2.0; see
 `LICENSE-gpui`. Sidebar icons are Tabler Icons, MIT; see `assets/LICENSE-tabler`.
 Toolbar glyphs are Picto's own, from `src/shared/ui/icons/toolbar-icons.tsx`.
 `assets/fixtures/interactive.swf` comes from Ruffle's

@@ -8,7 +8,9 @@ pub mod reveal;
 pub mod thumbnails;
 
 use crate::session::{Change, Session};
+use crate::theme::Text as _;
 use crate::{theme, ui};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use layout::{Layout, ViewMode};
 use picto_library::query::RootSummary;
@@ -34,7 +36,29 @@ pub struct GridView {
     bounds: Bounds<Pixels>,
     /// The session's result set this grid last laid out.
     epoch: u64,
+    /// The tile whose image the pointer is over.
+    hovered: Option<usize>,
+    /// When the grid last scrolled; hover drawing waits 80 ms after it.
+    scrolled: std::time::Instant,
+    settle: Option<Task<()>>,
     _session: Subscription,
+}
+
+/// `HOVER_RESUME_DELAY_MS`: the magnifier comes back this long after scrolling.
+const HOVER_RESUME: std::time::Duration = std::time::Duration::from_millis(80);
+/// "Return to Top" appears once the grid has scrolled this far.
+const RETURN_TO_TOP_AFTER: f32 = 200.;
+
+/// The item's aspect ratio when it is known. Audio without dimensions is
+/// drawn two to one.
+fn aspect(item: &RootSummary) -> Option<f32> {
+    match (item.width, item.height) {
+        (Some(width), Some(height)) if width > 0 && height > 0 => {
+            Some(width as f32 / height as f32)
+        }
+        _ if item.mime.starts_with("audio/") => Some(2.),
+        _ => None,
+    }
 }
 
 impl EventEmitter<MenuRequested> for GridView {}
@@ -71,13 +95,16 @@ impl GridView {
             clock: std::time::Instant::now(),
             bounds: Bounds::default(),
             epoch: 0,
+            hovered: None,
+            scrolled: std::time::Instant::now(),
+            settle: None,
             _session: subscription,
         }
     }
 
     /// Moves the selection as the Electron grid's keyboard navigation does and
     /// scrolls the new selection into view.
-    pub fn move_selection(&mut self, action: nav::Move, cx: &mut Context<Self>) {
+    pub fn move_selection(&mut self, action: nav::Move, extend: bool, cx: &mut Context<Self>) {
         let (width, height) = (
             f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER,
             f32::from(self.bounds.size.height),
@@ -92,8 +119,14 @@ impl GridView {
         let Some(target) = target else {
             return;
         };
-        self.session
-            .update(cx, |session, cx| session.select(target, cx));
+        self.session.update(cx, |session, cx| {
+            // Shift extends a range from where the selection started.
+            if extend {
+                session.select_to(target, false, cx)
+            } else {
+                session.select(target, cx)
+            }
+        });
         if let Some(tile) = self.layout.tiles.get(target) {
             let top = -f32::from(self.scroll.offset().y);
             if let Some(offset) = nav::scroll_into_view(tile, top, height, gap) {
@@ -106,13 +139,7 @@ impl GridView {
     /// One grid tile, drawn to the rules of the Electron canvas grid
     /// (`drawBase.ts`): the media rect, its hairline ring, badges inside the
     /// rect, the selection stroke outside it, and optional text rows below.
-    fn tile(
-        &self,
-        data: TileData,
-        prefs: &ViewPrefs,
-        now: f64,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn tile(&self, data: TileData, prefs: &ViewPrefs, now: f64, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let TileData {
             index,
@@ -125,16 +152,17 @@ impl GridView {
         let timed = item.mime.starts_with("video/") || item.mime.starts_with("audio/");
         // Letterboxed media keeps its own rect inside the tile; badges and the
         // selection stroke follow that rect, not the tile.
-        let (x, y, w, h) = if !prefs.fit_cover || timed {
-            let aspect = match (item.width, item.height) {
-                (Some(w), Some(h)) if w > 0 && h > 0 => w as f32 / h as f32,
-                _ => 1.,
-            };
-            let scale = (tile.w / aspect).min(image_height);
-            let (w, h) = (aspect * scale, scale);
-            ((tile.w - w) / 2., (image_height - h) / 2., w, h)
-        } else {
-            (0., 0., tile.w, image_height)
+        // Only the grid mode letterboxes by choice; waterfall and justified
+        // tiles already have their item's shape. Video and audio always do.
+        let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
+        let (x, y, w, h) = match aspect(&item).filter(|_| contain) {
+            Some(aspect) => {
+                let scale = (tile.w / aspect).min(image_height);
+                let (w, h) = (aspect * scale, scale);
+                ((tile.w - w) / 2., (image_height - h) / 2., w, h)
+            }
+            // An item of unknown shape takes the whole tile.
+            None => (0., 0., tile.w, image_height),
         };
         // The image fades in over its dominant colour, then that colour fades
         // away beneath it, which matters for images with transparency.
@@ -146,24 +174,36 @@ impl GridView {
         let (image_alpha, placeholder_alpha) =
             reveal::alphas(self.reveal.progress(item.root_id.0, now));
         let mut cell = div()
-            .id(index)
             .absolute()
             .left(px(tile.x))
             .top(px(tile.y))
             .w(px(tile.w))
             .h(px(tile.h));
         if selected {
-            cell = cell.child(
-                div()
-                    .absolute()
-                    .left(px(x - layout::SELECTION_EXTENT))
-                    .top(px(y - layout::SELECTION_EXTENT))
-                    .w(px(w + 2. * layout::SELECTION_EXTENT))
-                    .h(px(h + 2. * layout::SELECTION_EXTENT))
-                    .rounded(px(theme::TILE_RADIUS + layout::SELECTION_EXTENT))
-                    .border_2()
-                    .border_color(theme.primary()),
-            );
+            cell = cell
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x - layout::SELECTION_EXTENT))
+                        .top(px(y - layout::SELECTION_EXTENT))
+                        .w(px(w + 2. * layout::SELECTION_EXTENT))
+                        .h(px(h + 2. * layout::SELECTION_EXTENT))
+                        .rounded(px(theme::TILE_RADIUS + layout::SELECTION_EXTENT))
+                        .border_2()
+                        .border_color(rgb(theme::GRID_SELECTION)),
+                )
+                // A hairline of the app background between stroke and image.
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(x - 1.))
+                        .top(px(y - 1.))
+                        .w(px(w + 2.))
+                        .h(px(h + 2.))
+                        .rounded(px(theme::TILE_RADIUS + 1.))
+                        .border_1()
+                        .border_color(theme.background()),
+                );
         }
         cell = cell.child(
             div()
@@ -186,7 +226,13 @@ impl GridView {
                         .image_cache(&self.thumbnails)
                         .size_full()
                         .rounded(px(theme::TILE_RADIUS))
-                        .object_fit(ObjectFit::Cover)
+                        // A thumbnail of another shape than its item (cover
+                        // art, a rotated video) is fitted, not cropped.
+                        .object_fit(if contain {
+                            ObjectFit::Contain
+                        } else {
+                            ObjectFit::Cover
+                        })
                         .opacity(image_alpha),
                 )
                 .child(
@@ -208,7 +254,7 @@ impl GridView {
                         .justify_center()
                         .left(px(x + 5.))
                         .top(px(y + 5.))
-                        .child(ui::icon("folders", 12., rgba(theme::BADGE_TEXT))),
+                        .child(ui::icon("group", 14., rgba(theme::BADGE_TEXT))),
                 );
             } else if !label.is_empty() {
                 cell = cell.child(ui::badge(4.).left(px(x + 5.)).top(px(y + 5.)).child(label));
@@ -242,25 +288,29 @@ impl GridView {
                     .flex()
                     .justify_center()
                     .child(
+                        // The name truncates to the tile less 8px; selected,
+                        // it is white on a pill of the selection colour.
                         div()
-                            .max_w_full()
+                            .max_w(px(tile.w - 2.))
                             .px(px(3.))
                             .rounded(px(2.))
-                            .bg(if selected {
-                                theme.primary()
-                            } else {
-                                gpui::transparent_black().into()
+                            .when(selected, |pill| {
+                                pill.bg(rgb(theme::GRID_SELECTION)).text_color(white())
                             })
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
+                            .truncate()
                             .line_height(px(15.))
-                            .child(item.name.clone()),
+                            .child(if item.name.is_empty() {
+                                "Untitled".to_owned()
+                            } else {
+                                item.name.clone()
+                            }),
                     ),
             );
         }
         if prefs.show_resolution
             && let (Some(width), Some(height)) = (item.width, item.height)
+            && width > 0
+            && height > 0
         {
             cell = cell.child(
                 div()
@@ -273,30 +323,85 @@ impl GridView {
                     .h(px(15.))
                     .flex()
                     .justify_center()
-                    .text_size(px(theme::TEXT_CAPTION))
+                    .text(theme::TEXT_CAPTION)
                     .line_height(px(15.))
                     .text_color(theme.text_tertiary())
                     .child(format!("{width} × {height}")),
             );
         }
-        cell.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-            let open = event.click_count() == 2;
-            this.session.update(cx, |session, cx| {
-                session.select(index, cx);
-                if open {
-                    session.open_viewer(cx);
-                }
-            });
-            window.focus(&this.focus, cx);
-        }))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                this.session
-                    .update(cx, |session, cx| session.select(index, cx));
-                cx.emit(MenuRequested(event.position));
-                window.focus(&this.focus, cx);
-            }),
+        // The magnifier marks the hovered image, except on video and while
+        // the grid is scrolling.
+        if self.hovered == Some(index)
+            && !item.mime.starts_with("video/")
+            && self.scrolled.elapsed() >= HOVER_RESUME
+        {
+            cell = cell.child(
+                div()
+                    .absolute()
+                    .left(px(tile.w - 28.))
+                    .top(px(image_height - 26.))
+                    .w(px(28.))
+                    .h(px(26.))
+                    .rounded_tl(px(10.))
+                    .rounded_br(px(theme::TILE_RADIUS))
+                    .bg(rgba(0x00000066))
+                    .child(
+                        svg()
+                            .path("magnifier")
+                            .size_full()
+                            .text_color(rgba(0xffffffb3)),
+                    ),
+            );
+        }
+        // Only the image takes the pointer: the name and resolution rows
+        // below it are empty space, as in the canvas grid's hit test.
+        let in_selection = selected;
+        cell.child(
+            div()
+                .id(index)
+                .absolute()
+                .left_0()
+                .top_0()
+                .w(px(tile.w))
+                .h(px(image_height))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if *hovered {
+                        this.hovered = Some(index);
+                    } else if this.hovered == Some(index) {
+                        this.hovered = None;
+                    }
+                    cx.notify();
+                }))
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    let modifiers = event.modifiers();
+                    let open = event.click_count() == 2;
+                    this.session.update(cx, |session, cx| {
+                        if modifiers.shift {
+                            session.select_to(index, modifiers.platform, cx);
+                        } else if modifiers.platform {
+                            session.toggle(index, cx);
+                        } else {
+                            session.select(index, cx);
+                            if open {
+                                session.open_viewer(cx);
+                            }
+                        }
+                    });
+                    window.focus(&this.focus, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        // A right-click inside the selection keeps it.
+                        if !in_selection {
+                            this.session
+                                .update(cx, |session, cx| session.select(index, cx));
+                        }
+                        cx.emit(MenuRequested(event.position));
+                        window.focus(&this.focus, cx);
+                    }),
+                ),
         )
     }
 }
@@ -337,7 +442,8 @@ impl Render for GridView {
                 let aspects = session
                     .items
                     .iter()
-                    .map(|i| i.width.unwrap_or(1) as f32 / i.height.unwrap_or(1).max(1) as f32)
+                    // `gridLayoutModel.ts`: an unknown shape lays out as 3:2.
+                    .map(|item| aspect(item).unwrap_or(1.5))
                     .collect::<Vec<_>>();
                 self.layout = Layout::compute(
                     &aspects,
@@ -373,7 +479,7 @@ impl Render for GridView {
                         tile: self.layout.tiles[index],
                         item: item.clone(),
                         thumbnail: session.thumbnail(&item.content_hash),
-                        selected: index == session.selected,
+                        selected: session.selection.contains(&index),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -385,7 +491,8 @@ impl Render for GridView {
                 tiles,
             )
         };
-        if top + viewport + 1000. >= self.layout.total_height && !tiles.is_empty() {
+        // `CanvasGrid`: fetch the next page within three viewports of the end.
+        if top + viewport * 4. >= self.layout.total_height && !tiles.is_empty() {
             self.session.update(cx, |session, cx| session.load_more(cx));
         }
 
@@ -444,7 +551,22 @@ impl Render for GridView {
                 .opacity(fade)
                 .overflow_y_scroll()
                 .track_scroll(&self.scroll)
-                .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
+                .on_scroll(cx.listener(|this, _, _, cx| {
+                    // Hover drawing stops while scrolling and resumes 80 ms
+                    // after the last scroll event.
+                    this.scrolled = std::time::Instant::now();
+                    this.settle = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(HOVER_RESUME).await;
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                    }));
+                    cx.notify();
+                }))
+                // A click that no image took is a click on empty space.
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.session
+                        .update(cx, |session, cx| session.clear_selection(cx));
+                    window.focus(&this.focus, cx);
+                }))
                 .child(content)
         };
         crate::stats::grid_built(build_started, tile_count);
@@ -454,5 +576,13 @@ impl Render for GridView {
             .child(measure)
             .child(body)
             .child(ui::scrollbar("grid-scrollbar", &self.scroll, window, cx))
+            .children(ui::scroll_to_top(
+                "grid-return-to-top",
+                &self.scroll,
+                RETURN_TO_TOP_AFTER,
+                12.,
+                window,
+                cx,
+            ))
     }
 }

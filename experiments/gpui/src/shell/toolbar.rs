@@ -1,6 +1,6 @@
 //! The grid toolbar (`GridToolbar.tsx`), which sits in the titlebar row.
 use crate::session::{Change, Session};
-use crate::ui::{self, text_input::TextInput, zoom};
+use crate::ui::{self, field::Look, text_input::TextInput, zoom};
 use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
 
@@ -48,18 +48,89 @@ impl Toolbar {
     }
 }
 
+/// A colour with no opacity, for a gradient that fades to it.
+fn clear(color: Rgba) -> Rgba {
+    Rgba { a: 0., ..color }
+}
+
+impl Toolbar {
+    /// The scope title (`.scopeTitle`): the destination's ancestors as links,
+    /// then its own name. It runs from 72px in to the toolbar's middle and
+    /// fades out over its last 40px rather than ending in an ellipsis.
+    fn title(&self, opacity: f32, cx: &mut Context<Self>) -> Div {
+        let theme = theme::theme(cx);
+        let crumbs = {
+            let session = self.session.read(cx);
+            let mut crumbs = Vec::new();
+            let mut at = session
+                .nav
+                .get(session.displayed)
+                .map(|_| session.displayed);
+            while let Some(index) = at {
+                crumbs.push((index, session.nav[index].label.clone()));
+                at = session.nav[index].parent;
+            }
+            crumbs.reverse();
+            crumbs
+        };
+        let last = crumbs.len().saturating_sub(1);
+        let mut path = div().flex().items_center().whitespace_nowrap();
+        for (position, (index, label)) in crumbs.into_iter().enumerate() {
+            if position == last {
+                path = path.child(div().child(label));
+                continue;
+            }
+            path = path
+                .child(
+                    div()
+                        .id(("scope-crumb", index))
+                        .occlude()
+                        .cursor_pointer()
+                        .text_color(theme.text_secondary())
+                        .hover(move |style| style.text_color(theme.text()).underline())
+                        .child(label)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.session
+                                .update(cx, |session, cx| session.navigate(index, cx));
+                        })),
+                )
+                .child(div().mx(px(5.)).opacity(0.4).child("/"));
+        }
+        let background = theme.background();
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(8. + 72.))
+            .right(relative(0.5))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .opacity(opacity)
+            .child(path)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(40.))
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(clear(background), 0.),
+                        linear_color_stop(background, 1.),
+                    )),
+            )
+    }
+}
+
 impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
-        let (title, opacity, animating, back, forward, filtered) = {
+        let (opacity, animating, back, forward, filtered) = {
             let session = self.session.read(cx);
             (
-                session
-                    .nav
-                    .get(session.displayed)
-                    .map(|entry| entry.label.clone())
-                    .unwrap_or_else(|| "Opening library...".into()),
                 session.transition.opacity(),
                 session.transition.animating(),
                 session.can_step_history(-1),
@@ -71,34 +142,53 @@ impl Render for Toolbar {
         if animating {
             window.request_animation_frame();
         }
-        let history =
-            |id: &'static str, icon, delta: isize, enabled: bool, cx: &mut Context<Self>| {
-                ui::icon_button(id, icon)
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.session
-                            .update(cx, |session, cx| session.step_history(delta, cx));
-                    }))
-            };
-        let mut toolbar = ui::drag_region("toolbar", window, cx)
+        let history = |id: &'static str,
+                       icon,
+                       delta: isize,
+                       enabled: bool,
+                       tip: ui::tooltip::Tip,
+                       cx: &mut Context<Self>| {
+            ui::icon_button(id, icon)
+                .disabled(!enabled)
+                .tip(tip)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.session
+                        .update(cx, |session, cx| session.step_history(delta, cx));
+                }))
+        };
+        let background = theme.background();
+        ui::drag_region("toolbar", window, cx)
+            .relative()
             .size_full()
-            .px(px(8.))
+            // 8px either side from the titlebar, and 8 more on the right
+            // from the toolbar itself.
+            .pl(px(8.))
+            .pr(px(16.))
             .flex()
             .items_center()
-            .child(history("history-back", "history-back", -1, back, cx))
+            .child(self.title(opacity, cx))
+            .child(history(
+                "history-back",
+                "history-back",
+                -1,
+                back,
+                ui::tip("Back").keys(&["⌥", "←"]),
+                cx,
+            ))
             .child(history(
                 "history-forward",
                 "history-forward",
                 1,
                 forward,
+                ui::tip("Forward").keys(&["⌥", "→"]),
                 cx,
             ))
             .child(
                 // The zoom is centred in the space between the history
-                // buttons and the right-hand controls; the title sits at the
-                // left of that same space.
+                // buttons and the right-hand controls. It has the app
+                // background, with a short fade on its left, so a long
+                // scope title disappears under it.
                 div()
-                    .relative()
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -107,50 +197,47 @@ impl Render for Toolbar {
                     .justify_center()
                     .child(
                         div()
-                            .absolute()
-                            .left(px(24.))
-                            .top_0()
-                            .bottom_0()
-                            .max_w(px(200.))
-                            .flex()
-                            .items_center()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .opacity(opacity)
-                            .child(title),
-                    )
-                    .child(div().occlude().child(self.zoom.clone())),
-            );
-        if filtered {
-            toolbar = toolbar.child(ui::button("clear-filter", "Clear filter", cx).on_click(
-                cx.listener(|this, _, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.set_filter(None, cx));
-                }),
-            ));
-        }
-        toolbar
-            .child(ui::icon_button("view-options", "toolbar-layout"))
-            .child(div().w(px(4.)).flex_none())
-            .child(ui::icon_button("filter-library", "toolbar-filter"))
-            .child(
-                div()
-                    .occlude()
-                    .ml(px(4.))
-                    .w(px(148.))
-                    .h(px(theme::ICON_BUTTON))
-                    .rounded(px(theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(theme.border_secondary())
-                    .overflow_hidden()
-                    .flex()
-                    .items_center()
-                    .child(div().pl(px(7.)).flex_none().child(ui::icon(
-                        "search",
-                        14.,
-                        theme.text_tertiary(),
-                    )))
-                    .child(div().flex_1().h_full().child(self.search.clone())),
+                            .relative()
+                            .occlude()
+                            .bg(background)
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .bottom_0()
+                                    .right(relative(1.))
+                                    .w(px(20.))
+                                    .bg(linear_gradient(
+                                        90.,
+                                        linear_color_stop(clear(background), 0.),
+                                        linear_color_stop(background, 1.),
+                                    )),
+                            )
+                            .child(self.zoom.clone()),
+                    ),
             )
+            // TODO: open the view menu at the button's left edge, 4px below it.
+            .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
+            .child(div().w(px(4.)).flex_none())
+            .child(
+                // TODO: this opens the filter bar. Until that exists, a
+                // press clears the filter the inspector set.
+                ui::icon_button("filter-library", "toolbar-filter")
+                    .tip(ui::tip("Filter library"))
+                    .toggled(filtered)
+                    .badge(filtered as usize)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.session
+                            .update(cx, |session, cx| session.set_filter(None, cx));
+                    })),
+            )
+            .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
+                ui::field("search", &self.search, Look::Search).icon(
+                    "search",
+                    14.,
+                    8.,
+                    theme.text_tertiary(),
+                ),
+            ))
     }
 }

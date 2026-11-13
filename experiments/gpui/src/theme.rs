@@ -72,10 +72,6 @@ impl Theme {
     pub fn hover_overlay(&self) -> Rgba {
         translucent(self.contrast, 8.)
     }
-    /// `--color-active-overlay`
-    pub fn active_overlay(&self) -> Rgba {
-        translucent(self.contrast, 14.)
-    }
     /// `--color-text-primary`
     pub fn text(&self) -> Rgba {
         rgb(self.text)
@@ -112,9 +108,49 @@ impl Theme {
     pub fn glass(&self) -> Rgba {
         translucent(self.background, 92.)
     }
+    /// `LibraryAvatar`: `color-mix(currentColor 10%, control-surface)` with
+    /// the secondary text colour.
+    pub fn avatar_surface(&self) -> Rgba {
+        blend(self.control_surface(), self.text_secondary(), 0.1)
+    }
+    /// `--glass-border-top`
+    pub fn glass_border_top(&self) -> Rgba {
+        rgba(0xffffff40)
+    }
+    /// `--color-border-focus`: `--color-primary-60`.
+    pub fn border_focus(&self) -> Rgba {
+        translucent(self.primary, 60.)
+    }
+    /// `--sidebar-tree-guide-color`: a quarter of the secondary text colour.
+    pub fn tree_guide(&self) -> Rgba {
+        translucent(self.text, 17.5)
+    }
     /// `--glass-border-side`
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
+    }
+}
+
+/// The colour `amount` of the way from `from` to `to`, as a CSS colour
+/// transition passes through it (interpolated with alpha premultiplied).
+pub fn blend(from: Rgba, to: Rgba, amount: f32) -> Rgba {
+    let amount = amount.clamp(0., 1.);
+    let a = from.a + (to.a - from.a) * amount;
+    if a <= 0. {
+        return Rgba {
+            r: to.r,
+            g: to.g,
+            b: to.b,
+            a: 0.,
+        };
+    }
+    let channel =
+        |from_c: f32, to_c: f32| (from_c * from.a + (to_c * to.a - from_c * from.a) * amount) / a;
+    Rgba {
+        r: channel(from.r, to.r),
+        g: channel(from.g, to.g),
+        b: channel(from.b, to.b),
+        a,
     }
 }
 
@@ -126,8 +162,28 @@ pub fn panel_shadow() -> Vec<BoxShadow> {
     ]
 }
 
+/// `--shadow-panel-small`
+pub fn panel_shadow_small() -> Vec<BoxShadow> {
+    vec![
+        BoxShadow::new(px(0.), px(3.), rgba(0x0000004d).into()).blur_radius(px(12.)),
+        BoxShadow::new(px(0.), px(0.), rgba(0x00000080).into()).spread_radius(px(1.)),
+    ]
+}
+
+/// `font-variant-numeric: tabular-nums slashed-zero`
+pub fn tabular_figures() -> FontFeatures {
+    FontFeatures(std::sync::Arc::new(vec![
+        ("tnum".into(), 1),
+        ("zero".into(), 1),
+    ]))
+}
+
 /// A set star in `StarRating.module.css`.
 pub const RATING: u32 = 0xff9f0a;
+
+/// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
+/// same in every theme.
+pub const GRID_SELECTION: u32 = 0x3297ff;
 
 // Grid badges are fixed, not themed (`gridAppearance.ts`).
 pub const BADGE_BACKGROUND: u32 = 0x00000080;
@@ -135,13 +191,27 @@ pub const BADGE_BORDER: u32 = 0x00000033;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 
 // ── Typography ──────────────────────────────────────────────────
-/// `--font-family-ui` on macOS.
-pub const FONT_UI: &str = "SF Pro Text";
-/// `--font-family-mono`
-pub const FONT_MONO: &str = "SF Mono";
+/// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
+/// family, so Chromium draws the system font; this is the same face.
+pub const FONT_UI: &str = ".SystemUIFont";
 /// `Picto Inspector Roboto`
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
+/// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
+/// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a
+/// fractional line box would put centred text half a pixel off.
+pub const LINE_HEIGHT: f32 = 15.;
+/// Text at one of the UI sizes, on the line Chromium gives it. Its
+/// `line-height: normal` is the font's ascent and descent each rounded to a
+/// whole pixel, which for the UI fonts at these sizes is the size plus two.
+pub trait Text: Styled + Sized {
+    fn text(self, size: f32) -> Self {
+        self.text_size(px(size)).line_height(px(size + 2.))
+    }
+}
+
+impl<T: Styled> Text for T {}
+
 /// `--font-size-xs`
 pub const TEXT_XS: f32 = 10.;
 /// `--font-size-caption`
@@ -150,12 +220,12 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
-/// `--font-size-lg`
-pub const TEXT_LG: f32 = 14.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
 pub const RADIUS_SM: f32 = 4.;
+/// The 5px radius of the search field and the sidebar's small buttons.
+pub const RADIUS_CONTROL: f32 = 5.;
 /// `--radius-md`
 pub const RADIUS_MD: f32 = 6.;
 /// `--radius-lg`
@@ -172,7 +242,10 @@ pub const ICON_BUTTON: f32 = 24.;
 pub const TITLEBAR_HEIGHT: f32 = 48.;
 /// `--sidebar-width`
 pub const SIDEBAR_WIDTH: f32 = 300.;
-pub const INSPECTOR_WIDTH: f32 = 280.;
+/// `INSPECTOR_DEFAULT_WIDTH` and the limits its edge drags between.
+pub const INSPECTOR_WIDTH: f32 = 320.;
+pub const INSPECTOR_MIN: f32 = 260.;
+pub const INSPECTOR_MAX: f32 = 550.;
 /// `--sidebar-row-height`
 pub const SIDEBAR_ROW: f32 = 27.;
 /// `--sidebar-indent`
@@ -194,8 +267,28 @@ pub const TILE_RADIUS: f32 = 4.;
 
 #[cfg(test)]
 mod tests {
-    use super::DARK;
-    use gpui::{rgb, rgba};
+    use super::{DARK, blend};
+    use gpui::{Rgba, rgb, rgba};
+
+    #[test]
+    fn a_blend_from_transparent_keeps_the_target_hue() {
+        // CSS interpolates premultiplied, so fading in from `transparent`
+        // never passes through grey.
+        let clear = Rgba {
+            r: 0.,
+            g: 0.,
+            b: 0.,
+            a: 0.,
+        };
+        let half = blend(clear, DARK.primary(), 0.5);
+        assert_eq!(
+            (half.r, half.g, half.b),
+            (DARK.primary().r, DARK.primary().g, DARK.primary().b)
+        );
+        assert_eq!(half.a, 0.5);
+        assert_eq!(blend(DARK.border(), DARK.primary(), 0.), DARK.border());
+        assert_eq!(blend(DARK.border(), DARK.primary(), 1.), DARK.primary());
+    }
 
     #[test]
     fn derived_surfaces_match_the_resolved_css() {

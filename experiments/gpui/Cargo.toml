@@ -30,8 +30,13 @@ tempfile = "3"
 image = "0.25"
 smallvec = "1"
 url = "2"
+chrono = "0.4"
 ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", features = ["audio", "mp3", "aac", "lzma"] }
 ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", default-features = false, features = ["cpal"] }
 ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 wgpu = "27.0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"

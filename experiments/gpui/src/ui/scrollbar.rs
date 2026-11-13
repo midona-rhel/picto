@@ -8,7 +8,7 @@ pub const GUTTER: f32 = 8.;
 const INSET: f32 = 2.;
 const MINIMUM_THUMB: f32 = 24.;
 
-/// What survives between frames: whether the pointer is over the gutter and,
+/// What survives between frames: whether the pointer is over the thumb and,
 /// while the thumb is dragged, how far into the thumb it was grabbed.
 #[derive(Default)]
 struct State {
@@ -17,8 +17,8 @@ struct State {
 }
 
 /// The app's one scrollbar, as `globals.css` styles it: an 8px gutter with a
-/// rounded thumb inset 2px, at a quarter contrast and at half when the
-/// pointer is over it or dragging. Place it as the last child of the element
+/// rounded thumb inset 2px, at a quarter contrast and at half while the
+/// pointer is over the thumb or dragging it. Place it as the last child of the element
 /// that wraps the scrolling surface tracked by `scroll`.
 pub fn scrollbar(
     id: impl Into<ElementId>,
@@ -83,7 +83,7 @@ pub fn scrollbar(
                     drag_to(scroll, bounds, thumb, scrollable, event.position.y - grab);
                     cx.notify(view);
                 } else {
-                    let hovered = bounds.contains(&event.position);
+                    let hovered = thumb_bounds.contains(&event.position);
                     if state.hovered.replace(hovered) != hovered {
                         cx.notify(view);
                     }

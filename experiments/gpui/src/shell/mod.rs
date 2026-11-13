@@ -8,6 +8,7 @@ pub mod toolbar;
 use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
 use crate::session::{Change, Session};
+use crate::theme::Text as _;
 use crate::viewer::Viewer;
 use crate::{motion, theme, ui};
 use gpui::*;
@@ -28,6 +29,7 @@ actions!(
         PageDown,
         Preview,
         ClosePreview,
+        SelectAll,
         ToggleSidebar,
         ToggleInspector,
         TogglePanels,
@@ -52,6 +54,11 @@ pub struct Shell {
     focus: FocusHandle,
     sidebar_collapsed: bool,
     inspector_collapsed: bool,
+    inspector_pinned: bool,
+    /// The inspector rail's width, which its left edge drags.
+    inspector_width: f32,
+    /// A drag of that edge: where the pointer started, and the width then.
+    resizing: Option<(Pixels, f32)>,
     /// How far each rail has slid out of view.
     rails: motion::Fades,
     menu: Option<Point<Pixels>>,
@@ -95,6 +102,15 @@ impl Shell {
             focus,
             sidebar_collapsed: false,
             inspector_collapsed: false,
+            inspector_pinned: false,
+            // `PICTO_GPUI_INSPECTOR=272` opens at a stored width, to compare
+            // against an Electron window whose inspector was resized.
+            inspector_width: std::env::var("PICTO_GPUI_INSPECTOR")
+                .ok()
+                .and_then(|width| width.parse().ok())
+                .unwrap_or(theme::INSPECTOR_WIDTH)
+                .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX),
+            resizing: None,
             rails: motion::Fades::default(),
             menu: None,
             menu_closing: None,
@@ -172,9 +188,11 @@ impl Shell {
         cx.notify();
     }
 
-    fn move_selection(&mut self, action: nav::Move, cx: &mut Context<Self>) {
+    /// Moves the selection; with shift held, extends it instead.
+    fn move_selection(&mut self, action: nav::Move, window: &Window, cx: &mut Context<Self>) {
+        let extend = window.modifiers().shift;
         self.grid
-            .update(cx, |grid, cx| grid.move_selection(action, cx));
+            .update(cx, |grid, cx| grid.move_selection(action, extend, cx));
     }
 
     /// The titlebar's left block. It keeps the sidebar's width when the
@@ -192,20 +210,28 @@ impl Shell {
             .items_center()
             .justify_end()
             .gap(px(2.))
-            .bg(if self.sidebar_collapsed {
-                theme.background()
-            } else {
-                theme.rail()
-            })
+            .relative()
+            // The edge is drawn over the app background, with the rail
+            // surface inside it (`background-clip: padding-box`).
+            .bg(theme.background())
             .border_r_1()
             .border_color(if self.sidebar_collapsed {
                 gpui::transparent_black().into()
             } else {
                 theme.border_secondary()
             })
-            .child(ui::icon_button("open-settings", "settings"))
+            .children(
+                (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
+            )
+            // TODO: open the settings window.
+            .child(
+                ui::icon_button("open-settings", "settings")
+                    .tip(ui::tip("Settings").keys(&["⌘", ","])),
+            )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
+                    .glyph(14.)
+                    .tip(ui::tip("Toggle Panels").keys(&["⇥"]))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
             )
     }
@@ -264,10 +290,11 @@ impl Render for Shell {
         } else {
             theme::SIDEBAR_WIDTH
         };
+        let inspector_width = self.inspector_width;
         let right = if self.inspector_collapsed {
             0.
         } else {
-            theme::INSPECTOR_WIDTH
+            inspector_width
         };
         let sidebar_hidden = self.rails.value(("sidebar", 0));
         let inspector_hidden = self.rails.value(("inspector", 0));
@@ -302,17 +329,64 @@ impl Render for Shell {
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right(px(-theme::INSPECTOR_WIDTH * inspector_hidden))
-                .w(px(theme::INSPECTOR_WIDTH))
+                .right(px(-inspector_width * inspector_hidden))
+                .w(px(inspector_width))
                 .flex()
                 .flex_col()
                 .bg(theme.rail())
-                .border_l_1()
-                .border_color(theme.border_secondary())
+                // The rail's edge is its resize handle (`.inspectorResizeHandle`):
+                // 5px wide over the content, so it takes no width itself.
+                .child(
+                    div()
+                        .id("inspector-resize")
+                        .occlude()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(5.))
+                        .cursor(CursorStyle::ResizeColumn)
+                        .border_l_1()
+                        .border_color(theme.border_secondary())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                this.resizing = Some((event.position.x, this.inspector_width));
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
                 .child(
                     ui::drag_region("inspector-titlebar", window, cx)
                         .h(px(theme::TITLEBAR_HEIGHT))
-                        .flex_none(),
+                        .flex_none()
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .child(
+                            // TODO: while pinned, the inspector keeps showing
+                            // the item it had instead of following the selection.
+                            ui::icon_button(
+                                "pin-inspector",
+                                if self.inspector_pinned {
+                                    "pin-filled"
+                                } else {
+                                    "pin"
+                                },
+                            )
+                            .glyph(14.)
+                            .toggled(self.inspector_pinned)
+                            .tip(ui::tip(if self.inspector_pinned {
+                                "Unpin"
+                            } else {
+                                "Pin"
+                            }))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.inspector_pinned = !this.inspector_pinned;
+                                cx.notify();
+                            })),
+                        ),
                 )
                 .child(
                     div()
@@ -337,7 +411,7 @@ impl Render for Shell {
                 // The inspector's share of the titlebar stays reserved, and
                 // draggable, while the inspector is hidden.
                 ui::drag_region("titlebar-right", window, cx)
-                    .w(px(theme::INSPECTOR_WIDTH))
+                    .w(px(inspector_width))
                     .flex_none()
                     .h_full(),
             );
@@ -357,43 +431,68 @@ impl Render for Shell {
             .bg(theme.background())
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
-            .text_size(px(theme::TEXT_MD))
+            .text(theme::TEXT_MD)
+            // CSS `line-height: normal` for the system font.
+            .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
             .key_context("Browser")
-            .on_action(
-                cx.listener(|this, _: &Next, _, cx| this.move_selection(nav::Move::Right, cx)),
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if let Some((from, width)) = this.resizing {
+                    let wanted = width + f32::from(from - event.position.x);
+                    this.inspector_width = wanted
+                        .round()
+                        .clamp(theme::INSPECTOR_MIN, theme::INSPECTOR_MAX);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.resizing = None),
             )
-            .on_action(
-                cx.listener(|this, _: &Previous, _, cx| this.move_selection(nav::Move::Left, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &Down, _, cx| this.move_selection(nav::Move::Down, cx)),
-            )
-            .on_action(cx.listener(|this, _: &Up, _, cx| this.move_selection(nav::Move::Up, cx)))
-            .on_action(
-                cx.listener(|this, _: &First, _, cx| this.move_selection(nav::Move::First, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &Last, _, cx| this.move_selection(nav::Move::Last, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &PageUp, _, cx| this.move_selection(nav::Move::PageUp, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &PageDown, _, cx| {
-                    this.move_selection(nav::Move::PageDown, cx)
-                }),
-            )
+            .on_action(cx.listener(|this, _: &Next, window, cx| {
+                this.move_selection(nav::Move::Right, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Previous, window, cx| {
+                this.move_selection(nav::Move::Left, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Down, window, cx| {
+                this.move_selection(nav::Move::Down, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Up, window, cx| {
+                this.move_selection(nav::Move::Up, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &First, window, cx| {
+                this.move_selection(nav::Move::First, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Last, window, cx| {
+                this.move_selection(nav::Move::Last, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageUp, window, cx| {
+                this.move_selection(nav::Move::PageUp, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, window, cx| {
+                this.move_selection(nav::Move::PageDown, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &Preview, _, cx| {
                 this.session
                     .update(cx, |session, cx| session.toggle_viewer(cx));
             }))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
+                // Escape closes the menu, else the viewer, else deselects.
                 if !this.close_menu() {
-                    this.session
-                        .update(cx, |session, cx| session.close_viewer(cx));
+                    this.session.update(cx, |session, cx| {
+                        if session.viewer {
+                            session.close_viewer(cx)
+                        } else {
+                            session.clear_selection(cx)
+                        }
+                    });
                 }
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
+                this.session
+                    .update(cx, |session, cx| session.select_all(cx));
             }))
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_rails(true, false, cx)),

@@ -6,6 +6,10 @@ use std::time::Duration;
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// CSS `ease-in`.
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// CSS `ease-in-out`.
+pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// `ScrollToTopButton`: its rise and fade.
+pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// `menuOut`: a dismissed context menu fades for this long.
 pub const MENU_OUT: Duration = Duration::from_millis(80);
 /// The grid and scope title fade for this long on each side of a scope change.
@@ -61,6 +65,15 @@ pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
+/// `--duration-normal`: disclosure arrows, chips and field borders.
+pub const NORMAL: Duration = Duration::from_millis(200);
+/// The search field's border and background on focus.
+pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
+/// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.
+pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
+pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);
+pub const TOOLTIP_OFFSET: f32 = 6.;
+
 /// Where a fade that set off from `from` toward 0 or 1 has got to.
 fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
     let target = if hovered { 1. } else { 0. };
@@ -95,19 +108,41 @@ impl Default for Fade {
 }
 
 impl Fade {
+    /// A fade already at rest in the given state.
+    pub fn at(on: bool) -> Self {
+        Self {
+            on,
+            ..Self::default()
+        }
+    }
+
+    /// Moves toward `on` from wherever the fade is now. Setting the state it
+    /// is already in changes nothing.
     pub fn set(&mut self, on: bool, duration: Duration) {
+        if self.on == on {
+            return;
+        }
         self.from = self.value();
         self.on = on;
         self.since = std::time::Instant::now();
-        self.duration = duration;
+        // A transition reversed part-way takes only the time of the distance
+        // left to cover, as CSS shortens it.
+        let distance = if on { 1. - self.from } else { self.from };
+        self.duration = duration.mul_f32(distance.clamp(0., 1.));
     }
 
-    /// 0 at rest, 1 fully on.
+    /// 0 at rest, 1 fully on, moving on the default curve.
     pub fn value(&self) -> f32 {
+        self.value_with(EASE_DEFAULT)
+    }
+
+    /// The same, on another timing function.
+    pub fn value_with(&self, curve: CubicBezier) -> f32 {
+        let target = if self.on { 1. } else { 0. };
         if self.duration.is_zero() {
-            return if self.on { 1. } else { 0. };
+            return target;
         }
-        fade_value(self.from, self.on, self.since.elapsed(), self.duration)
+        self.from + (target - self.from) * curve.ease(progress(self.since.elapsed(), self.duration))
     }
 
     pub fn on(&self) -> bool {
@@ -204,6 +239,21 @@ mod tests {
             halfway
         );
         assert_eq!(fade_value(halfway, false, duration, duration), 0.);
+    }
+
+    #[test]
+    fn a_fade_reversed_part_way_takes_less_than_its_full_time() {
+        let mut fade = Fade::default();
+        fade.set(true, Duration::from_secs(10));
+        // Barely begun, so going back covers almost no distance.
+        fade.set(false, Duration::from_secs(10));
+        assert!(fade.duration < Duration::from_secs(1));
+        assert!(!fade.on());
+        // Setting the state it is already in starts nothing.
+        let since = fade.since;
+        fade.set(false, Duration::from_secs(10));
+        assert_eq!(fade.since, since);
+        assert!(Fade::at(true).value() == 1. && !Fade::at(true).animating());
     }
 
     #[test]

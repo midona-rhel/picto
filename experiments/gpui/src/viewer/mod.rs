@@ -110,7 +110,8 @@ impl Render for Viewer {
             ui::button(id, label, cx).on_click(cx.listener(move |this, _, _, cx| {
                 this.session.update(cx, |session, cx| {
                     let target = session
-                        .selected
+                        .focus
+                        .unwrap_or(0)
                         .saturating_add_signed(delta)
                         .min(session.items.len().saturating_sub(1));
                     session.select(target, cx);

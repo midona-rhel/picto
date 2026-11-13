@@ -86,7 +86,12 @@ pub struct Session {
     prefs_scope: Option<usize>,
     /// The zoom: the target tile size.
     pub tile: f32,
-    pub selected: usize,
+    /// The selected items, by position in `items`.
+    pub selection: std::collections::BTreeSet<usize>,
+    /// The selected item the inspector and viewer show: the one last chosen.
+    pub focus: Option<usize>,
+    /// Where a shift-click or shift-move range starts.
+    anchor: Option<usize>,
     pub details: Option<RootDetails>,
     pub viewer: bool,
     /// Which member of a collection the viewer shows.
@@ -146,7 +151,9 @@ impl Session {
             prefs: ViewPrefs::default(),
             prefs_scope: None,
             tile: 200.,
-            selected: 0,
+            selection: Default::default(),
+            focus: None,
+            anchor: None,
             details: None,
             viewer: false,
             member: 0,
@@ -171,7 +178,7 @@ impl Session {
     }
 
     pub fn selected_item(&self) -> Option<&RootSummary> {
-        self.items.get(self.selected)
+        self.items.get(self.focus?)
     }
 
     // ── Results ─────────────────────────────────────────────────
@@ -220,6 +227,30 @@ impl Session {
         self.query(false, cx);
     }
 
+    /// Narrows the grid by one more clause, keeping the filters it has.
+    pub fn add_filter(
+        &mut self,
+        clause: picto_library::predicate::FilterClause,
+        cx: &mut Context<Self>,
+    ) {
+        let clause = FilterExpr::Clause(clause);
+        let filter = match self.filter.take() {
+            Some(FilterExpr::All(mut clauses)) => {
+                clauses.push(clause);
+                FilterExpr::All(clauses)
+            }
+            Some(other) => FilterExpr::All(vec![other, clause]),
+            None => clause,
+        };
+        self.set_filter(Some(filter), cx);
+    }
+
+    /// The library folder's name without its `.library` suffix.
+    pub fn library_name(&self) -> Option<String> {
+        let name = self.blobs.parent()?.file_name()?.to_string_lossy();
+        Some(name.trim_end_matches(".library").to_owned())
+    }
+
     pub fn set_tile(&mut self, tile: f32, cx: &mut Context<Self>) {
         self.tile = tile;
         cx.emit(Change::Results);
@@ -246,7 +277,7 @@ impl Session {
                 Reply::Details(id, details)
                     if self.selected_item().is_some_and(|item| item.root_id == id) =>
                 {
-                    if let Some(item) = self.items.get_mut(self.selected) {
+                    if let Some(item) = self.focus.and_then(|focus| self.items.get_mut(focus)) {
                         item.name = details.root.name.clone();
                     }
                     self.details = Some(details);
@@ -284,14 +315,14 @@ impl Session {
         } else {
             self.items = page.items;
             self.results_epoch += 1;
-            self.selected = 0;
-            self.details = None;
+            // A new result set opens with nothing selected.
+            self.forget_selection();
             self.displayed = self.scope;
             if matches!(self.transition, Transition::Waiting) {
                 self.transition = Transition::FadingIn(Instant::now());
             }
             cx.emit(Change::Navigation);
-            self.select(0, cx);
+            cx.emit(Change::Selection);
         }
         cx.emit(Change::Results);
     }
@@ -358,8 +389,7 @@ impl Session {
     fn commit_screen(&mut self) {
         self.items.clear();
         self.results_epoch += 1;
-        self.selected = 0;
-        self.details = None;
+        self.forget_selection();
         self.total = 0;
         self.cursor = None;
         self.displayed = self.scope;
@@ -391,16 +421,81 @@ impl Session {
 
     // ── Selection ───────────────────────────────────────────────
 
-    pub fn select(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(item) = self.items.get(index) else {
-            return;
-        };
-        self.demo = None;
-        self.selected = index;
+    fn forget_selection(&mut self) {
+        self.selection.clear();
+        self.focus = None;
+        self.anchor = None;
         self.member = 0;
         self.details = None;
-        let _ = self.sender.send(Request::Details(item.root_id));
+    }
+
+    /// Shows `index` in the inspector, or nothing.
+    fn focus_on(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        self.demo = None;
+        self.member = 0;
+        self.details = None;
+        self.focus = index.filter(|index| *index < self.items.len());
+        if let Some(item) = self.selected_item() {
+            let _ = self.sender.send(Request::Details(item.root_id));
+        }
         cx.emit(Change::Selection);
+    }
+
+    /// Selects one item alone, as a plain click does.
+    pub fn select(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.items.len() {
+            return;
+        }
+        self.selection = [index].into();
+        self.anchor = Some(index);
+        self.focus_on(Some(index), cx);
+    }
+
+    /// Adds or removes one item, as a command-click does.
+    pub fn toggle(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.items.len() {
+            return;
+        }
+        if self.selection.remove(&index) {
+            let last = self.selection.iter().next_back().copied();
+            self.focus_on(last, cx);
+        } else {
+            self.selection.insert(index);
+            self.anchor = Some(index);
+            self.focus_on(Some(index), cx);
+        }
+    }
+
+    /// Selects from the anchor to `index`, as a shift-click or shift-move
+    /// does; `keep` adds the range to what is selected already.
+    pub fn select_to(&mut self, index: usize, keep: bool, cx: &mut Context<Self>) {
+        if index >= self.items.len() {
+            return;
+        }
+        let anchor = *self.anchor.get_or_insert(index);
+        if !keep {
+            self.selection.clear();
+        }
+        self.selection.extend(anchor.min(index)..=anchor.max(index));
+        self.focus_on(Some(index), cx);
+    }
+
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+        self.selection = (0..self.items.len()).collect();
+        let focus = self.focus.unwrap_or(0);
+        self.anchor.get_or_insert(focus);
+        self.focus_on(Some(focus), cx);
+    }
+
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            self.anchor = None;
+            self.focus_on(None, cx);
+        }
     }
 
     /// The item a keyboard move lands on, given the grid's current geometry.
@@ -411,9 +506,13 @@ impl Session {
             _ if self.viewer => return None,
             _ => action,
         };
+        // With nothing selected, any move selects the first item.
+        let Some(focus) = self.focus else {
+            return (!self.items.is_empty()).then_some(0);
+        };
         nav::target(
             action,
-            self.selected,
+            focus,
             self.items.len(),
             nav::column_count(width, self.tile, self.prefs.gap),
             nav::visible_rows(height, self.tile, self.prefs.gap),
@@ -423,7 +522,7 @@ impl Session {
     // ── Viewer ──────────────────────────────────────────────────
 
     pub fn open_viewer(&mut self, cx: &mut Context<Self>) {
-        if !self.viewer {
+        if !self.viewer && self.focus.is_some() {
             self.viewer = true;
             cx.emit(Change::Viewer);
         }
@@ -472,6 +571,14 @@ impl Session {
 
     pub fn set_notes(&self, id: RootId, notes: String) {
         let _ = self.sender.send(Request::Notes(id, notes));
+    }
+
+    pub fn remove_tag(&self, id: RootId, name: String) {
+        let _ = self.sender.send(Request::Untag(id, name));
+    }
+
+    pub fn remove_from_folder(&self, id: RootId, folder: picto_library::FolderId) {
+        let _ = self.sender.send(Request::LeaveFolder(id, folder));
     }
 
     pub fn undo(&self) {
