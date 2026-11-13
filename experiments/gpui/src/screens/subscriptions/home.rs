@@ -298,23 +298,24 @@ impl SubscriptionsScreen {
                     .flex()
                     .items_center()
                     .gap(px(clamp_cqi(width, 4., 0.8, 8.)))
-                    // TODO: the new-subscription dialog.
                     .child(
                         ui::action_button("subscription-add", Look::Primary)
                             .label("Add")
                             .icon("plus", 14.)
                             .padding(padding)
-                            .gap(gap),
+                            .gap(gap)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_create(cx))),
                     )
-                    // TODO: the add-gallery dialog. One gallery downloads at a
-                    // time, so the button waits while one runs.
+                    // One gallery downloads at a time, so the button waits
+                    // while one runs.
                     .child(
                         ui::action_button("subscription-add-gallery", Look::Standard)
                             .label("Add Gallery")
                             .icon("library-plus", 14.)
                             .padding(padding)
                             .gap(gap)
-                            .disabled(gallery_running),
+                            .disabled(gallery_running)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_gallery(cx))),
                     )
                     // TODO: the accounts window, for site logins.
                     .child(
@@ -337,15 +338,24 @@ impl SubscriptionsScreen {
             .queries
             .iter()
             .find(|query| query.last_failure_message.is_some());
-        let status = match failed {
-            Some(query) if !running => format::describe_gallery_failure(
+        // `progressBySubscriptionId`: what the run in progress reports.
+        let progress = self.gallery_progress.get(&job.id).copied();
+        let downloaded = progress.map_or(0, |progress| progress.downloaded);
+        let total = progress.and_then(|progress| progress.total);
+        let status = match (failed, total) {
+            (Some(query), _) if !running => format::describe_gallery_failure(
                 query.last_failure_kind.as_deref(),
                 query.last_failure_message.as_deref(),
             )
             .to_owned(),
-            _ => format!(
+            (_, Some(total)) => format!(
+                "{} / {} images downloaded",
+                crate::grid::format::grouped(downloaded),
+                crate::grid::format::grouped(total)
+            ),
+            (_, None) => format!(
                 "{} images downloaded",
-                crate::grid::format::grouped(job.progress.downloaded)
+                crate::grid::format::grouped(downloaded)
             ),
         };
         let id = job.id;
@@ -390,15 +400,15 @@ impl SubscriptionsScreen {
                                     .child(status),
                             ),
                     )
-                    // The total is not known until the source reports it, so
-                    // the line shows its track alone.
-                    .child(
-                        div()
-                            .h(px(2.))
-                            .w_full()
-                            .rounded_full()
-                            .bg(theme.surface_active()),
-                    ),
+                    // Filled to the share downloaded once the site has
+                    // reported the gallery's size, swept until then.
+                    .child(match total {
+                        Some(total) => ui::progress_bar().height(2.).filled(
+                            ("gallery-progress", job.id as usize),
+                            ui::progress_bar::share(downloaded, total),
+                        ),
+                        None => ui::progress_bar().height(2.),
+                    }),
             )
             .child(
                 div()
@@ -473,23 +483,12 @@ impl SubscriptionsScreen {
         if card.cover.is_some() {
             cover = cover.bg(theme.surface_2());
         }
-        let renaming = self.renaming == Some(id);
-        let name = if renaming {
-            div()
-                .flex_1()
-                .min_w_0()
-                .ml(px(-1.))
-                .child(self.rename_field("subscription-rename"))
-                .into_any_element()
-        } else {
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(if selected { accent } else { theme.text() })
-                .child(card.name.clone())
-                .into_any_element()
-        };
+        let name = div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_color(if selected { accent } else { theme.text() })
+            .child(card.name.clone());
         let (click_order, menu_order) = (order.clone(), order);
         div()
             .id(("subscription-card", id as usize))
@@ -507,9 +506,6 @@ impl SubscriptionsScreen {
             })
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 cx.stop_propagation();
-                if this.renaming == Some(id) {
-                    return;
-                }
                 if event.click_count() >= 2 {
                     this.open(id, cx);
                 } else {

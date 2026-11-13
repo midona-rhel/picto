@@ -298,6 +298,25 @@ impl FolderPicker {
         self.show(anchor, folders, window, cx);
     }
 
+    /// Opens with its bottom just above a button at `anchor`
+    /// (`anchorPlacement: 'above'`), on the folders `folders` names.
+    pub fn open_above(
+        &mut self,
+        anchor: Point<f32>,
+        folders: Vec<FolderId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(None, folders, window, cx);
+        let view = window.viewport_size();
+        self.geometry = overlay_shell::place_above(
+            anchor,
+            size(f32::from(view.width), f32::from(view.height)),
+            WIDTH,
+            HEIGHT,
+        );
+    }
+
     /// Opens in the filter mode below a control of the filter bar, on the
     /// folders the filter includes and excludes.
     pub fn open_filter(

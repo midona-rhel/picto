@@ -79,6 +79,8 @@ pub enum Scope {
     Viewer,
     /// The duplicate review (`DuplicatesScreen`'s).
     Duplicates,
+    /// The Subscriptions screen (`SubscriptionsGrid`'s shortcut scope).
+    Subscriptions,
     /// A detail window (`DetailWindow`'s), which has the viewer's keys but
     /// closes only on Escape.
     DetailWindow,
@@ -103,6 +105,7 @@ impl Scope {
             // Flash keeps its keys for the movie.
             Scope::Viewer => "Viewer && !Flash",
             Scope::Duplicates => "Duplicates",
+            Scope::Subscriptions => "Subscriptions",
             Scope::DetailWindow => "DetailWindow && !Flash",
             Scope::Media => "Media && !Flash",
         };
@@ -156,7 +159,8 @@ pub fn targets(id: &str) -> Vec<Target> {
         "grid.pageDown" => vec![to!(Grid, shell::PageDown, extends)],
         // File.
         "file.settings" => vec![to!(Anywhere, crate::settings::OpenSettings)],
-        "file.delete" => vec![to!(Grid, DeleteItems)],
+        // The grid's selection, or the selected subscriptions' cards.
+        "file.delete" => vec![to!(Grid, DeleteItems), to!(Subscriptions, DeleteItems)],
         "file.removeFromFolder" => vec![to!(Grid, RemoveFromFolder)],
         "file.restore" => vec![to!(Grid, RestoreItems)],
         "file.newFolder" => vec![to!(App, NewFolder)],
@@ -795,7 +799,10 @@ mod tests {
         let none = Overrides::new();
         assert_eq!(
             bound(KeyboardPreset::Us, &none, "file.delete"),
-            [(spelled("cmd-backspace"), Scope::Grid)]
+            [
+                (spelled("cmd-backspace"), Scope::Grid),
+                (spelled("cmd-backspace"), Scope::Subscriptions)
+            ]
         );
         assert_eq!(
             bound(KeyboardPreset::Us, &none, "file.removeFromFolder"),
@@ -810,6 +817,7 @@ mod tests {
             Scope::Grid,
             Scope::Viewer,
             Scope::Duplicates,
+            Scope::Subscriptions,
             Scope::DetailWindow,
         ] {
             let predicate = scope.predicate().unwrap();

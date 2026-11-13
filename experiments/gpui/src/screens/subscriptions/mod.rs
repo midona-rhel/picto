@@ -2,22 +2,29 @@
 //! library's subscriptions, and one subscription's workspace when a card is
 //! opened. Opening a subscription is a place of the screen, so Back returns
 //! to the grid and the scope title names it.
+mod cover_dialog;
 mod data;
 mod detail;
+mod dialogs;
 mod format;
 mod home;
+mod requests;
 
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
+use crate::inspector::{FolderPicker, TagPicker, folder_picker, tag_picker};
 use crate::session::{Change, Session};
 use crate::ui;
 use crate::ui::menu::{self, Menu};
-use crate::ui::text_input::{Committed, TextInput};
+use crate::ui::modal;
+use crate::ui::text_input::{Submitted, TextInput};
 use gpui::*;
+use requests::{Outbox, Request};
+use serde_json::Value;
 use std::{
     cell::Cell,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -83,9 +90,9 @@ impl Command {
     }
 
     /// The command name and arguments of `core/src/ipc.rs`.
-    pub fn request(self, subscription_id: i64) -> (&'static str, serde_json::Value) {
+    pub fn request(self, subscription_id: i64) -> Request {
         let id = serde_json::json!({ "subscription_id": subscription_id });
-        match self {
+        let (name, args) = match self {
             Command::Run => ("subscriptions.run", id),
             Command::Pause => ("subscriptions.run.pause", id),
             Command::Resume => ("subscriptions.run.resume", id),
@@ -105,7 +112,8 @@ impl Command {
                     "posts_per_run": posts_per_run,
                 }),
             ),
-        }
+        };
+        Request { name, args }
     }
 
     /// Whether it may start a run, after which progress is followed at once.
@@ -154,10 +162,44 @@ fn schedule_menu(current: Option<&str>) -> menu::Entry {
     .into()
 }
 
+/// How a notification reads (`showErrorNotification`,
+/// `showSuccessNotification`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Tone {
+    Error,
+    Success,
+}
+
+/// Shows a notification as production's toasts do, through the window's
+/// notification host.
+pub fn show_notification(tone: Tone, title: &str, message: &str, cx: &mut App) {
+    let (title, message) = (title.to_owned(), message.to_owned());
+    match tone {
+        Tone::Error => crate::ui::notify::error(title, message, cx),
+        Tone::Success => crate::ui::notify::success(title, message, cx),
+    }
+}
+
 /// The tabs of a subscription's data plane.
 const TABS: [&str; 3] = ["Sources", "History", "Problems"];
 const SOURCES: usize = 0;
 const HISTORY: usize = 1;
+
+/// A gallery download's run as `subscriptions.progress.get` reports it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct GalleryProgress {
+    run: i64,
+    downloaded: i64,
+    /// The gallery's size once the site has reported it.
+    total: Option<i64>,
+}
+
+/// Which destination list an open picker edits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Picking {
+    Folders(i64),
+    Tags(i64),
+}
 
 pub struct SubscriptionsScreen {
     session: Entity<Session>,
@@ -179,14 +221,30 @@ pub struct SubscriptionsScreen {
     detail_generation: u64,
     loading_more: bool,
     tab: usize,
-    /// The name field of a rename in place.
-    rename: Entity<TextInput>,
-    /// The subscription whose name is being edited.
-    renaming: Option<i64>,
     /// The open context menu, which stays while it fades out.
     menu: menu::Host,
     /// The subscriptions the open menu acts on.
     menu_targets: Vec<i64>,
+    /// The open dialog: new subscription, gallery, rename, a source's edit
+    /// or details, a confirmation, or the cover.
+    dialog: modal::Host<dialogs::Dialog>,
+    /// The pickers that add folders and tags to a subscription's
+    /// destination, and which list the open one edits.
+    tag_picker: Entity<TagPicker>,
+    folder_picker: Entity<FolderPicker>,
+    picking: Option<Picking>,
+    /// The add-query bar's source and query.
+    add_site: &'static str,
+    add_query: Entity<TextInput>,
+    /// The sites' saved logins and their last checks, for the chips of
+    /// sources that cannot run without one.
+    logins: Vec<format::Login>,
+    login_health: Vec<format::Login>,
+    /// Gallery downloads' progress, and the galleries being cleaned up.
+    gallery_progress: HashMap<i64, GalleryProgress>,
+    settling: HashSet<i64>,
+    /// A subscription just created, opened once the list has it.
+    pending_open: Option<i64>,
     /// Whether the screen showed at the last navigation, to read the list
     /// again each time it is opened.
     shown: bool,
@@ -196,15 +254,20 @@ pub struct SubscriptionsScreen {
     /// container-relative CSS sizes are measured against.
     home_width: Rc<Cell<f32>>,
     plane_width: Rc<Cell<f32>>,
-    /// Where the rail's "More actions" button is, to open its menu below it.
+    /// Where the rail's "More actions" button is, to open its menu below it,
+    /// and the destination's add buttons, to open the pickers above them.
     overflow: Rc<Cell<Bounds<Pixels>>>,
-    /// Where the name field of a rename is; a press anywhere else ends it.
-    rename_bounds: Rc<Cell<Bounds<Pixels>>>,
+    add_folder: Rc<Cell<Bounds<Pixels>>>,
+    add_tag: Rc<Cell<Bounds<Pixels>>>,
     home_scroll: ScrollHandle,
     rail_scroll: ScrollHandle,
     table_scroll: ScrollHandle,
     /// Subscriptions with a command on its way; their controls wait.
     acting: HashSet<i64>,
+    /// Edits on their way (`busyKey`): rows, dialogs and the add bar wait.
+    busy: usize,
+    /// Where commands go: the application, or a log when runs are held.
+    outbox: Outbox,
     /// Until when progress is read although nothing shows as running yet.
     grace_until: Option<Instant>,
     /// The next progress read while a run is going.
@@ -218,26 +281,21 @@ impl SubscriptionsScreen {
     pub fn new(
         session: Entity<Session>,
         _thumbnails: Entity<Thumbnails>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let rename = cx.new(|cx| TextInput::rename(crate::theme::TEXT_MD, window, cx));
-        let rename_focus = rename.read(cx).focus_handle(cx);
+        let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));
+        let folder_picker = cx.new(|cx| FolderPicker::new(session.clone(), cx));
+        let add_query = cx.new(|cx| TextInput::dialog("", cx));
+        let add_site = format::query_sites().first().map_or("", |site| site.id);
+        add_query.update(cx, |input, _| {
+            input.set_placeholder(placeholder(add_site));
+        });
         let subscriptions = vec![
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::Navigation {
                     this.navigated(cx);
                 }
-            }),
-            // The field is keyed by the subscription it renames, so a commit
-            // that arrives after the field closed still knows its target.
-            cx.subscribe(&rename, |this, _, Committed(id, name), cx| {
-                this.commit_rename(*id as i64, name.clone(), cx);
-            }),
-            cx.on_blur(&rename_focus, window, |this, window, cx| {
-                this.renaming = None;
-                window.focus(&this.focus, cx);
-                cx.notify();
             }),
             // What the runners and other edits change, read again as the
             // renderer's settle store does: the list after a quiet 250 ms,
@@ -258,6 +316,24 @@ impl SubscriptionsScreen {
                     this.load(cx);
                 }
             }),
+            cx.subscribe(&tag_picker, |this, _, event: &tag_picker::Event, cx| {
+                if let tag_picker::Event::Toggle { name, add, .. } = event {
+                    this.tag_picked(name, *add, cx);
+                }
+            }),
+            cx.subscribe(
+                &folder_picker,
+                |this, _, event: &folder_picker::Event, cx| {
+                    if let folder_picker::Event::Toggle { folder, add } = event {
+                        this.folder_picked(i64::from(folder.0), *add, cx);
+                    }
+                },
+            ),
+            cx.subscribe(&add_query, |this, _, _: &Submitted, cx| {
+                this.submit_query(cx)
+            }),
+            // The Add button follows what is typed.
+            cx.observe(&add_query, |_, _, cx| cx.notify()),
         ];
         let focus = cx.focus_handle();
         let mut screen = Self {
@@ -272,22 +348,34 @@ impl SubscriptionsScreen {
             detail_generation: 0,
             loading_more: false,
             tab: SOURCES,
-            rename,
-            renaming: None,
             // Over the window as the shell lays the grid's. The keyboard goes
-            // back to the screen unless the action moved it, as Rename does.
+            // back to the screen unless the action moved it.
             menu: menu::Host::deferred(2, menu::Return::To(focus)),
             menu_targets: Vec::new(),
+            dialog: modal::Host::default(),
+            tag_picker,
+            folder_picker,
+            picking: None,
+            add_site,
+            add_query,
+            logins: Vec::new(),
+            login_health: Vec::new(),
+            gallery_progress: HashMap::new(),
+            settling: HashSet::new(),
+            pending_open: None,
             shown: false,
             place_seen: None,
             home_width: Rc::new(Cell::new(0.)),
             plane_width: Rc::new(Cell::new(0.)),
             overflow: Rc::new(Cell::new(Bounds::default())),
-            rename_bounds: Rc::new(Cell::new(Bounds::default())),
+            add_folder: Rc::new(Cell::new(Bounds::default())),
+            add_tag: Rc::new(Cell::new(Bounds::default())),
             home_scroll: ScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             table_scroll: ScrollHandle::new(),
             acting: HashSet::new(),
+            busy: 0,
+            outbox: Outbox::from_environment(),
             grace_until: None,
             poll: None,
             invalidation: None,
@@ -298,8 +386,70 @@ impl SubscriptionsScreen {
         screen
     }
 
-    /// Reads every subscription again. What shows stays until the answer
-    /// arrives.
+    /// Sends a command to the application through the screen's outbox.
+    fn send(
+        &self,
+        request: Request,
+        cx: &App,
+    ) -> futures::channel::oneshot::Receiver<Result<Value, String>> {
+        let session = self.session.read(cx);
+        self.outbox
+            .send(request, |name, args| session.dispatch(name, args))
+    }
+
+    /// Whether an edit is on its way (`busy`).
+    fn busy(&self) -> bool {
+        self.busy > 0 || !self.acting.is_empty()
+    }
+
+    /// `act`: sends `requests` one after another, stopping at the first
+    /// that fails, which is shown as production's error toast; then reads
+    /// the subscriptions again and hands `then` whether all succeeded and
+    /// the last answer.
+    fn act(
+        &mut self,
+        requests: Vec<Request>,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, Result<Value, String>, &mut Context<Self>) + 'static,
+    ) {
+        if requests
+            .iter()
+            .any(|request| requests::starts_network(request.name))
+        {
+            self.grace_until = Some(Instant::now() + RUN_GRACE);
+        }
+        self.busy += 1;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let mut outcome = Ok(Value::Null);
+            for request in requests {
+                let Ok(answer) = this.update(cx, |this, cx| this.send(request, cx)) else {
+                    return;
+                };
+                outcome = answer
+                    .await
+                    .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+                if outcome.is_err() {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.busy -= 1;
+                if let Err(error) = &outcome {
+                    show_notification(Tone::Error, "Subscription action failed", error, cx);
+                }
+                then(this, outcome, cx);
+                this.session
+                    .update(cx, |session, cx| session.refresh_activity(cx));
+                this.reload(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Reads every subscription again, and the sites' logins. What shows
+    /// stays until the answer arrives.
     fn load(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
@@ -307,13 +457,23 @@ impl SubscriptionsScreen {
         let answer = self.session.read(cx).run(move |library| {
             data::subscriptions(library, &blobs).map_err(|error| error.to_string())
         });
+        let logins = self.send(requests::credentials(), cx);
+        let health = self.send(requests::credential_health(), cx);
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
+            let logins = logins.await.ok().and_then(Result::ok);
+            let health = health.await.ok().and_then(Result::ok);
             let _ = this.update(cx, |this, cx| {
                 if this.generation != generation {
                     return;
+                }
+                if let Some(logins) = logins {
+                    this.logins = read_logins(&logins);
+                }
+                if let Some(health) = health {
+                    this.login_health = read_logins(&health);
                 }
                 match result {
                     Ok(list) => {
@@ -322,15 +482,40 @@ impl SubscriptionsScreen {
                             .retain(|id| list.iter().any(|entry| entry.id == *id));
                         this.list = Some(list);
                     }
-                    // `refreshSubscriptionsWorkspace`.
-                    Err(error) => ui::notify::error("Subscriptions unavailable", error, cx),
+                    Err(error) => {
+                        show_notification(Tone::Error, "Subscriptions unavailable", &error, cx)
+                    }
                 }
-                this.name_place(cx);
-                this.follow_runs(cx);
+                this.settled(cx);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// What follows a new read of the list: a subscription just created
+    /// opens, a deleted one that was open gives way to the grid, and runs
+    /// and gallery downloads are followed.
+    fn settled(&mut self, cx: &mut Context<Self>) {
+        let exists = |id: i64| {
+            self.list
+                .iter()
+                .flatten()
+                .any(|entry| entry.id == id && !format::is_gallery_job(entry))
+        };
+        if let Some(id) = self.pending_open.filter(|id| exists(*id)) {
+            self.pending_open = None;
+            self.open(id, cx);
+        } else if self.shown && self.list.is_some() && self.place_seen.is_some_and(|id| !exists(id))
+        {
+            // `refreshSubscriptionsWorkspace`: the workspace of a
+            // subscription that is gone closes.
+            self.session
+                .update(cx, |session, cx| session.open_place(None, cx));
+        }
+        self.name_place(cx);
+        self.follow_runs(cx);
+        self.follow_galleries(cx);
     }
 
     /// Reads the list again, and the open subscription's runs and issues.
@@ -367,6 +552,140 @@ impl SubscriptionsScreen {
         }
     }
 
+    /// Gallery downloads: a running one's progress is read, with its total
+    /// kept once known (`retainGalleryProgressTotals`); one whose run has
+    /// settled is announced and removed (`settleFinishedGalleryImports`).
+    fn follow_galleries(&mut self, cx: &mut Context<Self>) {
+        let jobs: Vec<(i64, bool)> = self
+            .list
+            .iter()
+            .flatten()
+            .filter(|subscription| format::is_gallery_job(subscription))
+            .map(|job| (job.id, format::running(job)))
+            .collect();
+        self.gallery_progress
+            .retain(|id, _| jobs.iter().any(|(job, running)| job == id && *running));
+        for (id, running) in jobs {
+            if running {
+                let answer = self.send(requests::progress(id), cx);
+                cx.spawn(async move |this, cx| {
+                    let Ok(Ok(progress)) = answer.await else {
+                        return;
+                    };
+                    let Ok(Some(progress)) = serde_json::from_value::<
+                        Option<picto_core::subscription_activity::CurrentSubscriptionProgress>,
+                    >(progress) else {
+                        return;
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        let known = this
+                            .gallery_progress
+                            .get(&id)
+                            .filter(|known| known.run == progress.run_id)
+                            .and_then(|known| known.total);
+                        let total = match (known, progress.gallery_total_items) {
+                            (Some(known), Some(reported)) => Some(known.max(reported)),
+                            (known, reported) => known.or(reported),
+                        };
+                        this.gallery_progress.insert(
+                            id,
+                            GalleryProgress {
+                                run: progress.run_id,
+                                downloaded: progress.counts.downloaded,
+                                total,
+                            },
+                        );
+                        cx.notify();
+                    });
+                })
+                .detach();
+            } else if self.settling.insert(id) {
+                self.settle_gallery(id, cx);
+            }
+        }
+    }
+
+    /// A gallery download that is not running: once its latest run has
+    /// ended, it is announced and the transient subscription removed.
+    fn settle_gallery(&mut self, id: i64, cx: &mut Context<Self>) {
+        let runs = self.send(requests::runs(id), cx);
+        cx.spawn(async move |this, cx| {
+            let latest = runs
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .and_then(|runs| {
+                    serde_json::from_value::<
+                            picto_core::subscription_activity::SubscriptionRunList,
+                        >(runs)
+                        .ok()
+                })
+                .and_then(|list| list.runs.into_iter().next());
+            let Some(latest) =
+                latest.filter(|run| !matches!(run.status.as_str(), "pending" | "running"))
+            else {
+                // Not started yet, or still going: looked at again later.
+                let _ = this.update(cx, |this, _| this.settling.remove(&id));
+                return;
+            };
+            let Ok(cleanup) =
+                this.update(cx, |this, cx| this.send(requests::clean_up_gallery(id), cx))
+            else {
+                return;
+            };
+            let cleaned = cleanup.await.ok().and_then(Result::ok);
+            let _ = this.update(cx, |this, cx| {
+                let name = this
+                    .subscription(id)
+                    .map(|job| job.name.clone())
+                    .unwrap_or_default();
+                let title = cleaned
+                    .as_ref()
+                    .and_then(|value| value.get("title"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or(name);
+                let exists = cleaned
+                    .as_ref()
+                    .and_then(|value| value.get("already_exists"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                match latest.status.as_str() {
+                    "succeeded" if exists => show_notification(
+                        Tone::Success,
+                        "Gallery already exists",
+                        &format!("{title} is already in the library."),
+                        cx,
+                    ),
+                    "succeeded" => show_notification(
+                        Tone::Success,
+                        "Gallery downloaded",
+                        &format!("{title} has been downloaded."),
+                        cx,
+                    ),
+                    "cancelled" => {}
+                    status => show_notification(
+                        Tone::Error,
+                        "Gallery import failed",
+                        &latest.error_message.clone().unwrap_or_else(|| {
+                            format!(
+                                "Gallery worker failed ({}).",
+                                latest.failure_kind.as_deref().unwrap_or(status)
+                            )
+                        }),
+                        cx,
+                    ),
+                }
+                if let Some(list) = &mut this.list {
+                    list.retain(|entry| entry.id != id);
+                }
+                this.settling.remove(&id);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Sends `command` for each of `ids`, then reads what changed. The
     /// controls of a subscription wait while its command is on its way.
     fn perform(&mut self, ids: Vec<i64>, command: impl Fn(i64) -> Command, cx: &mut Context<Self>) {
@@ -378,8 +697,7 @@ impl SubscriptionsScreen {
             }
             let command = command(id);
             starts |= command.starts();
-            let (name, args) = command.request(id);
-            answers.push((id, self.session.read(cx).dispatch(name, args)));
+            answers.push((id, self.send(command.request(id), cx)));
         }
         if answers.is_empty() {
             return;
@@ -396,7 +714,7 @@ impl SubscriptionsScreen {
                 for (id, result) in settled {
                     this.acting.remove(&id);
                     if let Ok(Err(error)) = result {
-                        ui::notify::error("Subscription action failed", error, cx);
+                        show_notification(Tone::Error, "Subscription action failed", &error, cx);
                     }
                 }
                 this.session
@@ -436,6 +754,10 @@ impl SubscriptionsScreen {
         self.list.as_ref()?.iter().find(|entry| entry.id == id)
     }
 
+    fn subscription_mut(&mut self, id: i64) -> Option<&mut data::Subscription> {
+        self.list.as_mut()?.iter_mut().find(|entry| entry.id == id)
+    }
+
     /// Reads the open subscription's runs and issues.
     fn load_detail(&mut self, id: i64, cx: &mut Context<Self>) {
         self.detail_generation += 1;
@@ -451,7 +773,12 @@ impl SubscriptionsScreen {
                 Ok(Err(error)) => {
                     let _ = this.update(cx, |this, cx| {
                         if this.detail_generation == generation {
-                            ui::notify::error("Subscription details unavailable", error, cx);
+                            show_notification(
+                                Tone::Error,
+                                "Subscription details unavailable",
+                                &error,
+                                cx,
+                            );
                         }
                     });
                     return;
@@ -462,9 +789,12 @@ impl SubscriptionsScreen {
             // open issues, so its badge stops warning; the Problems tab
             // still lists them until they are resolved.
             let Ok(acknowledged) = this.update(cx, |this, cx| {
-                this.session.read(cx).dispatch(
-                    "subscriptions.issues.acknowledge",
-                    serde_json::json!({ "subscription_id": id }),
+                this.send(
+                    Request {
+                        name: "subscriptions.issues.acknowledge",
+                        args: serde_json::json!({ "subscription_id": id }),
+                    },
+                    cx,
                 )
             }) else {
                 return;
@@ -473,12 +803,7 @@ impl SubscriptionsScreen {
             let _ = this.update(cx, |this, cx| {
                 if this.detail_generation == generation {
                     this.detail = Some(detail);
-                    if acknowledged
-                        && let Some(entry) = this
-                            .list
-                            .as_mut()
-                            .and_then(|list| list.iter_mut().find(|entry| entry.id == id))
-                    {
+                    if acknowledged && let Some(entry) = this.subscription_mut(id) {
                         entry.open_issues = 0;
                     }
                     cx.notify();
@@ -551,6 +876,8 @@ impl SubscriptionsScreen {
         self.shown = showing;
         if showing {
             if entering || place != self.place_seen {
+                // A menu belongs to the surface it was opened on.
+                self.close_menu(cx);
                 // The grid opens with nothing selected, as it does each time
                 // the Electron grid mounts.
                 self.selected.clear();
@@ -591,59 +918,6 @@ impl SubscriptionsScreen {
             .update(cx, |session, cx| session.open_place(Some(id), cx));
     }
 
-    // ── Rename in place ─────────────────────────────────────────
-
-    /// Edits a name in place, in a field the size of the name it replaces.
-    fn start_rename(&mut self, id: i64, size: f32, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(name) = self
-            .list
-            .as_ref()
-            .and_then(|list| list.iter().find(|entry| entry.id == id))
-            .map(|entry| entry.name.clone())
-        else {
-            return;
-        };
-        self.renaming = Some(id);
-        self.rename.update(cx, |input, cx| {
-            input.set_rename_size(size, cx);
-            input.set_field(id as u64, name, cx);
-            input.select_everything(cx);
-        });
-        window.focus(&self.rename.focus_handle(cx), cx);
-        cx.notify();
-    }
-
-    /// Shows the new name at once and writes it through the library.
-    fn commit_rename(&mut self, id: i64, name: String, cx: &mut Context<Self>) {
-        let name = name.trim().to_owned();
-        if name.is_empty() {
-            return;
-        }
-        if let Some(entry) = self
-            .list
-            .as_mut()
-            .and_then(|list| list.iter_mut().find(|entry| entry.id == id))
-        {
-            entry.name = name.clone();
-        }
-        self.name_place(cx);
-        let answer = self.session.read(cx).run(move |library| {
-            data::rename(library, id, &name).map_err(|error| error.to_string())
-        });
-        cx.spawn(async move |this, cx| {
-            let result = answer.await;
-            let _ = this.update(cx, |this, cx| {
-                if let Ok(Err(error)) = result {
-                    ui::notify::error("Subscription action failed", error, cx);
-                }
-                // Read back what the library holds now.
-                this.load(cx);
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
     // ── Selection ───────────────────────────────────────────────
 
     /// Click, Cmd-click and Shift-click on the card at `index` of the grid's
@@ -680,11 +954,18 @@ impl SubscriptionsScreen {
         cx.notify();
     }
 
+    /// The selected cards, in the grid's order.
+    fn chosen(&self) -> Vec<i64> {
+        self.card_order()
+            .into_iter()
+            .filter(|id| self.selected.contains(id))
+            .collect()
+    }
+
     // ── Context menu ────────────────────────────────────────────
 
     /// Opens the menu for `targets` at `position`: the one subscription's
     /// menu, or the bulk menu for several (`subscriptionsContextMenu.tsx`).
-    /// Rows this prototype cannot perform are shown and not offered.
     fn open_menu(
         &mut self,
         targets: Vec<i64>,
@@ -734,20 +1015,16 @@ impl SubscriptionsScreen {
                         .into(),
                     menu::Entry::Separator,
                     menu::item("rename", "Rename").icon("menu-rename").into(),
-                    // TODO: the cover dialog, to frame a downloaded image.
                     menu::item("cover", "Set Cover Photo…")
                         .icon("menu-photo-edit")
                         .into(),
                     schedule_menu(Some(subscription.schedule.as_str())),
                     menu::Entry::Separator,
-                    // TODO: confirm, then clear the sync history.
                     menu::item("reset", "Reset Sync History…")
                         .icon("menu-refresh")
                         .disabled(active)
                         .into(),
                     menu::Entry::Separator,
-                    // TODO: confirm, then delete the subscription; its files
-                    // stay in the library.
                     menu::item("delete", "Delete Subscription…")
                         .icon("menu-trash")
                         .danger(true)
@@ -780,9 +1057,7 @@ impl SubscriptionsScreen {
                         .into(),
                     schedule_menu(shared),
                     menu::Entry::Separator,
-                    // TODO: confirm, then delete them; their files stay in the
-                    // library.
-                    menu::item("delete", format!("Delete {total}…"))
+                    menu::item("delete-all", format!("Delete {total}…"))
                         .icon("menu-trash")
                         .danger(true)
                         .into(),
@@ -805,23 +1080,16 @@ impl SubscriptionsScreen {
                 match (action, targets.as_slice()) {
                     ("run", [id]) => this.run_control(*id, cx),
                     ("hold", [id]) => this.hold_control(*id, cx),
+                    ("rename", [id]) => this.open_rename(*id, window, cx),
+                    ("cover", [id]) => this.open_cover(*id, cx),
+                    ("reset", [id]) => this.confirm_reset(*id, cx),
+                    ("delete", [id]) => this.confirm_delete(*id, cx),
                     // `handleBulk*`: each subscription on its own.
                     ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
                     ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
                     ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
+                    ("delete-all", _) => this.confirm_delete_all(targets, cx),
                     _ => {}
-                }
-                if action == "rename"
-                    && let [id] = this.menu_targets.as_slice()
-                {
-                    let id = *id;
-                    // The rail shows the name larger than a card does.
-                    let size = if this.place_seen.is_some() {
-                        crate::theme::TEXT_XL
-                    } else {
-                        crate::theme::TEXT_MD
-                    };
-                    this.start_rename(id, size, window, cx);
                 }
             });
     }
@@ -843,17 +1111,227 @@ impl SubscriptionsScreen {
             self.selected = [id].into();
             self.anchor = Some(index);
         }
-        let targets = order
-            .iter()
-            .copied()
-            .filter(|id| self.selected.contains(id))
-            .collect();
+        let targets = self.chosen();
         self.open_menu(targets, position, window, cx);
     }
 
     fn close_menu(&mut self, cx: &mut Context<Self>) {
         self.menu.close(cx);
     }
+
+    // ── Destination ─────────────────────────────────────────────
+
+    /// Saves where a subscription's new files go, showing it at once.
+    fn set_destination(
+        &mut self,
+        id: i64,
+        folders: Vec<i64>,
+        tags: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let request = requests::destination(id, &folders, &tags);
+        if let Some(entry) = self.subscription_mut(id) {
+            entry.folder_ids = folders;
+            entry.automatic_tags = tags;
+        }
+        self.act(vec![request], cx, |_, _, _| {});
+    }
+
+    fn remove_folder(&mut self, id: i64, folder: i64, cx: &mut Context<Self>) {
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let folders = entry
+            .folder_ids
+            .iter()
+            .copied()
+            .filter(|current| *current != folder)
+            .collect();
+        let tags = entry.automatic_tags.clone();
+        self.set_destination(id, folders, tags, cx);
+    }
+
+    fn remove_tag(&mut self, id: i64, tag: &str, cx: &mut Context<Self>) {
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let folders = entry.folder_ids.clone();
+        let tags = entry
+            .automatic_tags
+            .iter()
+            .filter(|current| *current != tag)
+            .cloned()
+            .collect();
+        self.set_destination(id, folders, tags, cx);
+    }
+
+    /// The folder picker, above the add button, on the folders new files go
+    /// to.
+    fn pick_folders(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let folders = entry
+            .folder_ids
+            .iter()
+            .filter_map(|folder| u32::try_from(*folder).ok())
+            .map(picto_library::FolderId)
+            .collect();
+        let anchor = self.add_folder.get().origin;
+        self.picking = Some(Picking::Folders(id));
+        self.folder_picker.update(cx, |picker, cx| {
+            picker.open_above(
+                point(f32::from(anchor.x), f32::from(anchor.y)),
+                folders,
+                window,
+                cx,
+            )
+        });
+    }
+
+    /// The tag picker, above the add button, on the tags new files get.
+    fn pick_tags(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let records = entry
+            .automatic_tags
+            .iter()
+            .map(|tag| tag_picker::record(tag))
+            .collect();
+        let anchor = self.add_tag.get().origin;
+        self.picking = Some(Picking::Tags(id));
+        self.tag_picker.update(cx, |picker, cx| {
+            picker.open_above(
+                point(f32::from(anchor.x), f32::from(anchor.y)),
+                records,
+                window,
+                cx,
+            )
+        });
+    }
+
+    /// A folder checked or unchecked in the picker (`onApplyFolders`).
+    fn folder_picked(&mut self, folder: i64, add: bool, cx: &mut Context<Self>) {
+        let Some(Picking::Folders(id)) = self.picking else {
+            return;
+        };
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let mut folders = entry.folder_ids.clone();
+        folders.retain(|current| *current != folder);
+        if add {
+            folders.push(folder);
+        }
+        let tags = entry.automatic_tags.clone();
+        self.set_destination(id, folders, tags, cx);
+    }
+
+    /// A tag checked or unchecked in the picker (`onApplyTags`).
+    fn tag_picked(&mut self, name: &str, add: bool, cx: &mut Context<Self>) {
+        let Some(Picking::Tags(id)) = self.picking else {
+            return;
+        };
+        let Some(entry) = self.subscription(id) else {
+            return;
+        };
+        let mut tags = entry.automatic_tags.clone();
+        tags.retain(|current| current != name);
+        if add {
+            tags.push(name.to_owned());
+        }
+        let folders = entry.folder_ids.clone();
+        self.set_destination(id, folders, tags, cx);
+    }
+
+    // ── Sources ─────────────────────────────────────────────────
+
+    /// The add-query bar's source.
+    fn choose_add_site(&mut self, site: &'static str, cx: &mut Context<Self>) {
+        self.add_site = site;
+        self.add_query.update(cx, |input, cx| {
+            input.set_placeholder(placeholder(site));
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// `AddQueryBar`'s submit: the typed query is added to the open
+    /// subscription, and the field empties once it is.
+    fn submit_query(&mut self, cx: &mut Context<Self>) {
+        let text = self.add_query.read(cx).value().trim().to_owned();
+        let Some(id) = self.place_seen else {
+            return;
+        };
+        if self.add_site.is_empty() || text.is_empty() || self.busy() {
+            return;
+        }
+        let source = requests::Source {
+            site: self.add_site.to_owned(),
+            text,
+            display_name: None,
+            notes: None,
+            group_posts: crate::settings::current(cx).subscription_default_group_posts,
+        };
+        self.act(vec![requests::add_query(id, &source)], cx, |this, _, cx| {
+            this.add_query.update(cx, |input, cx| input.clear(cx));
+        });
+    }
+
+    /// A source's own run (`runQuery`), which downloads.
+    fn run_query(&mut self, query: i64, cx: &mut Context<Self>) {
+        self.act(vec![requests::run_query(query)], cx, |_, _, _| {});
+    }
+
+    fn pause_query(&mut self, query: i64, paused: bool, cx: &mut Context<Self>) {
+        self.act(vec![requests::pause_query(query, paused)], cx, |_, _, _| {});
+    }
+
+    fn group_query(&mut self, query: i64, group_posts: bool, cx: &mut Context<Self>) {
+        self.act(
+            vec![requests::group_query(query, group_posts)],
+            cx,
+            |_, _, _| {},
+        );
+    }
+
+    // ── Deleting ────────────────────────────────────────────────
+
+    /// ⌘⌫ on the grid: the selected subscriptions, after asking.
+    fn delete_selected(&mut self, cx: &mut Context<Self>) {
+        let chosen = self.chosen();
+        if self.place_seen.is_some() || chosen.is_empty() {
+            return;
+        }
+        self.confirm_delete_all(chosen, cx);
+    }
+}
+
+/// `e.g. <the site's example>`, or `query` while there is no site.
+fn placeholder(site: &str) -> SharedString {
+    match format::site(site) {
+        Some(site) => format!("e.g. {}", site.example_query).into(),
+        None => "query".into(),
+    }
+}
+
+/// The sites of `auth.credentials.list` or `auth.health.list`.
+fn read_logins(answer: &Value) -> Vec<format::Login> {
+    let text =
+        |record: &Value, key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
+    answer
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            Some(format::Login {
+                site: text(record, "site_id")?,
+                health: text(record, "status"),
+                last_error: text(record, "last_error"),
+            })
+        })
+        .collect()
 }
 
 impl Render for SubscriptionsScreen {
@@ -870,6 +1348,7 @@ impl Render for SubscriptionsScreen {
             },
         };
         let menu = self.menu.layer(window, cx);
+        let dialog = self.dialog_layer(window, cx);
         div()
             .id("subscriptions")
             .size_full()
@@ -879,25 +1358,17 @@ impl Render for SubscriptionsScreen {
             .text_color(theme.text())
             .track_focus(&self.focus)
             .key_context("Subscriptions")
-            // A press takes the keyboard to the screen, which ends a rename
-            // unless it lands in the name field.
+            // A press takes the keyboard to the screen.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    if this.renaming.is_none()
-                        || !this.rename_bounds.get().contains(&event.position)
-                    {
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    if !this.focus.contains_focused(window, cx) {
                         window.focus(&this.focus, cx);
                     }
                 }),
             )
             .on_action(cx.listener(|this, _: &Open, _, cx| {
-                let order = this.card_order();
-                let chosen = order
-                    .iter()
-                    .copied()
-                    .filter(|id| this.selected.contains(id))
-                    .collect::<Vec<_>>();
+                let chosen = this.chosen();
                 if this.place_seen.is_none()
                     && let [id] = chosen.as_slice()
                 {
@@ -915,34 +1386,24 @@ impl Render for SubscriptionsScreen {
                     cx.notify();
                 }
             }))
+            .on_action(cx.listener(|this, _: &crate::keymap::DeleteItems, _, cx| {
+                if this.place_seen.is_none() && !this.selected.is_empty() {
+                    this.delete_selected(cx);
+                } else {
+                    cx.propagate();
+                }
+            }))
             .child(body)
             .children(menu)
-    }
-}
-
-impl SubscriptionsScreen {
-    /// The name field of a rename in place, which notes where it is.
-    fn rename_field(&self, id: &'static str) -> Div {
-        let bounds = self.rename_bounds.clone();
-        div()
-            .relative()
-            .w_full()
-            .child(crate::ui::field(
-                id,
-                &self.rename,
-                crate::ui::field::Look::Rename,
-            ))
-            .child(
-                canvas(move |at, _, _| bounds.set(at), |_, _, _, _| {})
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-            )
+            .children(dialog)
+            .child(self.tag_picker.clone())
+            .child(self.folder_picker.clone())
     }
 }
 
 /// Keeps a measured width in `cell` and repaints `view` when it changes.
+/// The repaint is asked for with a frame, since a notification made while
+/// a frame is drawn schedules none.
 fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
     let view = window.current_view();
     canvas(
@@ -963,9 +1424,19 @@ fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
     .size_full()
 }
 
+/// Keeps where an element is in `cell`.
+fn place_of(cell: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
+    canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {})
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Command;
+    use super::{Command, read_logins};
+    use picto_core::ipc;
 
     #[test]
     fn controls_send_the_commands_the_electron_screen_sends() {
@@ -975,37 +1446,55 @@ mod tests {
         assert_eq!(Command::hold(true, false), Command::Stop);
         assert_eq!(Command::hold(false, false), Command::Hold(true));
         assert_eq!(Command::hold(false, true), Command::Hold(false));
+        let run = Command::Run.request(4);
         assert_eq!(
-            Command::Run.request(4),
+            (run.name, run.args),
             (
                 "subscriptions.run",
                 serde_json::json!({ "subscription_id": 4 })
             )
         );
-        assert_eq!(Command::Pause.request(4).0, "subscriptions.run.pause");
-        assert_eq!(Command::Resume.request(4).0, "subscriptions.run.resume");
-        assert_eq!(Command::Stop.request(4).0, "subscriptions.cancel");
+        assert_eq!(Command::Pause.request(4).name, "subscriptions.run.pause");
+        assert_eq!(Command::Resume.request(4).name, "subscriptions.run.resume");
+        assert_eq!(Command::Stop.request(4).name, "subscriptions.cancel");
         assert_eq!(
-            Command::Hold(false).request(4),
-            (
-                "subscriptions.hold",
-                serde_json::json!({ "subscription_id": 4, "paused": false })
-            )
+            Command::Hold(false).request(4).args,
+            serde_json::json!({ "subscription_id": 4, "paused": false })
         );
         assert_eq!(
-            Command::Schedule("weekly").request(4),
-            (
-                "subscriptions.schedule",
-                serde_json::json!({ "subscription_id": 4, "schedule": "weekly" })
-            )
+            Command::Schedule("weekly").request(4).args,
+            serde_json::json!({ "subscription_id": 4, "schedule": "weekly" })
         );
         assert_eq!(
-            Command::PostsPerRun(250).request(4),
-            (
-                "subscriptions.posts_per_run",
-                serde_json::json!({ "subscription_id": 4, "posts_per_run": 250 })
-            )
+            Command::PostsPerRun(250).request(4).args,
+            serde_json::json!({ "subscription_id": 4, "posts_per_run": 250 })
         );
         assert!(!Command::Schedule("daily").starts() && !Command::PostsPerRun(1).starts());
+        // Each reads as the application's own input.
+        for command in [Command::Run, Command::Pause, Command::Resume, Command::Stop] {
+            serde_json::from_value::<ipc::SubscriptionInput>(command.request(4).args).unwrap();
+        }
+        serde_json::from_value::<ipc::PauseSubscriptionInput>(Command::Hold(true).request(4).args)
+            .unwrap();
+        serde_json::from_value::<ipc::ScheduleSubscriptionInput>(
+            Command::Schedule("manual").request(4).args,
+        )
+        .unwrap();
+        serde_json::from_value::<ipc::SubscriptionPostsPerRunInput>(
+            Command::PostsPerRun(9).request(4).args,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn logins_are_read_by_site() {
+        let logins = read_logins(&serde_json::json!([
+            { "site_id": "e621", "status": "healthy", "checked_at": null, "last_error": null },
+            { "site_id": "newgrounds", "status": "invalid", "last_error": "403" },
+            { "status": "orphan" },
+        ]));
+        assert_eq!(logins.len(), 2);
+        assert_eq!(logins[1].site, "newgrounds");
+        assert_eq!(logins[1].last_error.as_deref(), Some("403"));
     }
 }

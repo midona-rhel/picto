@@ -58,6 +58,9 @@ pub struct Query {
     pub id: i64,
     pub site_id: String,
     pub text: String,
+    /// Shown instead of the query text where the user named it.
+    pub display_name: Option<String>,
+    pub notes: Option<String>,
     pub group_posts: bool,
     pub paused: bool,
     pub initial_run_complete: bool,
@@ -181,6 +184,8 @@ fn queries(
                 id,
                 site_id: row.get(2)?,
                 text: row.get(4)?,
+                display_name: row.get(5)?,
+                notes: row.get(6)?,
                 group_posts: row.get(7)?,
                 paused: row.get(8)?,
                 initial_run_complete: row.get(9)?,
@@ -336,7 +341,7 @@ fn cover_of(
 }
 
 /// A thumbnail in the blob store, `.jpg` first, then the older `.png`.
-fn thumbnail(blobs: &Path, hash: &str) -> Option<PathBuf> {
+pub fn thumbnail(blobs: &Path, hash: &str) -> Option<PathBuf> {
     if hash.len() < 4 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
@@ -477,32 +482,6 @@ fn issues(
         None
     };
     Ok(Issues { items, total, next })
-}
-
-/// Renames a subscription as the application's `subscriptions.rename` does:
-/// a published write of the subscription row, recorded under the same
-/// operation, which changes nothing when the name is already that.
-pub fn rename(library: &Library, subscription: i64, name: &str) -> Result<()> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Ok(());
-    }
-    library.auxiliary_semantic_write_if_changed(
-        WorkPriority::ForegroundMutation,
-        ["subscriptions".to_owned(), "tasks".to_owned()],
-        [],
-        "subscriptions.rename",
-        serde_json::json!({"subscription_id": subscription, "name": name}),
-        |transaction, _| {
-            let changed = transaction.execute(
-                "UPDATE subscription SET name = ?1
-                 WHERE subscription_id = ?2 AND name != ?1",
-                params![name, subscription],
-            )?;
-            Ok((changed > 0).then_some(()))
-        },
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]
