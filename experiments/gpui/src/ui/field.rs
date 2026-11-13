@@ -333,7 +333,8 @@ impl RenderOnce for Field {
             let width = width.clone();
             canvas(
                 move |bounds, _, cx| {
-                    let measured = f32::from(bounds.size.width);
+                    // Inside the 1px border; the overlay spans the border box.
+                    let measured = f32::from(bounds.size.width) + 2.;
                     if *width.read(cx) != measured {
                         width.update(cx, |width, _| *width = measured);
                     }
@@ -516,7 +517,12 @@ impl Field {
             .rounded(px(frame.radius))
             .border_1()
             .border_color(frame.border.1)
-            .bg(theme.rail())
+            // `.fieldExpansionBackdrop` on the rail colour, under the
+            // focused field's own fill.
+            .bg({
+                let fill = frame.fill.1;
+                theme::blend(theme.rail(), Rgba { a: 1., ..fill }, fill.a)
+            })
             .shadow(vec![
                 BoxShadow::new(px(0.), px(8.), rgba(theme::BLACK_22).into()).blur_radius(px(20.)),
                 BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_18).into()).blur_radius(px(3.)),

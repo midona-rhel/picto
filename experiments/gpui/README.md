@@ -350,12 +350,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   then fades out. Changing destination follows `WorkspaceSurface.tsx`: 170 ms
   fade-out on `--ease-default`, hidden until the first page is ready, 170 ms
   fade-in; clicks during the fade-out retarget it.
-- Inspector for the selected item: fitted preview with its format badge,
-  colour palette (a click opens the filter bar with that colour in its
-  colour filter), name,
+- Inspector for the selected item: preview at the thumbnail's own size
+  (at most 200px) with its format badge, colour palette (a click opens the
+  filter bar with that colour in its colour filter, a right-click its menu of
+  Filter by color and the seven Copy rows, its tooltip says "Copied!" for
+  1.5 s after a copy), name,
   notes, source address, folders and tags as chips that can be removed, a
   rating that previews under the pointer, and the properties the Electron
-  inspector lists. Its left edge drags between 260 and 550px.
+  inspector lists, Export and Auto Tag. Its left edge drags between 260 and
+  550px and, under the pointer or while dragged, grows to 2px in the text
+  colour.
 - The Settings window (`Settings.tsx`), opened by the titlebar's Settings
   button, ⌘, and the app menu, as production opens it: a separate 900×650
   window, no smaller, with the traffic lights hidden in favour of its own
@@ -474,7 +478,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shared dialog.
 - Inspector with several items selected, from the library's selection
   summary: the stacked preview of the last six covers chosen with its
-  shade, the turned cards' scale and the enter and exit motion, "N items
+  shade, the turned cards turned and scaled, the enter and exit motion, "N items
   selected", the shared notes and sources, folder and tag chips shared by
   all (removing one removes it from every item), a shared rating that rates
   all of them, and Media and Size.
@@ -899,13 +903,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Random hides the direction pill. The bar, the tag picker in its filter
   mode, the colour editor and the view menu have been seen drawn off-screen;
   the calendar, the range editors and saved filters have not.
-- Inspector: the stacked preview's cards cannot turn (GPUI rotates only
-  SVGs), so they lie straight; the folder card's radial light is a vertical
-  gradient. Auto Tag,
-  the subfolder scope, the summary spinners and the 250 ms switch to the
-  loading skeleton are not ported, and a selection's covers follow the order
-  items were chosen in this session, not the Electron query-selection order
-  for ranges and Select All.
+- Inspector: a turned stack card is drawn into a bitmap of its own off the
+  drawing thread (`inspector/turned.rs`); it lies straight until that is
+  ready, and while it enters it grows and fades but keeps its resting turn
+  instead of turning from 10 to 5 degrees. The folder card's radial light is
+  a vertical gradient. Auto Tag is drawn (dimmed when nothing in it is an
+  image) but the AI tagger it opens is a `TODO`. The subfolder scope, the
+  summary spinners and the 250 ms switch to the loading skeleton are not
+  ported, and a selection's covers follow the order items were chosen in this
+  session, not the Electron query order, for shift ranges.
 - Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's

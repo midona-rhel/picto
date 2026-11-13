@@ -12,6 +12,7 @@ pub struct ActionRow {
     glyph: f32,
     label: SharedString,
     height: f32,
+    disabled: bool,
 }
 
 pub fn action_row(
@@ -25,6 +26,7 @@ pub fn action_row(
         glyph: 15.,
         label: label.into(),
         height: theme::CONTROL_SM,
+        disabled: false,
     }
 }
 
@@ -37,6 +39,11 @@ impl ActionRow {
         self.height = height;
         self
     }
+    /// `:disabled`: no surface, a quarter strength, and no hover.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
 }
 
 impl RenderOnce for ActionRow {
@@ -47,7 +54,7 @@ impl RenderOnce for ActionRow {
         if fade.read(cx).animating() {
             window.request_animation_frame();
         }
-        div()
+        let row = div()
             .id(self.id)
             .w_full()
             .h(px(self.height))
@@ -58,20 +65,26 @@ impl RenderOnce for ActionRow {
             .justify_center()
             .gap(px(8.))
             .rounded(px(theme::RADIUS_MD))
-            .bg(theme::blend(
-                theme.surface_hover(),
-                theme.surface_active(),
-                hover,
-            ))
-            .text(theme::TEXT_SM)
-            .cursor_pointer()
-            .on_hover(move |hovered, _, cx| {
-                fade.update(cx, |fade, cx| {
-                    fade.set(*hovered, motion::BUTTON_HOVER);
-                    cx.notify();
-                })
+            .text(theme::TEXT_SM);
+        if self.disabled {
+            return row
+                .opacity(0.25)
+                .child(super::icon(self.icon, self.glyph, theme.text()).opacity(0.8))
+                .child(self.label);
+        }
+        row.bg(theme::blend(
+            theme.surface_hover(),
+            theme.surface_active(),
+            hover,
+        ))
+        .cursor_pointer()
+        .on_hover(move |hovered, _, cx| {
+            fade.update(cx, |fade, cx| {
+                fade.set(*hovered, motion::BUTTON_HOVER);
+                cx.notify();
             })
-            .child(super::icon(self.icon, self.glyph, theme.text()).opacity(0.8 + 0.2 * hover))
-            .child(self.label)
+        })
+        .child(super::icon(self.icon, self.glyph, theme.text()).opacity(0.8 + 0.2 * hover))
+        .child(self.label)
     }
 }

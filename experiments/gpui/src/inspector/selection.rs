@@ -2,7 +2,8 @@
 //! `Inspector.tsx`): a stack of the last covers chosen, how many are
 //! selected, the notes, sources, folders and tags they all share, a rating
 //! that applies to all of them, and their media count and size.
-use super::stack::{self, Stack};
+use super::stack::{self, Pose, Stack};
+use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
 use crate::grid::format;
 use crate::session::Reread;
@@ -13,6 +14,7 @@ use gpui::*;
 use picto_library::selection::{SelectionSummary, SelectionTarget};
 use picto_library::{Library, MutationReceipt, Rating, RootId};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// A stack card may be leaving while six others show.
@@ -46,6 +48,11 @@ pub(super) struct SelectionState {
     stack: Stack,
     /// Each stacked cover's size, kept while it leaves the selection.
     sizes: HashMap<String, Option<(u32, u32)>>,
+    /// The turned cards drawn so far, by cover, with the shape and rail
+    /// colour they were drawn for.
+    turned: HashMap<String, (Shape, [u8; 3], Turned)>,
+    /// Covers whose turned card is being drawn.
+    turning: HashSet<String>,
     keys: u64,
 }
 
@@ -84,6 +91,8 @@ impl SelectionState {
             asked: None,
             stack: Stack::default(),
             sizes: HashMap::new(),
+            turned: HashMap::new(),
+            turning: HashSet::new(),
             keys: 0,
         }
     }
@@ -288,6 +297,11 @@ impl Inspector {
         // The stack starts over the next time several items are selected.
         self.selection.stack = Stack::default();
         self.selection.sizes.clear();
+        self.selection.turning.clear();
+        for (_, (_, _, turned)) in self.selection.turned.drain() {
+            cx.drop_image(turned.card, None);
+            cx.drop_image(turned.mask, None);
+        }
         self.thumbnails.update(cx, |thumbnails, _| {
             for holder in STACK_PINS {
                 thumbnails.pin(holder, None);
@@ -296,8 +310,8 @@ impl Inspector {
     }
 
     /// `StackedPreview`: up to six covers, the newest on top and the older
-    /// ones under a rail-coloured shade. GPUI cannot rotate an image, so the
-    /// turned cards keep their size and motion but lie straight.
+    /// ones under a rail-coloured shade, the turned ones drawn turned
+    /// (`turned.rs`).
     fn stack(
         &mut self,
         sample: &[String],
@@ -330,7 +344,7 @@ impl Inspector {
             (
                 cards
                     .iter()
-                    .map(|card| session.thumbnail(&card.hash))
+                    .map(|card| crate::viewer::thumbnail_file(session.thumbnail(&card.hash)))
                     .collect::<Vec<_>>(),
                 cards
                     .iter()
@@ -348,23 +362,90 @@ impl Inspector {
         });
         // `.stackContainer`: 80% of the rail, 200px tall.
         let mut container = div().relative().w(relative(0.8)).h(px(PREVIEW));
+        let device = window.scale_factor();
+        let rail = {
+            let rail = theme.rail();
+            let byte = |value: f32| (value * 255.).round() as u8;
+            [byte(rail.b), byte(rail.g), byte(rail.r)]
+        };
+        // Turned cards no longer in the stack give back their bitmaps.
+        let present = cards
+            .iter()
+            .map(|card| card.hash.clone())
+            .collect::<HashSet<_>>();
+        let gone = self
+            .selection
+            .turned
+            .keys()
+            .filter(|hash| !present.contains(*hash))
+            .cloned()
+            .collect::<Vec<_>>();
+        for hash in gone {
+            if let Some((_, _, turned)) = self.selection.turned.remove(&hash) {
+                cx.drop_image(turned.card, Some(window));
+                cx.drop_image(turned.mask, Some(window));
+            }
+        }
         for ((card, thumbnail), size) in cards.into_iter().zip(thumbnails).zip(sizes) {
-            let (width, height) = fitted(size);
-            let (width, height) = (width * card.scale, height * card.scale);
+            let resource = Resource::Path(thumbnail.clone().into());
+            // `.previewImage`: the thumbnail at its own size, at most 200px.
+            let natural = self
+                .thumbnails
+                .read(cx)
+                .size(&resource)
+                .map(|(width, height)| (width.round() as u32, height.round() as u32));
+            let (width, height) = fitted(natural.or(size));
             let mut shade = theme.rail();
             shade.a = card.shade;
-            container = container.child(
-                // `.stackItem`
-                div()
-                    .absolute()
-                    .top(px(card.offset.1))
-                    .left(px(card.offset.0))
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .opacity(card.opacity)
-                    .child(
+            let turned = if card.pose == Pose::Base {
+                None
+            } else {
+                let shape = Shape {
+                    width: width.round(),
+                    height: height.round(),
+                    scale: card.pose.scale(),
+                    degrees: card.pose.degrees(),
+                    radius: theme::RADIUS_MD,
+                    device,
+                };
+                self.turned_card(&card.hash, &resource, shape, rail, cx)
+            };
+            // `.stackItem`
+            let item = div()
+                .absolute()
+                .top(px(card.offset.1))
+                .left(px(card.offset.0))
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(card.opacity);
+            let item = match turned {
+                // The turned card, scaled from its resting size while it
+                // enters.
+                Some((image, mask, (card_width, card_height))) => {
+                    let grow = card.scale / card.pose.scale();
+                    item.child(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .w(px(card_width * grow))
+                            .h(px(card_height * grow))
+                            .child(img(image).size_full())
+                            .child(
+                                img(mask)
+                                    .absolute()
+                                    .inset_0()
+                                    .size_full()
+                                    .opacity(card.shade),
+                            ),
+                    )
+                }
+                // A straight card, or a turned one while its bitmap is being
+                // drawn.
+                None => {
+                    let (width, height) = (width * card.scale, height * card.scale);
+                    item.child(
                         // `.previewFrame` with `.previewGlass`'s shadow.
                         div()
                             .relative()
@@ -400,8 +481,10 @@ impl Inspector {
                                     .border_1()
                                     .border_color(rgba(theme::BLACK_10)),
                             ),
-                    ),
-            );
+                    )
+                }
+            };
+            container = container.child(item);
         }
         Some(
             div()
@@ -413,6 +496,56 @@ impl Inspector {
                 .justify_center()
                 .child(container),
         )
+    }
+
+    /// The bitmaps of a turned card, once drawn for this shape. The first
+    /// time a shape is asked for, and the cover is decoded, it is drawn off
+    /// the drawing thread; until then the card lies straight. A card drawn
+    /// for another shape is shown until the new one is ready.
+    fn turned_card(
+        &mut self,
+        hash: &str,
+        resource: &Resource,
+        shape: Shape,
+        rail: [u8; 3],
+        cx: &mut Context<Self>,
+    ) -> Option<(Arc<RenderImage>, Arc<RenderImage>, (f32, f32))> {
+        let current = self.selection.turned.get(hash);
+        let fresh = current.is_some_and(|(drawn, colour, _)| *drawn == shape && *colour == rail);
+        if !fresh && !self.selection.turning.contains(hash) {
+            // The cover is still loading: the view repaints when it is ready.
+            if let Some(cover) = self.thumbnails.read(cx).image(resource) {
+                self.selection.turning.insert(hash.to_owned());
+                let hash = hash.to_owned();
+                let job = cx.background_spawn(async move { turned::turn(&cover, shape, rail) });
+                cx.spawn(async move |this, cx| {
+                    let drawn = job.await;
+                    let _ = this.update(cx, |this, cx| {
+                        // The stack was let go while this was drawn.
+                        if !this.selection.turning.remove(&hash) {
+                            if let Some(drawn) = drawn {
+                                cx.drop_image(drawn.card, None);
+                                cx.drop_image(drawn.mask, None);
+                            }
+                            return;
+                        }
+                        if let Some(drawn) = drawn
+                            && let Some((_, _, old)) =
+                                this.selection.turned.insert(hash, (shape, rail, drawn))
+                        {
+                            cx.drop_image(old.card, None);
+                            cx.drop_image(old.mask, None);
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+        }
+        self.selection
+            .turned
+            .get(hash)
+            .map(|(_, _, turned)| (turned.card.clone(), turned.mask.clone(), turned.size))
     }
 
     /// The multi-select state's column.
@@ -445,7 +578,7 @@ impl Inspector {
             .and_then(|summary| summary.shared_source_urls.clone())
             .unwrap_or_default();
         panel = panel
-            .child(self.palette(&[], cx))
+            .child(self.palette(&[], window, cx))
             // `.selectionNameField`
             .child(
                 div()
@@ -522,6 +655,17 @@ impl Inspector {
             );
         }
         panel = panel.child(self.section("Properties", Some(properties.into_any_element()), cx));
+        let taggable = summary
+            .as_ref()
+            .map_or(0, |summary| summary.taggable_root_count);
+        let auto_tag = self.auto_tag(
+            "selection-auto-tag",
+            if summary.is_some() { taggable } else { count },
+            taggable > 0,
+            window,
+            cx,
+        );
+        panel = panel.child(auto_tag);
         if summary.is_none() {
             panel = panel.child(Self::status("Could not load selection details.", true, cx));
         }

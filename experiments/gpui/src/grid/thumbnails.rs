@@ -91,6 +91,22 @@ impl Thumbnails {
         self.wanted.contains(resource) || self.pins.values().any(|pinned| pinned == resource)
     }
 
+    /// The decoded thumbnail, once it is ready.
+    pub fn image(&self, resource: &Resource) -> Option<Arc<RenderImage>> {
+        self.entries.get(resource)?.get()?.ok()
+    }
+
+    /// The decoded size of a thumbnail, in its pixels, once it is ready.
+    pub fn size(&self, resource: &Resource) -> Option<(f32, f32)> {
+        match self.entries.get(resource)?.get()? {
+            Ok(image) => {
+                let size = image.size(0);
+                Some((size.width.0 as f32, size.height.0 as f32))
+            }
+            Err(_) => None,
+        }
+    }
+
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
         crate::stats::thumbnail_read();
         let item = ImageCacheItem::new(resource, cx);
