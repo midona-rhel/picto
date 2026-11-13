@@ -2,12 +2,14 @@
 //! Electron frontend. Views compose these and style nothing themselves.
 pub mod action_button;
 mod action_row;
+mod avatar;
 mod chip;
 mod empty_state;
 pub mod field;
 mod icon_button;
 pub mod menu;
 mod panel_section;
+pub mod popover;
 pub mod property_row;
 mod scroll_to_top;
 pub mod scrollbar;
@@ -19,8 +21,9 @@ pub mod zoom;
 
 pub use action_button::action_button;
 pub use action_row::action_row;
-pub use chip::chip;
-pub use empty_state::empty_state;
+pub use avatar::library_avatar;
+pub use chip::{Chip, chip};
+pub use empty_state::{empty_state, empty_state_action};
 pub use field::field;
 pub use icon_button::icon_button;
 pub use panel_section::panel_section;
@@ -36,7 +39,7 @@ use crate::theme::Text as _;
 use gpui::*;
 
 /// A monochrome glyph from the embedded icon set.
-pub fn icon(name: &'static str, size: f32, color: impl Into<Hsla>) -> Svg {
+pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Svg {
     svg().path(name).size(px(size)).text_color(color.into())
 }
 
@@ -69,24 +72,6 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
                 window.titlebar_double_click();
             }
         })
-}
-
-/// A plain text push button. It occludes what is behind it, so it works
-/// inside a titlebar strip.
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    div()
-        .id(id.into())
-        .occlude()
-        .h(px(theme::CONTROL_SM))
-        .px(px(12.))
-        .flex()
-        .items_center()
-        .rounded(px(theme::RADIUS_MD))
-        .bg(theme.contrast(8.))
-        .hover(move |style| style.bg(theme.contrast(14.)))
-        .cursor_pointer()
-        .child(label.into())
 }
 
 /// The grid's translucent label chip (`drawBadge` in `primitives.ts`).

@@ -15,12 +15,10 @@ pub enum Look {
     Standard,
     /// `.btn.btnPrimary`: the primary colour, at 60% under the pointer.
     Primary,
-    /// `EmptyState.module.css` `.action`: no ring, regular weight, and a
-    /// 250 ms hover on `--ease-standard`.
-    EmptyState,
 }
 
-/// A text button with an optional leading glyph, in one of the shared looks.
+/// The shared action button (`actionButton.module.css`): a text button with
+/// an optional leading glyph, in one of its looks.
 /// Disabled, it fades to 35% and takes no pointer, so it has no hover and no
 /// tooltip. It occludes what is behind it.
 #[derive(IntoElement)]
@@ -42,26 +40,17 @@ pub struct ActionButton {
 }
 
 pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
-    let empty = look == Look::EmptyState;
     ActionButton {
         id: id.into(),
         look,
         icon: None,
         label: None,
-        height: if empty {
-            theme::CONTROL_LG
-        } else {
-            theme::ACTION_BUTTON
-        },
+        height: theme::ACTION_BUTTON,
         width: None,
-        padding: if empty { 16. } else { 20. },
-        gap: if empty { 6. } else { 8. },
+        padding: 20.,
+        gap: 8.,
         text_size: theme::TEXT_MD,
-        weight: if empty {
-            FontWeight::NORMAL
-        } else {
-            FontWeight::MEDIUM
-        },
+        weight: FontWeight::MEDIUM,
         disabled: false,
         tip: None,
         on_click: None,
@@ -142,11 +131,7 @@ impl RenderOnce for ActionButton {
         }
         let (hover, animating) = {
             let fade = fade.read(cx);
-            let hover = match self.look {
-                Look::EmptyState => fade.value_with(motion::EASE_STANDARD),
-                _ => fade.value(),
-            };
-            (hover, fade.animating())
+            (fade.value(), fade.animating())
         };
         if animating || hint.read(cx).animating() {
             window.request_animation_frame();
@@ -161,11 +146,6 @@ impl RenderOnce for ActionButton {
                 let color = theme::blend(theme.primary(), theme.primary_at(60.), hover);
                 (color, color, theme.on_primary())
             }
-            Look::EmptyState => (
-                theme::blend(theme.surface_hover(), theme.surface_active(), hover),
-                theme.border(),
-                theme.text(),
-            ),
         };
         let mut button = div()
             .id(self.id)
@@ -190,12 +170,10 @@ impl RenderOnce for ActionButton {
         if let Some(width) = self.width {
             button = button.w(px(width));
         }
-        if self.look != Look::EmptyState {
-            // `box-shadow: 0 0 0 1px var(--color-black-20)`
-            button = button.shadow(vec![
-                BoxShadow::new(px(0.), px(0.), theme.black(20.).into()).spread_radius(px(1.)),
-            ]);
-        }
+        // `box-shadow: 0 0 0 1px var(--color-black-20)`
+        button = button.shadow(vec![
+            BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into()).spread_radius(px(1.)),
+        ]);
         if let Some((icon, size)) = self.icon {
             button = button.child(super::icon(icon, size, text).flex_none());
         }
@@ -208,10 +186,7 @@ impl RenderOnce for ActionButton {
         if let Some(tip) = &self.tip {
             button = button.children(hint.read(cx).layer(tip, self.height, cx));
         }
-        let duration = match self.look {
-            Look::EmptyState => motion::EMPTY_ACTION_HOVER,
-            _ => motion::BUTTON_HOVER,
-        };
+        let duration = motion::BUTTON_HOVER;
         let on_hover = self.on_hover;
         button = button
             .cursor_pointer()

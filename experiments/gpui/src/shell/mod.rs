@@ -2,6 +2,7 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+pub mod library;
 pub mod sidebar;
 pub mod toolbar;
 
@@ -82,6 +83,7 @@ impl Shell {
         window.focus(&focus, cx);
         let grid =
             cx.new(|cx| GridView::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
+        let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
         let subscriptions = vec![
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
@@ -106,7 +108,7 @@ impl Shell {
                 cx,
             )
         });
-        let toolbar = cx.new(|cx| Toolbar::new(session.clone(), cx));
+        let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         // A screen's titlebar controls take the grid's place in the toolbar.
         let controls = duplicates.read(cx).toolbar();
         toolbar.update(cx, |toolbar, _| {
@@ -116,7 +118,7 @@ impl Shell {
             sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
             toolbar,
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
-            viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
+            viewer,
             tags: cx.new(|cx| {
                 screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
             }),

@@ -1,7 +1,10 @@
-//! The grid toolbar (`GridToolbar.tsx`), which sits in the titlebar row.
+//! The titlebar's content (`.titlebarContent` in `AppShell.tsx`): the grid
+//! toolbar (`GridToolbar.tsx`) with Back, Forward and the scope title, or the
+//! viewer toolbar while an item is open.
 use crate::backend::Screen;
-use crate::session::{Change, Session};
+use crate::session::{Change, Session, Transition};
 use crate::ui::{self, field::Look, text_input::TextInput, zoom};
+use crate::viewer::{Viewer, toolbar::ViewerToolbar};
 use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
 
@@ -9,13 +12,18 @@ pub struct Toolbar {
     session: Entity<Session>,
     search: Entity<TextInput>,
     zoom: Entity<Zoom>,
+    viewer: Entity<ViewerToolbar>,
+    /// Set when the viewer closed by going to another destination: the
+    /// titlebar's content then fades with the grid (`data-viewer-exit-transition`),
+    /// the viewer toolbar out and the destination's toolbar in.
+    viewer_exit: bool,
     /// The controls a screen puts in the titlebar in place of the grid's.
     screen_controls: Vec<(Screen, AnyView)>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Toolbar {
-    pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+    pub fn new(session: Entity<Session>, viewer: &Entity<Viewer>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::new);
         let zoom = cx.new(|_| Zoom::new());
         let subscriptions = vec![
@@ -32,6 +40,12 @@ impl Toolbar {
                 &session,
                 |this, session, change: &Change, cx| match change {
                     Change::Navigation => cx.notify(),
+                    Change::Viewer => {
+                        let session = session.read(cx);
+                        this.viewer_exit =
+                            !session.viewer && !matches!(session.transition, Transition::Idle);
+                        cx.notify();
+                    }
                     Change::Results => {
                         // A destination opens at its saved zoom.
                         let tile = session.read(cx).tile;
@@ -43,6 +57,8 @@ impl Toolbar {
             ),
         ];
         Self {
+            viewer: viewer.read(cx).toolbar(),
+            viewer_exit: false,
             session,
             search,
             zoom,
@@ -139,6 +155,29 @@ impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
+        let (viewing, transition) = {
+            let session = self.session.read(cx);
+            (session.viewer, session.transition)
+        };
+        if self.viewer_exit && matches!(transition, Transition::Idle) {
+            self.viewer_exit = false;
+        }
+        // The content as a whole fades only on the way out of the viewer.
+        let content = if self.viewer_exit {
+            if transition.animating() {
+                window.request_animation_frame();
+            }
+            transition.opacity()
+        } else {
+            1.
+        };
+        if viewing || (self.viewer_exit && matches!(transition, Transition::FadingOut(_))) {
+            return div()
+                .size_full()
+                .opacity(content)
+                .child(self.viewer.clone())
+                .into_any_element();
+        }
         let (opacity, animating, back, forward, filtered, screen) = {
             let session = self.session.read(cx);
             (
@@ -168,10 +207,10 @@ impl Render for Toolbar {
                         .update(cx, |session, cx| session.step_history(delta, cx));
                 }))
         };
-        let background = theme.background();
         let toolbar = ui::drag_region("toolbar", window, cx)
             .relative()
             .size_full()
+            .opacity(content)
             // 8px either side from the titlebar, and 8 more on the right
             // from the toolbar itself.
             .pl(px(8.))
@@ -204,7 +243,7 @@ impl Render for Toolbar {
                 .iter()
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
-            return toolbar.children(controls);
+            return toolbar.children(controls).into_any_element();
         }
         toolbar
             .child(
@@ -219,26 +258,7 @@ impl Render for Toolbar {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        div()
-                            .relative()
-                            .occlude()
-                            .bg(background)
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top_0()
-                                    .bottom_0()
-                                    .right(relative(1.))
-                                    .w(px(20.))
-                                    .bg(linear_gradient(
-                                        90.,
-                                        linear_color_stop(clear(background), 0.),
-                                        linear_color_stop(background, 1.),
-                                    )),
-                            )
-                            .child(self.zoom.clone()),
-                    ),
+                    .child(zoom::section(cx).child(self.zoom.clone())),
             )
             // TODO: open the view menu at the button's left edge, 4px below it.
             .child(ui::icon_button("view-options", "toolbar-layout").tip(ui::tip("View options")))
@@ -263,5 +283,6 @@ impl Render for Toolbar {
                     theme.text_tertiary(),
                 ),
             ))
+            .into_any_element()
     }
 }

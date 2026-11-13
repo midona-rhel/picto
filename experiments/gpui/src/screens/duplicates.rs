@@ -844,7 +844,7 @@ impl DuplicatesScreen {
             )
     }
 
-    fn empty_state(&self) -> AnyElement {
+    fn empty_state(&self, cx: &App) -> AnyElement {
         let resolved = self.initial_total.saturating_sub(self.total);
         let (title, description) = match &self.error {
             Some(error) => ("Unable to load duplicate review".to_owned(), error.clone()),
@@ -860,17 +860,27 @@ impl DuplicatesScreen {
         // TODO: scan the library for duplicates and read the queue again.
         // The scanner lives in the application core, which this prototype
         // does not link; Retry would scan as well.
-        let action = ui::action_button("duplicates-scan", Look::EmptyState)
-            .icon("action-refresh", 14.)
-            .label(if self.error.is_some() {
+        let action = ui::empty_state_action(
+            "duplicates-scan",
+            "action-refresh",
+            if self.error.is_some() {
                 "Retry"
             } else {
                 "Scan library"
-            })
-            .disabled(self.resolving);
-        ui::empty_state("empty-copy", 28., title, description)
-            .action(action)
-            .into_any_element()
+            },
+        )
+        .disabled(self.resolving);
+        ui::empty_state(
+            "empty-copy",
+            title,
+            description,
+            vec![action.into_any_element()],
+            cx,
+        )
+        // The 180 × 2 slot of the scan's progress bar keeps its place while
+        // empty. TODO: the indeterminate `ProgressBar` while a scan runs.
+        .child(div().w(px(180.)).h(px(2.)).flex_none())
+        .into_any_element()
     }
 
     /// One candidate (`MediaCard`): its header with Keep, its preview, and
@@ -894,7 +904,7 @@ impl DuplicatesScreen {
         // other file for deletion from disk, which this prototype must never
         // cause, so the button is shown and not offered (Z and X likewise).
         let mut keep_button = ui::action_button(("duplicate-keep", index), Look::Standard)
-            .icon("action-check", 15.)
+            .icon("check", 15.)
             .height(theme::CONTROL_MD)
             .text_size(theme::TEXT_SM)
             .tip(ui::tip(keep).keys(&[if index == 0 { "Z" } else { "X" }]))
@@ -1015,7 +1025,7 @@ impl DuplicatesScreen {
             .flex_1()
             .min_h(px(PREVIEW_MIN))
             .rounded(px(theme::RADIUS_MD))
-            .bg(theme.black(30.))
+            .bg(rgba(theme::BLACK_30))
             .cursor(if dragging {
                 CursorStyle::ClosedHand
             } else {
@@ -1349,7 +1359,7 @@ impl Render for DuplicatesScreen {
             return root.child(if self.loading {
                 self.loading_state(cx).into_any_element()
             } else {
-                self.empty_state()
+                self.empty_state(cx)
             });
         }
         // A drag follows the pointer anywhere in the window until the
