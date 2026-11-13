@@ -597,8 +597,6 @@ impl Menu {
 
     /// Whether the menu may offer its search row (`showSearch`); it does
     /// when it has at least seven rows.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn search(mut self, show: bool) -> Self {
         if !show {
             self.search = None;

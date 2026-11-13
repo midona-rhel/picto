@@ -44,7 +44,9 @@ pub struct TextInput {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
-    field_key: Option<picto_library::RootId>,
+    /// What the stored value belongs to, as the view that owns the field
+    /// numbers it.
+    field_key: Option<u64>,
     original: SharedString,
     kind: Kind,
     /// How far the text is scrolled left to keep the caret in view.
@@ -64,6 +66,11 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A name edited in place, in the UI font at the size of the text it
+    /// replaces.
+    Rename(f32),
+    /// The search at the top of a popover (`LibrarySwitcherPopover`).
+    Popover,
     /// A context menu's search row (`.searchInput`).
     Menu,
 }
@@ -71,14 +78,15 @@ pub enum Kind {
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search | Kind::Menu => crate::theme::FONT_UI,
+            Kind::Search | Kind::Popover | Kind::Rename(_) | Kind::Menu => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector | Kind::Menu => crate::theme::TEXT_MD,
+            Kind::Sidebar | Kind::Inspector | Kind::Popover | Kind::Menu => crate::theme::TEXT_MD,
+            Kind::Rename(size) => size,
         }
     }
     fn line_height(self) -> f32 {
@@ -86,13 +94,24 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Rename(size) => size + 2.,
+            Kind::Popover => 48.,
             Kind::Menu => 36.,
+        }
+    }
+    /// The popover's input has no `::placeholder` rule, so it keeps
+    /// Chromium's; the others set the tertiary text colour.
+    fn placeholder(self, theme: crate::theme::Theme) -> gpui::Hsla {
+        match self {
+            Kind::Popover => theme.placeholder().into(),
+            _ => theme.text_tertiary().into(),
         }
     }
 }
 
 const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
-pub struct Committed(pub picto_library::RootId, pub String);
+/// A stored field's new value, with the key it was set for.
+pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
 
 impl TextInput {
@@ -492,6 +511,7 @@ impl Element for TextElement {
         let focused = input.focus_handle.is_focused(window);
         let marked_range = input.marked_range.clone();
         let placeholder = input.placeholder.clone();
+        let kind = input.kind;
         let previous_scroll = input.scroll;
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
@@ -536,7 +556,7 @@ impl Element for TextElement {
         };
 
         let (display_text, text_color) = if content.is_empty() {
-            (placeholder, theme.text_tertiary().into())
+            (placeholder, kind.placeholder(theme))
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -751,6 +771,13 @@ impl TextInput {
         input.kind = Kind::Sidebar;
         input
     }
+    /// The search field of a popover.
+    pub fn popover(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Popover;
+        input
+    }
     /// A context menu's search field. The menu takes its Enter, Escape and
     /// arrows before the field sees them.
     pub fn menu_search(cx: &mut Context<Self>) -> Self {
@@ -783,7 +810,22 @@ impl TextInput {
             .detach();
         input
     }
-    pub fn set_field(&mut self, key: picto_library::RootId, value: String, cx: &mut Context<Self>) {
+    /// A name edited in place: it commits when it loses focus, as the
+    /// inspector's fields do.
+    pub fn rename(size: f32, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::field("", window, cx);
+        input.kind = Kind::Rename(size);
+        input
+    }
+    /// Sets the size of a name edited in place, to match the text it
+    /// replaces.
+    pub fn set_rename_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if matches!(self.kind, Kind::Rename(_)) && self.kind != Kind::Rename(size) {
+            self.kind = Kind::Rename(size);
+            cx.notify();
+        }
+    }
+    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {
             return;
         }
