@@ -425,6 +425,50 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
+- Flash's controls (`FlashControls.tsx`): play or pause, stop (the movie
+  reloads at its first frame, held), and the volume button with its slider
+  that opens above it on hover (`VolumePanel`), in the media players' shaded
+  bar (`ui::media_controls`), which hides 2.5 s after the pointer stops
+  moving over the movie and fades over 300 ms. The buttons stay dimmed
+  until the first frame arrives. The viewer menu's Play/Pause, Stop and
+  Mute rows act on the movie and show its state.
+- One renderer per media type, chosen as `detailRendererKind.ts` chooses
+  (`viewer/document/kind.rs`), in all three hosts (media view, Quick Look,
+  detail window):
+  - PDF pages rasterized by hayro (pure Rust) on a thread of the
+    document's own, at the size they take on screen times the display's
+    scale (`documentCanvasGeometry`), one page at a time as `PdfViewer.tsx`
+    shows them: fitted to the page on opening, white with its
+    `0 8px 28px` shadow. The viewer toolbar's zoom drives it as production's
+    renderer zoom does: the percentage and its menu, the slider, Fit
+    (`` ` ``), Actual size (⌘0, 100% = one point per pixel), and `+`/`-` in
+    1.2× steps between 25% and 800%. A page drawn for an older zoom
+    stretches until its redraw arrives; a newer request supersedes one still
+    waiting.
+  - DjVu pages by djvu-rs (the crate production runs as WebAssembly) at
+    `max(96, dpi)`, and CBZ pages (the archive's images in natural order),
+    both shown at their size, shrunk to fit, never enlarged.
+  - The document shell (`DocumentViewerShell`): the scrolling viewport on
+    `rgb(42, 42, 46)` with 24px around the page, and the titlebar-high footer
+    with Previous page, "Page n of m" and Next page, whose J and L come
+    from the shortcut registry.
+  - Text, Markdown (GitHub flavoured: tables, strikethrough), JSON (pretty
+    printed) and RTF on the 816px text page, and EPUB chapters (the spine of
+    the package document, one chapter to a page, its pictures decoded) on
+    the 760px book page in Georgia, laid out as GPUI text with the page's
+    heading, paragraph, quote, code, list, link and rule styles. Parsing runs
+    off the drawing thread.
+  - Fonts (TTF, OTF, the first face of a collection, and WOFF, unpacked)
+    loaded into GPUI's text system: the title in the font, the Preview,
+    Waterfall, Glyphs and Information modes, the five paper colours, and the
+    floating size control (50–300%, also ⌘= / ⌘−, ⌘0).
+  - JPEG XL decoded by jxl-oxide (the decoder `core/` uses) onto the image
+    camera, so it zooms, pans and shows the navigator as images do.
+  - Every other type, Word and PowerPoint included by decision: its
+    thumbnail, "Preview is not available for <type>." and Open with Default
+    App.
+  - Media Examples has a sample of each (PDF, DjVu, CBZ, EPUB, text,
+    Markdown, JSON, RTF, a font, JPEG XL) next to SVG and Flash.
 
 ## Not yet equivalent to Picto
 
@@ -513,9 +557,32 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   guides, the double-click action) come from the settings model; its
   visibility menu writes through it to the library at once, as production
   patches the settings.
-- No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
-  viewers yet. Word and PowerPoint viewing is out of scope: those files import,
-  keep their embedded thumbnail and open in the default application.
+- No video or audio playback here (another branch builds it). Word and
+  PowerPoint viewing is out of scope: those files import, keep their embedded
+  thumbnail and open in the default application.
+- Document viewers: production's live PDF text layer (selectable text) is
+  not ported, nor is text selection on the text and book pages, nor the
+  editable font sample (`contentEditable`). RTF shows its text without
+  character formatting (rtf.js renders it). Markdown images and raw HTML
+  show as their text; an EPUB chapter's own stylesheet is ignored. Text
+  files over 4 MB show their first 4 MB and say so. A page larger than the
+  viewport starts at its top-left corner (production's centred grid cuts off
+  what overflows above and left); only the vertical scrollbar is drawn. The
+  glyph grid does not enlarge the hovered glyph (GPUI cannot scale an
+  element). WOFF2 fonts are not unpacked (Picto does not import them). The
+  font is registered with the text system on the drawing thread. A PDF
+  page is drawn at most 8192 pixels on its longest side. Encrypted PDFs show
+  a message. The thumbnail preview production shows until a document has
+  drawn is not ported: the viewer shows its shell until the page arrives.
+- Flash: the media keys (K, the arrows and M) do not reach the controls
+  yet; they belong to the video player's shortcuts. The stage is 960×720,
+  not fitted to the movie's own size (`fitFlashStage`). The controls' buttons
+  were written for Flash in `ui::media_controls`; the video player's should
+  use the same ones.
+- Not seen running in the app window: the document viewers, the font viewer
+  and Flash's controls were drawn off-screen (below) but not used with a
+  pointer; hover states, tooltips, scrolling, the volume drag and the
+  controls' fade are unverified.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface (`GroupSurface`), in all three hosts: Quick Look shows a
   collection's first member in the collection frame, and the detail window
@@ -697,6 +764,54 @@ that is fully covered, so the window has to be visible.
 often each view repainted, how long the grid took to build a frame, the gap
 between grid frames, and how many thumbnail files were read.
 
+### Format matrix
+
+`src/viewer/document/matrix.rs` checks every media type Picto accepts
+(`core/src/media_processing/formats.rs`) against the renderer it gets, and
+that its first page or frame draws: the regular tests decode the fixtures in
+`assets/fixtures/documents/` (generated, a few hundred bytes to 2 KB each;
+the font is the bundled Fira Mono, also wrapped as WOFF at test time) and
+assert each picture's size and that it is not one flat colour. The ignored
+tests draw the real viewers through GPUI's headless Metal renderer, off
+screen, and assert the window's middle holds a drawing:
+
+```sh
+# Every viewer, off-screen; pictures saved when PICTO_GPUI_MATRIX_OUT is set.
+PICTO_GPUI_MATRIX_OUT=/tmp/out cargo test --manifest-path experiments/gpui/Cargo.toml \
+  viewers_render_off_screen -- --ignored
+# One real file (type from its extension, or PICTO_GPUI_MEDIA_MIME).
+PICTO_GPUI_MEDIA=/path/to/file.pdf cargo test --manifest-path experiments/gpui/Cargo.toml \
+  renders_a_real_file -- --ignored
+```
+
+On 13 November 2026 the off-screen run passed for every fixture, and
+`renders_a_real_file` passed for copies of five PDFs, the JPEG XL, the text
+file, a GIF and a WebP from a real library.
+
+| Type | Renderer | Status | Checked by |
+| --- | --- | --- | --- |
+| `application/pdf` | PDF (hayro) | renders | fixture page decoded and viewer drawn off-screen; 5 real PDFs |
+| `image/vnd.djvu` | DjVu (djvu-rs) | renders | fixture (made with djvu-rs's encoder) decoded and drawn |
+| `application/vnd.comicbook+zip` | CBZ pages | renders | fixture decoded (natural page order) and drawn |
+| `application/epub+zip` | EPUB chapters | renders | fixture spine, chapter and picture read; viewer drawn |
+| `text/plain` | text page | renders | fixture read and drawn; 1 real text file |
+| `text/markdown` | text page | renders | fixture parsed and drawn |
+| `application/json` | text page | renders | fixture pretty-printed and drawn |
+| `application/rtf` | text page (text only) | renders | fixture's text read and drawn |
+| `font/ttf`, `font/otf`, `font/collection` | font viewer | renders | Fira Mono loaded, outlines checked, viewer drawn (OTF and TTC untested) |
+| `font/woff` | font viewer | renders | Fira Mono wrapped as WOFF, unpacked, drawn |
+| `image/jxl` | image camera (jxl-oxide) | renders | fixture (made with zune-jpegxl) and 1 real file decoded; not drawn in a viewer |
+| `image/gif` | image | renders | fixture and 1 real GIF decoded by `image` (GPUI's loader) |
+| `image/svg+xml` | image (SVG loader) | renders | `assets/fixtures/vector.svg` decoded by resvg |
+| `image/webp`, `image/jpeg`, `image/png` | image | renders | 1 real WebP decoded; JPEG and PNG are the library's everyday files |
+| `image/apng`, `bmp`, `tiff`, `x-icon`, `qoi`, `vnd-ms.dds`, `x-exr`, `vnd.radiance` | image | decoder linked | no fixture |
+| `image/heic`, `heif`, `avif` (and sequences), `x-icns`, `x-tga`, `x-ilbm`, Photoshop, camera RAW, `vnd.dwg`, `x-xcf`, `x-svga` | image | thumbnail only | GPUI's loader has no decoder; the original fails and the thumbnail stays (as in Chromium) |
+| `application/x-shockwave-flash` | Flash (Ruffle) | renders | Ruffle's fixture, ignored GPU tests (frames, mouse, Stop) |
+| `video/*` (15 types) | video | not built here | another branch |
+| `audio/*` (11 types) | audio | not built here | another branch |
+| Word, PowerPoint | unsupported view | unsupported view | viewer drawn off-screen with a thumbnail |
+| everything else (3D, design files, Excel, iWork, HTML, archives, LUTs, …) | unsupported view | unsupported view | routing checked for every accepted type |
+
 ## Structure
 
 One model, separate views, shared components:
@@ -710,7 +825,9 @@ One model, separate views, shared components:
   reveal, keyboard movement, rubber band, hover preview, tile artwork,
   thumbnail cache and originals), `inspector/` (one item, several items, and
   the destination), `viewer/` (the media surface with its zoom and pan
-  arithmetic in `camera.rs`, Flash, and its three hosts: the media view
+  arithmetic in `camera.rs`, Flash and its controls, `document/` (the
+  renderer choice and the document, text, font and unsupported viewers,
+  with the format matrix), and its three hosts: the media view
   with the viewer toolbar the titlebar shows, Quick Look and the detail
   window, with `trigger.rs` deciding which a key or click opens) and
   `screens/` (the destinations that are screens of their own).
@@ -719,7 +836,8 @@ One model, separate views, shared components:
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom
-  control, empty state and the titlebar drag region. Views compose these.
+  control, empty state, the media players' control bar, buttons and volume
+  control, and the titlebar drag region. Views compose these.
 - `screens/` holds the destinations that are screens rather than a grid.
   A screen can hand the toolbar controls to show in the grid's place.
 - `settings/` is the settings model the app reads, the shortcut registry, and
@@ -739,4 +857,6 @@ and events rather than growing a second application backend.
 Toolbar glyphs are Picto's own, from `src/shared/ui/icons/toolbar-icons.tsx`.
 `assets/fixtures/interactive.swf` comes from Ruffle's
 `tests/tests/swfs/avm1/button_goto/test.swf` at the pinned Ruffle revision in
-Cargo.toml; see `assets/LICENSE-Ruffle.md`.
+Cargo.toml; see `assets/LICENSE-Ruffle.md`. The files in
+`assets/fixtures/documents/` were made for this project (drawn pages,
+encoded with zip, djvu-rs and zune-jpegxl, a hand-written PDF and text).

@@ -8,6 +8,7 @@ pub mod camera;
 pub mod detail;
 pub mod document;
 pub mod flash;
+mod flash_controls;
 pub mod quick_look;
 mod strip;
 pub mod surface;
@@ -339,6 +340,11 @@ impl Viewer {
     /// The toolbar the titlebar shows while the viewer is open.
     pub fn toolbar(&self) -> Entity<ViewerToolbar> {
         self.toolbar.clone()
+    }
+
+    /// The media surface, for the viewer's context menu.
+    pub fn surface(&self) -> Entity<MediaSurface> {
+        self.surface.clone()
     }
 
     /// The viewer has the keyboard while it is open, so its shortcuts apply,

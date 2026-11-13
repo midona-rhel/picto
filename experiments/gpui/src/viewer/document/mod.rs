@@ -3,6 +3,7 @@
 //! Markdown, JSON, RTF and EPUB on a page, fonts, and the view for files
 //! that cannot be shown. The media surface asks [`kind::renderer_kind`]
 //! what an item gets and hands document kinds to [`Document`].
+pub mod demos;
 pub mod epub;
 pub mod font;
 pub mod geometry;
@@ -208,4 +209,14 @@ impl Document {
             }
         }
     }
+}
+
+/// A decoded picture in the BGRA order GPUI draws.
+pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
+    for pixel in image.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+        image
+    )]))
 }

@@ -573,7 +573,7 @@ mod gpu {
         }
         // Word files take the unsupported view: the thumbnail, the message
         // and the button.
-        let thumbnail = super::super::epub::render_image(RgbaImage::from_fn(160, 120, |x, _| {
+        let thumbnail = super::super::render_image(RgbaImage::from_fn(160, 120, |x, _| {
             image::Rgba([(x * 255 / 160) as u8, 90, 200, 255])
         }));
         let picture = render(

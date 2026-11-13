@@ -91,6 +91,10 @@ pub struct MediaSurface {
     full_task: Option<Task<()>>,
     flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
+    /// Flash's controls (`useMediaControlsVisibility`): their opacity, and a
+    /// count that lets only the latest reveal's timer hide them.
+    flash_controls: motion::Fade,
+    flash_reveal: u64,
     document: Option<Document>,
     _document_zoom: Option<Subscription>,
     /// Whether the open document takes the toolbar's zoom, and its zoom in
@@ -142,6 +146,13 @@ impl MediaSurface {
         self.flash.is_some()
     }
 
+    /// Whether the Flash movie plays and is muted, while one is shown.
+    pub fn flash_playback(&self) -> Option<(bool, bool)> {
+        self.flash
+            .as_ref()
+            .map(|flash| (flash.playback.playing, flash.playback.muted))
+    }
+
     pub fn set_options(&mut self, options: Options, cx: &mut Context<Self>) {
         if self.options != options {
             self.options = options;
@@ -178,6 +189,49 @@ impl MediaSurface {
             self.document_zoom = (document.zoomable(cx), document.percent(cx));
         }
         cx.emit(Event::Zoom);
+    }
+
+    /// Runs a control on the playing movie, and shows the controls again
+    /// (`revealControls`).
+    pub fn control_flash(
+        &mut self,
+        control: Box<dyn Fn(&mut super::flash::Flash)>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(flash) = &mut self.flash {
+            control(flash);
+        }
+        self.reveal_flash_controls(cx);
+    }
+
+    /// Shows Flash's controls, and hides them once the pointer has rested
+    /// for [`media_controls::HIDE_DELAY`].
+    fn reveal_flash_controls(&mut self, cx: &mut Context<Self>) {
+        use crate::ui::media_controls;
+        if self.flash.is_none() {
+            return;
+        }
+        // Already up, only the timer restarts, without a repaint for every
+        // pointer move.
+        let hidden = !self.flash_controls.on();
+        self.flash_controls.set(true, media_controls::FADE);
+        self.flash_reveal += 1;
+        let reveal = self.flash_reveal;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(media_controls::HIDE_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.flash_reveal == reveal {
+                    this.flash_controls.set(false, media_controls::FADE);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        if hidden {
+            cx.notify();
+        }
     }
 
     /// The name of the item about to be opened, for viewers that show it.
@@ -458,6 +512,7 @@ impl MediaSurface {
         match mode {
             Mode::Flash => {
                 self.flash = Some(super::flash::Flash::open(path));
+                self.reveal_flash_controls(cx);
                 self.flash_task = Some(cx.spawn(async move |entity, cx| {
                     loop {
                         cx.background_executor()
@@ -571,7 +626,7 @@ impl MediaSurface {
     /// camera, over its thumbnail until then.
     fn decode_jpeg_xl(&mut self, key: String, path: PathBuf, cx: &mut Context<Self>) {
         let decode = cx.background_executor().spawn(async move {
-            document::pages::decode_jpeg_xl(&path).map(document::epub::render_image)
+            document::pages::decode_jpeg_xl(&path).map(document::render_image)
         });
         self.full_task = Some(cx.spawn(async move |entity, cx| {
             let result = decode.await;
@@ -862,7 +917,8 @@ impl Render for MediaSurface {
                 .absolute()
                 .size_full(),
             )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, _| {
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                this.reveal_flash_controls(cx);
                 if let Some(flash) = &this.flash {
                     let (x, y) = this.flash_position(event.position);
                     let _ = flash
@@ -987,6 +1043,22 @@ impl Render for MediaSurface {
                     .text_size(px(12.))
                     .child(error.clone()),
             );
+        }
+        // Hidden, the controls are left out, so they take no pointer.
+        if let Some(flash) = &self.flash
+            && (self.flash_controls.on() || self.flash_controls.animating())
+        {
+            if self.flash_controls.animating() {
+                window.request_animation_frame();
+            }
+            surface = surface.child(super::flash_controls::controls(
+                cx.entity().downgrade(),
+                &flash.playback,
+                // `disabled={!controller}`: nothing to control until the
+                // first frame has arrived.
+                self.full.is_some() && self.full_key == self.key,
+                self.flash_controls.value_with(motion::EASE),
+            ));
         }
         if let Some(flash) = &self.flash
             && let Some(trace) = flash.traces.lock().unwrap().back()

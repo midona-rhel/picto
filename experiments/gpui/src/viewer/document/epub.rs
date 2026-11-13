@@ -3,10 +3,8 @@
 //! one chapter to a page, and the pictures each chapter refers to.
 use super::rich::{self, Block, Picture};
 use anyhow::{Context as _, Result, anyhow, bail};
-use gpui::RenderImage;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 
 /// The book's chapters, as paths inside the archive, in reading order.
 pub fn chapters(path: &Path) -> Result<Vec<String>> {
@@ -71,21 +69,11 @@ pub fn chapter(path: &Path, chapter: &str) -> Result<Vec<Block>> {
         let image = super::pages::decode_picture(&entry, &bytes).ok()?;
         let size = (image.width() as f32, image.height() as f32);
         Some(Picture {
-            image: render_image(image),
+            image: super::render_image(image),
             size,
         })
     };
     Ok(rich::xhtml(&markup, &mut picture))
-}
-
-/// A decoded picture in the BGRA order GPUI draws.
-pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in image.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
-    }
-    Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
-        image
-    )]))
 }
 
 fn open(path: &Path) -> Result<zip::ZipArchive<std::fs::File>> {

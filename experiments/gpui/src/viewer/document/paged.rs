@@ -240,7 +240,7 @@ impl PagedViewer {
         self.shown = Some(Shown {
             index: page.index,
             natural: page.natural,
-            image: super::epub::render_image(page.image),
+            image: super::render_image(page.image),
         });
         self.error = None;
         if first_measure {

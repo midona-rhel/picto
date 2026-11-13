@@ -34,10 +34,13 @@ pub fn set_app_menus(cx: &mut App) {
         },
         Menu {
             name: "Media Examples".into(),
-            items: vec![
+            items: [
                 MenuItem::action("SVG", DemoSvg),
                 MenuItem::action("Flash (Ruffle)", DemoFlash),
-            ],
+            ]
+            .into_iter()
+            .chain(viewer::document::demos::menu_items())
+            .collect(),
             disabled: false,
         },
     ]);

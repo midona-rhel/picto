@@ -9,6 +9,7 @@ pub mod confirm;
 mod empty_state;
 pub mod field;
 mod icon_button;
+pub mod media_controls;
 pub mod menu;
 pub mod modal;
 pub mod number_input;

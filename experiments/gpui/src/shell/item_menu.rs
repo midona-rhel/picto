@@ -483,7 +483,7 @@ impl Shell {
         // Production captures the current frame of a video or Flash movie;
         // this viewer plays Flash only.
         let playback = Playback {
-            flash: flash.then_some((true, false)),
+            flash: self.viewer.read(cx).surface().read(cx).flash_playback(),
             capture: flash,
         };
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
@@ -847,7 +847,16 @@ impl Shell {
                 // and import them into this destination.
             }
             Action::FlashPlay | Action::FlashStop | Action::FlashMute => {
-                // TODO: pause, stop and mute the Flash player.
+                use crate::viewer::flash::Flash;
+                let control: Box<dyn Fn(&mut Flash)> = match action {
+                    Action::FlashPlay => Box::new(Flash::toggle_play),
+                    Action::FlashStop => Box::new(Flash::stop),
+                    _ => Box::new(Flash::toggle_mute),
+                };
+                self.viewer
+                    .read(cx)
+                    .surface()
+                    .update(cx, |surface, cx| surface.control_flash(control, cx));
             }
             Action::SetAsThumbnail => {
                 // TODO: capture the shown frame and make it the thumbnail.
