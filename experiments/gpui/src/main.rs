@@ -1,6 +1,8 @@
+mod application;
 mod assets;
 mod backend;
 mod cover;
+mod delete;
 mod demo;
 mod grid;
 mod inspector;
@@ -83,13 +85,23 @@ fn match_chromium_text_weight() {
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
-    let mut args = std::env::args().skip(1);
-    let database = PathBuf::from(args.next().expect("Pass a snapshot database from run.sh"));
-    let blobs = PathBuf::from(args.next().expect("Pass the source blobs directory"));
-    assert!(
-        database.parent().unwrap().join(".gpui-snapshot").is_file(),
-        "Only a marked disposable snapshot is accepted"
+    // The one argument is the root of a disposable copy that run.sh made.
+    // Anything else, and the library it was copied from, is refused.
+    let root = PathBuf::from(
+        std::env::args()
+            .nth(1)
+            .expect("Pass the disposable library copy that run.sh made"),
     );
+    let root = match application::guard(&root) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("picto: {error}");
+            std::process::exit(2);
+        }
+    };
+    let (events, delivered) = std::sync::mpsc::channel();
+    let application = application::Application::new(root.clone(), events);
+    let closing = application.clone();
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
@@ -113,6 +125,13 @@ fn main() {
             viewer::bind(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
+            // Stop the workers and checkpoint the copy before the process
+            // ends, as the Electron app closes its library before quitting.
+            cx.on_app_quit(move |_| {
+                closing.close();
+                async {}
+            })
+            .detach();
             cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
             cx.set_menus(vec![
                 Menu {
@@ -154,7 +173,7 @@ fn main() {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         window_min_size: Some(size(px(1000.), px(600.))),
                         titlebar: Some(TitlebarOptions {
-                            title: Some("Picto GPUI · Library snapshot".into()),
+                            title: Some("Picto GPUI · Library copy".into()),
                             appears_transparent: true,
                             traffic_light_position: Some(point(px(12.), px(15.))),
                         }),
@@ -165,7 +184,9 @@ fn main() {
                         focus: !background,
                         ..Default::default()
                     },
-                    move |window, cx| cx.new(|cx| Shell::new(database, blobs, window, cx)),
+                    move |window, cx| {
+                        cx.new(|cx| Shell::new(root, application, delivered, window, cx))
+                    },
                 )
                 .unwrap();
             pointer::start(window.into(), cx);

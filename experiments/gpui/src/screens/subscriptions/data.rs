@@ -511,14 +511,12 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    #[ignore = "Requires PICTO_GPUI_TEST_DB pointing to a marked disposable snapshot"]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy made by run.sh"]
     fn real_snapshot_subscriptions_read() {
-        let path = PathBuf::from(std::env::var("PICTO_GPUI_TEST_DB").unwrap());
-        assert!(path.parent().unwrap().join(".gpui-snapshot").is_file());
-        let blobs = std::env::var("PICTO_GPUI_TEST_BLOBS")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let library = picto_library::Library::open(path).unwrap();
+        let root = PathBuf::from(std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap());
+        let root = crate::application::guard(&root).unwrap();
+        let blobs = root.join("blobs");
+        let library = picto_library::Library::open(root.join("library.sqlite")).unwrap();
         let list = subscriptions(&library, &blobs).unwrap();
         for subscription in &list {
             let detail = detail(&library, subscription.id).unwrap();

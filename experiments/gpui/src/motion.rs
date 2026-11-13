@@ -101,6 +101,8 @@ pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
 /// `.followCover`: a subscription card's border on hover, on `ease`.
 pub const CARD_HOVER: Duration = Duration::from_millis(120);
+/// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
+pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
 pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
 

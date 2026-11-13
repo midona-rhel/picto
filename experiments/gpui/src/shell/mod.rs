@@ -75,13 +75,15 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(
-        database: PathBuf,
-        blobs: PathBuf,
+        root: PathBuf,
+        application: std::sync::Arc<crate::application::Application>,
+        events: std::sync::mpsc::Receiver<crate::application::Event>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let session = cx.new(|cx| Session::new(database, blobs, cx));
+        let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
+        crate::delete::init(session.clone(), cx);
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -269,8 +271,8 @@ impl Shell {
                 .icon("menu-arrow-back-up")
                 .into(),
             );
-            // The one destructive row. This prototype borrows the library's
-            // files, so it never deletes them: the row is shown, not offered.
+            // The one destructive row, after a confirmation. The app owns the
+            // copy it runs on, so the files it removes are the copy's.
             entries.push(
                 menu::item(
                     "delete",
@@ -279,7 +281,6 @@ impl Shell {
                 .icon("menu-trash")
                 .shortcut("⌘⌫")
                 .danger(true)
-                .disabled(true)
                 .into(),
             );
         } else {
@@ -374,6 +375,18 @@ impl Shell {
             "restore" => self.session.update(cx, |session, cx| {
                 session.move_selection_to(picto_library::Lifecycle::Active, cx)
             }),
+            "delete" => {
+                let root_ids = self.session.read(cx).selected_ids();
+                if !root_ids.is_empty() {
+                    crate::delete::request(
+                        picto_library::selection::SelectionTarget::Explicit { root_ids },
+                        false,
+                        window,
+                        cx,
+                    );
+                }
+                return;
+            }
             _ => {}
         }
         window.focus(&self.focus, cx);
@@ -700,7 +713,9 @@ impl Render for Shell {
             }))
             .child(titlebar)
             .child(body)
-            .children(inspector);
+            .children(inspector)
+            // The permanent-delete confirmation, over everything.
+            .child(crate::delete::dialog(cx));
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.

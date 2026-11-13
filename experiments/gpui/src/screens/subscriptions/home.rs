@@ -342,6 +342,8 @@ impl SubscriptionsScreen {
                 format::count(job.progress.downloaded)
             ),
         };
+        let id = job.id;
+        let acting = self.acting.contains(&id);
         let (icon, tip) = if running {
             ("player-pause", "Pause gallery download")
         } else if paused {
@@ -398,17 +400,23 @@ impl SubscriptionsScreen {
                     .flex()
                     .items_center()
                     .gap(px(2.))
-                    // TODO: pause, resume or retry the download, and stop it,
-                    // through the subscription runner.
+                    // Pause, resume or retry the download, and stop it, as a
+                    // subscription's run is.
                     .child(
                         ui::small_button(("gallery-toggle", job.id as usize), icon)
                             .size(26., theme::RADIUS_SM)
-                            .tip(ui::tip(tip)),
+                            .tip(ui::tip(tip))
+                            .disabled(acting)
+                            .on_click(cx.listener(move |this, _, _, cx| this.run_control(id, cx))),
                     )
                     .child(
                         ui::small_button(("gallery-stop", job.id as usize), "player-stop")
                             .size(26., theme::RADIUS_SM)
-                            .tip(ui::tip("Stop gallery download")),
+                            .tip(ui::tip("Stop gallery download"))
+                            .disabled(acting)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.perform(vec![id], |_| super::Command::Stop, cx)
+                            })),
                     ),
             )
     }

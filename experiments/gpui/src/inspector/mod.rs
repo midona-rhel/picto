@@ -243,6 +243,7 @@ impl Inspector {
                     cx.notify();
                 }
                 Change::Results => this.refresh_scope(cx),
+                Change::Activity => {}
             }),
         ];
         Self {
