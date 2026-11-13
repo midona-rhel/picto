@@ -184,15 +184,14 @@ impl Shell {
     /// `file.delete`, as `gridRemovalAction` reads it: in a folder the key
     /// belongs to Remove from Folder, in the Trash it deletes permanently,
     /// elsewhere it moves the selection to the Trash.
-    fn delete_items(&mut self, cx: &mut Context<Self>) {
+    fn delete_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let kind = self.scope_kind(cx);
         let count = self.session.read(cx).selection.len();
         if (kind.folder.is_some() && !kind.trash) || count == 0 {
             cx.propagate();
         } else if kind.trash {
-            // TODO: delete the selection permanently, after the confirmation
-            // production shows. This prototype borrows the library's files
-            // and must never delete them, so the key does nothing here.
+            // Permanently, after the confirmation the menu row shows.
+            self.act_on_selection(crate::grid::menu::Action::DeletePermanently, window, cx);
         } else {
             self.session.update(cx, |session, cx| {
                 session.move_selection_to(Lifecycle::Trash, cx)
@@ -229,7 +228,7 @@ impl Shell {
 
     /// `inbox.reject` (`rejectTarget`): to the Trash, or deleted, as the
     /// Inbox & Deleting setting says.
-    fn reject(&mut self, cx: &mut Context<Self>) {
+    fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.scope_kind(cx).inbox || self.session.read(cx).selection.is_empty() {
             cx.propagate();
         } else if settings::current(cx).reject_action == "trash" {
@@ -237,9 +236,9 @@ impl Shell {
                 session.move_selection_to(Lifecycle::Trash, cx)
             });
         } else {
-            // TODO: delete the rejected items, after production's
-            // confirmation. This prototype must never delete library files,
-            // so with "Delete" chosen the key does nothing.
+            // Deleted, asking first only when it cannot be undone, as the
+            // menu's Reject row does.
+            self.act_on_selection(crate::grid::menu::Action::Reject, window, cx);
         }
     }
 
@@ -354,7 +353,7 @@ impl Shell {
         .on_action(cx.listener(|this, _: &Rate3, _, cx| this.rate(3, cx)))
         .on_action(cx.listener(|this, _: &Rate4, _, cx| this.rate(4, cx)))
         .on_action(cx.listener(|this, _: &Rate5, _, cx| this.rate(5, cx)))
-        .on_action(cx.listener(|this, _: &DeleteItems, _, cx| this.delete_items(cx)))
+        .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
         .on_action(cx.listener(|this, _: &RemoveFromFolder, _, cx| this.remove_from_folder(cx)))
         .on_action(cx.listener(|this, _: &RestoreItems, _, cx| {
             let trash = this.scope_kind(cx).trash;
@@ -364,7 +363,7 @@ impl Shell {
             let inbox = this.scope_kind(cx).inbox;
             this.move_in(inbox, Lifecycle::Active, cx)
         }))
-        .on_action(cx.listener(|this, _: &RejectInbox, _, cx| this.reject(cx)))
+        .on_action(cx.listener(|this, _: &RejectInbox, window, cx| this.reject(window, cx)))
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar
                 .update(cx, |sidebar, cx| sidebar.new_folder(window, cx));

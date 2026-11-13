@@ -10,13 +10,89 @@ Issue: https://github.com/midona-rhel/picto/issues/163
 experiments/gpui/run.sh /path/to/Main.library
 ```
 
-The launcher uses SQLite's online backup to create a disposable database under
-`/tmp/picto-gpui-library.*`. It reads existing thumbnails and originals in place
-without copying or changing blobs. The app refuses databases without the
-snapshot marker. Edits and undo/redo affect only that copy. The original library
-and the main checkout are not modified. Keep the snapshot until the app is closed.
+The launcher makes a complete private copy of the library under
+`/tmp/picto-gpui-library.*/<Name>.library` and opens the app on it as an
+ordinary library root, the way the Electron app opens one:
+
+- the database through SQLite's online backup (`sqlite3 -readonly …
+  .backup`), which includes committed WAL data and never touches the live
+  files the Electron app may have open;
+- everything else (`blobs/`, the cover files, `cloud/`, `ingest-staging/`,
+  `source-runners/`, the old pre-migration backups) by APFS clone
+  (`cp -Rc`), which is instant and takes no space until either side changes a
+  file. The copy of a 24 GB library takes about 8 seconds. If the library and
+  `/tmp` are not on the same APFS volume the launcher stops with a message
+  rather than copying tens of gigabytes.
+
+Reading the library to make the copy is the only access to it. The copy holds
+`.gpui-disposable`, naming the library it was copied from; the app refuses a
+folder without it, the library it names, and any folder inside that library,
+or one whose database is that library's file. Because the app owns every file
+it can see, it writes, imports and deletes inside the copy: Delete
+Permanently, Empty Trash, and the Duplicates screen's Keep and Smart merge
+remove files from the copy's blobs only.
+
+Before the application starts its workers, the copy is cut loose from work
+the real library has going on (`application::detach`, again on every launch):
+cloud sync is disconnected (so nothing is ever written to the user's cloud
+folder), watched folders are switched off, subscription runs that were queued
+or running are cancelled, and schedules have no next run, so nothing
+downloads unless the user starts it here; choosing a schedule again sets its
+next run. Data the application keeps outside a library (AI models) goes to
+`app-data/` beside the copy, never to the Electron app's folder.
+
+`PICTO_GPUI_COPY_ONLY=1 run.sh …` makes the copy, prints its path and stops;
+the checks below use it. Delete `/tmp/picto-gpui-library.*` when done.
 
 The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
+
+## How the app talks to the backend
+
+The app runs Picto's application layer, `picto_core` (the `core/` crate),
+in-process, as the Electron app runs it through its napi addon:
+`application.rs` sets the application data root, registers the event
+callback, and opens the copy with `picto_core::state::open_library` on a
+Tokio runtime of its own. That starts the same workers as production:
+publication, imports and ingest, derivatives (thumbnails, perceptual hashes
+and the automatic duplicate scan), full-text indexing, checkpoints, AI
+tagging, and the subscription scheduler and runners. `Session::run` keeps
+working: the library thread borrows the application's own `Library`
+(`LibraryApplication::library()`), so the database is opened once.
+
+- Commands: `Session::dispatch("command.name", json!({...}))` sends a command
+  as the renderer's `invoke(command, args)` does
+  (`picto_core::state::invoke`, which answers from `core/src/ipc.rs`) and
+  returns a `oneshot::Receiver<Result<serde_json::Value, String>>` to await in
+  `cx.spawn`. It runs on the application's runtime, never on the drawing
+  thread; a command sent while the library still opens waits for it. The
+  names and arguments are those of `src/platform/*Api.ts`.
+- Events: the application's `library/changed` (with the resources and items a
+  write touched) and `picto:thumbnail-changed` arrive on a channel the
+  session drains with its replies. One poll's invalidations are merged into
+  one, as the renderer's registry delivers one per frame, and the session
+  emits it as `application::Event`, which views subscribe to beside
+  `Change`. The session itself does what the Electron runtime stores do:
+  `sidebar`, `folders`, `smart_folders`, `tags` and `duplicates` read the
+  destination list and counts again (`sidebarSettle.ts`); `library` refreshes
+  the inspector when the shown item is named and drops the saved grids that
+  Back would restore; `subscriptions` and `tasks` read whether subscriptions
+  run (`Change::Activity`), every 1.5 s while one does. The Duplicates screen
+  reads its queue again on `duplicates`, and the Subscriptions screen its list
+  on `subscriptions` (after 250 ms of quiet) and `tasks`.
+- Still straight to the library (`Session::run` or the backend's requests):
+  grid pages and saved views, item details, rating, rename, notes, tags and
+  folders of an item, lifecycle, undo and redo, the sidebar's folder edits,
+  the settings model, the Tags screen, the Subscriptions screen's reads and
+  rename, and the Duplicates screen's queue and decisions. These are the same
+  `Library` calls the commands make, so they publish the same events; they
+  can move to commands one by one.
+
+Linking `picto_core` adds 166 crates to the lockfile (859 to 1,025), about
+2 minutes 40 seconds to a clean debug build on this machine (1,560 CPU
+seconds), and takes the debug binary from 59 MB to 126 MB. Incremental builds
+of the app are unchanged. ONNX Runtime links statically from `ort`'s cache;
+video work needs `ffmpeg` (`PICTO_FFMPEG_DIR`, `vendor/ffmpeg/` above the
+executable, or `PATH`).
 
 ## Toolchain and GPUI version
 
@@ -234,7 +310,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the sidebar's counts, tree guides, system rows and Folders and Smart Folders
   sections, the inspector's tag prefixes, and the grid's default view and the
   `gridSpacing` fallback, which the grid reads again. Writes go to the
-  disposable snapshot only.
+  disposable copy only.
 - Shared form controls in `ui/`, each once, to the production CSS with their
   hover, pressed, focus and disabled states and timings: the Settings footer
   and inline buttons as looks of the one action button,
@@ -413,10 +489,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Zoom and pan are linked between the two previews (wheel about the
   pointer, drag, double-click to fit), and Show Difference shows the
   difference of the two images while hovered. "Not duplicates" and "Keep
-  both" record the pair as different files through the library, keep the
-  queue's place and update the sidebar count; ←, →, F, ⌘0, N and B work as
-  in Electron. Below 900 and 620 points the layout tightens and then stacks
-  as the container queries do. Loading message after 200 ms, and the empty
+  both" record the pair as different files; Keep left, Keep right and Smart
+  merge keep one file and merge the other's item into it (the freed file is
+  deleted from the copy), with Smart merge's green ring around the survivor
+  while it is hovered, fading over 140 ms. Each keeps the queue's place and
+  updates the sidebar count; ←, →, F, ⌘0, N, B, Z, X and S work as in
+  Electron. "Scan library" and Retry run the application's scanner
+  (`duplicates.scan`, distance 16) and read the queue again, with the
+  indeterminate 2px progress bar (`ui::progress_bar`) after 200 ms; a scan
+  the media worker makes by itself refreshes the queue. Below 900 and 620
+  points the layout tightens and then stacks as the container queries do. Loading message after 200 ms, and the empty
   states for an empty queue, a finished review and an error.
 - The Subscriptions screen, read from the library: the grid of 180px cards
   (cover framed by its stored crop, name, status badge, item and source
@@ -434,6 +516,26 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the library's consistent auxiliary read; the list and the query rows use
   `core/src/subscription_views.sql` and `subscription_query_views.sql`
   directly.
+- Running subscriptions, through the application's runners: the rail's Run
+  now, Pause, Resume and Retry (`subscriptions.run`, `subscriptions.run.pause`,
+  `subscriptions.run.resume`) and Stop, Hold and Release
+  (`subscriptions.cancel`, `subscriptions.hold`), the same rows of a card's
+  menu, Run, Hold and Release for several, and a gallery download's pause,
+  resume and stop. A subscription's controls wait while its command is on its
+  way. The screen follows the run through the application's events and reads
+  progress every 1.5 s while a run goes (and for 5 s after one is started).
+  The sidebar's Subscriptions row shows the activity button of
+  `SidebarRow.tsx` while subscriptions run or are all held: the 8px primary
+  dot pulsing over 2.4 s, a pause glyph under the pointer on a 30% primary
+  fill, and while everything is held a pause glyph that becomes play; a
+  click holds or releases every subscription (`subscriptions.pause_all`).
+- Permanent deletion everywhere production offers it: the item menus'
+  Delete Permanently, ⌘⌫ in the Trash, Reject with "Delete" chosen (menu and
+  key), and the sidebar's Empty Trash ("Empty Trash", "Delete All"), all
+  through the shell's one `requestPermanentDelete` flow. The files a delete
+  that cannot be undone frees are removed from the copy's blobs by the
+  application's media worker, as in production; the source library is never
+  touched.
 - The Tags screen (`TagManagerScreen.tsx`): the 184px rail of All, General,
   Starred, the groups in their preset order and colours with their counts,
   "Create tag group" and "Delete Unused"; the tags of the chosen group in
@@ -491,13 +593,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   name field is dimmed while an edit runs but still takes typing; Undo does
   not reach tag edits; tag and group changes made elsewhere show when the
   screen is opened again, not live.
-- Duplicates: Keep left, Keep right and Smart merge (Z, X, S) are drawn
-  disabled, because they merge one item into the other and free the other
-  file for deletion from disk, which this prototype must never cause; with
-  them goes Smart merge's green survivor ring. Scan library and Retry are
-  drawn but do nothing: the scanner lives in the application core, which the
-  prototype does not link, so its progress bar is not ported either. Errors
-  show only in the empty state, not as toasts. No context menu on the
+- Duplicates: errors, the scan's result ("Found N new review pairs") and
+  "Smart merge needs a choice" are not shown, as there are no toasts yet (an
+  ambiguous Smart merge leaves the pair on screen); a failed read shows only
+  in the empty state. The progress bar's position over a shown pair is a
+  2px row above the cards (the Electron `.scanProgress` class has no rule).
+  The Smart merge ring follows the pointer only, not keyboard focus. No context menu on the
   candidates (Open with Default App, Open in New Window). The difference
   picture is computed from the decoded images (GPUI has no blend modes), at
   most 4096 pixels on its longest side, from the thumbnails until both
@@ -519,8 +620,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   others change the settings model and are saved, with a `TODO` where they
   belong (theme, zoom, language, the grid's wheel action, image rendering
   and the transparency grid, video autoplay and loop, notifications,
-  imports, subscriptions). Rejecting with "Delete" chosen does nothing,
-  since the prototype never deletes library files.
+  imports, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
   localStorage.
@@ -533,11 +633,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
   reload the model.
-- Subscriptions: running, pausing, holding, stopping, retrying and creating
-  subscriptions, galleries and sources need the source runners, which live
-  in `core`; their buttons and menu rows are drawn with hover states and
-  tooltips but do nothing, and the menu rows are shown disabled. Also not
-  built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
+- Subscriptions: no run has been started from this app yet (see the test
+  card below); failures and completions are not announced (no toasts or
+  system notifications). Creating subscriptions, galleries and sources, and
+  the per-source Run, Hold, Group, Edit and Delete, are drawn but not
+  performed. Also not built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
   dialog, reset and delete confirmations, adding or removing destination
   folders and tags, the source details and edit windows, the accounts
   window and login warnings, the gallery progress total, and acknowledging
@@ -564,7 +664,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
+- Not in the sidebar yet: drag reorder and
   drops from the grid (the rows have the drop looks; nothing drives them),
   Quick Access, keyboard movement through the rows (the focused look is
   there; nothing moves focus to a row), the Set Folder Auto Tags shortcut,
@@ -575,8 +675,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Rules..., New Smart Folder and New Child Smart Folder (no smart-folder
   editor), Change Icon, Sort Folders, Sort by and Export (submenus). The
   visibility rows close the menu when chosen; the
-  colour picker row and Remove Watched Folder are not drawn. Empty Trash is
-  shown disabled. Folded nodes and sections are kept in memory, not persisted.
+  colour picker row and Remove Watched Folder are not drawn. The activity
+  button's tooltip opens below it, not to its right as `position="right"`
+  puts it. Folded nodes and sections are kept in memory, not persisted.
   The sidebar's preferences (which system rows and sections show, counts,
   guides, the double-click action) come from the settings model; its
   visibility menu writes through it to the library at once, as production
@@ -609,9 +710,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
   the menu as a full-window layer; the menu itself chooses between its
   pop-up windows and the in-window panel. Subscriptions' Schedule row stays
-  disabled rather than a submenu: setting a schedule also sets the next run
-  time, which the application's subscription catalog computes and this
-  prototype does not link. Custom rows, right-click actions on rows
+  disabled rather than a submenu; `subscriptions.schedule`, which also sets
+  the next run time, is now reachable and is its `TODO`. Custom rows, right-click actions on rows
   (`contextAction`) and nested submenus are not ported, so the grid menus'
   view panel (Layout and Sort by selects, the direction pill) and the
   Display panel's switches are rows that check inside "Layout", "Sort by"
@@ -622,7 +722,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   (each with a `TODO` where it is received): Open With Other (the system's
   application list), Copy and Copy for several items (GPUI's macOS
   pasteboard drops file lists), Export Originals, Export As and Export as
-  Picto Pack (the application backend), Search by Image (production uploads
+  Picto Pack (`media.export` and `picto_pack.export`, after a folder or save dialog), Search by Image (production uploads
   the original from a hidden browser window), Set as Library Cover (the
   cover dialog that frames the square), Find Items with This Media (an
   ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
@@ -635,8 +735,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Quick Look and the detail window have no context menu yet.
   "Add to “…”" appears once a folder has been used (the folder picker and
   this row record it; for the session only). Show Extension and Show Subfolder Content are saved
-  but the grid does not follow them yet. Delete Permanently leaves the files
-  a delete that cannot be undone frees where they are. Errors go to the
+  but the grid does not follow them yet. Errors go to the
   console, not to notifications. Edits that change what the destination
   holds (Remove from Folder, Sort by, Group, Ungroup, the lifecycle rows,
   deletes) fetch the grid again, which clears the selection; after a rating
@@ -656,7 +755,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   cover is cropped once per session, so a cover changed elsewhere meanwhile
   shows the old one. A library with an icon but no cover shows the books
   glyph, not its icon.
-- No import/export, subscriptions, cloud, localization or site login.
+- No import/export, cloud, localization or site login. The grid shown is
+  not read again when background work (an import, a subscription run)
+  changes it; going to another destination and back does.
 - Viewer: the breadcrumb and "Edit group" belong to the collection editor,
   which does not exist yet, so neither is ever shown; collections step
   through members with the bottom strip instead of the reader surface. No
@@ -670,11 +771,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   New Smart Folder, Set Folder Auto Tags, Regenerate Thumbnail, Open in New
   Window, Auto-Tag, Copy (⌘C copies files, which GPUI's macOS clipboard
   cannot hold), Remove from Group, Toggle Grayscale, Always on Top, Toggle
-  Logs, the document pages, every video key, and the duplicate review's
-  Keep Left, Keep Right and Smart Merge; production's deferred ids are not
-  bound either. ⌘⌫ in the Trash (Delete Permanently) and Reject with
-  "Delete" chosen are bound but do nothing, so no library file is ever
-  deleted. T, F and ⌘⇧J open the inspector's pickers rather than
+  Logs, the document pages and every video key; production's deferred ids
+  are not bound either. T, F and ⌘⇧J open the inspector's pickers rather than
   production's picker dialogs; batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
@@ -714,9 +812,14 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ```sh
 cargo test --manifest-path experiments/gpui/Cargo.toml
-PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
-  cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
+PICTO_GPUI_TEST_LIBRARY="$(PICTO_GPUI_COPY_ONLY=1 experiments/gpui/run.sh /path/to/Main.library)" \
+  cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored --test-threads=1
 ```
+
+The ignored test `real_copy_answers_commands_and_reports_changes` opens the
+application on the copy, sends commands before and after it has opened,
+sees a write's `library/changed` arrive, runs a duplicate scan and keeps one
+file of a pair, checking the source library's blob is unchanged.
 
 The regular tests cover the Tags screen's sections, rows, ordering, search
 ranking, shimmer and starred-tag edits, the dialogs' timing, the context menu's search ranking, separator
@@ -734,7 +837,7 @@ order and name search, the reveal timeline, the easing curve
 against the sampled bezier, scaled frames about their origin, the corner a
 menu grows from, the menu's, tooltip's and dialog's enter and exit values,
 delayed fades, tree ordering and the text-search gates. The
-ignored tests need a real snapshot or a GPU and are run explicitly.
+ignored tests need a disposable copy or a GPU and are run explicitly.
 
 `pixel_diff.py` compares two captures of the same size using only the Python
 standard library, and reports the share of differing pixels for the whole
@@ -798,8 +901,10 @@ One model, separate views, shared components:
   `motion.rs` holds durations and easing. Views take colours, sizes and
   timings from these and write none of their own.
 
-Production integration should reuse the application service layer for jobs
-and events rather than growing a second application backend.
+- `application.rs` runs the application layer (`picto_core`) on the copy:
+  the guard that refuses anything but a marked copy, the detaching of
+  inherited work, commands and events. `delete.rs` is the permanent-delete
+  confirmation the grid and the sidebar share.
 
 ## Attribution
 

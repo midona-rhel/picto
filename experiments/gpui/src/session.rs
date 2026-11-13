@@ -1,6 +1,7 @@
 //! What is being browsed: the destination, its results, the selection and the
 //! viewer. One model that every view reads, so a view repaints only for the
 //! kind of change it shows and no view owns another's state.
+use crate::application::{self, Application, Event};
 use crate::backend::{self, Navigation, Reply, Request};
 use crate::grid::{nav, prefs::ViewPrefs};
 use crate::motion;
@@ -11,7 +12,10 @@ use picto_library::{Rating, RootDetails, RootId, TagRecord};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{Receiver, Sender},
+    },
     time::{Duration, Instant},
 };
 
@@ -56,7 +60,50 @@ pub enum Change {
     Details,
     /// The viewer opened, closed, or moved to another member.
     Viewer,
+    /// Background work the sidebar shows: whether subscriptions are running
+    /// or held globally.
+    Activity,
 }
+
+/// Whether subscriptions are running, as the sidebar's Subscriptions row
+/// shows it (`runningSubscriptionIds`, `globalPaused`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SubscriptionActivity {
+    pub running: bool,
+    pub paused: bool,
+    /// A pause or resume of everything is on its way.
+    pub busy: bool,
+}
+
+impl SubscriptionActivity {
+    /// Reads `subscriptions.list` as `getSubscriptionOverview` does: running
+    /// means an active run that is pending or running.
+    pub fn from_list(list: &serde_json::Value) -> Self {
+        let running = list
+            .get("subscriptions")
+            .and_then(|list| list.as_array())
+            .is_some_and(|list| {
+                list.iter().any(|subscription| {
+                    !subscription["active_run_id"].is_null()
+                        && matches!(subscription["status"].as_str(), Some("pending" | "running"))
+                })
+            });
+        Self {
+            running,
+            paused: list["global_paused"].as_bool().unwrap_or(false),
+            busy: false,
+        }
+    }
+
+    /// The row shows its activity button.
+    pub fn shown(&self) -> bool {
+        self.running || self.paused
+    }
+}
+
+/// `subscriptionsSettle.ts`: progress is read again this often while a run
+/// is going.
+pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
 
 /// One step of Back and Forward.
 #[derive(Clone, Copy, PartialEq)]
@@ -87,6 +134,17 @@ struct SavedGrid {
 pub struct Session {
     sender: Sender<Request>,
     receiver: Receiver<Reply>,
+    /// The application layer: commands and its events.
+    application: Arc<Application>,
+    events: Receiver<Event>,
+    pub subscriptions: SubscriptionActivity,
+    /// The subscription list is being read for the sidebar's activity.
+    activity_reading: bool,
+    /// Reads progress again while a run is going.
+    activity_poll: Option<Task<()>>,
+    /// The sidebar's destinations are being read again; `true` inside when
+    /// another change arrived meanwhile.
+    navigation_reading: Option<bool>,
     pub nav: Vec<Navigation>,
     pub tags: HashMap<u32, TagRecord>,
     /// The destination chosen in the sidebar.
@@ -139,8 +197,8 @@ pub struct Session {
     search_text: String,
     pub filter: Option<FilterExpr>,
     blobs: PathBuf,
-    /// The disposable database the library opened.
-    database: PathBuf,
+    /// The disposable copy the application opened.
+    root: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
@@ -156,10 +214,17 @@ pub struct Session {
 }
 
 impl EventEmitter<Change> for Session {}
+impl EventEmitter<Event> for Session {}
 
 impl Session {
-    pub fn new(database: PathBuf, blobs: PathBuf, cx: &mut Context<Self>) -> Self {
-        let (sender, receiver) = backend::start(database.clone());
+    pub fn new(
+        root: PathBuf,
+        application: Arc<Application>,
+        events: Receiver<Event>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let blobs = root.join("blobs");
+        let (sender, receiver) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
             loop {
                 cx.background_executor()
@@ -181,6 +246,12 @@ impl Session {
         Self {
             sender,
             receiver,
+            application,
+            events,
+            subscriptions: SubscriptionActivity::default(),
+            activity_reading: false,
+            activity_poll: None,
+            navigation_reading: None,
             nav: Vec::new(),
             tags: HashMap::new(),
             scope: 0,
@@ -218,7 +289,7 @@ impl Session {
             search_text: String::new(),
             filter: None,
             blobs,
-            database,
+            root,
             library_cover,
             fixtures,
             place_label: None,
@@ -227,10 +298,10 @@ impl Session {
         }
     }
 
-    /// Whether the open database is still a marked disposable copy, which
+    /// Whether the open library is still a marked disposable copy, which
     /// edits that cannot be undone require.
     pub fn disposable(&self) -> bool {
-        crate::marked_disposable(&self.database)
+        crate::application::guard(&self.root).is_ok()
     }
 
     /// The library's blob store.
@@ -323,6 +394,160 @@ impl Session {
             let _ = answer.send(work(library));
         })));
         receiver
+    }
+
+    /// Sends a command to the application layer, as the Electron renderer's
+    /// `invoke(command, args)` does, and hands back its JSON answer. The
+    /// command runs on the application's runtime, never on the thread that
+    /// draws. The command names and their arguments are those of
+    /// `core/src/ipc.rs`.
+    pub fn dispatch(
+        &self,
+        command: impl Into<String>,
+        args: serde_json::Value,
+    ) -> futures::channel::oneshot::Receiver<Result<serde_json::Value, String>> {
+        self.application.dispatch(command, args)
+    }
+
+    // ── The application's events ────────────────────────────────
+
+    /// Takes what the application reported since the last look, merged into
+    /// one invalidation, does what the Electron runtime stores do with it,
+    /// and passes it on to the views that subscribe to [`Event`].
+    fn receive_events(&mut self, cx: &mut Context<Self>) {
+        let (changed, thumbnails) = application::coalesce(self.events.try_iter());
+        for hash in thumbnails {
+            cx.emit(Event::Thumbnail(hash));
+        }
+        let Some(changed) = changed else {
+            return;
+        };
+        // `sidebarSettle.ts`: the counts and the destination list.
+        if ["sidebar", "folders", "smart_folders", "tags", "duplicates"]
+            .iter()
+            .any(|resource| application::touches(&changed, resource))
+        {
+            self.refresh_navigation(cx);
+        }
+        if application::touches(&changed, "library") {
+            // What other destinations held may no longer be true; going
+            // back to one reads it again. The grid on screen is not read
+            // again under the user.
+            self.saved.clear();
+            let shown = self
+                .selected_details()
+                .map(|details| details.root.root_id.0);
+            if shown.is_some_and(|id| changed.item_ids.contains(&id)) {
+                self.refresh_details();
+            }
+        }
+        // `subscriptionsSettle.ts`: the running state follows runs.
+        if application::touches(&changed, "subscriptions")
+            || application::touches(&changed, "tasks")
+        {
+            self.refresh_activity(cx);
+        }
+        cx.emit(Event::Changed(changed));
+    }
+
+    /// Reads the sidebar's destinations and counts again. Changes that
+    /// arrive while a read is under way are folded into one more read.
+    pub fn refresh_navigation(&mut self, cx: &mut Context<Self>) {
+        if let Some(again) = &mut self.navigation_reading {
+            *again = true;
+            return;
+        }
+        self.navigation_reading = Some(false);
+        let answer = self.run(backend::navigation);
+        cx.spawn(async move |session, cx| {
+            let result = answer.await;
+            let _ = session.update(cx, |this: &mut Self, cx| {
+                let again = this.navigation_reading.take() == Some(true);
+                match result {
+                    Ok(Ok((nav, tags))) => this.replace_navigation(nav, tags, cx),
+                    Ok(Err(error)) => eprintln!("picto: {error}"),
+                    Err(_) => {}
+                }
+                if again {
+                    this.refresh_navigation(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Reads whether subscriptions are running or held, and keeps reading
+    /// while one runs.
+    pub fn refresh_activity(&mut self, cx: &mut Context<Self>) {
+        if self.activity_reading {
+            return;
+        }
+        self.activity_reading = true;
+        let answer = self.dispatch("subscriptions.list", serde_json::json!({}));
+        cx.spawn(async move |session, cx| {
+            let result = answer.await;
+            let _ = session.update(cx, |this: &mut Self, cx| {
+                this.activity_reading = false;
+                let Ok(Ok(list)) = result else {
+                    return;
+                };
+                let activity = SubscriptionActivity {
+                    busy: this.subscriptions.busy,
+                    ..SubscriptionActivity::from_list(&list)
+                };
+                if activity != this.subscriptions {
+                    this.subscriptions = activity;
+                    cx.emit(Change::Activity);
+                }
+                this.poll_activity(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Polls while a run is going, as the renderer does every 1.5 s.
+    fn poll_activity(&mut self, cx: &mut Context<Self>) {
+        if !self.subscriptions.running {
+            self.activity_poll = None;
+            return;
+        }
+        if self.activity_poll.is_some() {
+            return;
+        }
+        self.activity_poll = Some(cx.spawn(async move |session, cx| {
+            cx.background_executor().timer(SUBSCRIPTION_POLL).await;
+            let _ = session.update(cx, |this: &mut Self, cx| {
+                this.activity_poll = None;
+                this.refresh_activity(cx);
+            });
+        }));
+    }
+
+    /// The sidebar row's button: holds every subscription, or lets them run
+    /// again (`subscriptions.pause_all`).
+    pub fn toggle_all_subscriptions(&mut self, cx: &mut Context<Self>) {
+        if self.subscriptions.busy {
+            return;
+        }
+        let paused = !self.subscriptions.paused;
+        self.subscriptions.busy = true;
+        cx.emit(Change::Activity);
+        let answer = self.dispatch(
+            "subscriptions.pause_all",
+            serde_json::json!({ "paused": paused }),
+        );
+        cx.spawn(async move |session, cx| {
+            let result = answer.await;
+            let _ = session.update(cx, |this: &mut Self, cx| {
+                this.subscriptions.busy = false;
+                if let Ok(Err(error)) = result {
+                    eprintln!("picto: {error}");
+                }
+                cx.emit(Change::Activity);
+                this.refresh_activity(cx);
+            });
+        })
+        .detach();
     }
 
     /// Fetches the current destination again, after an edit made elsewhere.
@@ -515,6 +740,7 @@ impl Session {
     }
 
     fn receive(&mut self, cx: &mut Context<Self>) {
+        self.receive_events(cx);
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
                 Reply::Ready(nav, tags) => {
@@ -522,6 +748,7 @@ impl Session {
                     self.tags = tags.into_iter().map(|tag| (tag.tag_id.0, tag)).collect();
                     cx.emit(Change::Navigation);
                     self.query(false, cx);
+                    self.refresh_activity(cx);
                 }
                 Reply::Page(generation, append, page, prefs) if generation == self.generation => {
                     if !append && matches!(self.transition, Transition::FadingOut(_)) {
@@ -1117,7 +1344,7 @@ fn remap_history(
 
 #[cfg(test)]
 mod tests {
-    use super::{Visit, record_recent, remap_history};
+    use super::{SubscriptionActivity, Visit, record_recent, remap_history};
     use picto_library::FolderId;
 
     #[test]
@@ -1132,6 +1359,26 @@ mod tests {
         }
         assert_eq!(recent.len(), 30);
         assert_eq!(recent[0], FolderId(139));
+    }
+
+    #[test]
+    fn subscription_activity_is_read_as_the_overview_reads_it() {
+        let list = serde_json::json!({
+            "global_paused": false,
+            "subscriptions": [
+                { "active_run_id": null, "status": "running" },
+                { "active_run_id": 4, "status": "failed" },
+            ],
+        });
+        let idle = SubscriptionActivity::from_list(&list);
+        assert!(!idle.running && !idle.paused && !idle.shown());
+        let list = serde_json::json!({
+            "global_paused": true,
+            "subscriptions": [{ "active_run_id": 9, "status": "pending" }],
+        });
+        let running = SubscriptionActivity::from_list(&list);
+        assert!(running.running && running.paused && running.shown());
+        assert!(!SubscriptionActivity::from_list(&serde_json::json!({})).shown());
     }
 
     #[test]

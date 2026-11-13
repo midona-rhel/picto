@@ -207,6 +207,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         // Duplicates.
         "dup.keepBoth" => vec![to!(Duplicates, duplicates::KeepBoth)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
+        "dup.keepLeft" => vec![to!(Duplicates, duplicates::KeepLeft)],
+        "dup.keepRight" => vec![to!(Duplicates, duplicates::KeepRight)],
+        "dup.smartMerge" => vec![to!(Duplicates, duplicates::SmartMerge)],
         "dup.fitToWindow" => vec![to!(Duplicates, duplicates::FitPair)],
         "dup.prevPair" => vec![to!(Duplicates, duplicates::PreviousPair)],
         "dup.nextPair" => vec![to!(Duplicates, duplicates::NextPair)],
@@ -263,18 +266,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("video.rateDecrease", "no video player"),
     ("video.rateReset", "no video player"),
     ("video.fullscreen", "no video player"),
-    (
-        "dup.smartMerge",
-        "merging frees a file for deletion, which the prototype must never cause",
-    ),
-    (
-        "dup.keepLeft",
-        "merging frees a file for deletion, which the prototype must never cause",
-    ),
-    (
-        "dup.keepRight",
-        "merging frees a file for deletion, which the prototype must never cause",
-    ),
 ];
 
 /// A registry key string (`Mod+Shift+Backspace`) as a GPUI keystroke

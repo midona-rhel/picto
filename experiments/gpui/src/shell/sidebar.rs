@@ -3,7 +3,7 @@
 //! take Cmd and Shift selection, open their context menus, and folders and
 //! smart folders are created, renamed in place and deleted here.
 use super::library::{LibraryPopover, Toggled};
-use crate::backend::{self, Navigation};
+use crate::backend::{self, Navigation, Screen};
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
@@ -77,6 +77,11 @@ fn smart_folder_id(node: &str) -> Option<SmartFolderId> {
 pub struct ShowMenu(pub Entity<Menu>);
 
 impl EventEmitter<ShowMenu> for Sidebar {}
+
+/// Empty Trash was chosen; the shell confirms and deletes.
+pub struct EmptyTrash;
+
+impl EventEmitter<EmptyTrash> for Sidebar {}
 
 /// What a double-click on a folder does (`sidebarDoubleClickAction`).
 #[derive(Clone, Copy, PartialEq)]
@@ -276,7 +281,7 @@ impl Sidebar {
             // The switcher shows whether its popover is open.
             cx.subscribe(&library_popover, |_, _, _: &Toggled, cx| cx.notify()),
             cx.subscribe(&session, |_, _, change: &Change, cx| {
-                if matches!(change, Change::Navigation) {
+                if matches!(change, Change::Navigation | Change::Activity) {
                     cx.notify();
                 }
             }),
@@ -1221,12 +1226,12 @@ impl Sidebar {
                     .into(),
             ],
             "system:trash" => vec![
-                // This prototype borrows the library's files and never
-                // deletes them, so the row is shown but not offered.
+                // Deletes everything in the Trash for good, after a
+                // confirmation. The files are the disposable copy's.
                 menu::item("empty-trash", "Empty Trash")
                     .icon("menu-trash")
                     .danger(true)
-                    .disabled(true)
+                    .disabled(count == 0)
                     .into(),
                 menu::item("restore-all", "Restore All")
                     .icon("menu-download")
@@ -1378,6 +1383,9 @@ impl Sidebar {
                     window,
                     cx,
                 ),
+                // The shell asks and deletes, as it does for the grid's
+                // Delete Permanently.
+                "empty-trash" => cx.emit(EmptyTrash),
                 _ => {}
             },
             Target::Section => match action {
@@ -1589,6 +1597,9 @@ impl Render for Sidebar {
             .pr(px(ui::scrollbar::GUTTER + theme::SIDEBAR_LIST_PADDING))
             .pb(px(16.));
 
+        // The Subscriptions row's button while subscriptions run or are
+        // held: it holds or releases every subscription.
+        let activity = self.session.read(cx).subscriptions;
         // System rows, those the visibility menu leaves on.
         for (index, entry) in entries.iter().enumerate() {
             if section(index).is_some() || !prefs.visible_system.contains(ids[index].as_str()) {
@@ -1601,6 +1612,24 @@ impl Render for Sidebar {
                     entry.label.clone(),
                 )
                 .count(entry.count.filter(|_| prefs.show_counts))
+                .activity(
+                    (entry.screen == Some(Screen::Subscriptions) && activity.shown()).then(|| {
+                        let session = self.session.clone();
+                        ui::sidebar_row::Activity {
+                            paused: activity.paused,
+                            busy: activity.busy,
+                            label: if activity.paused {
+                                "Resume all subscriptions".into()
+                            } else {
+                                "Pause all subscriptions".into()
+                            },
+                            on_click: Box::new(move |_, _, cx| {
+                                session
+                                    .update(cx, |session, cx| session.toggle_all_subscriptions(cx))
+                            }),
+                        }
+                    }),
+                )
                 .active(active == index)
                 .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
                 .drop_target(self.drop_target.as_ref() == Some(&ids[index]))
