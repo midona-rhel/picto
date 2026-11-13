@@ -322,7 +322,7 @@ impl Browser {
             .flex_col()
             .child(
                 // The titlebar strip: traffic lights on the left, these on the right.
-                div()
+                self.drag_region(div().id("sidebar-titlebar"), cx)
                     .h(px(48.))
                     .flex_none()
                     .px(px(12.))
@@ -385,6 +385,40 @@ impl Browser {
             )
     }
 
+    /// Makes a titlebar strip move the window, as `data-window-drag-region`
+    /// does in the Electron shell: a press that then moves drags the window,
+    /// and a double-click does what the system setting says. Controls inside
+    /// the strip opt out by occluding it.
+    pub(crate) fn drag_region(
+        &self,
+        strip: Stateful<Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        strip
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.titlebar_press = true),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.titlebar_press = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.titlebar_press = false),
+            )
+            .on_mouse_move(cx.listener(|this, _, window, _| {
+                if std::mem::take(&mut this.titlebar_press) {
+                    window.start_window_move();
+                }
+            }))
+            .on_click(|event, window, _| {
+                if event.click_count() == 2 {
+                    window.titlebar_double_click();
+                }
+            })
+    }
+
     /// The shared 24px icon button of `iconButton.module.css`: the glyph at
     /// 94%, lifting to full strength over a hover overlay that fades in.
     fn icon_button(
@@ -396,6 +430,7 @@ impl Browser {
     ) -> Stateful<Div> {
         let button = div()
             .id(id)
+            .occlude()
             .relative()
             .size(px(24.))
             .flex_none()
@@ -425,7 +460,7 @@ impl Browser {
             .child(glyph.opacity(0.94 + 0.06 * hover))
     }
 
-    pub(crate) fn toolbar(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn toolbar(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let can_go = |delta: isize| {
             self.history_index
                 .checked_add_signed(delta)
@@ -436,7 +471,7 @@ impl Browser {
                 cx.listener(move |this, _, window, cx| this.step_history(delta, window, cx)),
             )
         };
-        div()
+        self.drag_region(div().id("toolbar"), cx)
             .h(px(48.))
             .flex_none()
             .px(px(12.))
@@ -466,12 +501,13 @@ impl Browser {
                     .flex_1()
                     .flex()
                     .justify_center()
-                    .child(self.zoom.clone()),
+                    .child(div().occlude().child(self.zoom.clone())),
             )
             .child(self.icon_button("view-options", "toolbar-layout", true, cx))
             .child(self.icon_button("filter-library", "toolbar-filter", true, cx))
             .child(
                 div()
+                    .occlude()
                     .ml(px(4.))
                     .w(px(160.))
                     .h(px(24.))

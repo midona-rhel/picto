@@ -90,6 +90,8 @@ struct Browser {
     prefs_scope: Option<usize>,
     reveal: reveal::RevealTracker,
     hover: motion::HoverFades,
+    /// A press on a titlebar drag region that has not yet moved.
+    titlebar_press: bool,
     /// The steady clock the reveal timings are measured on.
     clock: std::time::Instant,
     transition: shell::Transition,
@@ -204,6 +206,7 @@ impl Browser {
             prefs_scope: None,
             reveal: reveal::RevealTracker::default(),
             hover: motion::HoverFades::default(),
+            titlebar_press: false,
             clock: std::time::Instant::now(),
             transition: shell::Transition::Idle,
             displayed: 0,
@@ -376,6 +379,7 @@ impl Browser {
     fn button(&self, id: &'static str, label: impl Into<SharedString>) -> Stateful<Div> {
         div()
             .id(id)
+            .occlude()
             .px_3()
             .py_1()
             .rounded_md()
@@ -853,7 +857,23 @@ impl Render for Browser {
                         .unwrap_or_else(|| format!("{} items", format::grouped(self.total))),
                 ),
         );
-        let inspector = self.inspector(cx);
+        // The inspector rail: its own titlebar strip, which drags the window,
+        // above the scrolling body.
+        let inspector = div()
+            .w(px(280.))
+            .flex_none()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(PANEL))
+            .border_l_1()
+            .border_color(rgb(0x303236))
+            .child(
+                self.drag_region(div().id("inspector-titlebar"), cx)
+                    .h(px(48.))
+                    .flex_none(),
+            )
+            .child(self.inspector(cx));
         let mut root = div()
             .relative()
             .size_full()
@@ -1087,6 +1107,10 @@ fn main() {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(12.), px(12.))),
                     }),
+                    // The toolbar sits in the titlebar. AppKit would drag the
+                    // window from anywhere in that zone, controls included, so
+                    // the drag regions are declared by the shell instead.
+                    app_owns_titlebar_drag: true,
                     ..Default::default()
                 },
                 move |window, cx| cx.new(|cx| Browser::new(database, blobs, window, cx)),

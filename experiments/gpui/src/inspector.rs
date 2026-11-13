@@ -128,19 +128,18 @@ impl Browser {
     }
 
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> AnyElement {
+        // The scrolling body. The shell puts it under the inspector's 48px
+        // titlebar strip.
         let mut panel = div()
             .id("inspector")
-            .w(px(280.))
-            .flex_none()
-            .h_full()
+            .w_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .px(px(16.))
-            .pt(px(16.))
+            .pt(px(10.))
             .pb(px(48.))
-            .font_family("Roboto")
-            .bg(rgb(PANEL))
-            .border_l_1()
-            .border_color(rgb(0x303236));
+            .font_family("Roboto");
         if let Some((name, mime)) = self.demo {
             return panel
                 .child(property("Example", name.to_owned()))
