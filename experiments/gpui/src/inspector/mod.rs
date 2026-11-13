@@ -403,7 +403,7 @@ impl Inspector {
                     "Add to Folder",
                 )),
                 "add-to-folder-tip",
-                ui::tip("Add to Folder").keys(&["F"]),
+                ui::tip("Add to Folder").shortcut("organize.addFolder", cx),
                 theme::CONTROL_SM,
                 window,
                 cx,
@@ -413,7 +413,7 @@ impl Inspector {
             chips
                 .child(Self::add_button(
                     "add-folder",
-                    ui::tip("Add to Folder").keys(&["F"]),
+                    ui::tip("Add to Folder").shortcut("organize.addFolder", cx),
                     window,
                     cx,
                 ))
@@ -433,7 +433,7 @@ impl Inspector {
                     "Add Tags",
                 )),
                 "add-tags-tip",
-                ui::tip("Add Tags").keys(&["T"]),
+                ui::tip("Add Tags").shortcut("organize.addTag", cx),
                 theme::CONTROL_SM,
                 window,
                 cx,
@@ -443,7 +443,7 @@ impl Inspector {
             chips
                 .child(Self::add_button(
                     "add-tag",
-                    ui::tip("Add Tags").keys(&["T"]),
+                    ui::tip("Add Tags").shortcut("organize.addTag", cx),
                     window,
                     cx,
                 ))

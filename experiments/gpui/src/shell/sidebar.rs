@@ -595,21 +595,21 @@ fn content_sort_field(value: &str) -> Option<ContentSortField> {
 const MENU_PADDING: f32 = 4.;
 
 /// `openFolderMenu`.
-fn folder_menu(node: NodeMenu) -> Vec<menu::Entry> {
+fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
     let mut entries = vec![
         menu::item("new-folder", "New Folder")
             .icon("menu-folder-plus")
-            .shortcut("⌘⇧N")
+            .shortcut_for("file.newFolder", cx)
             .into(),
         menu::item("new-subfolder", "New Subfolder")
             .icon("menu-new-subfolder")
-            .shortcut("⌥N")
+            .shortcut_for("file.newSubfolder", cx)
             .into(),
         menu::Entry::Separator,
         quick_access_row(node.quick),
         menu::item("rename", "Rename")
             .icon("menu-rename")
-            .shortcut("⌃R")
+            .shortcut_for("edit.rename", cx)
             .into(),
         menu::item("move-to", "Move to...")
             .icon("menu-folder-open")
@@ -619,7 +619,7 @@ fn folder_menu(node: NodeMenu) -> Vec<menu::Entry> {
             .into(),
         menu::item("auto-tags", "Set Auto Tags...")
             .icon("menu-auto-tags")
-            .shortcut("⌘⇧R")
+            .shortcut_for("folder.autoTags", cx)
             .into(),
         menu::Entry::Separator,
         menu::item("import-here", "Import Folder Here...")
@@ -795,7 +795,7 @@ struct BulkMenu {
 }
 
 /// `openBulkMenu`: several folders, several smart folders, or a mix.
-fn bulk_menu(nodes: &[String], bulk: BulkMenu) -> Vec<menu::Entry> {
+fn bulk_menu(nodes: &[String], bulk: BulkMenu, cx: &App) -> Vec<menu::Entry> {
     let all_folders = nodes.iter().all(|id| id.starts_with("folder:"));
     let all_smart = nodes.iter().all(|id| id.starts_with("smart:"));
     let count = nodes.len();
@@ -829,7 +829,7 @@ fn bulk_menu(nodes: &[String], bulk: BulkMenu) -> Vec<menu::Entry> {
         entries.push(
             menu::item("auto-tags", "Set Auto Tags...")
                 .icon("menu-auto-tags")
-                .shortcut("⌘⇧R")
+                .shortcut_for("folder.autoTags", cx)
                 .into(),
         );
     }
@@ -946,6 +946,38 @@ impl Sidebar {
             });
         })
         .detach();
+    }
+
+    /// `file.newFolder`: a top-level folder, renamed in place.
+    pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_folder(None, window, cx);
+    }
+
+    /// `file.newSubfolder`: a subfolder of the folder chosen in the sidebar,
+    /// or of the open folder when none is chosen. Returns false, creating
+    /// nothing, unless that is exactly one folder.
+    pub fn new_subfolder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut targets: Vec<FolderId> = self
+            .selection
+            .iter()
+            .filter_map(|node| folder_id(node))
+            .collect();
+        if targets.is_empty() {
+            let session = self.session.read(cx);
+            targets.extend(
+                session
+                    .nav
+                    .get(session.scope)
+                    .and_then(|entry| folder_id(&entry.id())),
+            );
+        }
+        match targets.as_slice() {
+            [folder] => {
+                self.create_folder(Some(*folder), window, cx);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// `createFolderAndRename`: a folder named "New Folder", revealed and
@@ -1593,7 +1625,7 @@ impl Sidebar {
                 any_not_quick: nodes.iter().any(|id| !quick.contains(id)),
                 move_targets: self.smart_move_targets(&nodes, cx),
             };
-            let menu = bulk_menu(&nodes, bulk);
+            let menu = bulk_menu(&nodes, bulk, cx);
             self.open_menu(Target::Bulk(nodes), menu, position, window, cx);
             return;
         }
@@ -1618,7 +1650,7 @@ impl Sidebar {
             },
         };
         let menu = match section {
-            Section::Folders => folder_menu(details),
+            Section::Folders => folder_menu(details, cx),
             Section::SmartFolders => smart_folder_menu(entry.group, details),
         };
         self.open_menu(Target::Node(node), menu, position, window, cx);
@@ -1636,7 +1668,7 @@ impl Sidebar {
             Section::Folders => vec![
                 menu::item("new-folder", "New Folder")
                     .icon("menu-folder-plus")
-                    .shortcut("⌘⇧N")
+                    .shortcut_for("file.newFolder", cx)
                     .into(),
                 menu::item("import-folder", "Import Folder...")
                     .icon("menu-folder-plus")
@@ -2117,7 +2149,10 @@ impl Render for Sidebar {
             }
             let expanded = filtering || !self.collapsed.contains(which.id());
             let (tip, element) = match which {
-                Section::Folders => (ui::tip("New Folder").keys(&["⌘", "⇧", "N"]), "folders"),
+                Section::Folders => (
+                    ui::tip("New Folder").shortcut("file.newFolder", cx),
+                    "folders",
+                ),
                 Section::SmartFolders => (ui::tip("New Smart Folder or Group"), "smart-folders"),
             };
             list = list.child(
