@@ -4,6 +4,7 @@
 //! are applied with Save & Close or Apply, as in production.
 pub mod model;
 mod panels;
+mod pieces;
 pub mod registry;
 mod shortcuts;
 mod window;
