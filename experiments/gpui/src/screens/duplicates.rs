@@ -1388,10 +1388,8 @@ impl DuplicatesScreen {
         let difference = button("duplicates-difference", Look::Standard)
             .icon("toolbar-difference", 16.)
             .label("Show Difference")
-            .gap(6.)
-            .padding(9.)
-            .text_size(theme::TEXT_SM)
-            .weight(FontWeight::NORMAL)
+            // `.differenceButton`'s padding, gap and type lose to the shared
+            // `.btn` in the built stylesheet, so it looks like its neighbours.
             .tip(ui::tip("Show differences while held"))
             .on_hover(move |hovered, _, cx| {
                 let _ = entity.update(cx, |this, cx| {

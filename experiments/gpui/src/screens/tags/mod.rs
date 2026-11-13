@@ -1176,8 +1176,10 @@ impl TagsScreen {
         let (opened, menu_tag) = (tag.clone(), tag.clone());
         div()
             .id(("tag", tag.tag_id.0 as usize))
-            .flex_1()
-            .min_w_0()
+            // `repeat(columns, minmax(0, 1fr))`: every column the same
+            // width, however many tags the row has.
+            .w(px(width))
+            .flex_none()
             .h(px(model::ROW_HEIGHT))
             .px(px(4.))
             .flex()
@@ -1230,7 +1232,7 @@ impl TagsScreen {
     }
 
     /// `.tagSkeleton`: a placeholder with the moving shimmer.
-    fn skeleton(&self, cx: &App) -> AnyElement {
+    fn skeleton(&self, width: f32, cx: &App) -> AnyElement {
         let theme = theme::theme(cx);
         let elapsed = self.clock.elapsed().as_secs_f32() % motion::TAG_SHIMMER.as_secs_f32();
         let eased = motion::EASE_IN_OUT.ease(elapsed / motion::TAG_SHIMMER.as_secs_f32());
@@ -1273,8 +1275,8 @@ impl TagsScreen {
                 }
             },
         )
-        .flex_1()
-        .min_w_0()
+        .w(px(width))
+        .flex_none()
         .h(px(model::ROW_HEIGHT))
         .into_any_element()
     }
@@ -1345,15 +1347,10 @@ impl TagsScreen {
                             .child(format!("({count})")),
                     ),
                 Row::Tags { tags, section_end } => {
-                    let shown = tags.len();
                     let mut row = place(div()).h(px(model::ROW_HEIGHT)).flex().gap(px(2.));
                     for position in tags {
                         let tag = self.rows.ordered[position].clone();
                         row = row.child(self.tag_card(&tag, card_width, window, cx));
-                    }
-                    // Each column keeps its share of the width.
-                    for _ in shown..columns {
-                        row = row.child(div().flex_1().min_w_0());
                     }
                     row.when(section_end, |row| {
                         row.child(
@@ -1371,7 +1368,7 @@ impl TagsScreen {
                     shimmering = true;
                     let mut row = place(div()).h(px(model::ROW_HEIGHT)).flex().gap(px(2.));
                     for _ in 0..columns {
-                        row = row.child(self.skeleton(cx));
+                        row = row.child(self.skeleton(card_width, cx));
                     }
                     row
                 }

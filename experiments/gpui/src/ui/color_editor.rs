@@ -441,7 +441,7 @@ impl Render for ColorEditor {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .line_height(px(theme::TEXT_CAPTION * theme::BODY_LINE_HEIGHT))
+                            .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_INHERITED))
                             .child("Tolerance")
                             .child(
                                 div()

@@ -46,6 +46,8 @@ struct State {
     /// its way.
     list: Option<AnyWindowHandle>,
     opening: bool,
+    /// The menu's list, which scrolls past seven choices.
+    scroll: ScrollHandle,
 }
 
 /// `CmSelect.tsx`: a 26px button showing the current choice with a selector
@@ -94,11 +96,14 @@ const ROW: f32 = theme::CONTROL_SM;
 /// `.drop`: 4px padding, rows 2px apart, a 1px border, at most seven rows.
 const LIST_PADDING: f32 = 4.;
 const LIST_GAP: f32 = 2.;
-const LIST_MAX: f32 = 7. * ROW + 6. * LIST_GAP + 12.;
+const LIST_MAX: f32 = VISIBLE as f32 * ROW + 6. * LIST_GAP + 12.;
 /// The list keeps this far below (or above) the button.
 const LIST_OFFSET: f32 = 4.;
 /// Room around a pop-up list for its drawn shadow (`--shadow-panel`).
 const SHADOW_ROOM: f32 = 40.;
+
+/// The choices the menu shows before it scrolls.
+const VISIBLE: usize = 7;
 
 /// The list's height for this many choices.
 fn list_height(choices: usize) -> f32 {
@@ -174,6 +179,7 @@ impl RenderOnce for Select {
             button: Rc::new(Cell::new(Bounds::default())),
             list: None,
             opening: false,
+            scroll: ScrollHandle::new(),
         });
         let current = self
             .choices
@@ -314,6 +320,7 @@ impl RenderOnce for Select {
             highlighted,
             bounds.size.width,
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "menu".into()),
+            window,
             cx,
         )
         .on_mouse_down_out({
@@ -370,24 +377,40 @@ fn list(
     highlighted: Option<usize>,
     width: Pixels,
     id: ElementId,
-    cx: &App,
-) -> Stateful<Div> {
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
     let theme = theme::theme(cx);
+    let scroll = listed.state.read(cx).scroll.clone();
+    // More than seven choices scroll, and the list gives the scrollbar's
+    // gutter room beside it, as `.drop`'s `overflow-y: auto` does.
+    let scrolls = listed.choices.len() > VISIBLE;
     let mut menu = div()
-        .id(id)
-        .occlude()
-        .w(width)
-        .max_h(px(LIST_MAX))
+        .id(ElementId::NamedChild(
+            std::sync::Arc::new(id.clone()),
+            "list".into(),
+        ))
+        .w_full()
+        // Seven rows, their gaps and the padding, inside the border.
+        .max_h(px(LIST_MAX - 2.))
         .overflow_y_scroll()
+        .track_scroll(&scroll)
+        .when(scrolls, |list| list.mr(px(super::scrollbar::GUTTER)))
         .p(px(LIST_PADDING))
         .flex()
         .flex_col()
-        .gap(px(LIST_GAP))
+        .gap(px(LIST_GAP));
+    let frame = div()
+        .occlude()
+        .relative()
+        .w(width)
+        .flex()
+        .flex_col()
         .rounded(px(theme::RADIUS_MD))
         .bg(theme.select_surface())
         .border_1()
         .border_color(theme.border_secondary())
-        .shadow(theme::panel_shadow())
+        .shadow(theme.panel_shadow())
         .font_family(theme::FONT_UI)
         .text(theme::TEXT_MD)
         .text_color(theme.text());
@@ -449,7 +472,14 @@ fn list(
                 }),
         );
     }
-    menu
+    frame.child(menu).when(scrolls, |frame| {
+        frame.child(super::scrollbar::scrollbar(
+            ElementId::NamedChild(std::sync::Arc::new(id), "scrollbar".into()),
+            &scroll,
+            window,
+            cx,
+        ))
+    })
 }
 
 fn close_list(list: AnyWindowHandle, cx: &mut App) {
@@ -603,7 +633,7 @@ impl PopUpList {
 }
 
 impl Render for PopUpList {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let highlighted = self.listed.state.read(cx).highlighted;
         div().size_full().child(
             div()
@@ -615,6 +645,7 @@ impl Render for PopUpList {
                     highlighted,
                     px(self.width),
                     "select-pop-up-list".into(),
+                    window,
                     cx,
                 )),
         )

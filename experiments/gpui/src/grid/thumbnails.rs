@@ -5,6 +5,7 @@
 use gpui::*;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -44,13 +45,29 @@ pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<
     order
 }
 
-/// `find_thumbnail_path`: thumbnails are `.jpg`, and libraries from before
-/// that wrote `.png`, so a `.jpg` that cannot be read is looked for as
-/// `.png`.
+/// `find_thumbnail_path`, the media protocol's rule: a thumbnail is the
+/// `.jpg` the library writes, else the `.png` written for audio waveforms,
+/// captured frames and by older libraries. This is the `.png` to try.
+pub fn png_for(jpeg: &Path) -> PathBuf {
+    jpeg.with_extension("png")
+}
+
+/// The thumbnail file that exists, checked on the file system, for a view
+/// that resolves one item at a time. The grid does not check: its cache
+/// tries the `.png` when the `.jpg` cannot be read.
+pub fn existing(jpeg: PathBuf) -> PathBuf {
+    if jpeg.exists() {
+        return jpeg;
+    }
+    let png = png_for(&jpeg);
+    if png.exists() { png } else { jpeg }
+}
+
+/// The `.png` a `.jpg` thumbnail resource falls back to.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {
         Resource::Path(path) if path.extension().is_some_and(|ext| ext == "jpg") => {
-            Some(Resource::Path(path.with_extension("png").into()))
+            Some(Resource::Path(png_for(path).into()))
         }
         _ => None,
     }

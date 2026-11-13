@@ -51,7 +51,7 @@ pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPane
             .id(id)
             .rounded(px(radius))
             .bg(theme.glass())
-            .shadow(theme::panel_shadow()),
+            .shadow(theme.panel_shadow()),
         edges: glass_edges(radius, cx),
     }
 }

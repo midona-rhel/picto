@@ -11,6 +11,7 @@ use crate::grid::menu::{
 };
 use crate::session::Reread;
 use crate::ui::{self, menu::Menu};
+use crate::viewer::{MenuRequested, surface::MediaSurface};
 use gpui::*;
 use picto_library::query::{ItemScope, RootSummary};
 use picto_library::selection::SelectionTarget;
@@ -29,6 +30,9 @@ pub(super) struct ItemMenus {
     /// the window, beside the JSON it writes to the clipboard).
     tag_clipboard: Vec<String>,
     confirm: ui::modal::Host<Confirmation>,
+    /// The media surface the open viewer menu was opened on (the media
+    /// view's or Quick Look's), whose Flash movie its rows control.
+    surface: Option<WeakEntity<MediaSurface>>,
 }
 
 /// The items a menu acts on.
@@ -41,6 +45,9 @@ struct Target {
     file: Option<File>,
     /// The folder the grid shows.
     folder: Option<FolderId>,
+    /// A collection member's menu: `file` is the member, `items` its
+    /// collection.
+    member: bool,
 }
 
 #[derive(Clone)]
@@ -56,10 +63,10 @@ impl Target {
     fn ids(&self) -> Vec<RootId> {
         self.items.iter().map(|item| item.root_id).collect()
     }
-    fn selection(&self) -> SelectionTarget {
-        SelectionTarget::Explicit {
-            root_ids: self.ids(),
-        }
+    /// What an edit of these items addresses: the destination's query when
+    /// they are the whole destination selected, else the items themselves.
+    fn selection(&self, session: &crate::session::Session) -> SelectionTarget {
+        session.target_for(self.ids())
     }
 }
 
@@ -86,7 +93,7 @@ struct Confirmation {
 type Work<T> = Box<dyn FnOnce(&Library) -> picto_library::Result<T> + Send>;
 
 /// `mediaLinkFor`: the link the Electron app serves a file at.
-fn media_link(hash: &str, mime: &str) -> String {
+pub(crate) fn media_link(hash: &str, mime: &str) -> String {
     let extension = match mime {
         "image/jpeg" => "jpg",
         "image/png" => "png",
@@ -157,6 +164,7 @@ impl Shell {
             items,
             file,
             folder: self.grid_scope(cx).2,
+            member: false,
         })
     }
 
@@ -173,12 +181,14 @@ impl Shell {
                 items: vec![item],
                 file: Some(file),
                 folder: None,
+                member: false,
             })
         } else {
             self.selection_target(cx)
         };
         if let Some(target) = target {
             self.items.target = Some(target);
+            self.items.surface = None;
             self.run_item_action(action, window, cx);
         }
     }
@@ -191,6 +201,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.items.surface = None;
         let (scope, scope_kind, folder) = self.grid_scope(cx);
         let Some(Target { items, file, .. }) = self.selection_target(cx) else {
             return;
@@ -216,7 +227,8 @@ impl Shell {
         let last_folder_name = self.last_folder_name(cx);
         let description = Description {
             surface: Surface::Grid,
-            selection_count: count,
+            // With the whole destination selected, all of it.
+            selection_count: self.session.read(cx).selection_count() as usize,
             ai_tag_enabled: Some(count > 0),
             single: single.is_some(),
             single_hash: single.map(|item| item.content_hash.clone()),
@@ -292,6 +304,7 @@ impl Shell {
             items,
             file,
             folder,
+            member: false,
         };
         self.show_item_menu(built, target, true, position, window, cx);
     }
@@ -303,6 +316,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.items.surface = None;
         let (scope, scope_kind, folder) = self.grid_scope(cx);
         let can_import = !matches!(
             scope,
@@ -378,27 +392,32 @@ impl Shell {
     /// The viewer was right-clicked: the viewer's rows for the item it shows.
     pub(super) fn open_viewer_menu(
         &mut self,
-        position: Point<Pixels>,
-        flash: bool,
+        request: &MenuRequested,
+        surface: Entity<MediaSurface>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (position, flash) = (request.position, request.flash);
         let Some((item, file)) = self.shown_item(true, cx) else {
             return;
         };
-        let media = item.kind == RootKind::Media;
-        let trash = item.lifecycle == Lifecycle::Trash;
+        // A member's menu (`openMemberMenu`) describes the member, a media
+        // item, with no lifecycle of its own; its edits go to the
+        // collection.
+        let member = request.member;
+        let media = member || item.kind == RootKind::Media;
+        let trash = !member && item.lifecycle == Lifecycle::Trash;
         let description = Description {
             surface: Surface::Viewer,
             selection_count: 1,
             ai_tag_enabled: Some(media && file.mime.starts_with("image/")),
             single: true,
             single_hash: Some(file.hash.clone()),
-            single_kind: Some(kind(item.kind)),
+            single_kind: Some(if member { Kind::Media } else { kind(item.kind) }),
             single_name: Some(item.name.clone()),
             single_mime: Some(file.mime.clone()),
             contains_group: !media,
-            status: Some(match item.lifecycle {
+            status: (!member).then_some(match item.lifecycle {
                 Lifecycle::Inbox => Status::Inbox,
                 Lifecycle::Active => Status::Active,
                 Lifecycle::Trash => Status::Trash,
@@ -432,17 +451,24 @@ impl Shell {
         // Production captures the current frame of a video or Flash movie;
         // this viewer plays Flash only.
         let playback = Playback {
-            flash: self.viewer.read(cx).surface().read(cx).flash_playback(),
+            flash: surface.read(cx).flash_playback(),
             capture: flash,
         };
+        self.items.surface = Some(surface.downgrade());
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
         let target = Target {
             items: vec![item],
             file: Some(file),
             folder: None,
+            member,
         };
-        self.show_item_menu(built, target, false, position, window, cx);
+        // A collection member's menu has the search field, as the grid's
+        // menus do (`contextMenu.openAt`).
+        // TODO: it also has "Remove from Group" above "Move to Trash", and
+        // its Trash row moves the member out of the collection into the
+        // Trash (`detachMembers`).
+        self.show_item_menu(built, target, request.member, position, window, cx);
     }
 
     /// The inspector's preview was right-clicked.
@@ -452,6 +478,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.items.surface = None;
         let Some((item, file)) = self.shown_item(false, cx) else {
             return;
         };
@@ -472,6 +499,7 @@ impl Shell {
             items: vec![item],
             file: Some(file),
             folder: None,
+            member: false,
         };
         self.show_item_menu(built, target, true, position, window, cx);
     }
@@ -503,6 +531,14 @@ impl Shell {
                     )
                 })
                 .entry(panel)
+        });
+        // The viewer's menus give the keyboard back to the viewer or Quick
+        // Look that opened them; the others to the shell.
+        let viewer_menu = self.items.surface.is_some();
+        self.menu.returning(if viewer_menu {
+            ui::menu::Return::Opener
+        } else {
+            ui::menu::Return::To(self.focus.clone())
         });
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(search));
         if let Some(panels) = panels {
@@ -655,6 +691,10 @@ impl Shell {
             }
             // ── Lifecycle ──
             Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
+            Action::MoveToTrash if target.member => {
+                // TODO: move the member out of its collection into the
+                // Trash (`detachItems` with `target_lifecycle: 'trash'`).
+            }
             Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
@@ -676,7 +716,7 @@ impl Shell {
                 if let Some(folder) = last {
                     self.session
                         .update(cx, |session, _| session.record_folder_use(folder));
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.add_to_folder(&selection, folder)),
                         Reread::SELECTION,
@@ -685,7 +725,7 @@ impl Shell {
                 }
             }
             Action::NewFolderWithSelection => {
-                let selection = target.selection();
+                let selection = target.selection(self.session.read(cx));
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.new_folder_in(None, Some(selection), window, cx)
                 });
@@ -700,7 +740,7 @@ impl Shell {
             }
             Action::RemoveFromFolder => {
                 if let Some(folder) = target.folder {
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.remove_from_folder(&selection, folder)),
                         Reread::RESULTS,
@@ -752,7 +792,7 @@ impl Shell {
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();
                 if !tags.is_empty() && !ids.is_empty() {
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.apply_tags(&selection, &tags, true)),
                         Reread::SELECTION,
@@ -762,7 +802,7 @@ impl Shell {
             }
             Action::Rate(stars) => {
                 let rating = picto_library::Rating::ALL[usize::from(stars).min(5)];
-                let selection = target.selection();
+                let selection = target.selection(self.session.read(cx));
                 self.edit(
                     Box::new(move |library| library.set_rating(&selection, rating)),
                     Reread::SELECTION,
@@ -810,16 +850,17 @@ impl Shell {
                     Action::FlashStop => Box::new(Flash::stop),
                     _ => Box::new(Flash::toggle_mute),
                 };
-                self.viewer
-                    .read(cx)
-                    .surface()
-                    .update(cx, |surface, cx| surface.control_flash(control, cx));
+                if let Some(surface) = self.items.surface.as_ref().and_then(|s| s.upgrade()) {
+                    surface.update(cx, |surface, cx| surface.control_flash(control, cx));
+                }
             }
             Action::SetAsThumbnail => {
                 // TODO: capture the shown frame and make it the thumbnail.
             }
         }
-        window.focus(&self.focus, cx);
+        if self.items.surface.is_none() {
+            window.focus(&self.focus, cx);
+        }
     }
 
     /// Sends an action for another part of the app from the shell, which
@@ -905,7 +946,7 @@ impl Shell {
     fn copy_tags(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
         let single = target.items.len() == 1;
         let ids = target.ids();
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.library(
             Box::new(move |library| {
                 let tag_ids = if single {
@@ -934,7 +975,7 @@ impl Shell {
         let Some(cover) = target.items.first().map(|item| item.root_id) else {
             return;
         };
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.library(
             Box::new(move |library| {
                 let summary = library.selection_summary(&selection)?;
@@ -984,7 +1025,7 @@ impl Shell {
         } else {
             "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."
         };
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.ask(
             title,
             message,
@@ -1018,7 +1059,13 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_deletion(target.selection(), reject, false, window, cx);
+        self.request_deletion(
+            target.selection(self.session.read(cx)),
+            reject,
+            false,
+            window,
+            cx,
+        );
     }
 
     /// The sidebar's Empty Trash: everything in the Trash, after the same
