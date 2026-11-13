@@ -138,7 +138,9 @@ impl SubscriptionsScreen {
     }
 
     pub(super) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = self.home_width.get();
+        // `cqi` and the container queries measure the content box: the
+        // measured width less the padding and the scrollbar's gutter.
+        let width = (self.home_width.get() - 32. - ui::scrollbar::GUTTER).max(0.);
         let order = self.card_order();
         let cards: Vec<data::Subscription> = self.cards().into_iter().cloned().collect();
         let header = self.header(cards.len(), width, cx);
@@ -266,18 +268,22 @@ impl SubscriptionsScreen {
                     .flex()
                     .flex_col()
                     .gap(px(2.))
+                    // `.heroTitle`: `letter-spacing: -0.01em`.
+                    .child(div().overflow_hidden().child(ui::tracked(
+                        "Subscriptions",
+                        Font {
+                            weight: FontWeight::SEMIBOLD,
+                            ..font(theme::FONT_UI)
+                        },
+                        theme::TEXT_TITLE,
+                        24.,
+                        theme.text(),
+                        theme::TEXT_TITLE * -0.01,
+                    )))
                     .child(
                         div()
-                            .text(theme::TEXT_TITLE)
-                            .line_height(px(24.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .whitespace_nowrap()
-                            .truncate()
-                            .child("Subscriptions"),
-                    )
-                    .child(
-                        div()
-                            .text(theme::TEXT_SM)
+                            .text_size(px(theme::TEXT_SM))
+                            .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                             .text_color(theme.text_secondary())
                             .whitespace_nowrap()
                             .child(subtitle),
@@ -535,7 +541,8 @@ impl SubscriptionsScreen {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .text(theme::TEXT_MD)
+                    .text_size(px(theme::TEXT_MD))
+                    .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_BODY))
                     .child(name)
                     .child(ui::status_badge(
                         ("subscription-card-status", id as usize),
@@ -545,7 +552,8 @@ impl SubscriptionsScreen {
             )
             .child(
                 div()
-                    .text(theme::TEXT_CAPTION)
+                    .text_size(px(theme::TEXT_CAPTION))
+                    .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_BODY))
                     .text_color(theme.text_tertiary())
                     .text_center()
                     .child(format::card_meta(card.items, card.queries.len())),

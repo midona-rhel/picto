@@ -94,12 +94,6 @@ impl ActionButton {
         self.height = height;
         self
     }
-    /// `.buttonCompact`: the small control height with 16px padding.
-    pub fn compact(mut self) -> Self {
-        self.height = theme::CONTROL_SM;
-        self.padding = 16.;
-        self
-    }
     /// Fills the width it is given, as a button in a grid track does.
     pub fn full_width(mut self) -> Self {
         self.full_width = true;
@@ -121,10 +115,6 @@ impl ActionButton {
     }
     pub fn text_size(mut self, size: f32) -> Self {
         self.text_size = size;
-        self
-    }
-    pub fn weight(mut self, weight: FontWeight) -> Self {
-        self.weight = weight;
         self
     }
     pub fn disabled(mut self, disabled: bool) -> Self {

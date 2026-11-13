@@ -2022,22 +2022,7 @@ impl Menu {
             } else {
                 theme.background()
             };
-            let mut ring = div()
-                .size(px(SWATCH))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(color)
-                .children(selected.then(|| super::icon("swatch-check", 10., check)));
-            if selected {
-                // `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`
-                ring = ring.shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), theme.background().into())
-                        .spread_radius(px(1.5)),
-                    BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
-                ]);
-            }
+            let ring = super::color_picker::swatch(color, selected.then_some(check), cx);
             let target = div()
                 .id(("menu-swatch", position))
                 .cursor_pointer()

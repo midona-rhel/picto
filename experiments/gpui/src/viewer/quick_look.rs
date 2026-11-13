@@ -6,8 +6,9 @@
 //! selection: stepping moves the grid's selection, which keeps it in view.
 //! It has the viewer's keys (`Viewer`), so Space, Enter and Escape close it.
 use super::{
-    ActualSize, Close, FitToWindow, Media, NextItem, PreviousItem, ZoomIn, ZoomOut,
-    browsing_recent, options, record_view, show_selection, strip, surface::MediaSurface,
+    ActualSize, Close, FitToWindow, Media, MenuRequested, NextItem, PreviousItem, ZoomIn, ZoomOut,
+    browsing_recent, collection_selected, group, options, record_view, show_selection, strip,
+    surface::MediaSurface,
 };
 use crate::session::{Change, Session};
 use crate::{theme, ui};
@@ -30,6 +31,8 @@ const CLOSE_INSET: f32 = 12.;
 pub struct QuickLook {
     session: Entity<Session>,
     surface: Entity<MediaSurface>,
+    /// A collection's members (`GroupQuickLookContent`).
+    group: Entity<group::GroupReader>,
     focus: FocusHandle,
     open: bool,
     /// Where the keyboard was before Quick Look opened, to give it back.
@@ -40,6 +43,7 @@ pub struct QuickLook {
 }
 
 impl EventEmitter<Toggled> for QuickLook {}
+impl EventEmitter<MenuRequested> for QuickLook {}
 
 impl QuickLook {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -49,7 +53,21 @@ impl QuickLook {
             surface.set_options(options(cx, false, false), cx);
             surface
         });
+        let group = cx.new(|_| group::GroupReader::new(session.clone()));
         let subscriptions = vec![
+            cx.subscribe(&group, |this, _, event: &group::MemberMenu, cx| {
+                this.session.update(cx, |session, cx| {
+                    let delta = event.member as isize - session.member as isize;
+                    if delta != 0 {
+                        session.step_member(delta, cx);
+                    }
+                });
+                cx.emit(MenuRequested {
+                    position: event.position,
+                    flash: false,
+                    member: true,
+                });
+            }),
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 if !this.open {
                     return;
@@ -89,12 +107,18 @@ impl QuickLook {
         Self {
             session,
             surface,
+            group,
             focus: cx.focus_handle(),
             open: false,
             return_focus: None,
             recorded: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The media surface, for the viewer's context menu.
+    pub fn surface(&self) -> Entity<MediaSurface> {
+        self.surface.clone()
     }
 
     pub fn is_open(&self) -> bool {
@@ -128,6 +152,7 @@ impl QuickLook {
         self.open = false;
         self.recorded = None;
         self.surface.update(cx, |surface, _| surface.stop());
+        self.group.update(cx, |group, cx| group.clear(cx));
         if let Some(focus) = self.return_focus.take() {
             window.focus(&focus, cx);
         }
@@ -138,7 +163,7 @@ impl QuickLook {
     /// Opens the selected item's file once its details are there, and
     /// records it as viewed (not while browsing Recently Viewed).
     fn present(&mut self, cx: &mut Context<Self>) {
-        let (media, root) = {
+        let (media, root, collection) = {
             let session = self.session.read(cx);
             let root = session.selected_item().map(|item| item.root_id);
             if let Some(root) = root.filter(|root| self.recorded != Some(*root))
@@ -149,9 +174,17 @@ impl QuickLook {
             let media = session
                 .selected_details()
                 .and_then(|details| Media::of(session, details, session.member));
-            (media, root)
+            let collection = collection_selected(session)
+                .then(|| session.selected_details().cloned())
+                .flatten();
+            (media, root, collection)
         };
         self.recorded = root;
+        if let Some(details) = collection {
+            self.surface.update(cx, |surface, _| surface.stop());
+            self.group.update(cx, |group, cx| group.show(&details, cx));
+            return;
+        }
         if let Some(media) = media {
             self.surface
                 .update(cx, |surface, cx| media.open(surface, cx));
@@ -217,9 +250,6 @@ impl Render for QuickLook {
                 .right(px(AREA_SIDE))
                 .rounded(px(AREA_RADIUS))
         };
-        // TODO: a collection shows its members in the continuous reader of
-        // `GroupSurface` (`presentation="quicklook"`); until that surface
-        // exists it shows the member the media view would.
         let step = |id: &'static str,
                     icon: &'static str,
                     label: &'static str,
@@ -266,9 +296,29 @@ impl Render for QuickLook {
                 .update(cx, |surface, cx| surface.step_zoom(false, cx));
         }))
         .map(|pane| super::document::handle_actions(pane, &self.surface))
-        // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
-        // on a right-click, and the copy shortcuts.
-        .child(frame.child(self.surface.clone()))
+        // The viewer's context menu (`useViewerEntityContextMenu`), which
+        // the shell shows.
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if collection_selected(this.session.read(cx)) {
+                    return;
+                }
+                let flash = this.surface.read(cx).flash();
+                cx.emit(MenuRequested {
+                    position: event.position,
+                    flash,
+                    member: false,
+                });
+            }),
+        )
+        // TODO: the copy shortcut (`edit.copy`) puts the file on the
+        // clipboard.
+        .child(frame.child(if collection {
+            self.group.clone().into_any_element()
+        } else {
+            self.surface.clone().into_any_element()
+        }))
         .child(
             div()
                 .absolute()
@@ -286,7 +336,7 @@ impl Render for QuickLook {
                 ),
         )
         .child(
-            strip::strip(false, cx)
+            strip::strip()
                 .child(step(
                     "quick-look-previous",
                     "toolbar-chevron-left",

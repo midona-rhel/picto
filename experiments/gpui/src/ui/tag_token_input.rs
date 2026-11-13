@@ -285,7 +285,7 @@ impl Render for TagTokenInput {
                 .border_1()
                 .border_color(theme.border_secondary())
                 .bg(theme.glass())
-                .shadow(theme::panel_shadow())
+                .shadow(theme.panel_shadow())
                 .font_family(theme::FONT_UI)
                 .text(theme::TEXT_SM);
             for (index, found) in self.results.iter().enumerate() {

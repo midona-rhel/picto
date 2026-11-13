@@ -1,5 +1,4 @@
 use super::tooltip::{self, Tip};
-use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 use std::time::Duration;
@@ -85,14 +84,16 @@ impl RenderOnce for StatusBadge {
             .border_1()
             .border_color(at(25.))
             .bg(at(10.))
-            .text_color(theme::blend(theme.text(), color, 0.45))
-            .font_family(theme::FONT_MONO)
-            .text(theme::TEXT_XS)
-            .line_height(px(theme::TEXT_XS))
-            .font_weight(FontWeight::NORMAL)
-            .whitespace_nowrap()
             .opacity(opacity)
-            .child(self.label.to_uppercase());
+            // `letter-spacing: 0.04em`
+            .child(super::tracked(
+                self.label.to_uppercase(),
+                font(theme::FONT_MONO),
+                theme::TEXT_XS,
+                theme::TEXT_XS,
+                theme::blend(theme.text(), color, 0.45),
+                theme::TEXT_XS * 0.04,
+            ));
         match self.tip {
             Some(tip) => tooltip::attach(
                 badge,
