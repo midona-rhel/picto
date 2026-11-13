@@ -53,9 +53,10 @@ impl Tip {
         self
     }
 
-    /// The shortcut's keys as the platform writes them, e.g. `["⌘", ","]`.
-    pub fn keys(mut self, keys: &[&'static str]) -> Self {
-        self.keys = keys.iter().map(|key| SharedString::from(*key)).collect();
+    /// The keys a registry shortcut is bound to now, so the tooltip
+    /// follows a rebinding (`shortcutId`).
+    pub fn shortcut(mut self, id: &str, cx: &App) -> Self {
+        self.keys = crate::keymap::badges(id, cx);
         self
     }
 }

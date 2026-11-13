@@ -14,6 +14,10 @@ pub struct ViewPrefs {
     pub show_name: bool,
     pub show_resolution: bool,
     pub show_extension_label: bool,
+    /// Names with their extension (`show_extension`).
+    pub show_extension: bool,
+    /// A folder shows its subfolders' items too (`show_subfolders`).
+    pub show_subfolders: bool,
     pub show_item_count: bool,
     pub fit_cover: bool,
     pub sort: ItemSort,
@@ -85,6 +89,8 @@ impl ViewPrefs {
             show_name: flag("show_name", true),
             show_resolution: flag("show_resolution", false),
             show_extension_label: flag("show_label", false),
+            show_extension: flag("show_extension", false),
+            show_subfolders: flag("show_subfolders", true),
             show_item_count: flag("show_item_count", true),
             fit_cover: text("thumbnail_fit") == Some("cover"),
             sort: ItemSort {

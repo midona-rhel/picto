@@ -138,8 +138,14 @@ impl Item {
         self
     }
     /// The shortcut as the platform writes it, e.g. `⌘⌫`.
-    pub fn shortcut(mut self, shortcut: &'static str) -> Self {
+    pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
         self.shortcut = Some(shortcut.into());
+        self
+    }
+    /// The hint for a registry shortcut as it is bound now (`shortcutHint`),
+    /// so the row follows a rebinding.
+    pub fn shortcut_for(mut self, id: &str, cx: &App) -> Self {
+        self.shortcut = crate::keymap::hint(id, cx);
         self
     }
     /// The one destructive row of a menu, drawn in the negative colour.
@@ -167,8 +173,6 @@ impl Item {
     }
     /// Choosing the row tells the owner and leaves the menu open, so several
     /// toggles can be changed together.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn keep_open(mut self, keep_open: bool) -> Self {
         self.keep_open = keep_open;
         self
@@ -690,8 +694,6 @@ impl Menu {
     }
 
     /// Checks or unchecks the row with this action while the menu is open.
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
     pub fn set_checked(&mut self, action: &'static str, checked: bool, cx: &mut Context<Self>) {
         fn visit(entries: &mut [Entry], action: &str, checked: bool) {
             for entry in entries {

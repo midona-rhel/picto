@@ -300,6 +300,10 @@ pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
 pub const NAVIGATOR_VIEWPORT_BORDER: u32 = 0xf8f9fbe6;
 pub const NAVIGATOR_VIEWPORT_FILL: u32 = 0xf8f9fb0f;
 pub const NAVIGATOR_SHADE: u32 = 0x00000094;
+/// Quick Look's close button: `color: #f8f9fb` (`QuickLookHost.module.css`).
+pub const QUICK_LOOK_GLYPH: u32 = 0xf8f9fb;
+/// The detail window's toolbar: `rgba(0, 0, 0, 0.55)` (`DetailWindow.module.css`).
+pub const DETAIL_TOOLBAR_BACKGROUND: u32 = 0x0000008c;
 
 // The media player's controls are fixed white on black, not themed
 // (`VideoPlayer.module.css`); alpha rounded to the nearest byte.

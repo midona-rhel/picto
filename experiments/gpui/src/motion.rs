@@ -29,6 +29,10 @@ pub const BOUNDARY_HOLD: Duration = Duration::from_millis(800);
 pub const NAVIGATOR_DELAY: Duration = Duration::from_millis(80);
 /// `QuickLookNavigation`'s buttons: `transition: background 200ms ease`.
 pub const STRIP_BUTTON: Duration = Duration::from_millis(200);
+/// The detail window's toolbar: `transition: opacity 250ms ease`, and
+/// `TOOLBAR_HIDE_DELAY`, how long it stays after the pointer last moved.
+pub const DETAIL_TOOLBAR_FADE: Duration = Duration::from_millis(250);
+pub const DETAIL_TOOLBAR_HIDE: Duration = Duration::from_millis(1000);
 /// `--ease-standard`
 pub const EASE_STANDARD: CubicBezier = CubicBezier::new(0.4, 0., 0.2, 1.);
 /// `ScrollToTopButton`: its rise and fade.

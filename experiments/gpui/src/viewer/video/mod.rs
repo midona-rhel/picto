@@ -45,30 +45,9 @@ actions!(
         ToggleLoop,
         RateIncrease,
         RateDecrease,
-        RateReset,
-        ToggleFullscreen
+        RateReset
     ]
 );
-
-/// The Video group of `shortcuts.ts`, while the viewer shows media. Its
-/// keys win over the viewer's and the grid's (`priority: 70`). Space stays
-/// the viewer's open and close. The frame steps have no key in production.
-pub fn bind(cx: &mut App) {
-    let media = Some("Viewer && Media");
-    cx.bind_keys([
-        KeyBinding::new("k", TogglePlay, media),
-        KeyBinding::new("j", SeekBackward, media),
-        KeyBinding::new("l", SeekForward, media),
-        KeyBinding::new("up", VolumeUp, media),
-        KeyBinding::new("down", VolumeDown, media),
-        KeyBinding::new("m", ToggleMute, media),
-        KeyBinding::new("o", ToggleLoop, media),
-        KeyBinding::new("]", RateIncrease, media),
-        KeyBinding::new("[", RateDecrease, media),
-        KeyBinding::new("\\", RateReset, media),
-        KeyBinding::new("f", ToggleFullscreen, media),
-    ]);
-}
 
 /// Whether a media type plays in this player, and as what.
 pub fn kind_of(mime: &str) -> Option<Kind> {
@@ -81,17 +60,28 @@ pub fn kind_of(mime: &str) -> Option<Kind> {
     }
 }
 
+/// A viewer's key context, with `Media` added while it shows the player,
+/// for the player's keys (`keymap::Scope::Media`).
+pub fn key_context(base: &'static str, showing: bool) -> KeyContext {
+    let mut context = KeyContext::default();
+    context.add(base);
+    if showing {
+        context.add("Media");
+    }
+    context
+}
+
 /// Forwards the player's actions from the element that has the keyboard
-/// (the viewer) to the player, if one is showing.
-pub fn on_actions(
-    element: Stateful<Div>,
+/// (a viewer) to the player, if one is showing.
+pub fn on_actions<E: InteractiveElement>(
+    element: E,
     player: impl Fn(&App) -> Option<Entity<VideoPlayer>> + Clone + 'static,
-) -> Stateful<Div> {
-    fn forward<A: Action>(
-        element: Stateful<Div>,
+) -> E {
+    fn forward<A: Action, E: InteractiveElement>(
+        element: E,
         player: impl Fn(&App) -> Option<Entity<VideoPlayer>> + 'static,
         run: fn(&mut VideoPlayer, &mut Context<VideoPlayer>),
-    ) -> Stateful<Div> {
+    ) -> E {
         element.on_action(move |_: &A, _, cx| {
             if let Some(player) = player(cx) {
                 player.update(cx, |player, cx| {
@@ -102,31 +92,30 @@ pub fn on_actions(
             }
         })
     }
-    let element = forward::<TogglePlay>(element, player.clone(), |p, cx| p.toggle_play(cx));
-    let element = forward::<SeekBackward>(element, player.clone(), |p, _| p.seek_by(-SKIP_STEP));
-    let element = forward::<SeekForward>(element, player.clone(), |p, _| p.seek_by(SKIP_STEP));
-    let element = forward::<StepFrameBackward>(element, player.clone(), |p, _| p.step_frame(-1));
-    let element = forward::<StepFrameForward>(element, player.clone(), |p, _| p.step_frame(1));
-    let element = forward::<VolumeUp>(element, player.clone(), |p, cx| {
+    let element = forward::<TogglePlay, _>(element, player.clone(), |p, cx| p.toggle_play(cx));
+    let element = forward::<SeekBackward, _>(element, player.clone(), |p, _| p.seek_by(-SKIP_STEP));
+    let element = forward::<SeekForward, _>(element, player.clone(), |p, _| p.seek_by(SKIP_STEP));
+    let element = forward::<StepFrameBackward, _>(element, player.clone(), |p, _| p.step_frame(-1));
+    let element = forward::<StepFrameForward, _>(element, player.clone(), |p, _| p.step_frame(1));
+    let element = forward::<VolumeUp, _>(element, player.clone(), |p, cx| {
         p.set_volume(p.playback.volume + VOLUME_STEP);
         p.show_hud(cx);
     });
-    let element = forward::<VolumeDown>(element, player.clone(), |p, cx| {
+    let element = forward::<VolumeDown, _>(element, player.clone(), |p, cx| {
         p.set_volume(p.playback.volume - VOLUME_STEP);
         p.show_hud(cx);
     });
-    let element = forward::<ToggleMute>(element, player.clone(), |p, _| p.toggle_mute());
-    let element = forward::<ToggleLoop>(element, player.clone(), |p, _| {
+    let element = forward::<ToggleMute, _>(element, player.clone(), |p, _| p.toggle_mute());
+    let element = forward::<ToggleLoop, _>(element, player.clone(), |p, _| {
         p.playback.looping = !p.playback.looping
     });
-    let element = forward::<RateIncrease>(element, player.clone(), |p, _| {
+    let element = forward::<RateIncrease, _>(element, player.clone(), |p, _| {
         p.set_rate(model::cycle_rate(p.playback.rate, 1))
     });
-    let element = forward::<RateDecrease>(element, player.clone(), |p, _| {
+    let element = forward::<RateDecrease, _>(element, player.clone(), |p, _| {
         p.set_rate(model::cycle_rate(p.playback.rate, -1))
     });
-    let element = forward::<RateReset>(element, player.clone(), |p, _| p.set_rate(1.));
-    forward::<ToggleFullscreen>(element, player, |p, _| p.toggle_fullscreen())
+    forward::<RateReset, _>(element, player, |p, _| p.set_rate(1.))
 }
 
 /// `reportPlaybackFailure`: one diagnostic line in production's shape.
@@ -737,7 +726,7 @@ impl VideoPlayer {
                         "media-mute",
                         model::volume_icon(volume, muted),
                         16.,
-                        ui::tip(label).keys(&["M"]),
+                        ui::tip(label).shortcut("video.toggleMute", cx),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.toggle_mute();
@@ -940,7 +929,8 @@ impl VideoPlayer {
                         "player-play"
                     },
                     20.,
-                    ui::tip(if playing { "Pause" } else { "Play" }).keys(&["K"]),
+                    ui::tip(if playing { "Pause" } else { "Play" })
+                        .shortcut("video.togglePlay", cx),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.toggle_play(cx);
@@ -952,7 +942,7 @@ impl VideoPlayer {
                     "media-back",
                     "player-skip-back",
                     18.,
-                    ui::tip(skip(-1.)).keys(&["J"]),
+                    ui::tip(skip(-1.)).shortcut("video.seekBackward", cx),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.seek((this.playback.current - SKIP_STEP).max(0.));
@@ -964,7 +954,7 @@ impl VideoPlayer {
                     "media-forward",
                     "player-skip-forward",
                     18.,
-                    ui::tip(skip(1.)).keys(&["L"]),
+                    ui::tip(skip(1.)).shortcut("video.seekForward", cx),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.seek((this.playback.current + SKIP_STEP).min(this.playback.duration));
@@ -984,7 +974,8 @@ impl VideoPlayer {
                     "media-loop",
                     if looping { "repeat" } else { "repeat-off" },
                     18.,
-                    ui::tip(if looping { "Loop on" } else { "Loop off" }).keys(&["O"]),
+                    ui::tip(if looping { "Loop on" } else { "Loop off" })
+                        .shortcut("video.toggleLoop", cx),
                 )
                 .active(looping)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -999,7 +990,7 @@ impl VideoPlayer {
                     "media-fullscreen",
                     "maximize",
                     18.,
-                    ui::tip("Fullscreen").keys(&["F"]),
+                    ui::tip("Fullscreen").shortcut("video.fullscreen", cx),
                 )
                 .on_click(cx.listener(|this, _, _, _| this.toggle_fullscreen())),
             );
