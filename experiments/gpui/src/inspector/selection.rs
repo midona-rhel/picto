@@ -160,9 +160,7 @@ impl Inspector {
 
     fn read_summary_of(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
         self.selection.asked = Some(ids.clone());
-        let target = SelectionTarget::Explicit {
-            root_ids: ids.clone(),
-        };
+        let target = self.session.read(cx).target_for(ids.clone());
         let job = self
             .session
             .read(cx)
@@ -221,7 +219,7 @@ impl Inspector {
         let Some(ids) = self.selection.shown.as_ref().map(|shown| shown.ids.clone()) else {
             return;
         };
-        let target = SelectionTarget::Explicit { root_ids: ids };
+        let target = self.session.read(cx).target_for(ids);
         // The focused item was edited with the rest.
         let job = self.session.update(cx, |session, cx| {
             session.edit(move |library| work(library, &target), Reread::DETAILS, cx)

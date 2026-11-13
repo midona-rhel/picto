@@ -74,7 +74,15 @@ pub enum Request {
 }
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
-    Page(u64, bool, RootPage, crate::grid::prefs::ViewPrefs),
+    /// A page of results, with the view it was read under and the query
+    /// that produced it.
+    Page(
+        u64,
+        bool,
+        RootPage,
+        crate::grid::prefs::ViewPrefs,
+        Box<RootQuery>,
+    ),
     Error(String),
 }
 /// Whether a smart folder's filter has no rules, which makes it a group.
@@ -301,7 +309,15 @@ pub fn start(
                                 };
                                 library
                                     .query(&query, &PageRequest { limit: 500, cursor })
-                                    .map(|page| Reply::Page(generation, append, page, prefs))
+                                    .map(|page| {
+                                        Reply::Page(
+                                            generation,
+                                            append,
+                                            page,
+                                            prefs,
+                                            Box::new(query),
+                                        )
+                                    })
                             })
                     }
                 };
