@@ -25,6 +25,13 @@ const PERCENT_MINIMUM: f32 = 5.;
 const PERCENT_MAXIMUM: f32 = 800.;
 const POSITION_STEP: f32 = 0.5;
 
+/// The grid's tile size one step larger or smaller, as the slider's buttons
+/// and the zoom keys move it.
+pub fn step_tile(size: f32, larger: bool) -> f32 {
+    let step = if larger { BUTTON_STEP } else { -BUTTON_STEP };
+    (size + step).clamp(MINIMUM, MAXIMUM)
+}
+
 /// Where a zoom percentage sits on the viewer's 0–100 track: 5% at the left
 /// end, 100% in the middle, 800% at the right end, logarithmic on each side
 /// (`zoomToSlider` in `GridToolbar.tsx`).
@@ -248,14 +255,18 @@ impl Render for Zoom {
                 ui::icon_button("zoom-out", "toolbar-minus")
                     .disabled(self.value <= MINIMUM)
                     .tip(ui::tip("Zoom out").shortcut("view.zoomOut", cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.set(this.value - BUTTON_STEP, cx))),
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.set(step_tile(this.value, false), cx)),
+                    ),
             )
             .child(slider)
             .child(
                 ui::icon_button("zoom-in", "toolbar-plus")
                     .disabled(self.value >= MAXIMUM)
                     .tip(ui::tip("Zoom in").shortcut("view.zoomIn", cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.set(this.value + BUTTON_STEP, cx))),
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.set(step_tile(this.value, true), cx)),
+                    ),
             )
             .into_any_element()
     }
