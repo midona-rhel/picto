@@ -800,12 +800,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   session (production keeps some in localStorage). Not drawn: the create
   row's sticky position, the 60 ms row highlight transitions, the panel's
   backdrop blur, and an error notification when an edit fails (it is
-  printed). The pickers' filter modes (include and exclude, match all or
-  any) belong to the filter bar, which does not exist yet.
+  printed).
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
   belong (theme, zoom, language, the grid's wheel action, image rendering
-  and the transparency grid, video autoplay and loop, notifications,
+  and the transparency grid, notifications,
   imports, subscriptions).
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
@@ -819,8 +818,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not
   reload the model.
-- Subscriptions: no run has been started from this app yet (see the test
-  card below); failures and completions are not announced (no toasts or
+- Subscriptions: no run has been started from this app yet; failures and completions are not announced (no toasts or
   system notifications). Creating subscriptions, galleries and sources, and
   the per-source Run, Hold, Group, Edit and Delete, are drawn but not
   performed. Also not built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
@@ -848,8 +846,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   not a native one. Menus with editors do not reach past the window's edge.
   A layout change keeps the anchored tile without the scope fade production
   runs for it. The view menu's sort row keeps its height while open when
-  Random hides the direction pill. None of the bar, its menus, the pickers,
-  the calendar or the view menu has been seen running.
+  Random hides the direction pill. The bar, the tag picker in its filter
+  mode, the colour editor and the view menu have been seen drawn off-screen;
+  the calendar, the range editors and saved filters have not.
 - Inspector: the stacked preview's cards cannot turn (GPUI rotates only
   SVGs), so they lie straight; the folder card's radial light is a vertical
   gradient. Auto Tag,
@@ -907,10 +906,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   (`viewer/flash_controls.rs`) and the media player's (drawn inline in
   `video/`) were written in parallel and are two implementations of the same
   production controls; they should become one.
-- Not seen running in the app window: the document viewers, the font viewer
-  and Flash's controls were drawn off-screen (below) but not used with a
-  pointer; hover states, tooltips, scrolling, the volume drag and the
-  controls' fade are unverified.
+- Seen drawn in the app (off-screen, see Checks): a PDF in the viewer with
+  its page footer. Not used with a pointer yet: the other document viewers,
+  the font viewer and Flash's controls; hover states, tooltips, scrolling,
+  the volume drag and the controls' fade are unverified.
 - Media player: Fullscreen (the button, F and production's double-click)
   is drawn with its tooltip but does nothing yet (`TODO`), since the shell
   cannot yet give the pane the whole window. The rate menu is production's
@@ -922,17 +921,18 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   goes through the bundled `ffmpeg` and audio through Symphonia and CPAL;
   neither has been built or run there. An APNG plays as a still image (GPUI
   decodes PNG as one frame). A video's picture is uploaded per frame where
-  `ffmpeg` decodes it; only the AVFoundation path is zero-copy. Not seen
-  running: the whole player, its timings, hover states and the pictures on
-  screen; what was checked headlessly is listed under Checks.
+  `ffmpeg` decodes it; only the AVFoundation path is zero-copy. Seen
+  playing in the app: a `.mov` (AVFoundation), a `.webm` (`ffmpeg`) and an
+  MP3 with the visualizer, each with its controls. Not checked: timings,
+  hover states, the volume and rate popups; what was checked headlessly is
+  listed under Checks.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface (`GroupSurface`), in all three hosts: Quick Look shows a
   collection's first member in the collection frame, and the detail window
   steps its members with the strip.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
   corners do not clip a zoomed image. No right-click menu or Copy (the
-  file itself), and no video, audio or document players (the surface has
-  none yet).
+  file itself).
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
@@ -951,11 +951,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the menu as a full-window layer; the menu itself chooses between its
   pop-up windows and the in-window panel. Subscriptions' Schedule row stays
   disabled rather than a submenu; `subscriptions.schedule`, which also sets
-  the next run time, is now reachable and is its `TODO`. Custom rows, right-click actions on rows
-  (`contextAction`) and nested submenus are not ported, so the grid menus'
-  view panel (Layout and Sort by selects, the direction pill) and the
-  Display panel's switches are rows that check inside "Layout", "Sort by"
-  and "Display" submenus, kept open while they change. "Open With Other" is
+  the next run time, is now reachable and is its `TODO`. The grid menus'
+  view options are rows that check inside "Layout", "Sort by" and "Display"
+  submenus, kept open while they change, where the titlebar's View options
+  shows production's panel. "Open With Other" is
   the one-row chooser on every platform: the applications cannot be listed,
   so macOS's submenu is not shown.
 - Item menu rows shown, enabled as production has them, that do nothing yet
@@ -968,22 +967,20 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
   Group (the collection editor), Group when the selection needs the group
   organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
-  editor), Import Files, Import Folder and Paste Import, Flash's Play,
-  Stop and Mute, and Set as Thumbnail. "Add Tags" and "Add to Folder"
+  editor), Import Files, Import Folder and Paste Import, and Set as Thumbnail. "Add Tags" and "Add to Folder"
   dispatch the shortcuts' `AddTags` and `AddToFolder`, which open the
   inspector's pickers. "Open in New Window" opens the item alone in a detail window.
-  Quick Look and the detail window have no context menu yet.
   "Add to “…”" appears once a folder has been used (the folder picker and
-  this row record it; for the session only). Show Extension and Show Subfolder Content are saved
-  but the grid does not follow them yet. Errors go to the
+  this row record it; for the session only). Errors go to the
   console, not to notifications. Edits that change what the destination
   holds (Remove from Folder, Sort by, Group, Ungroup, the lifecycle rows,
   deletes) fetch the grid again, which clears the selection; after a rating
   or tags pasted on several items the inspector's selection summary is not
   read again.
-- The pop-up menu windows have not been seen running. Not verified: that
-  AppKit draws no titlebar buttons on them, what the system window shadow
-  adds around the transparent window and the drawn shadow, the pointing-hand
+- The pop-up menu windows have been seen on macOS reaching past the main
+  window's edges, a submenu included, and closing on a press in the main
+  window; the system's own shadow and edge highlight are turned off on them.
+  Not verified: the pointing-hand
   cursor (GPUI sets the cursor only from the key window), and the input
   method's candidate window, which appears at the invisible twin near the
   main window's corner. Clicking a panel makes its window the key window for
@@ -1007,10 +1004,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
   reasons in `keymap::NOT_YET`: Import, Export and Export As, Paste Import,
-  New Smart Folder, Set Folder Auto Tags, Regenerate Thumbnail, Open in New
-  Window, Auto-Tag, Copy (⌘C copies files, which GPUI's macOS clipboard
-  cannot hold), Remove from Group, Toggle Grayscale, Always on Top, Toggle
-  Logs, the document pages and the player's fullscreen key; production's deferred ids
+  Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
+  which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
+  Remove from Group, Toggle Grayscale, the layout and tile-label keys,
+  Toggle Logs and the player's fullscreen key; production's deferred ids
   are not bound either. T, F and ⌘⇧J open the inspector's pickers rather than
   production's picker dialogs; batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
@@ -1027,11 +1024,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   production sets `pointer-events: none`. Still to port with the features
   they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
   no notification host yet), the task and progress dialogs, the inbox review
-  controls, the inspector field's expansion (`fieldExpand`),
-  a subscription's run progress fading in (no run can start here), the 250 ms
+  controls,
+  a subscription's run progress fading in, the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
-  and the progress and spinner loops. A scope change does not yet restore the previous
-  scroll position as the Electron grid does.
+  and the spinner loops.
 - No glass surfaces or window vibrancy yet. In-app backdrop blur needs a
   renderer patch; two open-source implementations exist to port. GPUI cannot
   scale or rotate arbitrary elements; see Motion above for what stands in.
@@ -1040,8 +1036,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
-- The grid is still one element tree per tile. The media surface still
-  carries colours of its own.
+- The grid is still one element tree per tile.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
 - Windows and Linux are not built or tested. The Ruffle frame path reads back
@@ -1119,14 +1114,48 @@ fields 0.9%, inspector chips 4.3%, and the window's edges none. The grid's
 share is mostly originals the Electron grid loads for large tiles; part of
 the rest is state that differed and JPEG noise in the captures.
 
-`PICTO_GPUI_POINTER=<file or FIFO>` replays pointer events written to that
-file (`move X Y`, `drag X Y` with the button held, `down X Y [clicks]`,
+`PICTO_GPUI_POINTER=<file or FIFO>` replays input written to that file
+(`move X Y`, `drag X Y` with the button held, `down X Y [clicks]`,
 `up X Y [clicks]`, `rdown X Y`, `rup X Y`, `scroll X Y DISTANCE`, in window
-points), so hover, pressed, tooltip, menu, rubber-band and navigation states
-can be checked without taking the real pointer. GPUI stops painting a window
-that is fully covered, so the window has to be visible.
-`PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored width, and
-`PICTO_GPUI_BACKGROUND=1` opens without taking keyboard focus.
+points; `key <keystroke>` and `type <text>`), so hover, pressed, tooltip,
+menu, rubber-band, keyboard and navigation states can be checked without
+taking the real pointer. GPUI stops painting a window that is fully covered;
+`PICTO_GPUI_BACKGROUND=1` opens the window without taking keyboard focus and
+keeps it drawing behind other applications. `PICTO_GPUI_MENU=window` draws
+menus inside the window (a pop-up menu closes when the app is not the active
+one). `PICTO_GPUI_INSPECTOR=<width>` opens with the inspector at a stored
+width, and `PICTO_GPUI_SILENT=1` starts every player muted.
+
+The whole app can also be drawn with no screen at all. The ignored test
+`plays_a_script` (`src/offscreen.rs`) opens the shell on a disposable copy
+in a headless window, plays a script of the same input lines plus
+`wait <ms>`, `shot <name>` and `window <n>`, and saves a picture per shot:
+
+```sh
+PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
+PICTO_GPUI_COPY=/tmp/picto-gpui-library.XXXXXX/Name.library \
+PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
+  cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
+```
+
+`reference.sh /path/to/Name.library [n]` starts the Electron app as an
+isolated reference: a development build from this checkout in its
+automation mode (`PICTO_E2E`), on its own detached copy of the library, with
+its own application data, and a DevTools port (9222 + n).
+`node reference.mjs steps.txt outdir` plays the same script lines into it
+(`reload` and `size 1213 865` first, to start from a fresh window at that
+size; the GPUI test skips those lines), so one script photographs a view
+in both apps and `pixel_diff.py` compares the pairs. Both apps then open the
+inspector at its default width; the reference has no traffic lights and
+shows the default library avatar.
+
+Seen this way on 13 November 2026: the grid and its item menu, Quick Look,
+the View options panel, the filter bar with the tag picker and the colour
+editor, the Tags, Subscriptions and Duplicates screens, the smart-folder
+rules dialog, the Settings window, a detail window, and the viewer on a JPEG,
+a GIF, a JPEG XL, a `.mov`, a `.webm`, an MP3 and a PDF collection. Timers
+advance with the real clock there, so animations play, but nothing was
+measured.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap
@@ -1221,8 +1250,9 @@ One model, separate views, shared components:
 
 - `application.rs` runs the application layer (`picto_core`) on the copy:
   the guard that refuses anything but a marked copy, the detaching of
-  inherited work, commands and events. `delete.rs` is the permanent-delete
-  confirmation the grid and the sidebar share.
+  inherited work, commands and events. The permanent-delete confirmation the
+  grid and the sidebar share is `Shell::request_permanent_delete` in
+  `shell/item_menu.rs`.
 
 ## Attribution
 
