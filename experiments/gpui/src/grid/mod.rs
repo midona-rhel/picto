@@ -14,6 +14,7 @@ pub mod nav;
 pub mod originals;
 pub mod prefs;
 pub mod preview;
+pub mod rendered;
 pub mod reveal;
 pub mod thumbnails;
 
@@ -81,7 +82,13 @@ pub struct GridView {
     preview: preview::HoverPreview,
     /// The broken-thumbnail and font artwork.
     art: Option<art::Art>,
+    /// The items the layout's tiles are for, by id.
+    layout_ids: Vec<u32>,
+    /// Files whose missing thumbnail the application was asked to render
+    /// (`scheduleThumbnailAfterMiss`), each once.
+    rendering: std::collections::HashSet<String>,
     _session: Subscription,
+    _thumbnails: Subscription,
 }
 
 /// "Return to Top" appears once the grid has scrolled this far.
@@ -203,6 +210,18 @@ impl GridView {
                 cx.notify();
             }
         });
+        // A thumbnail written since it was read is read again.
+        let changed = cx.subscribe(
+            &session,
+            |this, session, event: &crate::application::Event, cx| {
+                if let crate::application::Event::Thumbnail(hash) = event {
+                    let jpeg = session.read(cx).thumbnail(hash);
+                    this.thumbnails
+                        .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
+                    cx.notify();
+                }
+            },
+        );
         let originals = cx.new(originals::Originals::new);
         // An original that finished decoding is drawn on the next frame.
         cx.observe(&originals, |_, _, cx| cx.notify()).detach();
@@ -231,7 +250,61 @@ impl GridView {
             swallow_tile_click: false,
             preview: preview::HoverPreview::default(),
             art: None,
+            layout_ids: Vec::new(),
+            rendering: Default::default(),
             _session: subscription,
+            _thumbnails: changed,
+        }
+    }
+
+    /// Asks the application to render the thumbnails of files that have
+    /// none yet (`media.render_thumbnail_now`), as the media protocol does
+    /// on a miss, and draws those it cannot make (Flash, PDF and the other
+    /// paged documents) as the Electron main process does
+    /// (`renderExternalThumbnail`); the thumbnail is read again once it has
+    /// been written.
+    fn render_missing(&mut self, missing: Vec<(String, String, PathBuf)>, cx: &mut Context<Self>) {
+        for (hash, mime, jpeg) in missing {
+            // Each file once; one whose thumbnail exists but did not decode
+            // stays broken.
+            if !self.rendering.insert(hash.clone())
+                || jpeg.exists()
+                || thumbnails::png_for(&jpeg).exists()
+            {
+                continue;
+            }
+            let answer = self.session.read(cx).dispatch(
+                "media.render_thumbnail_now",
+                serde_json::json!({ "file_hash": hash }),
+            );
+            let (original, disposable) = {
+                let session = self.session.read(cx);
+                (session.original(&hash, &mime), session.disposable())
+            };
+            cx.spawn(async move |this, cx| {
+                let _ = answer.await;
+                let png = thumbnails::png_for(&jpeg);
+                // Only into a marked disposable copy, as every write here.
+                if !jpeg.exists() && !png.exists() && disposable && rendered::draws(&mime) {
+                    // A thread of its own: a movie plays for seconds first.
+                    let (sent, drawn) = futures::channel::oneshot::channel();
+                    let output = png.clone();
+                    std::thread::spawn(move || {
+                        let _ = sent.send(rendered::render(&mime, &original, &output));
+                    });
+                    if let Ok(Err(error)) = drawn.await {
+                        eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
+                    }
+                }
+                if jpeg.exists() || png.exists() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.thumbnails
+                            .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
         }
     }
 
@@ -972,17 +1045,29 @@ impl Render for GridView {
         // is scrolled, and says where a restored grid should open.
         let scrolled = self.scroll_top();
         let epoch = self.epoch;
+        // A press, rubber band or drag in progress holds back a refresh of
+        // the results, which would move what it is on.
+        let busy = self.marquee.is_some() || self.dragging || self.press.is_some();
         let restore = self.session.update(cx, |session, cx| {
             session.advance_transition(cx);
+            session.pointer_busy = busy;
             if session.results_epoch == epoch {
                 session.grid_scroll = scrolled;
                 None
             } else {
-                Some(session.restore_scroll.take().unwrap_or(0.))
+                Some((
+                    session.restore_scroll.take().unwrap_or(0.),
+                    std::mem::take(&mut session.refreshed_in_place),
+                ))
             }
         });
-        if let Some(offset) = restore {
-            self.scroll.set_offset(point(px(0.), px(-offset)));
+        let mut follow = false;
+        match restore {
+            // Read again in place: the items that stay keep their place on
+            // screen, laid out below.
+            Some((_, true)) => follow = true,
+            Some((offset, false)) => self.scroll.set_offset(point(px(0.), px(-offset))),
+            None => {}
         }
         let theme = theme::theme(cx);
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
@@ -1053,21 +1138,51 @@ impl Render for GridView {
                     ),
                 );
                 // The same items laid out anew (zoom, spacing, layout mode,
-                // labels, width): the topmost visible tile stays in place,
-                // as `CanvasGrid` keeps it.
-                if self.layout_key.is_some()
-                    && let Some(anchored) = layout::scroll_anchor(
+                // labels, width), or the results read again in place: the
+                // topmost visible tile, followed by its item, stays where it
+                // was on screen, as `CanvasGrid` keeps it.
+                let ids = session
+                    .items
+                    .iter()
+                    .map(|item| item.root_id.0)
+                    .collect::<Vec<_>>();
+                if self.layout_key.is_some() || follow {
+                    let now = ids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| (*id, index))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    let before = self
+                        .layout_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| (*id, index))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    let selected = session
+                        .selection
+                        .iter()
+                        .filter_map(|index| ids.get(*index))
+                        .filter_map(|id| before.get(id).copied())
+                        .collect();
+                    let moved = |index: usize| {
+                        self.layout_ids
+                            .get(index)
+                            .and_then(|id| now.get(id).copied())
+                    };
+                    if let Some(anchored) = layout::scroll_anchor(
                         &previous.tiles,
                         &self.layout.tiles,
-                        &session.selection,
+                        &selected,
                         top,
                         viewport,
-                    )
-                    && anchored != top
-                {
-                    top = anchored;
-                    self.scroll.set_offset(point(px(0.), px(-anchored)));
+                        moved,
+                    ) && anchored != top
+                    {
+                        top = anchored;
+                        self.scroll.set_offset(point(px(0.), px(-anchored)));
+                    }
                 }
+                self.layout_ids = ids;
                 self.layout_key = key;
             }
             if let Some(marquee) = &mut self.marquee {
@@ -1079,7 +1194,7 @@ impl Render for GridView {
                 Surface::Error(error.clone())
             } else if !session.items.is_empty() {
                 Surface::Tiles
-            } else if session.loading {
+            } else if session.loading && !session.refreshing {
                 Surface::Loading
             } else {
                 let scope = session
@@ -1138,6 +1253,7 @@ impl Render for GridView {
             .collect();
         self.thumbnails
             .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
+        let mut missing = Vec::new();
         let decoded = {
             let thumbnails = self.thumbnails.read(cx);
             tiles
@@ -1151,6 +1267,11 @@ impl Render for GridView {
                         data.thumb = if thumbnails.is_loaded(&resource) {
                             Thumb::Loaded
                         } else if thumbnails.is_failed(&resource) {
+                            missing.push((
+                                data.item.content_hash.clone(),
+                                data.item.mime.clone(),
+                                data.thumbnail.clone(),
+                            ));
                             Thumb::Failed
                         } else {
                             Thumb::Pending
@@ -1160,6 +1281,7 @@ impl Render for GridView {
                 })
                 .collect::<Vec<_>>()
         };
+        self.render_missing(missing, cx);
         // Tiles in the viewport that draw more pixels than their thumbnail
         // holds ask for their original, which arrives after a short dwell.
         let scale = window.scale_factor();
@@ -1201,11 +1323,14 @@ impl Render for GridView {
 
         let entity = cx.entity().downgrade();
         let measure = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.bounds != bounds {
                         this.bounds = bounds;
                         cx.notify();
+                        // A notification made while a frame is being drawn
+                        // does not by itself bring another frame.
+                        window.request_animation_frame();
                     }
                 });
             },
@@ -1252,18 +1377,42 @@ impl Render for GridView {
             Surface::Loading => div().id("grid-loading").size_full(),
             Surface::Empty(copy) => {
                 let actions = if copy.import {
+                    // `chooseAndImportFiles` / `chooseAndImportFolder` into
+                    // this destination, held while an import runs.
+                    let destination = {
+                        let session = self.session.read(cx);
+                        session
+                            .nav
+                            .get(session.displayed)
+                            .map(|entry| crate::imports::plan::Destination::for_scope(&entry.scope))
+                            .unwrap_or_default()
+                    };
+                    let blocked = crate::imports::blocked(cx);
+                    let start = move |folder: bool| {
+                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                            if let Some(imports) = crate::imports::get(cx) {
+                                imports.update(cx, |imports, cx| {
+                                    if folder {
+                                        imports.choose_folder(destination, window, cx)
+                                    } else {
+                                        imports.choose_files(destination, window, cx)
+                                    }
+                                });
+                            }
+                        }
+                    };
                     vec![
                         ui::empty_state_action("grid-import-files", "upload", "Import Files")
-                            // TODO: choose files and import them into this scope.
-                            .on_click(|_, _, _| {})
+                            .disabled(blocked.is_some())
+                            .on_click(start(false))
                             .into_any_element(),
                         ui::empty_state_action(
                             "grid-import-folder",
                             "folder-plus",
                             "Import Folder",
                         )
-                        // TODO: choose a folder and import it into this scope.
-                        .on_click(|_, _, _| {})
+                        .disabled(blocked.is_some())
+                        .on_click(start(true))
                         .into_any_element(),
                     ]
                 } else {

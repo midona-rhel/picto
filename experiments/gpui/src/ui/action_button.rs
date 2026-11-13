@@ -24,6 +24,10 @@ pub enum Look {
     /// `Settings.module.css` `.footerBtnPrimary`: the primary colour,
     /// semibold, lightening 5% toward white under the pointer.
     SettingsPrimary,
+    /// `TaskDialog.module.css` `.foot .ghost`: `.btn` with no fill, border
+    /// or ring and the secondary text colour, taking the hover surface and
+    /// the primary text colour under the pointer.
+    Ghost,
 }
 
 impl Look {
@@ -70,7 +74,7 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         gap: if settings { 6. } else { 8. },
         text_size: theme::TEXT_MD,
         weight: match look {
-            Look::Standard | Look::Primary | Look::Danger => FontWeight::MEDIUM,
+            Look::Standard | Look::Primary | Look::Danger | Look::Ghost => FontWeight::MEDIUM,
             Look::Settings => FontWeight::NORMAL,
             Look::SettingsPrimary => FontWeight::SEMIBOLD,
         },
@@ -186,6 +190,15 @@ impl RenderOnce for ActionButton {
                 theme.border(),
                 theme.text(),
             ),
+            Look::Ghost => (
+                theme::blend(
+                    theme::clear(theme.surface_hover()),
+                    theme.surface_hover(),
+                    hover,
+                ),
+                theme::clear(theme.border()),
+                theme::blend(theme.text_secondary(), theme.text(), hover),
+            ),
             // `color-mix(in srgb, var(--color-primary) 95%, #fff)`
             Look::SettingsPrimary => (
                 theme::blend(
@@ -223,7 +236,7 @@ impl RenderOnce for ActionButton {
             button = button.w_full().min_w_0();
         }
         // `.btn`: `box-shadow: 0 0 0 1px var(--color-black-20)`.
-        if !self.look.settings() {
+        if !self.look.settings() && self.look != Look::Ghost {
             button = button.shadow(vec![
                 BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into()).spread_radius(px(1.)),
             ]);

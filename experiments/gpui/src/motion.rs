@@ -68,6 +68,12 @@ impl CubicBezier {
         Self { x1, y1, x2, y2 }
     }
 
+    /// The two control points, as CSS and Core Animation write them.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn points(&self) -> (f32, f32, f32, f32) {
+        (self.x1, self.y1, self.x2, self.y2)
+    }
+
     fn axis(t: f32, p1: f32, p2: f32) -> f32 {
         let inverse = 1. - t;
         3. * inverse * inverse * t * p1 + 3. * inverse * t * t * p2 + t * t * t
@@ -125,6 +131,11 @@ pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
 /// `LOADING_MESSAGE_DELAY_MS`: a loading message waits this long, so a
 /// quick load shows none.
 pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
+
+/// How long the viewer keeps the previous item on screen while a video
+/// opening waits for its first frame, or a document for its first page,
+/// before showing the new item without it.
+pub const MEDIA_HOLD: Duration = Duration::from_millis(1500);
 
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
@@ -210,6 +221,13 @@ pub const CARET_BLINK: Duration = Duration::from_millis(500);
 pub const TOGGLE_SWITCH: Duration = Duration::from_millis(200);
 /// `progress-indeterminate`: one sweep of an indeterminate progress bar.
 pub const PROGRESS_SWEEP: Duration = Duration::from_millis(900);
+/// `TaskDialog.module.css` `backdropIn` and `dialogIn`: the task dialog and
+/// its backdrop come in over 200 ms on `--ease-scale-in`.
+pub const TASK_DIALOG_IN: Duration = Duration::from_millis(200);
+/// `.fill`: a task's progress moves over 250 ms on `--ease-default`.
+pub const TASK_PROGRESS: Duration = Duration::from_millis(250);
+/// `.fill[data-indeterminate]`: one sweep of a task of unknown length.
+pub const TASK_PROGRESS_SWEEP: Duration = Duration::from_millis(1100);
 /// A Flash movie is advanced and redrawn this often (about 60 frames a
 /// second).
 pub const FLASH_FRAME: Duration = Duration::from_millis(16);

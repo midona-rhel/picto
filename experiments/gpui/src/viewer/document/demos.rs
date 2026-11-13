@@ -6,10 +6,10 @@ use gpui::*;
 /// Each sample's file name, media type, menu label and contents.
 pub const SAMPLES: [(&str, &str, &str, &[u8]); 10] = [
     (
-        "page.pdf",
+        "pages.pdf",
         "application/pdf",
         "PDF",
-        include_bytes!("../../../assets/fixtures/documents/page.pdf"),
+        include_bytes!("../../../assets/fixtures/documents/pages.pdf"),
     ),
     (
         "page.djvu",

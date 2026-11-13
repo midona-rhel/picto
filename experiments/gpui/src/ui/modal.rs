@@ -161,6 +161,23 @@ pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Di
         .child(message.into())
 }
 
+/// `.warningBox`: a note in a dialog that something about its subject needs
+/// attention, on a faint warning tint.
+pub fn warning_box(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
+    let warning = rgb(theme::WARNING);
+    div()
+        .px(px(12.))
+        .py(px(10.))
+        .rounded(px(theme::RADIUS_MD))
+        .border_1()
+        .border_color(theme::blend(theme.border_secondary(), warning, 0.45))
+        .bg(theme::blend(theme.control_surface(), warning, 0.09))
+        .text_color(theme.text())
+        .text(theme::TEXT_SM)
+        .line_height(px(18.))
+        .child(message.into())
+}
+
 /// A dialog titled `title`. Draw it from the view that owns it; it covers
 /// the whole window whatever that view's bounds.
 pub fn modal(

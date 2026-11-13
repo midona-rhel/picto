@@ -431,6 +431,25 @@ pub const FAILURE_TEXT: u32 = 0xf0ad91;
 pub const MERGE_SURVIVOR_FILL: u32 = 0x48c77414;
 pub const MERGE_SURVIVOR_RING: u32 = 0x48c77480;
 
+/// `TaskDialog.module.css`: a task's glyph and fill by its tone (`.kind`,
+/// `.fill`), the warning text, the danger choice and the dimmed backdrop.
+pub const TASK_WORKING_GLYPH: u32 = 0x8cc4ff;
+pub const TASK_DONE_GLYPH: u32 = 0x7be39b;
+/// `rgba(52, 199, 89, 0.18)`
+pub const TASK_DONE_TILE: u32 = 0x34c7592e;
+/// `#34c759`
+pub const TASK_DONE_FILL: u32 = 0x34c759;
+pub const TASK_WARNING_GLYPH: u32 = 0xffb4a0;
+/// `rgba(255, 120, 90, 0.16)`
+pub const TASK_WARNING_TILE: u32 = 0xff785a29;
+/// `.choice[data-selected][data-danger]`: `rgba(255, 71, 87, 0.5)` and `0.08`.
+pub const TASK_DANGER_BORDER: u32 = 0xff475780;
+pub const TASK_DANGER_FILL: u32 = 0xff475714;
+/// `.choice[data-danger] .choiceMark`
+pub const TASK_DANGER_MARK: u32 = 0xff8a95;
+/// `.backdrop`: `rgba(0, 0, 0, 0.55)`.
+pub const TASK_BACKDROP: u32 = 0x0000008c;
+
 /// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
 /// same in every theme.
 pub const GRID_SELECTION: u32 = 0x3297ff;

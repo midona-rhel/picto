@@ -45,6 +45,8 @@ pub struct AvPlayer {
     output: Retained<AVPlayerItemVideoOutput>,
     composition: Arc<Mutex<Option<Composition>>>,
     composed: bool,
+    /// Whether a paused item has been asked for its first frame.
+    primed: bool,
     playing: bool,
     rate: f32,
     /// Display times of recent frames, to measure the frame rate as
@@ -121,6 +123,7 @@ impl AvPlayer {
                 output,
                 composition,
                 composed: false,
+                primed: false,
                 playing: false,
                 rate: 1.,
                 frame_times: Vec::new(),
@@ -204,6 +207,19 @@ impl Backend for AvPlayer {
     fn status(&mut self) -> Status {
         self.compose();
         unsafe {
+            // A paused item hands its output no picture until it moves; a
+            // seek to the start, once it is ready, brings the first frame,
+            // which then shows instead of nothing.
+            if !self.primed && self.item.status() == AVPlayerItemStatus::ReadyToPlay {
+                self.primed = true;
+                if !self.playing {
+                    self.player.seekToTime_toleranceBefore_toleranceAfter(
+                        kCMTimeZero,
+                        kCMTimeZero,
+                        kCMTimeZero,
+                    );
+                }
+            }
             let error = (self.item.status() == AVPlayerItemStatus::Failed).then(|| {
                 self.item
                     .error()

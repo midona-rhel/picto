@@ -104,6 +104,7 @@ pub(crate) mod appkit {
             types: *const c_char,
         ) -> *const c_void;
         fn objc_msgSend();
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
     }
 
     pub fn selector(name: &CStr) -> *const c_void {
@@ -136,6 +137,114 @@ pub(crate) mod appkit {
                 implementation,
                 types.as_ptr(),
             );
+        }
+    }
+
+    /// Turns off the animation AppKit plays as a window appears (a panel
+    /// zooms in), for windows that bring their own.
+    pub fn without_appear_animation(ns_window: *mut c_void) {
+        /// `NSWindowAnimationBehaviorNone`.
+        const NONE: isize = 2;
+        // SAFETY: `ns_window` is a live NSWindow; `setAnimationBehavior:`
+        // takes an `NSInteger`.
+        unsafe {
+            let send_integer: extern "C" fn(*mut c_void, *const c_void, isize) =
+                std::mem::transmute(send());
+            send_integer(ns_window, selector(c"setAnimationBehavior:"), NONE);
+        }
+    }
+
+    /// Plays CSS's `transform: scale(from) → scale(1)` on everything the
+    /// window draws, about the point `fixed` (in points from the content's
+    /// centre, x to the right and y up), over `seconds` on the cubic bezier
+    /// `curve`. Core Animation scales the window's layer, so the contents
+    /// scale with their panel, which GPUI cannot do for an element.
+    pub fn pop_in(
+        ns_window: *mut c_void,
+        fixed: (f32, f32),
+        from: f32,
+        seconds: f64,
+        curve: (f32, f32, f32, f32),
+    ) {
+        type Id = *mut c_void;
+        type Sel = *const c_void;
+        // SAFETY: every receiver is checked for null before it is sent to;
+        // each cast gives `objc_msgSend` the signature of the AppKit or
+        // QuartzCore method named beside it. Called on the main thread.
+        unsafe {
+            let send_id: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(send());
+            let send_object: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(send());
+            let send_two: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(send());
+            let send_text: extern "C" fn(Id, Sel, *const c_char) -> Id =
+                std::mem::transmute(send());
+            let send_double: extern "C" fn(Id, Sel, f64) -> Id = std::mem::transmute(send());
+            let send_curve: extern "C" fn(Id, Sel, f32, f32, f32, f32) -> Id =
+                std::mem::transmute(send());
+            let view = send_id(ns_window, selector(c"contentView"));
+            if view.is_null() {
+                return;
+            }
+            let layer = send_id(view, selector(c"layer"));
+
+            let (animation_class, timing_class, number_class, string_class) = (
+                objc_getClass(c"CABasicAnimation".as_ptr()),
+                objc_getClass(c"CAMediaTimingFunction".as_ptr()),
+                objc_getClass(c"NSNumber".as_ptr()),
+                objc_getClass(c"NSString".as_ptr()),
+            );
+            if layer.is_null()
+                || animation_class.is_null()
+                || timing_class.is_null()
+                || number_class.is_null()
+                || string_class.is_null()
+            {
+                return;
+            }
+            let text = |text: &CStr| {
+                send_text(
+                    string_class,
+                    selector(c"stringWithUTF8String:"),
+                    text.as_ptr(),
+                )
+            };
+            let number = |value: f32| {
+                send_double(number_class, selector(c"numberWithDouble:"), value.into())
+            };
+            let timing = send_curve(
+                timing_class,
+                selector(c"functionWithControlPoints::::"),
+                curve.0,
+                curve.1,
+                curve.2,
+                curve.3,
+            );
+            // A scale about a point other than the centre is the scale about
+            // the centre and a shift of (1 - scale) × that point; the three
+            // run together on one curve, so the point stays where it is.
+            for (path, start, end) in [
+                (c"transform.scale", from, 1.),
+                (c"transform.translation.x", (1. - from) * fixed.0, 0.),
+                (c"transform.translation.y", (1. - from) * fixed.1, 0.),
+            ] {
+                let animation = send_object(
+                    animation_class,
+                    selector(c"animationWithKeyPath:"),
+                    text(path),
+                );
+                if animation.is_null() {
+                    return;
+                }
+                send_object(animation, selector(c"setFromValue:"), number(start));
+                send_object(animation, selector(c"setToValue:"), number(end));
+                send_double(animation, selector(c"setDuration:"), seconds);
+                send_object(animation, selector(c"setTimingFunction:"), timing);
+                send_two(
+                    layer,
+                    selector(c"addAnimation:forKey:"),
+                    animation,
+                    text(path),
+                );
+            }
         }
     }
 

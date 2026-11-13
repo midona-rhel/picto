@@ -23,15 +23,49 @@ use crate::keymap::Scope;
 use font::FontViewer;
 use gpui::*;
 use kind::RendererKind;
-use paged::{PagedViewer, ZoomChanged};
+use paged::{PagedViewer, Progressed, ZoomChanged};
 use reader::ReaderViewer;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 actions!(
     document,
-    [PreviousPage, NextPage, PreviewLarger, PreviewSmaller]
+    [
+        PreviousPage,
+        NextPage,
+        PreviewLarger,
+        PreviewSmaller,
+        ScrollToStart,
+        ScrollToEnd,
+        ScrollPageUp,
+        ScrollPageDown
+    ]
 );
+
+/// The key context a host adds while it shows a document's pages, for the
+/// keys that scroll them.
+pub const PAGES_CONTEXT: &str = "Pages";
+
+/// Home, End, Page Up, Page Down and Space scroll a document's pages as
+/// they scroll any page. Space otherwise closes the media view, so these
+/// are made after the registry's bindings, which they then take precedence
+/// over in a host that shows pages.
+pub fn scroll_bindings() -> Vec<KeyBinding> {
+    let mut bindings = Vec::new();
+    for scope in [Scope::Viewer, Scope::DetailWindow] {
+        let predicate = scope
+            .predicate()
+            .map(|predicate| format!("{predicate} && {PAGES_CONTEXT}"));
+        let predicate = predicate.as_deref();
+        bindings.push(KeyBinding::new("home", ScrollToStart, predicate));
+        bindings.push(KeyBinding::new("end", ScrollToEnd, predicate));
+        bindings.push(KeyBinding::new("pageup", ScrollPageUp, predicate));
+        bindings.push(KeyBinding::new("pagedown", ScrollPageDown, predicate));
+        bindings.push(KeyBinding::new("space", ScrollPageDown, predicate));
+        bindings.push(KeyBinding::new("shift-space", ScrollPageUp, predicate));
+    }
+    bindings
+}
 
 /// The font preview's Cmd+= and Cmd+−, which `FontViewer.tsx` handles
 /// itself rather than through the shortcut registry, in each host that shows
@@ -63,7 +97,25 @@ pub fn handle_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaS
         surface.clone(),
         surface.clone(),
     );
+    let (start, end, up, down) = (
+        surface.clone(),
+        surface.clone(),
+        surface.clone(),
+        surface.clone(),
+    );
     element
+        .on_action(move |_: &ScrollToStart, _, cx| {
+            start.update(cx, |surface, cx| surface.scroll_pages(Scroll::Start, cx))
+        })
+        .on_action(move |_: &ScrollToEnd, _, cx| {
+            end.update(cx, |surface, cx| surface.scroll_pages(Scroll::End, cx))
+        })
+        .on_action(move |_: &ScrollPageUp, _, cx| {
+            up.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageUp, cx))
+        })
+        .on_action(move |_: &ScrollPageDown, _, cx| {
+            down.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageDown, cx))
+        })
         .on_action(move |_: &PreviousPage, _, cx| {
             previous.update(cx, |surface, cx| surface.previous_page(cx))
         })
@@ -74,6 +126,15 @@ pub fn handle_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaS
         .on_action(move |_: &PreviewSmaller, _, cx| {
             smaller.update(cx, |surface, cx| surface.preview_size(false, cx))
         })
+}
+
+/// A scroll of a document's pages by a key.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Scroll {
+    Start,
+    End,
+    PageUp,
+    PageDown,
 }
 
 /// An open document and the view that shows it.
@@ -90,17 +151,19 @@ pub enum Document {
 
 impl Document {
     /// Opens a file of a document kind. Reading and rendering start on
-    /// other threads; the view shows what it has meanwhile.
+    /// other threads; the view shows what it has meanwhile. `inline` lays a
+    /// paged document's pages out for the collection reader.
     pub fn open(
         kind: RendererKind,
         path: PathBuf,
         mime: &str,
         name: SharedString,
+        inline: bool,
         cx: &mut App,
     ) -> Self {
         match kind {
             RendererKind::Pdf | RendererKind::Djvu | RendererKind::Cbz => {
-                Document::Paged(cx.new(|cx| PagedViewer::new(kind, path, cx)))
+                Document::Paged(cx.new(|cx| PagedViewer::new(kind, path, inline, cx)))
             }
             RendererKind::TextDocument | RendererKind::Epub => {
                 let mime = mime.to_owned();
@@ -133,6 +196,65 @@ impl Document {
             }
             _ => None,
         }
+    }
+
+    /// Calls `progressed` when a paged document becomes presentable or draws
+    /// its first page.
+    pub fn observe_progress<T: 'static>(
+        &self,
+        cx: &mut Context<T>,
+        progressed: impl Fn(&mut T, &mut Context<T>) + 'static,
+    ) -> Option<Subscription> {
+        match self {
+            Document::Paged(paged) => {
+                Some(cx.subscribe(paged, move |this, _, _: &Progressed, cx| {
+                    progressed(this, cx)
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// Hands the item's thumbnail, once its load has settled, to a view that
+    /// shows it first.
+    pub fn set_thumbnail(&self, thumbnail: Option<Arc<RenderImage>>, cx: &mut App) {
+        if let Document::Paged(paged) = self {
+            paged.update(cx, |paged, cx| paged.set_thumbnail(thumbnail, cx));
+        }
+    }
+
+    /// Whether the document has something to show without a gap. Only
+    /// paged documents wait; the others draw at once.
+    pub fn presentable(&self, cx: &App) -> bool {
+        match self {
+            Document::Paged(paged) => paged.read(cx).presentable(),
+            _ => true,
+        }
+    }
+
+    /// Whether the document has drawn what it opened to (for a paged one,
+    /// its first page in view).
+    pub fn settled(&self, cx: &App) -> bool {
+        match self {
+            Document::Paged(paged) => paged.read(cx).settled(),
+            _ => true,
+        }
+    }
+
+    pub fn scroll(&self, scroll: Scroll, cx: &mut App) {
+        if let Document::Paged(paged) = self {
+            paged.update(cx, |paged, cx| match scroll {
+                Scroll::Start => paged.scroll_to_end(false, cx),
+                Scroll::End => paged.scroll_to_end(true, cx),
+                Scroll::PageUp => paged.scroll_page(false, cx),
+                Scroll::PageDown => paged.scroll_page(true, cx),
+            });
+        }
+    }
+
+    /// Whether this is a paged document, whose keys scroll its pages.
+    pub fn paged(&self) -> bool {
+        matches!(self, Document::Paged(_))
     }
 
     /// Whether the viewer toolbar's zoom controls drive this document: PDF

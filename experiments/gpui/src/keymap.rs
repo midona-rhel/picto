@@ -54,7 +54,10 @@ actions!(
         FolderAutoTags,
         AddTags,
         AddToFolders,
-        AddToFolder
+        AddToFolder,
+        ImportFiles,
+        ImportFolder,
+        PasteImport
     ]
 );
 
@@ -156,6 +159,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.openDefaultApp" => vec![to!(Grid, OpenDefaultApp)],
         "file.revealInFolder" => vec![to!(Grid, RevealInFinder)],
         "file.openNewWindow" => vec![to!(Grid, shell::OpenInNewWindow)],
+        // An application menu accelerator in production, so the whole
+        // window's.
+        "file.import" => vec![to!(App, ImportFiles)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
@@ -167,6 +173,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "edit.deselectAll" => vec![to!(App, shell::ClosePreview)],
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
+        "edit.pasteImport" => vec![to!(Grid, PasteImport)],
         // Inbox. The viewer's review the item it shows.
         "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
         "inbox.reject" => vec![to!(Grid, RejectInbox), to!(Viewer, RejectInbox)],
@@ -257,7 +264,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    ("file.import", "no import"),
     ("file.export", "no export"),
     ("file.exportAs", "no export"),
     (
@@ -272,7 +278,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
-    ("edit.pasteImport", "no import"),
     ("group.removeMembers", "no group surface"),
     ("view.grayscale", "the grid has no grayscale mode"),
     ("view.slideshow", "deferred in production"),
@@ -458,6 +463,13 @@ pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
         preset,
         overrides: overrides.clone(),
     });
+    // A document's scrolling keys come after the registry's, which they
+    // override where pages are shown (Space).
+    bindings.extend(
+        crate::viewer::document::scroll_bindings()
+            .into_iter()
+            .map(|binding| binding.with_meta(FROM_REGISTRY)),
+    );
     // Adding bindings redraws every window, so tooltips and the
     // application menu's key equivalents follow.
     cx.bind_keys(bindings);

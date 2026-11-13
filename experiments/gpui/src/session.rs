@@ -110,6 +110,16 @@ impl SubscriptionActivity {
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
 /// How often the session takes in what the library's thread has sent.
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
+/// The grid reads its results in pages of this many items.
+const PAGE: usize = 500;
+/// `gridController.scheduleRefresh`: a refresh after background changes
+/// waits at least this long, and at most a second, three times as long as
+/// the last refresh took, counted from when it finished.
+const REFRESH_MIN: Duration = Duration::from_millis(40);
+const REFRESH_MAX: Duration = Duration::from_millis(1000);
+/// While the grid cannot be refreshed (a drag, a scope change, a page on
+/// its way), a wanted refresh looks again after this long.
+const REFRESH_RETRY: Duration = Duration::from_millis(100);
 
 /// One step of Back and Forward.
 #[derive(Clone, Copy, PartialEq)]
@@ -239,6 +249,24 @@ pub struct Session {
     /// The selected items and the one shown, to select again by id once a
     /// [`Session::refresh_results`] page is in.
     reselect: Option<(Vec<RootId>, Option<RootId>)>,
+    /// A refresh in place is on its way: what the grid shows stays until it
+    /// arrives, an empty state included.
+    pub refreshing: bool,
+    /// The results were last replaced by a refresh in place, so the grid
+    /// keeps its topmost item where it was rather than its scroll offset.
+    pub refreshed_in_place: bool,
+    /// The grid has the pointer for a gesture (a press, a rubber band, a
+    /// drag) that a refresh would cut short. The grid says so as it paints.
+    pub pointer_busy: bool,
+    /// Background changes asked for the shown results to be read again
+    /// (`requestReconcile`), and the timer that will.
+    refresh_wanted: bool,
+    refresh_timer: Option<Task<()>>,
+    /// When the last refresh in place started and finished, for spacing the
+    /// next one.
+    refresh_started: Option<Instant>,
+    refresh_took: Duration,
+    refresh_finished: Option<Instant>,
 }
 
 impl EventEmitter<Change> for Session {}
@@ -326,6 +354,14 @@ impl Session {
             scratch,
             place_label: None,
             reselect: None,
+            refreshing: false,
+            refreshed_in_place: false,
+            pointer_busy: false,
+            refresh_wanted: false,
+            refresh_timer: None,
+            refresh_started: None,
+            refresh_took: Duration::ZERO,
+            refresh_finished: None,
             recent_folders: Vec::new(),
             recent_tags: Vec::new(),
         }
@@ -464,9 +500,10 @@ impl Session {
         }
         if application::touches(&changed, "library") {
             // What other destinations held may no longer be true; going
-            // back to one reads it again. The grid on screen is not read
-            // again under the user.
+            // back to one reads it again. The grid on screen is read again
+            // in place (`gridSettle.ts`), keeping its scroll and selection.
             self.saved.clear();
+            self.request_refresh(cx);
             let shown = self
                 .selected_details()
                 .map(|details| details.root.root_id.0);
@@ -601,6 +638,50 @@ impl Session {
         record_recent_names(&mut self.recent_tags, tags);
     }
 
+    /// `requestReconcile`: background work (an import, a subscription
+    /// run) changed the library, so the shown results are read again in
+    /// place, soon after, coalesced with whatever else arrives meanwhile,
+    /// and never under a gesture or a change of destination.
+    fn request_refresh(&mut self, cx: &mut Context<Self>) {
+        self.refresh_wanted = true;
+        self.schedule_refresh(REFRESH_MIN, cx);
+    }
+
+    fn schedule_refresh(&mut self, earliest: Duration, cx: &mut Context<Self>) {
+        if !self.refresh_wanted || self.refresh_timer.is_some() {
+            return;
+        }
+        let since = self
+            .refresh_finished
+            .map_or(Duration::MAX, |finished| finished.elapsed());
+        let delay = refresh_delay(self.refresh_took, since).max(earliest);
+        self.refresh_timer = Some(cx.spawn(async move |session, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = session.update(cx, |this: &mut Self, cx| {
+                this.refresh_timer = None;
+                this.run_wanted_refresh(cx);
+            });
+        }));
+    }
+
+    fn run_wanted_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.refresh_wanted {
+            return;
+        }
+        let busy = self.pointer_busy
+            || cx.has_active_drag()
+            || self.loading
+            || !matches!(self.transition, Transition::Idle)
+            || self.scope != self.displayed;
+        if busy {
+            self.schedule_refresh(REFRESH_RETRY, cx);
+            return;
+        }
+        self.refresh_wanted = false;
+        self.refresh_started = Some(Instant::now());
+        self.refresh_results(cx);
+    }
+
     /// Fetches the current destination again after an edit that may change
     /// what it holds, keeping the selection (by item) and the scroll, as the
     /// Electron grid refreshes in place.
@@ -621,7 +702,11 @@ impl Session {
         self.reselect = Some((ids, self.selected_item().map(|item| item.root_id)));
         self.restore_scroll = Some(self.grid_scroll);
         self.saved.clear();
-        self.query(false, cx);
+        self.refreshing = true;
+        // As many items as are loaded, so the grid keeps what it had below
+        // the first page.
+        let limit = self.items.len().max(PAGE);
+        self.query_with(false, limit, cx);
     }
 
     /// Puts a rebuilt destination list in place of the current one, after
@@ -694,6 +779,11 @@ impl Session {
     // ── Results ─────────────────────────────────────────────────
 
     fn query(&mut self, append: bool, cx: &mut Context<Self>) {
+        self.refreshing = false;
+        self.query_with(append, PAGE, cx);
+    }
+
+    fn query_with(&mut self, append: bool, limit: usize, cx: &mut Context<Self>) {
         let Some(entry) = self.nav.get(self.scope) else {
             return;
         };
@@ -712,6 +802,7 @@ impl Session {
             ]),
             if append { self.cursor.clone() } else { None },
             entry.random,
+            limit,
         ));
         cx.emit(Change::Results);
     }
@@ -911,6 +1002,7 @@ impl Session {
                 Reply::Error(error) if self.loading => {
                     self.error = Some(error);
                     self.loading = false;
+                    self.refreshing = false;
                     if matches!(self.transition, Transition::Waiting) {
                         self.show_error(cx);
                     }
@@ -957,6 +1049,12 @@ impl Session {
         } else {
             self.items = page.items;
             self.results_epoch += 1;
+            self.refreshing = false;
+            if let Some(started) = self.refresh_started.take() {
+                self.refresh_took = started.elapsed();
+                self.refresh_finished = Some(Instant::now());
+            }
+            self.refreshed_in_place = self.reselect.is_some();
             if let Some((ids, focus)) = self.reselect.take() {
                 // A refresh in place: the same items stay selected.
                 let positions = self
@@ -1725,9 +1823,34 @@ fn whole_selection(ids: usize, selected: usize) -> bool {
     ids > 0 && ids == selected
 }
 
+/// How long a background refresh waits, `since` the last one finished,
+/// which `took` that long: three times as long, between 40 ms and a second,
+/// less the time already passed, so that under a stream of changes about a
+/// quarter of the time goes to refreshing.
+fn refresh_delay(took: Duration, since: Duration) -> Duration {
+    (took * 3)
+        .clamp(REFRESH_MIN, REFRESH_MAX)
+        .saturating_sub(since)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionActivity, Visit, record_recent, remap_history, whole_selection};
+    use super::{
+        SubscriptionActivity, Visit, record_recent, refresh_delay, remap_history, whole_selection,
+    };
+    use std::time::Duration;
+
+    #[test]
+    fn background_refreshes_are_spaced_by_how_long_the_last_took() {
+        let ms = Duration::from_millis;
+        // A quick refresh long ago: at once.
+        assert_eq!(refresh_delay(ms(5), ms(5000)), Duration::ZERO);
+        // A quick one just now: 40 ms after it.
+        assert_eq!(refresh_delay(ms(5), ms(10)), ms(30));
+        // A slow one just now: three times as long, at most a second.
+        assert_eq!(refresh_delay(ms(200), Duration::ZERO), ms(600));
+        assert_eq!(refresh_delay(ms(900), ms(100)), ms(900));
+    }
     use picto_library::FolderId;
 
     #[test]

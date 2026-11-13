@@ -2,6 +2,8 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+mod delete;
+mod import;
 mod item_menu;
 pub(crate) use item_menu::media_link;
 pub mod library;
@@ -102,6 +104,11 @@ pub struct Shell {
     /// The item menus' state: what the open one acts on, copied tags, and
     /// the confirmation it may ask.
     items: item_menu::ItemMenus,
+    /// Imports, their dialogs and the task dialog and bar.
+    imports: Entity<crate::imports::Imports>,
+    /// Files dragged from the system over the window, until they are
+    /// dropped or leave it.
+    file_drag: Option<Vec<PathBuf>>,
     /// The Inbox reviews in progress, the press flashing on the review
     /// pill, a review waiting for the next page, and whether a review key
     /// is held down.
@@ -243,6 +250,7 @@ impl Shell {
         });
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
+        let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
         let mut subscriptions = subscriptions;
         subscriptions.extend([
             // The bar's height belongs to the layout here.
@@ -308,6 +316,8 @@ impl Shell {
             view_panels: Vec::new(),
             _view_panels: Vec::new(),
             items: Default::default(),
+            imports,
+            file_drag: None,
             reviewer: Default::default(),
             review_flash: None,
             pending_review: None,
@@ -614,6 +624,8 @@ impl Render for Shell {
         let sidebar_hidden = self.rails.value(("sidebar", 0));
         let inspector_hidden = self.rails.value(("inspector", 0));
         let fill = || StyleRefinement::default().size_full();
+        self.place_task_bar(left, if inspector_available { right } else { 0. }, cx);
+        let drop_overlay = self.drop_overlay(cx);
 
         let center = div()
             .absolute()
@@ -667,7 +679,8 @@ impl Render for Shell {
                     )
                     .into_any_element(),
                 None => self.grid.clone().cached(fill()).into_any_element(),
-            });
+            })
+            .children(drop_overlay);
         let sidebar = (sidebar_hidden < 1.).then(|| {
             div()
                 .absolute()
@@ -954,8 +967,12 @@ impl Render for Shell {
         if quick_look_open {
             root = root.child(self.quick_look.clone());
         }
+        // Imports in progress, below the menus and dialogs.
+        root = root.child(self.imports.clone());
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
+        root = self.import_actions(root, cx);
+        root = self.file_drop(root, cx);
 
         root = root.children(self.menu.layer(window, cx));
         root = root.children(self.confirmation(window, cx));

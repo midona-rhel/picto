@@ -133,60 +133,34 @@ impl RenderOnce for DocumentShell {
 
         let previous = self.on_previous;
         let next = self.on_next;
-        let footer = div()
-            .flex_none()
-            .h(px(theme::TITLEBAR_HEIGHT))
-            .min_w_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_t_1()
-            .border_color(theme.border_secondary())
-            .bg(theme.background())
-            .font_family(theme::FONT_UI)
-            .child(
-                // `TitlebarControlGroup`
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(
-                        ui::icon_button("document-previous", "toolbar-chevron-left")
-                            .disabled(!can_previous)
-                            .tip(ui::tip("Previous page").shortcut("document.previousPage", cx))
-                            .on_click(move |_, window, cx| {
-                                if let Some(previous) = &previous {
-                                    previous(window, cx);
-                                }
-                            }),
-                    )
-                    .child(
-                        // `.pageStatus`
-                        div()
-                            .min_w(px(92.))
-                            .flex()
-                            .justify_center()
-                            .whitespace_nowrap()
-                            .text(theme::TEXT_SM)
-                            .font_weight(FontWeight::MEDIUM)
-                            .font_features(FontFeatures(std::sync::Arc::new(vec![(
-                                "tnum".into(),
-                                1,
-                            )])))
-                            .text_color(theme.text_secondary())
-                            .child(page_status(self.page, self.count)),
-                    )
-                    .child(
-                        ui::icon_button("document-next", "toolbar-chevron-right")
-                            .disabled(!can_next)
-                            .tip(ui::tip("Next page").shortcut("document.nextPage", cx))
-                            .on_click(move |_, window, cx| {
-                                if let Some(next) = &next {
-                                    next(window, cx);
-                                }
-                            }),
-                    ),
-            );
+        let footer = footer(cx).child(
+            // `TitlebarControlGroup`
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(
+                    ui::icon_button("document-previous", "toolbar-chevron-left")
+                        .disabled(!can_previous)
+                        .tip(ui::tip("Previous page").shortcut("document.previousPage", cx))
+                        .on_click(move |_, window, cx| {
+                            if let Some(previous) = &previous {
+                                previous(window, cx);
+                            }
+                        }),
+                )
+                .child(page_status_label(self.page, self.count, cx))
+                .child(
+                    ui::icon_button("document-next", "toolbar-chevron-right")
+                        .disabled(!can_next)
+                        .tip(ui::tip("Next page").shortcut("document.nextPage", cx))
+                        .on_click(move |_, window, cx| {
+                            if let Some(next) = &next {
+                                next(window, cx);
+                            }
+                        }),
+                ),
+        );
 
         div()
             .absolute()
@@ -199,6 +173,37 @@ impl RenderOnce for DocumentShell {
             .child(viewport)
             .child(footer)
     }
+}
+
+/// `.pageStatus`: "Page n of m" in the footer's secondary text.
+pub fn page_status_label(page: usize, count: usize, cx: &App) -> Div {
+    div()
+        .min_w(px(92.))
+        .flex()
+        .justify_center()
+        .whitespace_nowrap()
+        .text(theme::TEXT_SM)
+        .font_weight(FontWeight::MEDIUM)
+        .font_features(FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)])))
+        .text_color(theme::theme(cx).text_secondary())
+        .child(page_status(page, count))
+}
+
+/// The footer under a document (`.footer`): as tall as the titlebar, a
+/// line above it, its content centred.
+pub fn footer(cx: &App) -> Div {
+    let theme = theme::theme(cx);
+    div()
+        .flex_none()
+        .h(px(theme::TITLEBAR_HEIGHT))
+        .min_w_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_t_1()
+        .border_color(theme.border_secondary())
+        .bg(theme.background())
+        .font_family(theme::FONT_UI)
 }
 
 /// "Page n of m", with a dash while the count is unknown.
