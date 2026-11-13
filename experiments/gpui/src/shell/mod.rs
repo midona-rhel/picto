@@ -450,10 +450,12 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
-        // While a screen shows there is no grid to move the scope change
-        // along, so the shell does.
+        // While a screen shows, or a closed viewer fades out in the grid's
+        // place, there is no grid to move the scope change along, so the
+        // shell does.
+        let exiting = self.viewer_exit;
         let (viewer_open, screen, fade) = self.session.update(cx, |session, cx| {
-            if session.screen().is_some() {
+            if session.screen().is_some() || exiting {
                 session.advance_transition(cx);
             }
             (

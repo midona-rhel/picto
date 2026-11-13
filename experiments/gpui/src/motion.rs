@@ -140,10 +140,6 @@ pub const TOOLTIP_POP_RISE: f32 = 10.;
 /// or left), not when it is toggled.
 pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
 
-/// `GlassModal`: `modalIn` and `backdropIn` take 150 ms, `modalOut` and
-/// `backdropOut` 120 ms (`EXIT_MS`, after which the modal unmounts).
-pub const MODAL_IN: Duration = Duration::from_millis(150);
-pub const MODAL_OUT: Duration = Duration::from_millis(120);
 /// `modalIn` / `modalOut`: the panel's scale and drop when hidden.
 pub const MODAL_SCALE: f32 = 0.97;
 pub const MODAL_DROP: f32 = 4.;

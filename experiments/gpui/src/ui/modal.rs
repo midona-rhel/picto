@@ -231,27 +231,42 @@ impl RenderOnce for Modal {
             a: alpha,
         };
         let edge = || div().absolute().inset_0().rounded(px(theme::RADIUS_LG));
-        let mut panel = div()
-            .id(self.id.clone())
-            .relative()
-            .w(px(self.size.width()))
-            .max_h(px(max_height))
+        // `modalIn` / `modalOut`: `scale(0.97) translateY(4px)` about the
+        // centre, with the opacity. GPUI cannot scale the contents, so while
+        // the dialog moves the panel's surface is drawn at the scale, the
+        // contents stay at full size and in place, clipped to it. That needs
+        // the contents' height, measured on an earlier frame; until there is
+        // one, and whenever the dialog is at rest, the contents size the
+        // panel as usual.
+        let width = self.size.width();
+        let measured = window.use_keyed_state(
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "height".into()),
+            cx,
+            |_, _| None::<f32>,
+        );
+        let (scale, drop) = motion::modal_pop(shown);
+        let frame = (*measured.read(cx))
+            .filter(|_| self.presence.animating())
+            .map(|height| motion::scaled_frame(width, height, scale, (0.5, 0.5)));
+        let measure = canvas(
+            move |bounds, _, cx| {
+                measured.update(cx, |height, _| {
+                    *height = Some(f32::from(bounds.size.height))
+                })
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        let mut content = div()
+            .w(px(width))
             .flex()
             .flex_col()
-            .overflow_hidden()
-            // `modalIn`: rises 4px as it fades in.
-            .top(px(4. * (1. - shown)))
-            .opacity(shown)
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.glass())
-            .shadow(theme::panel_shadow())
+            .child(measure)
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
             .line_height(px(theme::LINE_HEIGHT_MD))
             .text_color(theme.text_secondary())
-            // A press inside the panel is not a press on the backdrop.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 div()
                     .relative()
@@ -305,7 +320,7 @@ impl RenderOnce for Modal {
                     .child(super::scrollbar("modal-scrollbar", &scroll, window, cx)),
             );
         if has_footer {
-            panel = panel.child(
+            content = content.child(
                 div()
                     .h(px(FOOTER))
                     .flex_none()
@@ -320,6 +335,32 @@ impl RenderOnce for Modal {
                     .children(self.footer),
             );
         }
+        let mut panel = div()
+            .id(self.id.clone())
+            .relative()
+            .flex_none()
+            .overflow_hidden()
+            .top(px(drop))
+            .opacity(shown)
+            .rounded(px(theme::RADIUS_LG))
+            .bg(theme.glass())
+            .shadow(theme::panel_shadow())
+            // A press inside the panel is not a press on the backdrop.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        panel = match frame {
+            // Centred by the backdrop, so the smaller frame stays centred.
+            Some((left, top, scaled_width, scaled_height)) => panel
+                .w(px(scaled_width))
+                .h(px(scaled_height))
+                .child(content.absolute().left(px(-left)).top(px(-top))),
+            None => panel
+                .w(px(width))
+                .max_h(px(max_height))
+                .flex()
+                .flex_col()
+                .child(content.relative().max_h(px(max_height))),
+        };
         panel = panel
             .child(edge().border_1().border_color(over(0.10)))
             .child(edge().border_l_1().border_r_1().border_color(over(0.0556)))

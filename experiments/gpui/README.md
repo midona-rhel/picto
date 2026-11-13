@@ -113,8 +113,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The shared context menu as `ContextMenu.tsx` draws it: glass panel at the
   pointer with a 12px margin, icons, shortcut hints, separators, a 30 ms row
   highlight shared by the pointer and the arrow keys (which skip separators
-  and disabled rows and stop on submenus), Enter and Escape, and an 80 ms
-  fade when dismissed. A press outside closes it and goes no further. Rows
+  and disabled rows and stop on submenus), Enter and Escape, and its
+  `menuIn` and `menuOut`: it grows in from 96% over 70 ms about the corner
+  it was placed by (the pointer's, or the right or bottom edge it was moved
+  in from), and when dismissed shrinks to 95% and fades over 80 ms. A
+  submenu has neither and stays as it is until the menu is gone, as
+  `.submenuMenu` has no animation. A press outside closes it and goes no further. Rows
   can carry a check slot, be `excluded` (struck through with a cross) or
   keep the menu open when chosen, and the owner can check or uncheck them
   while it is open. Submenus open on hover, Right arrow or Enter, beside
@@ -149,7 +153,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   does. `ui::popover` is the shared frame and `ui::library_avatar` the cover
   disc both the button and the rows use.
 - Tooltips as `KbdTooltip` draws them: below the control after 400 ms, with
-  the shortcut's keys as badges.
+  the shortcut's keys as badges, popping in and out as Mantine's `pop`
+  does: 150 ms on `ease`, from 90% about its centre and 9px below its place.
 - Text fields with their focus states: the toolbar search, the sidebar filter
   with its clear button, and the inspector's name and notes. One-pixel
   blinking caret, text that scrolls to keep the caret in view, and an
@@ -192,7 +197,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Keyboard movement by the rules of `useGridArrowNav.ts`: arrows and WASD,
   Home and End, Page Up and Page Down, and scrolling the target into view.
 - Sidebar rows fade their highlight over 50 ms and icon buttons over 150 ms.
-  A dismissed context menu fades out over 80 ms.
+- The inspector rail fades over 170 ms instead of sliding when a screen
+  takes the window or gives it back (`data-motion='fade'`), and a viewer
+  closed by going to another destination stays in the pane and fades out
+  with it, as `MediaView` does inside the fading workspace surface. "Return
+  to Top" waits its 30 ms `transition-delay` before rising or sinking.
 - Motion with the Electron timings. Thumbnails follow the reveal contract of
   `thumbnailRevealTracker.ts`: 100 ms after entering the 500px margin, a 500 ms
   reveal in which the image fades in over its dominant colour and that colour
@@ -316,8 +325,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   them to the library's application settings), copy a tag's name, and "Filter Items with This Tag", which opens
   All filtered to the tag as a step of history.
 - Dialogs as `GlassModal` draws them (`ui::modal`): backdrop, glass panel,
-  title bar with its close button, body and footer, the 150 ms fade and rise
-  in and 120 ms fade out, Escape and a click on the backdrop to close. The
+  title bar with its close button, body and footer, `modalIn` (150 ms: it
+  fades in, grows from 97% about its centre and rises 4px) and `modalOut`
+  (120 ms, the reverse) with the backdrop's 150 ms fade in and 120 ms fade
+  out, Escape and a click on the backdrop to close. The
   tag editor, merge picker, group dialogs and confirmations use it, with the
   shared action button (`actionButton.module.css`) and dialog fields.
 - Context menus have a row of colour swatches (`ColorPicker`), used by the
@@ -428,7 +439,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   delete them. "Set Rating" is offered for one item only (the library adapter
   rates one item per request), and "More" is left out: nothing this
   prototype can do belongs in it. Custom rows, right-click actions on rows
-  (`contextAction`), nested submenus and the open scale-in are not ported.
+  (`contextAction`) and nested submenus are not ported.
 - The pop-up menu windows have not been seen running. Not verified: that
   AppKit draws no titlebar buttons on them, what the system window shadow
   adds around the transparent window and the drawn shadow, the pointing-hand
@@ -451,17 +462,25 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   memory, no viewer context menu, rating or copy shortcuts, and no video
   shortcuts (there is no video playback). Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
-  while the pane is measured. When the viewer closes by going to another
-  destination, the pane shows the fading grid rather than the fading viewer.
-- Motion still to port: the dialogs' scale (they fade and rise but cannot
-  scale), the inspector's fade when entering
-  the grid from the viewer, toasts, smooth paging,
-  progress and spinner loops. A scope change does not yet restore the previous
+  while the pane is measured.
+- Motion: GPUI cannot scale an element's contents, so where production
+  scales a panel (menus, the library popover, dialogs, tooltips) the panel's
+  surface, border and shadow are drawn in the scaled rectangle about the
+  same origin while the contents stay at full size; menus and dialogs clip
+  their contents to that rectangle, tooltips and the library popover do not
+  (a dialog clips only once its height has been measured, from its second
+  frame). While a rail or dialog fades out it still takes the pointer, where
+  production sets `pointer-events: none`. Still to port with the features
+  they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
+  no notification host yet), the task and progress dialogs, the inbox review
+  controls, video controls, the inspector field's expansion (`fieldExpand`),
+  a subscription's run progress fading in (no run can start here), the 250 ms
+  switch of a slow selection summary to the loading skeleton, smooth paging,
+  and the progress and spinner loops. A scope change does not yet restore the previous
   scroll position as the Electron grid does.
 - No glass surfaces or window vibrancy yet. In-app backdrop blur needs a
   renderer patch; two open-source implementations exist to port. GPUI cannot
-  scale or rotate arbitrary elements, so the menu and modal scale-in needs a
-  substitute.
+  scale or rotate arbitrary elements; see Motion above for what stands in.
 - Sidebar expansion, rail widths, hidden rails and view changes are not
   persisted. The sidebar cannot be resized.
 - The grid lays out every loaded item; the Electron grid's windowed model for
@@ -493,7 +512,9 @@ rubber band's hit geometry and auto-scroll speed, the hover preview's timing
 and fit, the empty-state copy, the broken and font artwork as rendered, view
 preference fallbacks, grid labels, popover placement, the known-library
 order and name search, the reveal timeline, the easing curve
-against the sampled bezier, tree ordering and the text-search gates. The
+against the sampled bezier, scaled frames about their origin, the corner a
+menu grows from, the menu's, tooltip's and dialog's enter and exit values,
+delayed fades, tree ordering and the text-search gates. The
 ignored tests need a real snapshot or a GPU and are run explicitly.
 
 `pixel_diff.py` compares two captures of the same size using only the Python
