@@ -537,8 +537,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `gridRemovalAction` decides, Restore in the Trash, Accept and Reject in the
   Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which open the
   Add Tags and Folders dialogs), `Viewer` (previous, next, fit, actual
-  size, zoom, close, ratings for the shown item, in the media view and Quick
-  Look), `DetailWindow` (the viewer's keys except that only Escape closes,
+  size, zoom, close, ratings for the shown item, Accept and Reject for an
+  Inbox item, in the media view and Quick Look), `DetailWindow` (the viewer's keys except that only Escape closes,
   ⇧T and Copy File Path) and `Duplicates`. None of them fires while a text
   field, a context menu, a popover or a dialog has the keyboard; Escape goes
   to the menu, then the popover, the dialog, the viewer and the selection.
@@ -549,6 +549,24 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   options (navigator, resize following) and the Preview settings: an image
   opens at 100% under `imageDefaultZoom: actual`, and under
   `viewerTrackpadGestures` on macOS scrolling pans while a pinch zooms.
+- Inbox review (`InboxReviewControls.tsx`, `inboxReview.ts`): while the
+  media view or Quick Look shows an Inbox item, the Accept / Reject glass
+  pill sits 96px above the window's bottom edge, centred, over the dialogs.
+  Each half's light (two radial gradients, three inset shadows, a sideways
+  fade) and the glyphs' drop shadows are drawn as bitmaps once per display
+  scale (`viewer/review_art.rs`), since GPUI has no radial gradients, masks
+  or filters; the light fades in to 72% under the pointer over 160 ms, the
+  glyph tints over 140 ms, a press flashes the light from `brightness(2)`
+  over 360 ms, the tooltips (above, with the `inbox.accept` /
+  `inbox.reject` keys) and the focus ring a clicked button shows once a key
+  is pressed. Z and X (the registry's keys) work in both views. A review
+  moves the view to the next item at once (skipping items still saving,
+  loading the next page first when the item is the last loaded), saves
+  through `Session::set_lifecycle` or, when rejected items are deleted,
+  through the item menu's permanent delete, which asks first only when it
+  cannot be undone; the pill takes no input while that question is open,
+  and a cancelled or failed save brings the view back to the item. The
+  last item closes the view.
 - Quick Look as `GridQuickLook.tsx` draws it: an overlay over the whole
   window, titlebar and rails included, on the app background, below the
   context menus. The media sits 48px from the top and bottom and 16px from
@@ -837,6 +855,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
+- Inbox review: a failed save or a next page that cannot load is reported
+  on the console, not in a notification. A review key held down is told
+  from its repeats by its release or the next key, since GPUI hands an
+  action no repeat flag (the off-screen test sends no key releases, so it
+  sees the same review key twice in a row as held). The press is taken at
+  once rather than after the next item's image has decoded (`ready`):
+  the viewers show the next item's thumbnail at once. After a review the
+  grid's results are read again from the first page, so a review that
+  advanced past the first page loses its place.
+
 - Tags screen: a failed save of the tag
   preferences is held as the settings model's error, not shown as a toast; the editor's
   name field is dimmed while an edit runs but still takes typing; Undo does
@@ -1067,7 +1095,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Viewer: the breadcrumb belongs to the collection editor, which does not
   exist yet. No
   transparency checkerboard (off by default in Picto), no per-image zoom
-  memory, no copy shortcut and no Inbox review controls. Next stops at the last loaded item
+  memory and no copy shortcut. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
@@ -1090,8 +1118,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   frame). While a rail or dialog fades out it still takes the pointer, where
   production sets `pointer-events: none`. Still to port with the features
   they belong to: toasts (`NotificationHost`: 400 ms drop and fade; there is
-  no notification host yet), the task and progress dialogs, the inbox review
-  controls,
+  no notification host yet), the task and progress dialogs,
   a subscription's run progress fading in, the 250 ms
   switch of a slow selection summary to the loading skeleton, smooth paging,
   and the spinner loops.

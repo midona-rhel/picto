@@ -79,7 +79,15 @@ struct Deletion {
     reject: bool,
     title: String,
     label: &'static str,
+    /// Told whether the delete went through, once it has or has not.
+    done: Option<Done>,
 }
+
+/// Hears whether a delete went through: false when it was cancelled or
+/// failed.
+pub(super) type Done = Rc<dyn Fn(&mut Shell, bool, &mut Window, &mut Context<Shell>)>;
+
+type Run = Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>;
 
 /// A question asked before an edit (`ConfirmModal`).
 struct Confirmation {
@@ -87,7 +95,9 @@ struct Confirmation {
     message: SharedString,
     label: SharedString,
     danger: bool,
-    run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
+    run: Run,
+    /// Run when the question is cancelled or closed.
+    cancelled: Option<Run>,
 }
 
 type Work<T> = Box<dyn FnOnce(&Library) -> picto_library::Result<T> + Send>;
@@ -1063,9 +1073,31 @@ impl Shell {
             target.selection(self.session.read(cx)),
             reject,
             false,
+            None,
             window,
             cx,
         );
+    }
+
+    /// `rejectTarget` when the setting deletes rejected items: deletes
+    /// `selection` as the Reject row does, asking first only when it cannot
+    /// be undone, and tells `done` whether it went through.
+    pub(super) fn reject_by_deleting(
+        &mut self,
+        selection: SelectionTarget,
+        done: Done,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_deletion(selection, true, false, Some(done), window, cx);
+    }
+
+    /// Whether a question is waiting for an answer (`confirmModalAtom`).
+    pub(super) fn asking(&mut self) -> bool {
+        self.items
+            .confirm
+            .get_mut()
+            .is_some_and(|dialog| !dialog.presence.closing())
     }
 
     /// The sidebar's Empty Trash: everything in the Trash, after the same
@@ -1078,7 +1110,7 @@ impl Shell {
             },
             excluded_root_ids: Vec::new(),
         };
-        self.request_deletion(selection, false, true, window, cx);
+        self.request_deletion(selection, false, true, None, window, cx);
     }
 
     fn request_deletion(
@@ -1086,6 +1118,7 @@ impl Shell {
         selection: SelectionTarget,
         reject: bool,
         empty_trash: bool,
+        done: Option<Done>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1096,6 +1129,9 @@ impl Shell {
             move |this, summary, window, cx| {
                 let count = summary.selected_count;
                 if count == 0 {
+                    if let Some(done) = &done {
+                        done(this, false, window, cx);
+                    }
                     return;
                 }
                 let undoable = undo_limit > 0 && summary.media_count <= undo_limit as u128;
@@ -1114,13 +1150,14 @@ impl Shell {
                     reject,
                     title,
                     label,
+                    done: done.clone(),
                 };
                 if reject && undoable {
                     this.delete_permanently(delete, undoable, window, cx);
                     return;
                 }
                 let message = permanent_delete_message(Some(summary.media_count), undo_limit);
-                this.ask(
+                this.ask_with(
                     delete.title.clone(),
                     message,
                     label,
@@ -1128,6 +1165,7 @@ impl Shell {
                     Rc::new(move |this, window, cx| {
                         this.delete_permanently(delete.clone(), undoable, window, cx)
                     }),
+                    cancelled(&done),
                     cx,
                 );
             },
@@ -1145,12 +1183,28 @@ impl Shell {
     ) {
         if !self.session.read(cx).disposable() {
             eprintln!("picto: refusing to delete from a library that is not a disposable copy");
+            if let Some(done) = &delete.done {
+                done(self, false, window, cx);
+            }
             return;
         }
         let undo_limit = crate::settings::current(cx).undo_delete_limit.max(0) as usize;
         let (selection, reject) = (delete.selection.clone(), delete.reject);
-        self.session
-            .update(cx, |session, cx| session.close_viewer(cx));
+        // The viewer closes when what it shows is deleted (`deleteTarget`);
+        // an Inbox review has already moved it on.
+        let shows_deleted = {
+            let session = self.session.read(cx);
+            match &selection {
+                SelectionTarget::Explicit { root_ids } => session
+                    .selected_item()
+                    .is_some_and(|item| root_ids.contains(&item.root_id)),
+                _ => true,
+            }
+        };
+        if shows_deleted {
+            self.session
+                .update(cx, |session, cx| session.close_viewer(cx));
+        }
         let answer = self.session.read(cx).run(move |library| {
             let deleted = if reject {
                 library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
@@ -1171,14 +1225,19 @@ impl Shell {
             let Ok(result) = answer.await else {
                 return;
             };
-            let _ = this.update_in(cx, move |this, _, cx| match result {
-                Ok(()) => this
-                    .session
-                    .update(cx, |session, cx| session.reread(Reread::RESULTS, cx)),
+            let _ = this.update_in(cx, move |this, window, cx| match result {
+                Ok(()) => {
+                    this.session
+                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
+                    if let Some(done) = &delete.done {
+                        done(this, true, window, cx);
+                    }
+                }
                 // The library resolved a different selection or limit: never
                 // drop the promise of undo silently; ask again.
                 Err(picto_library::LibraryError::UndoLimitExceeded) if require_undoable => {
-                    this.ask(
+                    let cancel = cancelled(&delete.done);
+                    this.ask_with(
                         delete.title.clone(),
                         "This delete can no longer be undone. Delete permanently anyway?",
                         delete.label,
@@ -1186,10 +1245,16 @@ impl Shell {
                         Rc::new(move |this, window, cx| {
                             this.delete_permanently(delete.clone(), false, window, cx)
                         }),
+                        cancel,
                         cx,
                     );
                 }
-                Err(error) => eprintln!("picto: {error}"),
+                Err(error) => {
+                    eprintln!("picto: {error}");
+                    if let Some(done) = &delete.done {
+                        done(this, false, window, cx);
+                    }
+                }
             });
         })
         .detach();
@@ -1204,7 +1269,22 @@ impl Shell {
         message: impl Into<SharedString>,
         label: impl Into<SharedString>,
         danger: bool,
-        run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
+        run: Run,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask_with(title, message, label, danger, run, None, cx);
+    }
+
+    /// The same, running `cancelled` when the question is turned down.
+    #[allow(clippy::too_many_arguments)]
+    fn ask_with(
+        &mut self,
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        danger: bool,
+        run: Run,
+        cancelled: Option<Run>,
         cx: &mut Context<Self>,
     ) {
         let confirmation = Confirmation {
@@ -1213,8 +1293,15 @@ impl Shell {
             label: label.into(),
             danger,
             run,
+            cancelled,
         };
-        let back = ui::menu::Return::To(self.focus.clone());
+        // Over a viewer the keyboard goes back to it, so its keys go on
+        // working; over the grid, to the grid.
+        let back = if self.viewing(cx) {
+            ui::menu::Return::Opener
+        } else {
+            ui::menu::Return::To(self.focus.clone())
+        };
         self.items.confirm.open(confirmation, back, cx);
     }
 
@@ -1228,14 +1315,28 @@ impl Shell {
         let dialog = self.items.confirm.layer(window, cx)?;
         let confirm = &dialog.content;
         let run = confirm.run.clone();
-        let close = cx.listener(|this, _: &(), _, cx| this.items.confirm.dismiss(cx));
-        let cancel = cx.listener(|this, _: &(), _, cx| {
+        let refused = confirm.cancelled.clone();
+        let close = cx.listener({
+            let refused = refused.clone();
+            move |this, _: &(), window, cx| {
+                this.items.confirm.dismiss(cx);
+                if let Some(refused) = &refused {
+                    refused(this, window, cx);
+                }
+            }
+        });
+        let cancel = cx.listener(move |this, _: &(), window, cx| {
             // Cancel takes the dialog away at once.
             this.items.confirm.close(cx);
+            if let Some(refused) = &refused {
+                refused(this, window, cx);
+            }
         });
         let accept = cx.listener(move |this, _: &(), window, cx| {
             this.items.confirm.dismiss(cx);
-            window.focus(&this.focus, cx);
+            if !this.viewing(cx) {
+                window.focus(&this.focus, cx);
+            }
             run(this, window, cx);
         });
         Some(
@@ -1254,6 +1355,14 @@ impl Shell {
             .into_any_element(),
         )
     }
+}
+
+/// What tells `done` a delete was turned down.
+fn cancelled(done: &Option<Done>) -> Option<Run> {
+    let done = done.clone()?;
+    Some(Rc::new(move |this, window, cx| {
+        done(this, false, window, cx)
+    }))
 }
 
 fn write_text(text: String, cx: &mut App) {

@@ -374,11 +374,24 @@ impl Shell {
             let trash = this.scope_kind(cx).trash;
             this.move_in(trash, Lifecycle::Active, cx)
         }))
-        .on_action(cx.listener(|this, _: &AcceptInbox, _, cx| {
+        // Over the media view or Quick Look, the keys review the item
+        // being viewed (`InboxReviewControls`); over the grid, the
+        // selection.
+        .on_action(cx.listener(|this, _: &AcceptInbox, window, cx| {
+            if this.viewing(cx) {
+                this.review_key(crate::viewer::review::Decision::Accept, window, cx);
+                return;
+            }
             let inbox = this.scope_kind(cx).inbox;
             this.move_in(inbox, Lifecycle::Active, cx)
         }))
-        .on_action(cx.listener(|this, _: &RejectInbox, window, cx| this.reject(window, cx)))
+        .on_action(cx.listener(|this, _: &RejectInbox, window, cx| {
+            if this.viewing(cx) {
+                this.review_key(crate::viewer::review::Decision::Reject, window, cx);
+                return;
+            }
+            this.reject(window, cx)
+        }))
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar
                 .update(cx, |sidebar, cx| sidebar.new_folder(window, cx));

@@ -226,6 +226,14 @@ pub const MEDIA_VOLUME_HUD_IN: Duration = Duration::from_millis(150);
 /// `VolumePanel`: the volume slider stays 300 ms after the pointer leaves.
 pub const MEDIA_VOLUME_PANEL_GRACE: Duration = Duration::from_millis(300);
 
+/// `reviewPillIn` in `InboxReviewControls.module.css`: the Inbox review pill
+/// rises into place over 130 ms (`--ease-default`).
+pub const REVIEW_PILL_IN: Duration = Duration::from_millis(130);
+/// `.glow` and the glyph's `filter`: 160 ms (`ease`).
+pub const REVIEW_GLOW: Duration = Duration::from_millis(160);
+/// `.action`'s `color`: 140 ms (`ease`).
+pub const REVIEW_TINT: Duration = Duration::from_millis(140);
+
 /// Where a fade that set off from `from` toward 0 or 1 has got to.
 fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
     let target = if hovered { 1. } else { 0. };
