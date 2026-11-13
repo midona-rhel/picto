@@ -161,7 +161,7 @@ impl Shell {
         reload: bool,
         cx: &mut Context<Self>,
     ) {
-        let target = SelectionTarget::Explicit { root_ids: ids };
+        let target = self.session.read(cx).target_for(ids);
         let reread = if reload {
             Reread::RESULTS
         } else {
@@ -286,22 +286,31 @@ impl Shell {
         }
     }
 
-    /// `organize.addTag`, `organize.addFolder` and `file.addToFolder`: the
-    /// pickers for the selection.
-    ///
-    /// Production opens its `TagSelectModal` and `FolderPickerModal` dialogs
-    /// here; this opens the inspector's pickers instead, docked 80px below
-    /// the inspector's top, or centred while it is hidden.
+    /// `organize.addTag`, `organize.addFolder` and `file.addToFolder`, and
+    /// the item menu's Add Tags and Add to Folder. Over the grid they open
+    /// the Add Tags and Folders dialogs for the selection, as `GridScreen`
+    /// does; the viewer's menu opens the inspector's pickers instead
+    /// (`useViewerEntityContextMenu`), docked 80px below the inspector's
+    /// top, or centred while it is hidden.
     fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session.read(cx).selection.is_empty() {
+        let (empty, viewer) = {
+            let session = self.session.read(cx);
+            (session.selection.is_empty(), session.viewer)
+        };
+        if empty {
             cx.propagate();
             return;
         }
         let visible = !self.inspector_collapsed;
-        self.inspector.update(cx, |inspector, cx| match picker {
-            Picker::Tags => inspector.add_tags(visible, window, cx),
-            Picker::Folders | Picker::AddToFolder => inspector.add_to_folder(visible, window, cx),
-        });
+        self.inspector
+            .update(cx, |inspector, cx| match (picker, viewer) {
+                (Picker::Tags, false) => inspector.open_tag_dialog(cx),
+                (Picker::Folders | Picker::AddToFolder, false) => inspector.open_folder_dialog(cx),
+                (Picker::Tags, true) => inspector.add_tags(visible, window, cx),
+                (Picker::Folders | Picker::AddToFolder, true) => {
+                    inspector.add_to_folder(visible, window, cx)
+                }
+            });
     }
 
     /// Wires the registry's actions on the window's root.

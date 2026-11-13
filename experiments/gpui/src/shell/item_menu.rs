@@ -63,10 +63,10 @@ impl Target {
     fn ids(&self) -> Vec<RootId> {
         self.items.iter().map(|item| item.root_id).collect()
     }
-    fn selection(&self) -> SelectionTarget {
-        SelectionTarget::Explicit {
-            root_ids: self.ids(),
-        }
+    /// What an edit of these items addresses: the destination's query when
+    /// they are the whole destination selected, else the items themselves.
+    fn selection(&self, session: &crate::session::Session) -> SelectionTarget {
+        session.target_for(self.ids())
     }
 }
 
@@ -227,7 +227,8 @@ impl Shell {
         let last_folder_name = self.last_folder_name(cx);
         let description = Description {
             surface: Surface::Grid,
-            selection_count: count,
+            // With the whole destination selected, all of it.
+            selection_count: self.session.read(cx).selection_count() as usize,
             ai_tag_enabled: Some(count > 0),
             single: single.is_some(),
             single_hash: single.map(|item| item.content_hash.clone()),
@@ -717,7 +718,7 @@ impl Shell {
                 if let Some(folder) = last {
                     self.session
                         .update(cx, |session, _| session.record_folder_use(folder));
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.add_to_folder(&selection, folder)),
                         Reread::SELECTION,
@@ -726,7 +727,7 @@ impl Shell {
                 }
             }
             Action::NewFolderWithSelection => {
-                let selection = target.selection();
+                let selection = target.selection(self.session.read(cx));
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.new_folder_in(None, Some(selection), window, cx)
                 });
@@ -741,7 +742,7 @@ impl Shell {
             }
             Action::RemoveFromFolder => {
                 if let Some(folder) = target.folder {
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.remove_from_folder(&selection, folder)),
                         Reread::RESULTS,
@@ -793,7 +794,7 @@ impl Shell {
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();
                 if !tags.is_empty() && !ids.is_empty() {
-                    let selection = target.selection();
+                    let selection = target.selection(self.session.read(cx));
                     self.edit(
                         Box::new(move |library| library.apply_tags(&selection, &tags, true)),
                         Reread::SELECTION,
@@ -803,7 +804,7 @@ impl Shell {
             }
             Action::Rate(stars) => {
                 let rating = picto_library::Rating::ALL[usize::from(stars).min(5)];
-                let selection = target.selection();
+                let selection = target.selection(self.session.read(cx));
                 self.edit(
                     Box::new(move |library| library.set_rating(&selection, rating)),
                     Reread::SELECTION,
@@ -947,7 +948,7 @@ impl Shell {
     fn copy_tags(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
         let single = target.items.len() == 1;
         let ids = target.ids();
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.library(
             Box::new(move |library| {
                 let tag_ids = if single {
@@ -976,7 +977,7 @@ impl Shell {
         let Some(cover) = target.items.first().map(|item| item.root_id) else {
             return;
         };
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.library(
             Box::new(move |library| {
                 let summary = library.selection_summary(&selection)?;
@@ -1026,7 +1027,7 @@ impl Shell {
         } else {
             "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."
         };
-        let selection = target.selection();
+        let selection = target.selection(self.session.read(cx));
         self.ask(
             title,
             message,
@@ -1060,7 +1061,13 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_deletion(target.selection(), reject, false, window, cx);
+        self.request_deletion(
+            target.selection(self.session.read(cx)),
+            reject,
+            false,
+            window,
+            cx,
+        );
     }
 
     /// The sidebar's Empty Trash: everything in the Trash, after the same

@@ -7,8 +7,9 @@ use crate::grid::{filters::Filters, nav, prefs::ViewPrefs};
 use crate::motion;
 use gpui::*;
 use picto_library::predicate::FilterExpr;
-use picto_library::query::{RootPage, RootSummary};
+use picto_library::query::{RootPage, RootQuery, RootSummary};
 use picto_library::{RootDetails, RootId, TagRecord};
+use std::collections::BTreeSet;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -172,7 +173,7 @@ pub struct Session {
     pub restore_scroll: Option<f32>,
     pub transition: Transition,
     /// A destination's first page that arrived before the fade-out finished.
-    pending_page: Option<(RootPage, ViewPrefs)>,
+    pending_page: Option<(RootPage, ViewPrefs, Box<RootQuery>)>,
     pub items: Vec<RootSummary>,
     /// Counts each time the items are replaced rather than extended.
     pub results_epoch: u64,
@@ -189,6 +190,13 @@ pub struct Session {
     pub tile: f32,
     /// The selected items, by position in `items`.
     pub selection: std::collections::BTreeSet<usize>,
+    /// Set while Select All holds: the selection is everything the
+    /// destination holds, loaded or not, except these items taken out of it
+    /// since. Edits then address the query itself (`target_for`), as
+    /// production's query selections do.
+    whole: Option<BTreeSet<RootId>>,
+    /// The query the shown results were read with.
+    ran: Option<RootQuery>,
     /// The selected item the inspector and viewer show: the one last chosen.
     pub focus: Option<usize>,
     /// Where a shift-click or shift-move range starts.
@@ -224,6 +232,10 @@ pub struct Session {
     /// Production keeps them in the renderer's localStorage; here they last
     /// for the session.
     pub recent_folders: Vec<picto_library::FolderId>,
+    /// Tags put on items, newest first, for the Add Tags dialog's Recent
+    /// view (`picto-recent-tags`). Like the folders, they last for the
+    /// session.
+    pub recent_tags: Vec<String>,
     /// The selected items and the one shown, to select again by id once a
     /// [`Session::refresh_results`] page is in.
     reselect: Option<(Vec<RootId>, Option<RootId>)>,
@@ -282,6 +294,8 @@ impl Session {
             restore_scroll: None,
             transition: Transition::Idle,
             pending_page: None,
+            whole: None,
+            ran: None,
             items: Vec::new(),
             results_epoch: 0,
             total: 0,
@@ -313,6 +327,7 @@ impl Session {
             place_label: None,
             reselect: None,
             recent_folders: Vec::new(),
+            recent_tags: Vec::new(),
         }
     }
 
@@ -578,6 +593,12 @@ impl Session {
     /// folders, each kept once, at most 30.
     pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
         record_recent(&mut self.recent_folders, folder);
+    }
+
+    /// `recordRecentItems('picto-recent-tags', …)`: the tags go to the front
+    /// in their order, each kept once, at most 30.
+    pub fn record_tags_use(&mut self, tags: &[String]) {
+        record_recent_names(&mut self.recent_tags, tags);
     }
 
     /// Fetches the current destination again after an edit that may change
@@ -868,14 +889,16 @@ impl Session {
                     self.query(false, cx);
                     self.refresh_activity(cx);
                 }
-                Reply::Page(generation, append, page, prefs) if generation == self.generation => {
+                Reply::Page(generation, append, page, prefs, query)
+                    if generation == self.generation =>
+                {
                     let prefs = self.fresh_prefs(generation, prefs);
                     if !append && matches!(self.transition, Transition::FadingOut(_)) {
                         // The previous grid is still fading out. Hold the
                         // destination until it is gone.
-                        self.pending_page = Some((page, prefs));
+                        self.pending_page = Some((page, prefs, query));
                     } else {
-                        self.apply_page(append, page, prefs, cx);
+                        self.apply_page(append, page, prefs, query, cx);
                     }
                 }
                 // A query that failed is the grid's error, shown in place of
@@ -899,8 +922,10 @@ impl Session {
         append: bool,
         page: RootPage,
         prefs: ViewPrefs,
+        query: Box<RootQuery>,
         cx: &mut Context<Self>,
     ) {
+        self.ran = Some(*query);
         // A scope opens at its saved zoom. Searching inside it keeps
         // whatever the zoom control was moved to since.
         if self.prefs_scope != Some(self.scope) {
@@ -913,7 +938,17 @@ impl Session {
         self.cursor = page.next_cursor;
         self.loading = false;
         if append {
+            let first = self.items.len();
             self.items.extend(page.items);
+            // With the whole destination selected, the items that arrive
+            // are selected too.
+            if let Some(excluded) = &self.whole {
+                for (index, item) in self.items.iter().enumerate().skip(first) {
+                    if !excluded.contains(&item.root_id) {
+                        self.selection.insert(index);
+                    }
+                }
+            }
         } else {
             self.items = page.items;
             self.results_epoch += 1;
@@ -925,10 +960,21 @@ impl Session {
                     .enumerate()
                     .map(|(index, item)| (item.root_id, index))
                     .collect::<HashMap<_, _>>();
-                self.selection = ids
-                    .iter()
-                    .filter_map(|id| positions.get(id).copied())
-                    .collect();
+                self.selection = match &self.whole {
+                    // The whole destination stays selected, whatever it
+                    // holds now.
+                    Some(excluded) => self
+                        .items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, item)| !excluded.contains(&item.root_id))
+                        .map(|(index, _)| index)
+                        .collect(),
+                    None => ids
+                        .iter()
+                        .filter_map(|id| positions.get(id).copied())
+                        .collect(),
+                };
                 self.anchor = None;
                 let focus = focus
                     .and_then(|id| positions.get(&id).copied())
@@ -1065,6 +1111,7 @@ impl Session {
         self.results_epoch += 1;
         self.restore_scroll = Some(saved.scroll);
         self.selection = saved.selection;
+        self.whole = None;
         self.anchor = saved.focus;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
@@ -1182,8 +1229,8 @@ impl Session {
                     cx.emit(Change::Selection);
                 } else if let Some(saved) = self.pending_restore.take() {
                     self.restore_grid(saved, cx);
-                } else if let Some((page, prefs)) = self.pending_page.take() {
-                    self.apply_page(false, page, prefs, cx);
+                } else if let Some((page, prefs, query)) = self.pending_page.take() {
+                    self.apply_page(false, page, prefs, query, cx);
                 } else if self.error.is_some() && !self.loading {
                     self.show_error(cx);
                 }
@@ -1201,6 +1248,7 @@ impl Session {
 
     fn forget_selection(&mut self) {
         self.selection.clear();
+        self.whole = None;
         self.focus = None;
         self.anchor = None;
         self.member = 0;
@@ -1235,6 +1283,7 @@ impl Session {
             return;
         }
         self.selection = [index].into();
+        self.whole = None;
         self.anchor = Some(index);
         self.focus_on(Some(index), cx);
     }
@@ -1244,10 +1293,17 @@ impl Session {
         if index >= self.items.len() {
             return;
         }
+        let root = self.items[index].root_id;
         if self.selection.remove(&index) {
+            if let Some(excluded) = &mut self.whole {
+                excluded.insert(root);
+            }
             let last = self.selection.iter().next_back().copied();
             self.focus_on(last, cx);
         } else {
+            if let Some(excluded) = &mut self.whole {
+                excluded.remove(&root);
+            }
             self.selection.insert(index);
             self.anchor = Some(index);
             self.focus_on(Some(index), cx);
@@ -1261,6 +1317,7 @@ impl Session {
             return;
         }
         let anchor = *self.anchor.get_or_insert(index);
+        self.whole = None;
         if !keep {
             self.selection.clear();
         }
@@ -1273,9 +1330,37 @@ impl Session {
             return;
         }
         self.selection = (0..self.items.len()).collect();
+        // Everything the destination holds, not only what has been loaded.
+        self.whole = Some(BTreeSet::new());
         let focus = self.focus.unwrap_or(0);
         self.anchor.get_or_insert(focus);
         self.focus_on(Some(focus), cx);
+    }
+
+    /// How many items are selected: with the whole destination selected,
+    /// all it holds less those taken out, however few are loaded.
+    pub fn selection_count(&self) -> u64 {
+        match &self.whole {
+            Some(excluded) => self.total.saturating_sub(excluded.len() as u64),
+            None => self.selection.len() as u64,
+        }
+    }
+
+    /// What an edit of the grid's selection addresses. `ids` are the loaded
+    /// selected items; while the whole destination is selected and `ids` are
+    /// that selection, the edit addresses the destination's query instead,
+    /// so that it reaches the items not loaded yet.
+    pub fn target_for(&self, ids: Vec<RootId>) -> picto_library::selection::SelectionTarget {
+        use picto_library::selection::SelectionTarget;
+        match (&self.whole, &self.ran) {
+            (Some(excluded), Some(query)) if whole_selection(ids.len(), self.selection.len()) => {
+                SelectionTarget::Query {
+                    query: query.clone(),
+                    excluded_root_ids: excluded.iter().copied().collect(),
+                }
+            }
+            _ => SelectionTarget::Explicit { root_ids: ids },
+        }
     }
 
     /// Replaces the selection, as a finished rubber band does. The item shown
@@ -1290,6 +1375,7 @@ impl Session {
             .into_iter()
             .filter(|index| *index < self.items.len())
             .collect();
+        self.whole = None;
         self.anchor = None;
         let focus = self
             .focus
@@ -1306,6 +1392,7 @@ impl Session {
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() {
             self.selection.clear();
+            self.whole = None;
             self.anchor = None;
             self.focus_on(None, cx);
         }
@@ -1462,7 +1549,7 @@ impl Session {
             .collect::<Vec<_>>();
         if !ids.is_empty() {
             self.close_viewer(cx);
-            let target = picto_library::selection::SelectionTarget::Explicit { root_ids: ids };
+            let target = self.target_for(ids);
             let _ = self.edit(
                 move |library| library.set_lifecycle(&target, lifecycle),
                 Reread::RESULTS,
@@ -1576,6 +1663,22 @@ fn record_recent(recent: &mut Vec<picto_library::FolderId>, folder: picto_librar
     recent.truncate(30);
 }
 
+/// `recordRecentItems`: `names` first, in their order, then the others,
+/// each once, at most 30.
+fn record_recent_names(recent: &mut Vec<String>, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let mut next = Vec::with_capacity(30);
+    for name in names.iter().chain(recent.iter()) {
+        if !next.contains(name) {
+            next.push(name.clone());
+        }
+    }
+    next.truncate(30);
+    *recent = next;
+}
+
 /// Back and Forward without the places that no longer exist, each moved to
 /// its destination's new position, and where the current place now is.
 fn remap_history(
@@ -1599,10 +1702,37 @@ fn remap_history(
     (kept, current)
 }
 
+/// Whether `ids` items are the grid's whole selection of `selected` loaded
+/// items, rather than one item acted on by itself (the viewer's, a tile
+/// dragged alone).
+fn whole_selection(ids: usize, selected: usize) -> bool {
+    ids > 0 && ids == selected
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionActivity, Visit, record_recent, remap_history};
+    use super::{SubscriptionActivity, Visit, record_recent, remap_history, whole_selection};
     use picto_library::FolderId;
+
+    #[test]
+    fn only_the_grid_selection_stands_for_the_whole_destination() {
+        // The loaded selection, acted on as one.
+        assert!(whole_selection(500, 500));
+        // One item acted on by itself while everything is selected.
+        assert!(!whole_selection(1, 500));
+        assert!(!whole_selection(0, 0));
+    }
+
+    #[test]
+    fn recent_tags_put_the_new_ones_first_in_their_order() {
+        let mut recent = vec!["b".to_owned(), "c".to_owned()];
+        super::record_recent_names(&mut recent, &["a".to_owned(), "c".to_owned()]);
+        assert_eq!(recent, ["a", "c", "b"]);
+        let many = (0..40).map(|n| n.to_string()).collect::<Vec<_>>();
+        super::record_recent_names(&mut recent, &many);
+        assert_eq!(recent.len(), 30);
+        assert_eq!(recent[0], "0");
+    }
 
     #[test]
     fn recent_folders_are_newest_first_each_once_and_at_most_thirty() {
