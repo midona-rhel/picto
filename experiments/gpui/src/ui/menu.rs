@@ -53,6 +53,78 @@ pub fn presentation() -> Presentation {
     }
 }
 
+/// The pop-up windows menus have open, and the pop-up windows a control
+/// inside one of them opened (a select's list), each with the menu window it
+/// was opened from. A child closes with its menu window, and while a child
+/// has the keyboard its menu counts as having it.
+#[derive(Default)]
+struct PopUps {
+    menus: Vec<AnyWindowHandle>,
+    children: Vec<(AnyWindowHandle, AnyWindowHandle)>,
+}
+
+impl Global for PopUps {}
+
+/// Whether this window is one of a menu's pop-up windows, where a control
+/// cannot open anything over the window and must open a pop-up of its own
+/// ([`adopt`]).
+pub fn is_pop_up(window: &Window, cx: &App) -> bool {
+    let handle = window.window_handle();
+    cx.try_global::<PopUps>()
+        .is_some_and(|pop_ups| pop_ups.menus.contains(&handle))
+}
+
+/// Records a pop-up window opened from a menu's pop-up window, so that it
+/// closes with it.
+pub fn adopt(owner: AnyWindowHandle, child: AnyWindowHandle, cx: &mut App) {
+    let pop_ups = cx.default_global::<PopUps>();
+    if pop_ups.menus.contains(&owner) {
+        pop_ups.children.push((owner, child));
+    } else {
+        // The menu closed while the child opened.
+        close_window(child, cx);
+    }
+}
+
+/// Forgets a child pop-up its control closed itself.
+pub fn release(child: AnyWindowHandle, cx: &mut App) {
+    cx.default_global::<PopUps>()
+        .children
+        .retain(|(_, open)| *open != child);
+}
+
+fn register(window: AnyWindowHandle, cx: &mut App) {
+    cx.default_global::<PopUps>().menus.push(window);
+}
+
+/// Forgets a menu window that is closing, and closes its children.
+fn forget(window: AnyWindowHandle, cx: &mut App) {
+    let pop_ups = cx.default_global::<PopUps>();
+    pop_ups.menus.retain(|open| *open != window);
+    let mut children = Vec::new();
+    pop_ups.children.retain(|(owner, child)| {
+        let keep = *owner != window;
+        if !keep {
+            children.push(*child);
+        }
+        keep
+    });
+    for child in children {
+        let _ = child.update(cx, |_, window, _| window.remove_window());
+    }
+}
+
+fn children_of(owners: &[AnyWindowHandle], cx: &App) -> Vec<AnyWindowHandle> {
+    cx.try_global::<PopUps>().map_or(Vec::new(), |pop_ups| {
+        pop_ups
+            .children
+            .iter()
+            .filter(|(owner, _)| owners.contains(owner))
+            .map(|(_, child)| *child)
+            .collect()
+    })
+}
+
 const WIDTH: f32 = 270.;
 /// The panel keeps this far from the window's (or the display's) edges.
 const MARGIN: f32 = 12.;
@@ -436,7 +508,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
         };
         match entry {
             Entry::Separator => {
-                if matches!(rows.last(), Some(Row::Entry(_))) {
+                if rows.last().is_some_and(|row| *row != Row::Separator) {
                     rows.push(Row::Separator);
                 }
             }
@@ -729,8 +801,9 @@ impl Menu {
     }
 
     /// Draws the menu in its owner's window rather than in pop-up windows,
-    /// for views whose fields need the keyboard and whose selects and
-    /// calendars open over the window.
+    /// for views whose fields need the keyboard and whose calendars open
+    /// over the window. (A select in a pop-up menu opens its list as a
+    /// pop-up of its own, so selects alone do not need this.)
     pub fn in_window(mut self) -> Self {
         self.presentation = Presentation::InWindow;
         self
@@ -1360,12 +1433,16 @@ impl Menu {
                 match (role, opened) {
                     (_, Some(handle)) if this.closing.is_some() => close_window(handle, cx),
                     (Role::Root, Some(handle)) => {
+                        register(handle, cx);
                         if let Some(screen) = &mut this.screen {
                             screen.window = Some(handle);
                         }
                     }
                     (Role::Submenu(serial), Some(handle)) => match &mut this.submenu {
-                        Some(open) if open.serial == serial => open.window = Some(handle),
+                        Some(open) if open.serial == serial => {
+                            register(handle, cx);
+                            open.window = Some(handle);
+                        }
                         _ => close_window(handle, cx),
                     },
                     // The platform has no pop-up windows: draw in the window.
@@ -1392,12 +1469,15 @@ impl Menu {
         }
         let main = self.main;
         cx.defer(move |cx| {
-            let had_keyboard = windows.iter().any(|window| {
+            let mut watched = windows.clone();
+            watched.extend(children_of(&windows, cx));
+            let had_keyboard = watched.iter().any(|window| {
                 window
                     .update(cx, |_, window, _| window.is_window_active())
                     .unwrap_or(false)
             });
             for window in windows {
+                forget(window, cx);
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
             if had_keyboard && let Some(main) = main {
@@ -1419,6 +1499,8 @@ impl Menu {
             let mut windows = this.main.into_iter().collect::<Vec<_>>();
             windows.extend(this.screen.as_ref().and_then(|screen| screen.window));
             windows.extend(this.submenu.as_ref().and_then(|open| open.window));
+            // A select's list opened from a panel counts as the menu's.
+            windows.extend(children_of(&windows, cx));
             // When a click moves the keyboard from one of the menu's windows
             // to another, the one losing it reports first; wait for the
             // other before deciding.
@@ -1773,14 +1855,26 @@ impl Menu {
                     ),
             );
         }
+        // A menu taller than its area scrolls, and then shows the app's
+        // scrollbar, whose 8px gutter narrows the rows (`::-webkit-scrollbar`).
+        let overflows = self.height(rows) > rect.h + 0.5;
+        let items_height = (rect.h - self.search_height()).max(0.);
         panel = panel.child(
             div()
-                .id("menu-items")
                 .relative()
-                .h(px((rect.h - self.search_height()).max(0.)))
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll)
-                .child(list),
+                .h(px(items_height))
+                .child(
+                    div()
+                        .id("menu-items")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
+                        .when(overflows, |items| items.pr(px(super::scrollbar::GUTTER)))
+                        .child(list),
+                )
+                .when(overflows, |items| {
+                    items.child(super::scrollbar("menu-scrollbar", &self.scroll, window, cx))
+                }),
         );
         self.chrome(
             "menu",
@@ -2094,6 +2188,7 @@ fn separator(cx: &App) -> Div {
 /// Closes a window once the current update is over.
 fn close_window(window: AnyWindowHandle, cx: &mut App) {
     cx.defer(move |cx| {
+        forget(window, cx);
         let _ = window.update(cx, |_, window, _| window.remove_window());
     });
 }
@@ -2141,7 +2236,7 @@ impl Render for Menu {
 /// border round the panel. The panel draws its own shadow, so the system's
 /// is turned off. GPUI has no option for this, so it asks AppKit directly.
 #[cfg(target_os = "macos")]
-fn without_system_shadow(window: &Window) {
+pub(crate) fn without_system_shadow(window: &Window) {
     use super::window_chrome::appkit;
     appkit::with_ns_window(window, |ns_window| {
         // SAFETY: `setHasShadow:` is an NSWindow method taking a BOOL,
@@ -2155,13 +2250,13 @@ fn without_system_shadow(window: &Window) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn without_system_shadow(_: &Window) {}
+pub(crate) fn without_system_shadow(_: &Window) {}
 
 #[cfg(test)]
 mod tests {
     use super::{
         Entry, MARGIN, PADDING, Path, Rect, Row, SEPARATOR, clean, item, items_height, origin,
-        place, place_submenu, row_offset, score, search, step, submenu,
+        place, place_submenu, row_offset, score, search, step, submenu, swatches,
     };
 
     fn top(index: usize) -> Path {
@@ -2247,6 +2342,17 @@ mod tests {
         assert_eq!(
             clean(&entries, None),
             vec![Row::Entry(top(1)), Row::Separator, Row::Entry(top(4))]
+        );
+        // A row that is not an item (a panel or swatches) keeps the
+        // separator after it, as the view menu's panels have one between.
+        let entries: Vec<Entry> = vec![
+            swatches("colour", Vec::new(), None).into(),
+            Entry::Separator,
+            item("b", "B").into(),
+        ];
+        assert_eq!(
+            clean(&entries, None),
+            vec![Row::Swatches(top(0)), Row::Separator, Row::Entry(top(2))]
         );
     }
 

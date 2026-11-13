@@ -42,6 +42,10 @@ struct State {
     highlighted: Option<usize>,
     /// Where the button was last painted, which places the menu.
     button: Rc<Cell<Bounds<Pixels>>>,
+    /// In a pop-up menu, the list's own pop-up window, and whether it is on
+    /// its way.
+    list: Option<AnyWindowHandle>,
+    opening: bool,
 }
 
 /// `CmSelect.tsx`: a 26px button showing the current choice with a selector
@@ -87,6 +91,51 @@ impl Select {
 
 /// `--control-height-sm`, the height of the button and of each choice.
 const ROW: f32 = theme::CONTROL_SM;
+/// `.drop`: 4px padding, rows 2px apart, a 1px border, at most seven rows.
+const LIST_PADDING: f32 = 4.;
+const LIST_GAP: f32 = 2.;
+const LIST_MAX: f32 = 7. * ROW + 6. * LIST_GAP + 12.;
+/// The list keeps this far below (or above) the button.
+const LIST_OFFSET: f32 = 4.;
+/// Room around a pop-up list for its drawn shadow (`--shadow-panel`).
+const SHADOW_ROOM: f32 = 40.;
+
+/// The list's height for this many choices.
+fn list_height(choices: usize) -> f32 {
+    let rows = choices as f32 * ROW + choices.saturating_sub(1) as f32 * LIST_GAP;
+    (rows + 2. * LIST_PADDING + 2.).min(LIST_MAX)
+}
+
+/// A rectangle as `[x, y, width, height]`.
+type Area = [f32; 4];
+
+/// Where a select's list goes when it opens as a pop-up window of its own
+/// (inside a pop-up menu): `button` and `area` (the display's usable part)
+/// in display coordinates. The list is as wide as the button, 4px below it
+/// or above it by the rule of [`opens_upward`] applied to the display, and
+/// moved sideways to stay on the display. Returns the list's rectangle and
+/// the window's, which leaves room for the shadow but not past the display.
+pub fn pop_up_list(button: Area, choices: usize, area: Area) -> (Area, Area) {
+    let [bx, by, bw, bh] = button;
+    let [ax, ay, aw, ah] = area;
+    let height = list_height(choices);
+    let upward = opens_upward(choices, by - ay, by + bh - ay, ah);
+    let y = if upward {
+        by - LIST_OFFSET - height
+    } else {
+        by + bh + LIST_OFFSET
+    };
+    let x = bx.min(ax + aw - bw).max(ax);
+    let list = [x, y, bw, height];
+    let left = (x - SHADOW_ROOM).max(ax);
+    let top = (y - SHADOW_ROOM).max(ay);
+    let right = (x + bw + SHADOW_ROOM).min(ax + aw);
+    let bottom = (y + height + SHADOW_ROOM).min(ay + ah);
+    (
+        list,
+        [left, top, (right - left).max(0.), (bottom - top).max(0.)],
+    )
+}
 
 /// Whether the menu opens above the button (`CmSelect`'s `flipUp`): when it
 /// does not fit below and there is more room above.
@@ -123,6 +172,8 @@ impl RenderOnce for Select {
             open: false,
             highlighted: None,
             button: Rc::new(Cell::new(Bounds::default())),
+            list: None,
+            opening: false,
         });
         let current = self
             .choices
@@ -196,12 +247,14 @@ impl RenderOnce for Select {
                     .child(super::icon("selector-2", 14., theme.text())),
             )
             // Records where the button is, for the menu. A move while open
-            // (the page scrolled) draws again with the new place.
+            // (the page scrolled) draws again with the new place. The canvas
+            // fills the button inside its 1px border.
             .child({
                 let measured = measured.clone();
                 let open = open;
                 canvas(
                     move |bounds, window, _| {
+                        let bounds = bounds.dilate(px(1.));
                         if measured.replace(bounds) != bounds && open {
                             window.refresh();
                         }
@@ -222,6 +275,22 @@ impl RenderOnce for Select {
         if let Some(width) = self.width {
             button = button.w(px(width));
         }
+        let handler = self.on_change.map(Rc::new);
+        if super::menu::is_pop_up(window, cx) {
+            return pop_up(
+                button,
+                Listed {
+                    choices: self.choices,
+                    current,
+                    has_icons,
+                    state,
+                    handler,
+                },
+                open,
+                window,
+                cx,
+            );
+        }
         if !open {
             return div().flex().child(button);
         }
@@ -234,100 +303,37 @@ impl RenderOnce for Select {
             f32::from(bounds.bottom()),
             f32::from(viewport.height),
         );
-        let handler = self.on_change.map(Rc::new);
-        let mut menu = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id.clone()),
-                "menu".into(),
-            ))
-            .occlude()
-            .w(bounds.size.width)
-            // Seven rows, their gaps and the padding.
-            .max_h(px(7. * ROW + 6. * 2. + 12.))
-            .overflow_y_scroll()
-            .p(px(4.))
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .rounded(px(theme::RADIUS_MD))
-            .bg(theme.select_surface())
-            .border_1()
-            .border_color(theme.border_secondary())
-            .shadow(theme::panel_shadow())
-            .font_family(theme::FONT_UI)
-            .text(theme::TEXT_MD)
-            .text_color(theme.text())
-            .on_mouse_down_out({
-                let state = state.clone();
-                move |event, _, cx| {
-                    // A press on the button itself is the button's to toggle.
-                    if bounds.contains(&event.position) {
-                        return;
-                    }
-                    state.update(cx, |state, cx| {
-                        state.open = false;
-                        cx.notify();
-                    });
+        let menu = list(
+            &Listed {
+                choices: self.choices,
+                current,
+                has_icons,
+                state: state.clone(),
+                handler,
+            },
+            highlighted,
+            bounds.size.width,
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "menu".into()),
+            cx,
+        )
+        .on_mouse_down_out({
+            let state = state.clone();
+            move |event, _, cx| {
+                // A press on the button itself is the button's to toggle.
+                if bounds.contains(&event.position) {
+                    return;
                 }
-            });
-        for (index, choice) in self.choices.iter().enumerate() {
-            let lit = highlighted == Some(index) || current == Some(index);
-            let (hover_state, click_state) = (state.clone(), state.clone());
-            let handler = handler.clone();
-            let value = choice.value;
-            menu = menu.child(
-                div()
-                    .id(index)
-                    .h(px(ROW))
-                    .flex_none()
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .rounded(px(theme::RADIUS_SM))
-                    // `--color-menu-hover` and the chosen row's
-                    // `--color-hover-overlay` are the same colour.
-                    .when(lit, |row| row.bg(theme.hover_overlay()))
-                    .whitespace_nowrap()
-                    .cursor_pointer()
-                    .when(has_icons, |row| {
-                        row.child(
-                            glyph(choice.icon, theme.text())
-                                .unwrap_or_else(|| div().w(px(20.)).flex_none().into_any_element()),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(choice.label.clone()),
-                    )
-                    .on_mouse_move(move |_, _, cx| {
-                        hover_state.update(cx, |state, cx| {
-                            if state.highlighted != Some(index) {
-                                state.highlighted = Some(index);
-                                cx.notify();
-                            }
-                        })
-                    })
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        click_state.update(cx, |state, cx| {
-                            state.open = false;
-                            cx.notify();
-                        });
-                        if let Some(handler) = &handler {
-                            handler(value, window, cx);
-                        }
-                    }),
-            );
-        }
+                state.update(cx, |state, cx| {
+                    state.open = false;
+                    cx.notify();
+                });
+            }
+        });
         let origin = if upward {
             // Its bottom 4px above the button's top.
-            point(bounds.left(), bounds.top() - px(4.))
+            point(bounds.left(), bounds.top() - px(LIST_OFFSET))
         } else {
-            point(bounds.left(), bounds.bottom() + px(4.))
+            point(bounds.left(), bounds.bottom() + px(LIST_OFFSET))
         };
         div().flex().child(button).child(
             deferred(
@@ -346,9 +352,278 @@ impl RenderOnce for Select {
     }
 }
 
+/// What the list shows and whom it tells.
+#[derive(Clone)]
+struct Listed {
+    choices: Vec<Choice>,
+    current: Option<usize>,
+    has_icons: bool,
+    state: Entity<State>,
+    handler: Option<Rc<ChangeHandler>>,
+}
+
+/// `.drop` with its rows (`.opt`), the current choice and the row under the
+/// pointer lit. Choosing a row closes the list, and its pop-up window when
+/// it has one.
+fn list(
+    listed: &Listed,
+    highlighted: Option<usize>,
+    width: Pixels,
+    id: ElementId,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = theme::theme(cx);
+    let mut menu = div()
+        .id(id)
+        .occlude()
+        .w(width)
+        .max_h(px(LIST_MAX))
+        .overflow_y_scroll()
+        .p(px(LIST_PADDING))
+        .flex()
+        .flex_col()
+        .gap(px(LIST_GAP))
+        .rounded(px(theme::RADIUS_MD))
+        .bg(theme.select_surface())
+        .border_1()
+        .border_color(theme.border_secondary())
+        .shadow(theme::panel_shadow())
+        .font_family(theme::FONT_UI)
+        .text(theme::TEXT_MD)
+        .text_color(theme.text());
+    for (index, choice) in listed.choices.iter().enumerate() {
+        let lit = highlighted == Some(index) || listed.current == Some(index);
+        let (hover_state, click_state) = (listed.state.clone(), listed.state.clone());
+        let handler = listed.handler.clone();
+        let value = choice.value;
+        menu = menu.child(
+            div()
+                .id(index)
+                .h(px(ROW))
+                .flex_none()
+                .px(px(8.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .rounded(px(theme::RADIUS_SM))
+                // `--color-menu-hover` and the chosen row's
+                // `--color-hover-overlay` are the same colour.
+                .when(lit, |row| row.bg(theme.hover_overlay()))
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .when(listed.has_icons, |row| {
+                    row.child(
+                        glyph(choice.icon, theme.text())
+                            .unwrap_or_else(|| div().w(px(20.)).flex_none().into_any_element()),
+                    )
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(choice.label.clone()),
+                )
+                .on_mouse_move(move |_, _, cx| {
+                    hover_state.update(cx, |state, cx| {
+                        if state.highlighted != Some(index) {
+                            state.highlighted = Some(index);
+                            cx.notify();
+                        }
+                    })
+                })
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    let pop_up = click_state.update(cx, |state, cx| {
+                        state.open = false;
+                        state.opening = false;
+                        cx.notify();
+                        state.list.take()
+                    });
+                    if let Some(handler) = &handler {
+                        handler(value, window, cx);
+                    }
+                    if let Some(pop_up) = pop_up {
+                        close_list(pop_up, cx);
+                    }
+                }),
+        );
+    }
+    menu
+}
+
+fn close_list(list: AnyWindowHandle, cx: &mut App) {
+    super::menu::release(list, cx);
+    cx.defer(move |cx| {
+        let _ = list.update(cx, |_, window, _| window.remove_window());
+    });
+}
+
+/// A select inside a pop-up menu's window, which cannot draw past its own
+/// small window: its list opens as a pop-up window of its own at the button,
+/// on the same display, and closes with the menu. A press elsewhere in the
+/// menu's window closes it, as a press outside the list does in the window.
+fn pop_up(
+    button: Stateful<Div>,
+    listed: Listed,
+    open: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    let state = listed.state.clone();
+    let (list_window, opening, measured) = {
+        let state = state.read(cx);
+        (state.list, state.opening, state.button.clone())
+    };
+    if !open {
+        if let Some(list_window) = list_window {
+            state.update(cx, |state, _| state.list = None);
+            close_list(list_window, cx);
+        }
+        return div().flex().child(button);
+    }
+    if list_window.is_none()
+        && !opening
+        && let Some(display) = window.display(cx)
+    {
+        state.update(cx, |state, _| state.opening = true);
+        // The pop-up's frame is its content: it has no titlebar.
+        let frame = window.bounds();
+        let content = window.viewport_size();
+        let origin = (
+            f32::from(frame.origin.x),
+            f32::from(frame.origin.y) + f32::from(frame.size.height - content.height),
+        );
+        let bounds = measured.get();
+        let area = display.visible_bounds();
+        let (list_rect, window_rect) = pop_up_list(
+            [
+                origin.0 + f32::from(bounds.origin.x),
+                origin.1 + f32::from(bounds.origin.y),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            ],
+            listed.choices.len(),
+            [
+                f32::from(area.origin.x),
+                f32::from(area.origin.y),
+                f32::from(area.size.width),
+                f32::from(area.size.height),
+            ],
+        );
+        let owner = window.window_handle();
+        let display = display.id();
+        cx.defer(move |cx| {
+            if !listed.state.read(cx).open {
+                listed.state.update(cx, |state, _| state.opening = false);
+                return;
+            }
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(window_rect[0]), px(window_rect[1])),
+                    size(px(window_rect[2]), px(window_rect[3])),
+                ))),
+                display_id: Some(display),
+                titlebar: None,
+                focus: false,
+                show: true,
+                kind: WindowKind::PopUp,
+                is_movable: false,
+                is_resizable: false,
+                is_minimizable: false,
+                window_background: WindowBackgroundAppearance::Transparent,
+                ..Default::default()
+            };
+            let state = listed.state.clone();
+            let at = (list_rect[0] - window_rect[0], list_rect[1] - window_rect[1]);
+            let width = list_rect[2];
+            let opened = cx
+                .open_window(options, move |window, cx| {
+                    super::menu::without_system_shadow(window);
+                    cx.new(|cx| PopUpList::new(listed, at, width, cx))
+                })
+                .ok()
+                .map(AnyWindowHandle::from);
+            state.update(cx, |state, cx| {
+                state.opening = false;
+                match opened {
+                    Some(handle) if state.open => {
+                        state.list = Some(handle);
+                        cx.notify();
+                    }
+                    Some(handle) => {
+                        cx.defer(move |cx| {
+                            let _ = handle.update(cx, |_, window, _| window.remove_window());
+                        });
+                    }
+                    // No pop-up windows here: the list stays closed.
+                    None => state.open = false,
+                }
+            });
+            if let Some(handle) = opened {
+                super::menu::adopt(owner, handle, cx);
+            }
+        });
+    }
+    let bounds = measured.get();
+    div()
+        .flex()
+        .child(button)
+        .on_mouse_down_out(move |event, _, cx| {
+            // A press on the button itself is the button's to toggle.
+            if bounds.contains(&event.position) {
+                return;
+            }
+            state.update(cx, |state, cx| {
+                state.open = false;
+                cx.notify();
+            });
+        })
+}
+
+/// The root view of a select list's pop-up window: the list at its place in
+/// the transparent window, following the select's highlight.
+struct PopUpList {
+    listed: Listed,
+    at: (f32, f32),
+    width: f32,
+    _observe: Subscription,
+}
+
+impl PopUpList {
+    fn new(listed: Listed, at: (f32, f32), width: f32, cx: &mut Context<Self>) -> Self {
+        let observe = cx.observe(&listed.state, |_, _, cx| cx.notify());
+        Self {
+            listed,
+            at,
+            width,
+            _observe: observe,
+        }
+    }
+}
+
+impl Render for PopUpList {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let highlighted = self.listed.state.read(cx).highlighted;
+        div().size_full().child(
+            div()
+                .absolute()
+                .left(px(self.at.0))
+                .top(px(self.at.1))
+                .child(list(
+                    &self.listed,
+                    highlighted,
+                    px(self.width),
+                    "select-pop-up-list".into(),
+                    cx,
+                )),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::opens_upward;
+    use super::{list_height, opens_upward, pop_up_list};
 
     #[test]
     fn the_menu_opens_upward_only_when_there_is_more_room_above() {
@@ -358,5 +633,30 @@ mod tests {
         assert!(opens_upward(3, 500., 526., 584.));
         // Too little either way: below wins unless above is larger.
         assert!(!opens_upward(8, 20., 46., 120.));
+    }
+
+    #[test]
+    fn a_pop_up_list_sits_below_its_button_with_room_for_its_shadow() {
+        let display = [0., 25., 1440., 875.];
+        // Three choices: three rows, two gaps, the padding and the border.
+        assert_eq!(list_height(3), 3. * 26. + 2. * 2. + 8. + 2.);
+        let (list, window) = pop_up_list([500., 200., 130., 26.], 3, display);
+        assert_eq!(list, [500., 230., 130., list_height(3)]);
+        assert_eq!(window, [460., 190., 210., list_height(3) + 80.]);
+        // Many choices stop at seven rows.
+        assert_eq!(list_height(12), 7. * 26. + 6. * 2. + 12.);
+    }
+
+    #[test]
+    fn a_pop_up_list_flips_above_and_stays_on_the_display() {
+        let display = [0., 25., 1440., 875.];
+        // Near the display's bottom it opens above, its bottom 4px over the
+        // button, and the window stops at the display's edge.
+        let (list, window) = pop_up_list([1380., 860., 130., 26.], 6, display);
+        assert_eq!(list[1] + list[3], 856.);
+        // Moved left to stay on the display.
+        assert_eq!(list[0], 1310.);
+        assert_eq!(window[0] + window[2], 1440.);
+        assert_eq!(window[1] + window[3], list[1] + list[3] + 40.);
     }
 }

@@ -115,12 +115,17 @@ impl Toolbar {
 
 impl Toolbar {
     /// The scope title (`.scopeTitle`): the destination's ancestors as links,
-    /// then its own name. It runs from 72px in to the toolbar's middle and
+    /// then its own name. While a search or a filter narrows the grid, the
+    /// name is a link too, back to the destination unnarrowed, followed by
+    /// "Search results · N". It runs from 72px in to the toolbar's middle and
     /// fades out over its last 40px rather than ending in an ellipsis.
     fn title(&self, opacity: f32, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
-        let crumbs = {
+        let (crumbs, results) = {
             let session = self.session.read(cx);
+            let results = (session.place().is_none()
+                && (!session.search_text().is_empty() || session.filters.count() > 0))
+                .then(|| search_results_label(session.total));
             let mut crumbs = Vec::new();
             let mut at = session
                 .nav
@@ -136,30 +141,45 @@ impl Toolbar {
             if let Some(label) = session.place().and(session.place_label.clone()) {
                 crumbs.push((usize::MAX, label.to_string()));
             }
-            crumbs
+            (crumbs, results)
         };
         let last = crumbs.len().saturating_sub(1);
         let mut path = div().flex().items_center().whitespace_nowrap();
+        let separator = || div().mx(px(5.)).opacity(0.4).child("/");
         for (position, (index, label)) in crumbs.into_iter().enumerate() {
-            if position == last {
+            if position == last && results.is_none() {
                 path = path.child(div().child(label));
                 continue;
             }
-            path = path
-                .child(
-                    div()
-                        .id(("scope-crumb", index))
-                        .occlude()
-                        .cursor_pointer()
-                        .text_color(theme.text_secondary())
-                        .hover(move |style| style.text_color(theme.text()).underline())
-                        .child(label)
-                        .on_click(cx.listener(move |this, _, _, cx| {
+            let clears = position == last;
+            path = path.child(
+                div()
+                    .id(("scope-crumb", index))
+                    .occlude()
+                    .cursor_pointer()
+                    .text_color(theme.text_secondary())
+                    .hover(move |style| style.text_color(theme.text()).underline())
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if clears {
+                            // `clearSearchResults`: no search, no filters.
+                            this.search.update(cx, |search, cx| search.clear(cx));
+                            this.session.update(cx, |session, cx| {
+                                session.set_search(String::new(), cx);
+                                session.navigate_with_filters(index, Default::default(), cx);
+                            });
+                        } else {
                             this.session
                                 .update(cx, |session, cx| session.navigate(index, cx));
-                        })),
-                )
-                .child(div().mx(px(5.)).opacity(0.4).child("/"));
+                        }
+                    })),
+            );
+            if !clears {
+                path = path.child(separator());
+            }
+        }
+        if let Some(results) = results {
+            path = path.child(separator()).child(div().child(results));
         }
         let background = theme.background();
         div()
@@ -187,6 +207,11 @@ impl Toolbar {
                     )),
             )
     }
+}
+
+/// `Search results · N`, the count grouped by thousands.
+fn search_results_label(total: u64) -> String {
+    format!("Search results · {}", crate::grid::format::grouped(total))
 }
 
 impl Render for Toolbar {
@@ -365,5 +390,16 @@ impl Render for Toolbar {
                 ),
             ))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_results_label;
+
+    #[test]
+    fn search_results_count_their_items() {
+        assert_eq!(search_results_label(0), "Search results · 0");
+        assert_eq!(search_results_label(2673), "Search results · 2,673");
     }
 }

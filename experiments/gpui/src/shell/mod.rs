@@ -283,6 +283,7 @@ impl Shell {
             position,
             !self.sidebar_collapsed,
             !self.inspector_collapsed,
+            window,
             cx,
         );
         self.watch_view_panels(&menu, panels, cx);

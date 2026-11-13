@@ -543,6 +543,9 @@ pub const TEXT_MD: f32 = 13.;
 pub const TEXT_LG: f32 = 14.;
 /// `--line-height-md`
 pub const LINE_HEIGHT_MD: f32 = 20.;
+/// The body's `line-height: 1.55` (Mantine's), which text that sets no
+/// line height of its own inherits, as a multiple of its size.
+pub const BODY_LINE_HEIGHT: f32 = 1.55;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
 /// `--font-size-title`

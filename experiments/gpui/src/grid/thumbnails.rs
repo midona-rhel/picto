@@ -44,6 +44,28 @@ pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<
     order
 }
 
+/// `find_thumbnail_path`: thumbnails are `.jpg`, and libraries from before
+/// that wrote `.png`, so a `.jpg` that cannot be read is looked for as
+/// `.png`.
+fn fallback(resource: &Resource) -> Option<Resource> {
+    match resource {
+        Resource::Path(path) if path.extension().is_some_and(|ext| ext == "jpg") => {
+            Some(Resource::Path(path.with_extension("png").into()))
+        }
+        _ => None,
+    }
+}
+
+/// The `.jpg` a `.png` thumbnail stands in for.
+fn primary(resource: &Resource) -> Option<Resource> {
+    match resource {
+        Resource::Path(path) if path.extension().is_some_and(|ext| ext == "png") => {
+            Some(Resource::Path(path.with_extension("jpg").into()))
+        }
+        _ => None,
+    }
+}
+
 impl Thumbnails {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.on_release(|cache, cx| {
@@ -73,22 +95,36 @@ impl Thumbnails {
         };
     }
 
-    /// Whether this thumbnail is decoded and ready to paint.
-    pub fn is_loaded(&self, resource: &Resource) -> bool {
-        self.entries
-            .get(resource)
-            .is_some_and(|item| matches!(item.get(), Some(Ok(_))))
+    fn state(&self, resource: &Resource) -> Option<bool> {
+        match self.entries.get(resource)?.get()? {
+            Ok(_) => Some(true),
+            Err(_) => Some(false),
+        }
     }
 
-    /// Whether this thumbnail was tried and could not be read or decoded.
+    /// Whether this thumbnail (or the `.png` it falls back to) is decoded
+    /// and ready to paint.
+    pub fn is_loaded(&self, resource: &Resource) -> bool {
+        match self.state(resource) {
+            Some(loaded) => {
+                loaded || fallback(resource).is_some_and(|png| self.state(&png) == Some(true))
+            }
+            None => false,
+        }
+    }
+
+    /// Whether this thumbnail was tried and could not be read or decoded,
+    /// nor its `.png`.
     pub fn is_failed(&self, resource: &Resource) -> bool {
-        self.entries
-            .get(resource)
-            .is_some_and(|item| matches!(item.get(), Some(Err(_))))
+        self.state(resource) == Some(false)
+            && fallback(resource).is_none_or(|png| self.state(&png) == Some(false))
     }
 
     fn held(&self, resource: &Resource) -> bool {
-        self.wanted.contains(resource) || self.pins.values().any(|pinned| pinned == resource)
+        let is = |wanted: &Resource| {
+            self.wanted.contains(wanted) || self.pins.values().any(|pinned| pinned == wanted)
+        };
+        is(resource) || primary(resource).is_some_and(|jpg| is(&jpg))
     }
 
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
@@ -168,7 +204,13 @@ impl ImageCache for Thumbnails {
             self.hits += 1;
             self.recent.retain(|r| r != resource);
             self.recent.push_back(resource.clone());
-            return item.use_image(window);
+            let image = item.use_image(window);
+            if let Some(Err(_)) = &image
+                && let Some(png) = fallback(resource)
+            {
+                return self.load(&png, window, cx);
+            }
+            return image;
         }
         // A grid thumbnail waits for its turn in the plan. Anything else,
         // such as the inspector's preview, loads as soon as it is asked for.
@@ -181,7 +223,17 @@ impl ImageCache for Thumbnails {
 
 #[cfg(test)]
 mod tests {
-    use super::load_order;
+    use super::{fallback, load_order, primary};
+    use gpui::Resource;
+
+    #[test]
+    fn a_jpg_thumbnail_falls_back_to_png_and_back() {
+        let jpg = Resource::Path(std::path::Path::new("/l/blobs/t/ab/cd/abcd.jpg").into());
+        let png = Resource::Path(std::path::Path::new("/l/blobs/t/ab/cd/abcd.png").into());
+        assert_eq!(fallback(&jpg), Some(png.clone()));
+        assert_eq!(fallback(&png), None);
+        assert_eq!(primary(&png), Some(jpg));
+    }
 
     #[test]
     fn tiles_load_from_the_middle_of_the_viewport_outward() {

@@ -436,10 +436,12 @@ impl Render for ColorEditor {
                     .text(theme::TEXT_CAPTION)
                     .text_color(theme.text_secondary())
                     .child(
+                        // `.sensitivityHeader` keeps the body's line height.
                         div()
                             .flex()
                             .items_center()
                             .justify_between()
+                            .line_height(px(theme::TEXT_CAPTION * theme::BODY_LINE_HEIGHT))
                             .child("Tolerance")
                             .child(
                                 div()
