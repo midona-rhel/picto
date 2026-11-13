@@ -15,7 +15,7 @@ use crate::ui::{
     action_button::Look as ButtonLook,
     field::Look,
     menu::{self, Menu},
-    modal::{Presence, Size},
+    modal::{self, Size},
     overlay_shell::{self, Geometry, Mark, Nav},
     text_input::{Submitted, TextInput},
 };
@@ -220,8 +220,6 @@ struct Create {
     title: &'static str,
     parent: Option<FolderId>,
     name: Entity<TextInput>,
-    presence: Presence,
-    focus: FocusHandle,
     busy: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -240,12 +238,11 @@ pub struct FolderPicker {
     folded: HashSet<FolderId>,
     focus_index: Option<usize>,
     scroll: ScrollHandle,
-    menu: Option<Entity<Menu>>,
+    /// A row's menu and the dialog it opens; the keyboard goes back to the
+    /// search once each has gone.
+    menu: menu::Host,
     menu_folder: Option<Folder>,
-    _menu: Option<Subscription>,
-    create: Option<Create>,
-    /// The keyboard goes back to the search at the next frame.
-    refocus: bool,
+    create: modal::Host<Create>,
     filter: Option<FilterMode>,
     parent_mode: Option<ParentMode>,
     _subscriptions: Vec<Subscription>,
@@ -254,6 +251,7 @@ pub struct FolderPicker {
 impl FolderPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::menu_search);
+        let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {
@@ -279,11 +277,9 @@ impl FolderPicker {
             folded: HashSet::new(),
             focus_index: None,
             scroll: ScrollHandle::new(),
-            menu: None,
+            menu,
             menu_folder: None,
-            _menu: None,
-            create: None,
-            refocus: false,
+            create: modal::Host::default(),
             filter: None,
             parent_mode: None,
             _subscriptions: subscriptions,
@@ -420,10 +416,8 @@ impl FolderPicker {
         let Some(opening) = self.opening.take() else {
             return;
         };
-        if let Some(menu) = &self.menu {
-            menu.update(cx, |menu, cx| menu.dismiss(cx));
-        }
-        self.create = None;
+        self.menu.close(cx);
+        self.create.close(cx);
         opening.finish(&self.focus, window, cx);
         cx.notify();
     }
@@ -560,7 +554,7 @@ impl FolderPicker {
     }
 
     fn navigate(&mut self, key: Nav, cx: &mut Context<Self>) -> bool {
-        if self.create.is_some() || self.menu.is_some() {
+        if self.create.is_open() || self.menu.is_open() {
             return false;
         }
         let rows = self.visible(cx);
@@ -636,35 +630,23 @@ impl FolderPicker {
                 .into(),
         ];
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    let Some(folder) = this.menu_folder.clone() else {
-                        return;
-                    };
-                    match *action {
-                        "new-subfolder" => {
-                            this.start_create("New Subfolder", Some(folder.id), window, cx)
-                        }
-                        "new-sibling" => {
-                            this.start_create("New Sibling Folder", folder.parent, window, cx)
-                        }
-                        _ => {}
-                    }
-                }),
-            );
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+        self.menu.open(menu, window, cx, |this, _, action, _, cx| {
+            let Some(folder) = this.menu_folder.clone() else {
+                return;
+            };
+            match action {
+                "new-subfolder" => this.start_create("New Subfolder", Some(folder.id), cx),
+                "new-sibling" => this.start_create("New Sibling Folder", folder.parent, cx),
+                _ => {}
+            }
+        });
         self.menu_folder = Some(folder);
-        cx.notify();
     }
 
     fn start_create(
         &mut self,
         title: &'static str,
         parent: Option<FolderId>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let name = cx.new(|cx| TextInput::dialog("Folder name", cx));
@@ -674,22 +656,25 @@ impl FolderPicker {
             cx.observe(&name, |_, _, cx| cx.notify()),
         ];
         let handle = name.read(cx).focus_handle(cx);
-        self.create = Some(Create {
+        let back = menu::Return::To(self.search.read(cx).focus_handle(cx));
+        let create = Create {
             title,
             parent,
             name,
-            presence: Presence::new(),
-            focus: cx.focus_handle(),
             busy: false,
             _subscriptions: subscriptions,
-        });
-        window.focus(&handle, cx);
-        cx.notify();
+        };
+        self.create.open(create, back, cx).focus_first(handle);
     }
 
     /// `createNamedFolder`: creates it, then adds the items to it.
     fn submit_create(&mut self, cx: &mut Context<Self>) {
-        let Some(create) = self.create.as_mut().filter(|create| !create.busy) else {
+        let Some(create) = self
+            .create
+            .get_mut()
+            .map(|dialog| &mut dialog.content)
+            .filter(|create| !create.busy)
+        else {
             return;
         };
         let name = create.name.read(cx).value().trim().to_owned();
@@ -706,19 +691,18 @@ impl FolderPicker {
             let Ok(result) = answer.await else { return };
             let _ = this.update(cx, |this, cx| match result {
                 Ok((folder, _)) => {
-                    this.create = None;
+                    this.create.close(cx);
                     if let Some(parent) = parent {
                         this.session
                             .update(cx, |session, _| session.record_folder_use(parent));
                     }
                     this.toggle(folder, cx);
-                    this.refocus = true;
                 }
                 Err(error) => {
                     // TODO: show this as the notification production shows.
                     eprintln!("folder picker: {error}");
-                    if let Some(create) = &mut this.create {
-                        create.busy = false;
+                    if let Some(dialog) = this.create.get_mut() {
+                        dialog.content.busy = false;
                     }
                     cx.notify();
                 }
@@ -728,10 +712,7 @@ impl FolderPicker {
     }
 
     fn dismiss_create(&mut self, cx: &mut Context<Self>) {
-        if let Some(create) = &mut self.create {
-            create.presence.close();
-            cx.notify();
-        }
+        self.create.dismiss(cx);
     }
 }
 
@@ -1009,14 +990,15 @@ impl FolderPicker {
         row.into_any_element()
     }
 
-    fn create_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let create = self.create.as_ref()?;
+    fn create_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.create.layer(window, cx)?;
+        let create = &dialog.content;
         let typed = !create.name.read(cx).value().trim().is_empty();
         let busy = create.busy;
         Some(
-            ui::modal("folder-picker-create", create.title, create.presence)
+            ui::modal("folder-picker-create", create.title, dialog.presence)
                 .size(Size::Small)
-                .focus(&create.focus)
+                .focus(&dialog.focus)
                 .layer(11)
                 .on_close({
                     let this = cx.entity().downgrade();
@@ -1029,9 +1011,7 @@ impl FolderPicker {
                     ui::action_button("folder-picker-cancel", ButtonLook::Standard)
                         .label("Cancel")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.create = None;
-                            this.refocus = true;
-                            cx.notify();
+                            this.create.close(cx);
                         })),
                 )
                 .footer(
@@ -1047,32 +1027,10 @@ impl FolderPicker {
 
 impl Render for FolderPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-            if self.create.is_none() {
-                self.refocus = true;
-            }
-        }
-        if self
-            .create
-            .as_ref()
-            .is_some_and(|create| create.presence.finished())
-        {
-            self.create = None;
-            self.refocus = true;
-        }
+        let menu = self.menu.layer(window, cx);
+        let create = self.create_dialog(window, cx);
         if !self.is_open() {
             return div().into_any_element();
-        }
-        // The keyboard goes back to the search once a menu or dialog is gone.
-        if std::mem::take(&mut self.refocus) {
-            let handle = self.search.read(cx).focus_handle(cx);
-            window.focus(&handle, cx);
         }
         let theme = theme::theme(cx);
         let entity = cx.entity().downgrade();
@@ -1263,26 +1221,11 @@ impl Render for FolderPicker {
                         .child(overlay_shell::kbd("Esc", cx)),
                 )
             });
-        let mut root = div().child(shell).children(self.create_dialog(cx));
-        if let Some(menu) = self.menu.clone() {
-            let view = window.viewport_size();
-            root = root.child(
-                deferred(
-                    anchored()
-                        .position(point(px(0.), px(0.)))
-                        .child(div().w(view.width).h(view.height).child(menu)),
-                )
-                .with_priority(30),
-            );
-        }
-        if self
-            .create
-            .as_ref()
-            .is_some_and(|create| create.presence.animating())
-        {
-            window.request_animation_frame();
-        }
-        root.into_any_element()
+        div()
+            .child(shell)
+            .children(create)
+            .children(menu)
+            .into_any_element()
     }
 }
 

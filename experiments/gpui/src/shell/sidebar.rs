@@ -273,7 +273,7 @@ pub struct Sidebar {
     swallow_click: bool,
     _drags: Option<Subscription>,
     /// The open dialog.
-    dialog: Option<dialogs::Layer>,
+    dialog: ui::modal::Host<dialogs::Dialog>,
     /// The folder picker "Move to..." opens, the folders it moves, and
     /// where the last context menu opened, which it opens at.
     folder_picker: Entity<crate::inspector::FolderPicker>,
@@ -355,7 +355,7 @@ impl Sidebar {
             node_drag: None,
             swallow_click: false,
             _drags: None,
-            dialog: None,
+            dialog: ui::modal::Host::default(),
             smart_editor: None,
             folder_picker,
             moving_folders: Vec::new(),
@@ -1873,7 +1873,7 @@ impl Sidebar {
             .collect::<Vec<_>>();
         match action {
             "duplicate" => self.duplicate(nodes.to_vec(), window, cx),
-            "delete" => self.confirm_delete(nodes.to_vec(), window, cx),
+            "delete" => self.confirm_delete(nodes.to_vec(), cx),
             "quick-access-add" => {
                 let mut next = self.quick_access(cx);
                 next.extend(
@@ -1970,7 +1970,7 @@ impl Sidebar {
                 self.start_rename(node.to_owned(), entries[index].label.clone(), window, cx)
             }
             "duplicate" => self.duplicate(vec![node.to_owned()], window, cx),
-            "delete" => self.confirm_delete(vec![node.to_owned()], window, cx),
+            "delete" => self.confirm_delete(vec![node.to_owned()], cx),
             "quick-access" => {
                 let mut next = self.quick_access(cx);
                 if let Some(at) = next.iter().position(|id| id == node) {
@@ -2066,7 +2066,6 @@ impl Sidebar {
                             label: "Remove",
                             then: dialogs::Confirmed::RemoveWatch(id),
                         },
-                        window,
                         cx,
                     );
                 }

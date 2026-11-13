@@ -324,9 +324,8 @@ pub struct TagPicker {
     focus_index: Option<usize>,
     scroll: ScrollHandle,
     search_timer: Option<Task<()>>,
-    menu: Option<Entity<Menu>>,
+    menu: menu::Host,
     menu_tag: Option<TagRecord>,
-    _menu: Option<Subscription>,
     filter: Option<FilterMode>,
     _subscriptions: Vec<Subscription>,
 }
@@ -334,6 +333,8 @@ pub struct TagPicker {
 impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::menu_search);
+        // The keyboard goes back to the search once a row's menu has gone.
+        let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {
@@ -374,9 +375,8 @@ impl TagPicker {
             focus_index: None,
             scroll: ScrollHandle::new(),
             search_timer: None,
-            menu: None,
+            menu,
             menu_tag: None,
-            _menu: None,
             filter: None,
             _subscriptions: subscriptions,
         }
@@ -491,9 +491,7 @@ impl TagPicker {
             return;
         };
         self.search_timer = None;
-        if let Some(menu) = &self.menu {
-            menu.update(cx, |menu, cx| menu.dismiss(cx));
-        }
+        self.menu.close(cx);
         opening.finish(&self.focus, window, cx);
         cx.notify();
     }
@@ -772,7 +770,7 @@ impl TagPicker {
     }
 
     fn navigate(&mut self, key: Nav, cx: &mut Context<Self>) -> bool {
-        if self.settings_open || self.menu.is_some() {
+        if self.settings_open || self.menu.is_open() {
             return false;
         }
         let starred = crate::settings::current(cx).starred_tags.clone();
@@ -848,19 +846,12 @@ impl TagPicker {
     ) {
         let entries = crate::tags::common_menu(&tag, &self.namespaces, tag.tag_id.0 > 0, cx);
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu = Some(cx.subscribe_in(
-            &menu,
-            window,
-            |this, menu, event: &menu::Event, window, cx| {
-                let menu::Event::Chosen(action) = event;
+        self.menu
+            .open(menu, window, cx, |this, menu, action, window, cx| {
                 let value = menu.read(cx).chosen_value();
                 this.run_menu(action, value, window, cx);
-            },
-        ));
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+            });
         self.menu_tag = Some(tag);
-        cx.notify();
     }
 
     fn run_menu(
@@ -1471,15 +1462,7 @@ impl WhenNotActive for Stateful<Div> {}
 
 impl Render for TagPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A dismissed menu goes once its fade is over.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-        }
+        let menu = self.menu.layer(window, cx);
         if !self.is_open() {
             return div().into_any_element();
         }
@@ -1663,19 +1646,7 @@ impl Render for TagPicker {
                 .child("Close ")
                 .child(overlay_shell::kbd("Esc", cx)),
         );
-        let mut root = div().child(shell);
-        if let Some(menu) = self.menu.clone() {
-            let view = window.viewport_size();
-            root = root.child(
-                deferred(
-                    anchored()
-                        .position(point(px(0.), px(0.)))
-                        .child(div().w(view.width).h(view.height).child(menu)),
-                )
-                .with_priority(30),
-            );
-        }
-        root.into_any_element()
+        div().child(shell).children(menu).into_any_element()
     }
 }
 

@@ -14,6 +14,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::time::{Duration, Instant};
 
+pub(crate) mod host;
+pub use host::{Host, Return};
+
 actions!(menu, [Up, Down, Confirm, Cancel, OpenSubmenu, CloseSubmenu]);
 
 pub fn bind(cx: &mut App) {

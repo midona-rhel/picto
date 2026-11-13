@@ -4,7 +4,7 @@ use super::{Sidebar, folder_id, tree};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::tag_token_input::{self, TagTokenInput};
-use crate::ui::{self, action_button::Look as ButtonLook, modal::Presence, modal::Size};
+use crate::ui::{self, action_button::Look as ButtonLook, menu::Return, modal, modal::Size};
 use gpui::*;
 use picto_library::{FolderId, Lifecycle};
 
@@ -41,14 +41,6 @@ pub enum Dialog {
     },
 }
 
-/// The open dialog, its time on screen, and the focus that holds the
-/// keyboard while no field in it has it.
-pub struct Layer {
-    pub dialog: Dialog,
-    pub presence: Presence,
-    pub focus: FocusHandle,
-}
-
 /// `singleFolderDeletionMessage`.
 pub fn folder_deletion(name: &str) -> String {
     format!(
@@ -77,48 +69,29 @@ pub fn smart_folder_deletion(name: &str, group: bool) -> String {
 }
 
 impl Sidebar {
-    /// Opens a dialog and gives it the keyboard.
+    /// Opens a dialog, which takes the keyboard and gives it back to the
+    /// sidebar when it goes.
     pub(super) fn open_dialog(
         &mut self,
         dialog: Dialog,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
-        self.dialog = Some(Layer {
-            dialog,
-            presence: Presence::new(),
-            focus,
-        });
-        cx.notify();
+    ) -> &mut modal::Dialog<Dialog> {
+        self.dialog.open(dialog, Return::To(self.home.clone()), cx)
     }
 
     /// The close button, Escape and the backdrop: the dialog fades out.
-    pub(super) fn dismiss_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(layer) = &mut self.dialog {
-            layer.presence.close();
-            window.focus(&self.home, cx);
-            cx.notify();
-        }
+    pub(super) fn dismiss_dialog(&mut self, cx: &mut Context<Self>) {
+        self.dialog.dismiss(cx);
     }
 
     /// Cancel, or a dialog whose work is done: it goes at once.
-    pub(super) fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dialog.take().is_some() {
-            window.focus(&self.home, cx);
-            cx.notify();
-        }
+    pub(super) fn close_dialog(&mut self, cx: &mut Context<Self>) {
+        self.dialog.close(cx);
     }
 
     /// Asks before deleting folders and smart folders, in the Electron
     /// sidebar's words.
-    pub(super) fn confirm_delete(
-        &mut self,
-        nodes: Vec<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn confirm_delete(&mut self, nodes: Vec<String>, cx: &mut Context<Self>) {
         let (title, message) = match nodes.as_slice() {
             [node] => {
                 let (name, group) = {
@@ -143,7 +116,6 @@ impl Sidebar {
                 label: "Delete",
                 then: Confirmed::Delete(nodes),
             },
-            window,
             cx,
         );
     }
@@ -209,10 +181,9 @@ impl Sidebar {
                         tags,
                         _changed: changed,
                     },
-                    window,
                     cx,
-                );
-                window.focus(&focus, cx);
+                )
+                .focus_first(focus);
             });
         })
         .detach();
@@ -263,7 +234,7 @@ impl Sidebar {
             let Ok(Ok(record)) = answer.await else {
                 return;
             };
-            let _ = this.update_in(cx, move |this, window, cx| {
+            let _ = this.update(cx, move |this, cx| {
                 // `folderWatchInitial`: an enabled watch fills the dialog.
                 let watched =
                     record.filter(|record| record.watch_enabled && record.watch_path.is_some());
@@ -282,7 +253,6 @@ impl Sidebar {
                             _ => Lifecycle::Inbox,
                         },
                     },
-                    window,
                     cx,
                 );
             });
@@ -306,11 +276,7 @@ impl Sidebar {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                if let Some(Layer {
-                    dialog: Dialog::Watch { path, .. },
-                    ..
-                }) = &mut this.dialog
-                {
+                if let Some(Dialog::Watch { path, .. }) = this.dialog.content_mut() {
                     *path = Some(chosen.to_string_lossy().into_owned());
                     cx.notify();
                 }
@@ -324,23 +290,19 @@ impl Sidebar {
     // TODO: watching the directory and importing what arrives needs the
     // application backend; only the setting is stored here.
     fn save_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Layer {
-            dialog:
-                Dialog::Watch {
-                    folder,
-                    path: Some(path),
-                    enabled,
-                    subfolders,
-                    status,
-                },
-            ..
-        }) = &self.dialog
+        let Some(Dialog::Watch {
+            folder,
+            path: Some(path),
+            enabled,
+            subfolders,
+            status,
+        }) = self.dialog.content()
         else {
             return;
         };
         let (folder, path, enabled, subfolders, status) =
             (*folder, path.clone(), *enabled, *subfolders, *status);
-        self.close_dialog(window, cx);
+        self.close_dialog(cx);
         self.edit(
             move |library| {
                 if enabled {
@@ -357,7 +319,7 @@ impl Sidebar {
     }
 
     fn confirmed(&mut self, then: Confirmed, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_dialog(window, cx);
+        self.close_dialog(cx);
         match then {
             Confirmed::Delete(nodes) => self.delete(nodes, window, cx),
             Confirmed::RemoveWatch(id) => self.edit(
@@ -375,28 +337,21 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self
-            .dialog
-            .as_ref()
-            .is_some_and(|layer| layer.presence.finished())
-        {
-            self.dialog = None;
-        }
-        let layer = self.dialog.as_ref()?;
+        let layer = self.dialog.layer(window, cx)?;
         let theme = theme::theme(cx);
         let frame = |title: &'static str, size: Size, cx: &mut Context<Self>| {
             ui::modal("sidebar-dialog", title, layer.presence)
                 .size(size)
                 .focus(&layer.focus)
                 .on_close(
-                    cx.listener(|this, _: &(), window, cx| this.dismiss_dialog(window, cx))
+                    cx.listener(|this, _: &(), _, cx| this.dismiss_dialog(cx))
                         .into_handler(),
                 )
         };
         let cancel = ui::action_button("sidebar-dialog-cancel", ButtonLook::Standard)
             .label("Cancel")
-            .on_click(cx.listener(|this, _, window, cx| this.close_dialog(window, cx)));
-        let element = match &layer.dialog {
+            .on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx)));
+        let element = match &layer.content {
             Dialog::AutoTags { tags, .. } => {
                 frame("Set Auto Tags", Size::Small, cx).child(tags.clone())
             }
@@ -483,10 +438,7 @@ impl Sidebar {
                                 "Enable Watch",
                                 ui::toggle("watch-enabled", enabled)
                                     .on_toggle(cx.listener(move |this, _: &(), _, cx| {
-                                        if let Some(Layer {
-                                            dialog: Dialog::Watch { enabled, .. },
-                                            ..
-                                        }) = &mut this.dialog
+                                        if let Some(Dialog::Watch { enabled, .. }) = this.dialog.content_mut()
                                         {
                                             *enabled = !*enabled;
                                             cx.notify();
@@ -498,10 +450,7 @@ impl Sidebar {
                                 "Watch Subfolders",
                                 ui::toggle("watch-subfolders", subfolders)
                                     .on_toggle(cx.listener(move |this, _: &(), _, cx| {
-                                        if let Some(Layer {
-                                            dialog: Dialog::Watch { subfolders, .. },
-                                            ..
-                                        }) = &mut this.dialog
+                                        if let Some(Dialog::Watch { subfolders, .. }) = this.dialog.content_mut()
                                         {
                                             *subfolders = !*subfolders;
                                             cx.notify();
@@ -532,10 +481,7 @@ impl Sidebar {
                                         .width(160.)
                                         .on_change(move |value, _, cx| {
                                             let _ = sidebar.update(cx, |this, cx| {
-                                                if let Some(Layer {
-                                                    dialog: Dialog::Watch { status, .. },
-                                                    ..
-                                                }) = &mut this.dialog
+                                                if let Some(Dialog::Watch { status, .. }) = this.dialog.content_mut()
                                                 {
                                                     *status = if value == "active" {
                                                         Lifecycle::Active
@@ -562,13 +508,10 @@ impl Sidebar {
                                 ui::action_button("watch-remove", ButtonLook::Danger)
                                     .label("Remove Watch")
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(Layer {
-                                            dialog: Dialog::Watch { folder, .. },
-                                            ..
-                                        }) = &this.dialog
+                                        if let Some(Dialog::Watch { folder, .. }) = this.dialog.content()
                                         {
                                             let folder = *folder;
-                                            this.close_dialog(window, cx);
+                                            this.close_dialog(cx);
                                             this.edit(
                                                 move |library| {
                                                     library.clear_folder_watch(folder).map(|_| ())
@@ -612,17 +555,16 @@ impl Sidebar {
                         let _ =
                             sidebar.update(cx, |this, cx| this.confirmed(then.clone(), window, cx));
                     })
-                    .on_cancel(move |window, cx| {
-                        let _ = cancel.update(cx, |this, cx| this.close_dialog(window, cx));
+                    .on_cancel(move |_, cx| {
+                        let _ = cancel.update(cx, |this, cx| this.close_dialog(cx));
                     })
-                    .on_close(move |window, cx| {
-                        let _ = close.update(cx, |this, cx| this.dismiss_dialog(window, cx));
+                    .on_close(move |_, cx| {
+                        let _ = close.update(cx, |this, cx| this.dismiss_dialog(cx));
                     })
                     .into_any_element(),
                 );
             }
         };
-        let _ = window;
         Some(element.into_any_element())
     }
 }

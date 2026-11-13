@@ -10,7 +10,6 @@ use crate::tags::record_name as name;
 use crate::ui::{
     self,
     menu::{self, Menu},
-    modal::Presence,
 };
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -438,17 +437,11 @@ impl Inspector {
             ],
         };
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    this.run_chip_menu(action, window, cx);
-                }),
-            );
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+        self.menu
+            .open(menu, window, cx, |this, _, action, window, cx| {
+                this.run_chip_menu(action, window, cx)
+            });
         self.menu_target = Some(target);
-        cx.notify();
     }
 
     fn run_chip_menu(&mut self, action: &str, _: &mut Window, cx: &mut Context<Self>) {
@@ -514,13 +507,9 @@ impl Inspector {
 
     /// Asks before replacing what some of the selected items have.
     pub(super) fn ask(&mut self, overwrite: Overwrite, count: u64, cx: &mut Context<Self>) {
-        self.confirm = Some(Confirm {
-            overwrite,
-            count,
-            presence: Presence::new(),
-            focus: cx.focus_handle(),
-        });
-        cx.notify();
+        // The keyboard is left where the dialog leaves it.
+        self.confirm
+            .open(Confirm { overwrite, count }, menu::Return::Stay, cx);
     }
 
     /// Writes the notes or addresses to every selected item.
@@ -547,24 +536,18 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self
-            .confirm
-            .as_ref()
-            .is_some_and(|confirm| confirm.presence.finished())
-        {
-            self.confirm = None;
-        }
-        let confirm = self.confirm.as_ref()?;
+        let confirm = self.confirm.layer(window, cx)?;
+        // It keeps the keyboard while it is open.
         if !confirm.focus.contains_focused(window, cx) && !confirm.presence.closing() {
             window.focus(&confirm.focus, cx);
         }
-        let (title, label, what) = match confirm.overwrite {
+        let (title, label, what) = match confirm.content.overwrite {
             Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),
             Overwrite::Sources(_) => ("Overwrite sources?", "Overwrite Sources", "source URLs"),
         };
         let message = format!(
             "This will replace existing {what} on all {} selected items. Are you sure?",
-            crate::grid::format::grouped(confirm.count)
+            crate::grid::format::grouped(confirm.content.count)
         );
         let this = cx.entity().downgrade();
         let (dismiss, accept) = (this.clone(), this);
@@ -573,24 +556,18 @@ impl Inspector {
                 .danger(true)
                 .focus(&confirm.focus)
                 .on_close(move |_, cx| {
-                    let _ = dismiss.update(cx, |this, cx| {
-                        if let Some(confirm) = &mut this.confirm {
-                            confirm.presence.close();
-                            cx.notify();
-                        }
-                    });
+                    let _ = dismiss.update(cx, |this, cx| this.confirm.dismiss(cx));
                 })
                 .on_confirm(move |_, cx| {
                     let _ = accept.update(cx, |this, cx| {
-                        if let Some(confirm) = this.confirm.as_mut() {
-                            confirm.presence.close();
+                        this.confirm.dismiss(cx);
+                        if let Some(confirm) = this.confirm.get_mut() {
                             let overwrite = std::mem::replace(
-                                &mut confirm.overwrite,
+                                &mut confirm.content.overwrite,
                                 Overwrite::Notes(String::new()),
                             );
                             this.overwrite(overwrite, cx);
                         }
-                        cx.notify();
                     });
                 })
                 .into_any_element(),
