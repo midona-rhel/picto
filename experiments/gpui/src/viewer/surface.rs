@@ -1047,6 +1047,7 @@ impl Render for MediaSurface {
         let image_mode = self.mode == Mode::Image;
         let image = self.image_size().filter(|_| image_mode);
         let pane = self.pane();
+        let camera_before = self.camera;
         // A newly shown image opens fitted, once the pane has been measured.
         if self.needs_fit
             && pane.0 > 0.
@@ -1057,7 +1058,10 @@ impl Render for MediaSurface {
             let opening = self.opening(image, pane);
             self.set_camera(opening, cx);
         }
-        if self.animate(cx) {
+        // A camera moved while drawing notifies no one (the detail window
+        // observes the surface for its zoom percentage, read before this
+        // ran): another frame tells them, also after a glide's last step.
+        if self.animate(cx) || self.camera != camera_before {
             window.request_animation_frame();
         }
         // The navigator appears a moment after the image first overflows.

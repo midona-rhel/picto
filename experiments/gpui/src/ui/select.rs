@@ -267,7 +267,9 @@ impl RenderOnce for Select {
                     move |bounds, window, _| {
                         let bounds = bounds.dilate(px(1.));
                         if measured.replace(bounds) != bounds && open {
-                            window.refresh();
+                            // `refresh` does nothing while a frame is being
+                            // drawn; this asks for the next one.
+                            window.request_animation_frame();
                         }
                     },
                     |_, _, _, _| {},

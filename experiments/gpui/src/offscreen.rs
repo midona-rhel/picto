@@ -12,7 +12,10 @@
 //! window (0 is the main one; Settings and a detail window come after it in
 //! the order they opened), or `pace <milliseconds>`, how long the app runs
 //! after each input line (200 unless set), for pictures taken soon after
-//! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
+//! one, or `lazy` / `eager`: from there on, draw a frame only when a real
+//! window would (see `settle`) / redraw every tick, the default.
+//! `PICTO_GPUI_LAZY=1` starts a script lazy. `PICTO_GPUI_WINDOW=1213x865`
+//! sets the main window's size.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -25,14 +28,37 @@ const TICK: Duration = Duration::from_millis(16);
 
 /// Lets the app work for a while: draws, runs what became ready, and moves
 /// its timers along with the real clock that its animations read.
-fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle, time: Duration) {
+///
+/// Eager (the default) redraws the whole window every tick. Lazy draws a
+/// frame only when a real window would: after something invalidated it
+/// outside a draw, or asked for the next animation frame. A view that is
+/// right eagerly and wrong lazily waits for a frame nothing schedules, the
+/// kind of fault that on screen "fixes itself when the mouse moves".
+fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle, time: Duration, lazy: bool) {
     let started = std::time::Instant::now();
     loop {
-        cx.update_window(window, |_, window, cx| {
-            window.refresh();
-            window.draw(cx).clear(cx);
-        })
-        .unwrap();
+        // A window the script closed (a detail window's Escape) is gone:
+        // the app still runs, and `window 0` goes back to the main one.
+        let drawn = cx.update_window(window, |_, window, cx| {
+            if lazy {
+                // The platform's frame callback: the frames asked for run
+                // first, then the window is drawn if anything dirtied it.
+                let asked = window.simulate_next_frame(cx);
+                if window.is_dirty() {
+                    if std::env::var_os("PICTO_GPUI_LAZY_DEBUG").is_some() {
+                        eprintln!("lazy draw (asked {asked})");
+                    }
+                    window.draw(cx).clear(cx);
+                }
+            } else {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            }
+        });
+        if drawn.is_err() {
+            cx.run_until_parked();
+            break;
+        }
         cx.run_until_parked();
         if started.elapsed() >= time {
             break;
@@ -78,8 +104,9 @@ fn plays_a_script() {
     let main: AnyWindowHandle = window.into();
     let mut window = main;
     let mut pace = Duration::from_millis(200);
+    let mut lazy = std::env::var_os("PICTO_GPUI_LAZY").is_some_and(|value| value != "0");
     // The library opens and the first page and its thumbnails arrive.
-    settle(&mut cx, window, Duration::from_secs(3));
+    settle(&mut cx, window, Duration::from_secs(3), lazy);
     for line in script.lines().map(str::trim) {
         // `size`, `js` and `reload` are for the Electron reference
         // (`reference.mjs`), which takes the same scripts.
@@ -104,17 +131,19 @@ fn plays_a_script() {
             window = *windows
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
-            settle(&mut cx, window, Duration::from_millis(200));
+            settle(&mut cx, window, Duration::from_millis(200), lazy);
+        } else if line == "lazy" || line == "eager" {
+            lazy = line == "lazy";
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {
             let time = time.trim().parse().expect("wait <milliseconds>");
-            settle(&mut cx, window, Duration::from_millis(time));
+            settle(&mut cx, window, Duration::from_millis(time), lazy);
         } else {
             let event = pointer::parse(line).unwrap_or_else(|| panic!("not a line: {line}"));
             cx.update_window(window, |_, window, cx| event.deliver(window, cx))
                 .unwrap();
-            settle(&mut cx, window, pace);
+            settle(&mut cx, window, pace, lazy);
         }
     }
     closing.close();
