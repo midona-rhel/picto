@@ -1417,6 +1417,18 @@ a GIF, a JPEG XL, a `.mov`, a `.webm`, an MP3 and a PDF collection. Timers
 advance with the real clock there, so animations play, but nothing was
 measured.
 
+`PICTO_GPUI_FPS=1` shows a frame meter in the window's bottom-left corner:
+the frames drawn in the last second, the time between the last two, and how
+long the app took to draw one (from the start of the shell's render to the end
+of its paint; the GPU's share is not in it). It reads "idle" once nothing has
+drawn for a second.
+
+`million.sh [items]` makes a synthetic library (a million items by default:
+4,096 generated JPEGs shared among them by hard links, with five smart
+folders) with the repository's `million_grid_demo` example and opens the app
+on it with the meter on, for checking scrolling, resizing and loading at
+scale. It reads no existing library.
+
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame, the gap
 between grid frames, and how many thumbnail files were read.

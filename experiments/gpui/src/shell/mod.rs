@@ -132,6 +132,23 @@ impl Shell {
     ) -> Self {
         let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
+        // The frame meter says "idle" once nothing has drawn for a second.
+        if crate::meter::enabled() {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                    if crate::meter::idle() {
+                        crate::meter::idle_look();
+                        if this.update(cx, |_, cx| cx.notify()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            })
+            .detach();
+        }
         let thumbnails = cx.new(Thumbnails::new);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -566,6 +583,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::meter::frame_started();
         crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
         // While a screen shows, or a closed viewer fades out in the grid's
@@ -994,6 +1012,8 @@ impl Render for Shell {
         root = root.child(tag_picker).child(folder_picker);
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim(cx));
+        // The frame meter, when debugging: last, so that it ends the frame.
+        root = root.children(crate::meter::overlay(cx));
         // Keep painting while a rail slides.
         if self.rails.animating() {
             window.request_animation_frame();
