@@ -12,6 +12,10 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 /// `COLOR_FILTER_SETTLE_MS`.
 const SETTLE: Duration = Duration::from_millis(250);
+/// `.saturation`: white toward the hue across, and black up from the
+/// bottom to clear, which make the saturation and brightness square.
+const SQUARE_WHITE: u32 = 0xffffff;
+const SQUARE_BLACK: u32 = 0x000000;
 
 /// `PRESETS`.
 const PRESETS: [u32; 12] = [
@@ -330,13 +334,13 @@ impl Render for ColorEditor {
             .cursor(CursorStyle::Crosshair)
             .child(div().absolute().inset_0().bg(linear_gradient(
                 90.,
-                linear_color_stop(rgb(0xffffff), 0.),
+                linear_color_stop(rgb(SQUARE_WHITE), 0.),
                 linear_color_stop(pure_hue, 1.),
             )))
             .child(div().absolute().inset_0().bg(linear_gradient(
                 0.,
-                linear_color_stop(rgb(0x000000), 0.),
-                linear_color_stop(clear(rgb(0x000000)), 1.),
+                linear_color_stop(rgb(SQUARE_BLACK), 0.),
+                linear_color_stop(clear(rgb(SQUARE_BLACK)), 1.),
             )))
             .child(
                 // `.cursor`: a 9px white ring with a dark halo, centred on the
@@ -348,9 +352,9 @@ impl Render for ColorEditor {
                     .size(px(9.))
                     .rounded_full()
                     .border_1()
-                    .border_color(rgb(0xffffff))
+                    .border_color(rgb(theme::COLOR_CURSOR_RING))
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0x000000a6).into())
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::COLOR_CURSOR_HALO).into())
                             .spread_radius(px(1.)),
                     ]),
             )
@@ -394,7 +398,7 @@ impl Render for ColorEditor {
                     .right_0()
                     .top(px(thumb_top))
                     .h(px(1.))
-                    .bg(rgba(0xffffffe6)),
+                    .bg(rgba(theme::COLOR_HUE_THUMB_LIGHT)),
             )
             .child(
                 div()
@@ -403,7 +407,7 @@ impl Render for ColorEditor {
                     .right_0()
                     .top(px(thumb_top + 2.))
                     .h(px(1.))
-                    .bg(rgba(0x00000099)),
+                    .bg(rgba(theme::COLOR_HUE_THUMB_DARK)),
             )
             .child(self.drag_surface(Drag::Hue, cx));
 
@@ -471,18 +475,18 @@ impl Render for ColorEditor {
                 .size(px(20.))
                 .rounded(px(5.))
                 .overflow_hidden()
-                .bg(rgb(0xcccccc))
+                .bg(rgb(theme::COLOR_NONE_FILL))
                 .border_1()
                 .border_color(if none_active {
                     theme.text()
                 } else {
-                    rgba(0x8080804d)
+                    rgba(theme::COLOR_PRESET_RING)
                 })
                 .opacity(if none_active { 1. } else { 0.8 })
                 .hover(|style| style.opacity(1.))
                 .cursor_pointer()
                 .child(
-                    super::icon("color-none", 20., rgb(0x6a6a6a))
+                    super::icon("color-none", 20., rgb(theme::COLOR_NONE_STROKE))
                         .absolute()
                         .left(px(-1.))
                         .top(px(-1.)),
@@ -504,7 +508,7 @@ impl Render for ColorEditor {
                     .border_color(if active {
                         theme.text()
                     } else {
-                        rgba(0x8080804d)
+                        rgba(theme::COLOR_PRESET_RING)
                     })
                     .opacity(if active { 1. } else { 0.8 })
                     .hover(|style| style.opacity(1.))

@@ -167,6 +167,55 @@ pub const MODAL_DROP: f32 = 4.;
 /// `ScrollToTopButton`: its rise and fade wait this long before starting.
 pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
 
+/// The tag manager (`TagManagerScreen.module.css`): `.viewLeaving`, the
+/// list fading out before another group shows; `.viewEntering`, the new
+/// list fading in; `.tagListInner`, the rows fading in each time the list
+/// is replaced; and `tagSkeleton`, one pass of the placeholder shimmer.
+pub const TAG_VIEW_LEAVE: Duration = Duration::from_millis(100);
+pub const TAG_VIEW_ENTER: Duration = Duration::from_millis(140);
+pub const TAG_LIST_FADE: Duration = Duration::from_millis(90);
+pub const TAG_SHIMMER: Duration = Duration::from_millis(800);
+
+/// The inspector's preview stack (`@keyframes stackPreviewLeft`,
+/// `stackPreviewRight`): a card entering from the left or the right, and
+/// one leaving, which fades over 200 ms and is gone at 220 ms.
+pub const STACK_ENTER_LEFT: Duration = Duration::from_millis(200);
+pub const STACK_ENTER_RIGHT: Duration = Duration::from_millis(250);
+pub const STACK_EXIT_FADE: Duration = Duration::from_millis(200);
+pub const STACK_EXIT_REMOVE: Duration = Duration::from_millis(220);
+
+/// The grid's hover preview (`HoverPreviewPortal.tsx`):
+/// `HOVER_PREVIEW_DELAY_MS`, how long the pointer rests on the magnifier;
+/// `HOVER_HIDE_DELAY_MS`, how long after leaving it the preview stays; and
+/// `MIN_WAIT_MS`, the preview never appearing sooner than this after it
+/// opens.
+pub const HOVER_PREVIEW_DELAY: Duration = Duration::from_millis(200);
+pub const HOVER_PREVIEW_HIDE: Duration = Duration::from_millis(90);
+pub const HOVER_PREVIEW_MIN_WAIT: Duration = Duration::from_millis(150);
+/// `HOVER_RESUME_DELAY_MS`: the grid's magnifier comes back this long after
+/// scrolling.
+pub const MAGNIFIER_RESUME: Duration = Duration::from_millis(80);
+/// `thumbnailTiming.ts`: a thumbnail entering the viewport waits 100 ms,
+/// then fades in over 500 ms.
+pub const THUMBNAIL_REVEAL_DELAY: Duration = Duration::from_millis(100);
+pub const THUMBNAIL_REVEAL: Duration = Duration::from_millis(500);
+
+/// The viewer's `ANIM_DURATION_MS`: a keyboard or wheel-notch zoom glides
+/// for this long.
+pub const ZOOM_GLIDE: Duration = Duration::from_millis(150);
+
+/// A text field's caret: on and off for this long each.
+pub const CARET_BLINK: Duration = Duration::from_millis(500);
+/// `ToggleSwitch`: `transition: 0.2s ease`.
+pub const TOGGLE_SWITCH: Duration = Duration::from_millis(200);
+/// `progress-indeterminate`: one sweep of an indeterminate progress bar.
+pub const PROGRESS_SWEEP: Duration = Duration::from_millis(900);
+/// A Flash movie is advanced and redrawn this often (about 60 frames a
+/// second).
+pub const FLASH_FRAME: Duration = Duration::from_millis(16);
+/// Settings shows "Saving…" only for a save that takes longer than this.
+pub const SAVING_MESSAGE_DELAY: Duration = Duration::from_millis(160);
+
 /// `.controls` in `VideoPlayer.module.css`: the media controls fade in and
 /// out over 300 ms (`ease`).
 pub const MEDIA_CONTROLS_FADE: Duration = Duration::from_millis(300);

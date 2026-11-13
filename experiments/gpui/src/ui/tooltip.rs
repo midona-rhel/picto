@@ -128,7 +128,7 @@ impl Hover {
             .border_1()
             .border_color(theme.border_secondary())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(2.), rgba(0x0000004d).into()).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
             ])
             // `--glass-border-top`: the top edge is brighter than the sides.
             .child(

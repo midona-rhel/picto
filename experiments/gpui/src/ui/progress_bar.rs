@@ -6,8 +6,6 @@ use gpui::*;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// `progress-indeterminate`: one sweep.
-const SWEEP: Duration = Duration::from_millis(900);
 /// `.indeterminate { width: 35% }`.
 const SEGMENT: f32 = 0.35;
 
@@ -15,7 +13,8 @@ const SEGMENT: f32 = 0.35;
 /// `translateX(-110%)` to `translateX(310%)` of its own width, on
 /// `ease-in-out`, over and over.
 pub fn sweep_offset(elapsed: Duration) -> f32 {
-    let along = (elapsed.as_secs_f32() % SWEEP.as_secs_f32()) / SWEEP.as_secs_f32();
+    let along = (elapsed.as_secs_f32() % motion::PROGRESS_SWEEP.as_secs_f32())
+        / motion::PROGRESS_SWEEP.as_secs_f32();
     let moved = -1.1 + 4.2 * motion::EASE_IN_OUT.ease(along);
     SEGMENT * moved
 }

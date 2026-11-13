@@ -520,8 +520,8 @@ impl Render for SettingsWindow {
             .border_color(theme.contrast(5.))
             .bg(theme.contrast(3.))
             .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), rgba(0x00000026).into()).spread_radius(px(1.)),
-                BoxShadow::new(px(0.), px(2.), rgba(0x0000001a).into()).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).spread_radius(px(1.)),
+                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_10).into()).blur_radius(px(8.)),
             ])
             .child(header)
             .child(body)

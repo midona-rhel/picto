@@ -11,11 +11,7 @@ use super::camera::{self, Camera, Glide, Size};
 use super::document::{self, Document, kind::RendererKind};
 use crate::{motion, theme};
 use gpui::*;
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 /// `NAV_SIZE`: the navigator's side.
 const NAVIGATOR: f32 = 120.;
@@ -544,9 +540,7 @@ impl MediaSurface {
                 self.reveal_flash_controls(cx);
                 self.flash_task = Some(cx.spawn(async move |entity, cx| {
                     loop {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(16))
-                            .await;
+                        cx.background_executor().timer(motion::FLASH_FRAME).await;
                         let keep = entity.update(cx, |this, cx| {
                             if this.key != key {
                                 return false;

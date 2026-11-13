@@ -382,7 +382,7 @@ impl Inspector {
                             .rounded(px(theme::RADIUS_MD))
                             .overflow_hidden()
                             .shadow(vec![
-                                BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into())
+                                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
                                     .blur_radius(px(5.)),
                             ])
                             .child(
@@ -407,7 +407,7 @@ impl Inspector {
                                     .inset_0()
                                     .rounded(px(theme::RADIUS_MD))
                                     .border_1()
-                                    .border_color(rgba(0x0000001a)),
+                                    .border_color(rgba(theme::BLACK_10)),
                             ),
                     ),
             );

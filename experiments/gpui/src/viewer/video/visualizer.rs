@@ -192,6 +192,10 @@ impl Canvas<'_> {
     }
 }
 
+/// `drawStage`'s radial glow: violet at 18% in the middle, pink at 8% a
+/// third of the way out, clear at the edge.
+const GLOW: [(f32, u32); 3] = [(0., 0x735cff2e), (0.34, 0xff4fa314), (1., 0x05050b00)];
+
 /// `drawStage`: the night sky and the violet glow about the middle. GPUI
 /// draws two-stop linear gradients only, so the sky is two bands and the
 /// radial glow is a stack of concentric discs whose alphas compose to the
@@ -216,11 +220,7 @@ fn draw_stage(canvas: &mut Canvas, width: f32, height: f32) {
             linear_color_stop(color(0x04040a), 1.),
         ),
     ));
-    let stops = [
-        (0., rgba(0x735cff2e)),
-        (0.34, rgba(0xff4fa314)),
-        (1., rgba(0x05050b00)),
-    ];
+    let stops = GLOW.map(|(at, colour)| (at, rgba(colour)));
     let (centre_x, centre_y) = (width / 2., height * 0.54);
     let radius = (width * 0.58).max(height);
     const RINGS: usize = 32;

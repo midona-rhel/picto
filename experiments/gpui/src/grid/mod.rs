@@ -84,8 +84,6 @@ pub struct GridView {
     _session: Subscription,
 }
 
-/// `HOVER_RESUME_DELAY_MS`: the magnifier comes back this long after scrolling.
-const HOVER_RESUME: std::time::Duration = std::time::Duration::from_millis(80);
 /// "Return to Top" appears once the grid has scrolled this far.
 const RETURN_TO_TOP_AFTER: f32 = 200.;
 
@@ -272,7 +270,9 @@ impl GridView {
                 .map(|item| (item.root_id, item.content_hash.clone()));
             if let Some((id, hash)) = target {
                 self.preview.show = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(preview::SHOW_DELAY).await;
+                    cx.background_executor()
+                        .timer(crate::motion::HOVER_PREVIEW_DELAY)
+                        .await;
                     let _ = this.update(cx, |this, cx| {
                         this.preview.show = None;
                         this.open_preview(id, hash, cx);
@@ -301,7 +301,9 @@ impl GridView {
             return;
         }
         self.preview.hide = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(preview::HIDE_DELAY).await;
+            cx.background_executor()
+                .timer(crate::motion::HOVER_PREVIEW_HIDE)
+                .await;
             let _ = this.update(cx, |this, cx| this.close_preview(cx));
         }));
     }
@@ -762,7 +764,8 @@ impl GridView {
                             .px(px(3.))
                             .rounded(px(2.))
                             .when(selected, |pill| {
-                                pill.bg(rgb(theme::GRID_SELECTION)).text_color(white())
+                                pill.bg(rgb(theme::GRID_SELECTION))
+                                    .text_color(rgb(theme::BADGE_STRONG_TEXT))
                             })
                             .truncate()
                             .line_height(px(15.))
@@ -809,7 +812,7 @@ impl GridView {
         // the grid is scrolling.
         if self.hovered == Some(index)
             && !item.mime.starts_with("video/")
-            && self.scrolled.elapsed() >= HOVER_RESUME
+            && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME
         {
             cell = cell.child(
                 div()
@@ -820,12 +823,12 @@ impl GridView {
                     .h(px(marquee::MAGNIFIER_HEIGHT))
                     .rounded_tl(px(10.))
                     .rounded_br(px(theme::TILE_RADIUS))
-                    .bg(rgba(0x00000066))
+                    .bg(rgba(theme::GRID_MAGNIFIER_BACKGROUND))
                     .child(
                         svg()
                             .path("magnifier")
                             .size_full()
-                            .text_color(rgba(0xffffffb3)),
+                            .text_color(rgba(theme::GRID_MAGNIFIER_GLYPH)),
                     ),
             );
         }
@@ -953,7 +956,9 @@ impl Render for GridView {
             }
             self.scrolled = std::time::Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(HOVER_RESUME).await;
+                cx.background_executor()
+                    .timer(crate::motion::MAGNIFIER_RESUME)
+                    .await;
                 let _ = this.update(cx, |this, cx| {
                     if let Some(pointer) = this.pointer {
                         this.pointer_moved(pointer, cx);

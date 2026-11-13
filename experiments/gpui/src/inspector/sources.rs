@@ -422,7 +422,7 @@ impl Inspector {
             .border_color(theme.primary())
             .bg(theme.rail())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(4.), rgba(0x0000002e).into()).blur_radius(px(10.)),
+                BoxShadow::new(px(0.), px(4.), rgba(theme::BLACK_18).into()).blur_radius(px(10.)),
             ])
             .font_family(theme::FONT_INSPECTOR)
             .text(theme::TEXT_MD)

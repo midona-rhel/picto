@@ -556,8 +556,8 @@ fn swatch(
         // `linear-gradient(135deg, #f0f0f0 50%, #1a1a1e 50%)`
         None => div().bg(linear_gradient(
             135.,
-            linear_color_stop(rgb(0xf0f0f0), 0.5),
-            linear_color_stop(rgb(0x1a1a1e), 0.5001),
+            linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.0), 0.5),
+            linear_color_stop(rgb(theme::THEME_SWATCH_AUTO.1), 0.5001),
         )),
     };
     // The 1.5px outline sits 1.5px out from the border.
@@ -612,7 +612,7 @@ fn swatch(
             .border_1()
             .border_color(theme.border_secondary())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(2.), rgba(0x0000004d).into()).blur_radius(px(8.)),
+                BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
             ])
             .text(theme::TEXT_SM)
             .line_height(px(24.))

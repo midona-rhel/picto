@@ -104,6 +104,8 @@ impl SubscriptionActivity {
 /// `subscriptionsSettle.ts`: progress is read again this often while a run
 /// is going.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
+/// How often the session takes in what the library's thread has sent.
+const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 
 /// One step of Back and Forward.
 #[derive(Clone, Copy, PartialEq)]
@@ -236,9 +238,7 @@ impl Session {
         let (sender, receiver) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
             loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(30))
-                    .await;
+                cx.background_executor().timer(RECEIVE_INTERVAL).await;
                 if session
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()

@@ -156,7 +156,7 @@ impl SubscriptionsScreen {
         )
         .bg(theme.rail())
         .shadow(vec![
-            BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into()).spread_radius(px(1.)),
+            BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into()).spread_radius(px(1.)),
         ])
         .child(
             div()
@@ -663,8 +663,8 @@ impl SubscriptionsScreen {
             .border_color(theme.border())
             .bg(theme.rail())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), rgba(0x00000040).into()).spread_radius(px(1.)),
-                BoxShadow::new(px(0.), px(0.), rgba(0x00000026).into()).blur_radius(px(12.)),
+                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_25).into()).spread_radius(px(1.)),
+                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).blur_radius(px(12.)),
             ])
             .child(measure(self.plane_width.clone(), window))
             .child(

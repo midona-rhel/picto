@@ -11,8 +11,6 @@ pub const MAX_SCALE: f32 = 8.0;
 pub const STEP: f32 = 1.25;
 /// A pixel wheel delta at least this large is a wheel notch, not a trackpad.
 pub const NOTCH: f32 = 40.;
-/// `ANIM_DURATION_MS`: a keyboard or wheel-notch zoom glides for this long.
-pub const GLIDE: Duration = Duration::from_millis(150);
 /// Wheel notches within this time of each other zoom from where the last one
 /// was headed, not from where the glide has got to.
 pub const NOTCH_RUN: Duration = Duration::from_millis(200);
@@ -226,7 +224,7 @@ pub fn follow(current: (f32, f32), target: (f32, f32)) -> (f32, f32) {
     }
 }
 
-/// A camera move that glides over [`GLIDE`] on an ease-out cubic.
+/// A camera move that glides over [`crate::motion::ZOOM_GLIDE`] on an ease-out cubic.
 #[derive(Clone, Copy, Debug)]
 pub struct Glide {
     pub from: Camera,
@@ -237,7 +235,7 @@ pub struct Glide {
 impl Glide {
     /// Where the glide is `elapsed` after it started, and whether it is over.
     pub fn at(&self, elapsed: Duration) -> (Camera, bool) {
-        let t = (elapsed.as_secs_f32() / GLIDE.as_secs_f32()).clamp(0., 1.);
+        let t = (elapsed.as_secs_f32() / crate::motion::ZOOM_GLIDE.as_secs_f32()).clamp(0., 1.);
         let eased = 1. - (1. - t).powi(3);
         if t >= 1. {
             (self.to, true)
@@ -390,9 +388,9 @@ mod tests {
             started: Instant::now(),
         };
         assert_eq!(glide.at(Duration::ZERO).0.scale, 1.);
-        let (half, done) = glide.at(GLIDE / 2);
+        let (half, done) = glide.at(crate::motion::ZOOM_GLIDE / 2);
         // Ease-out: past halfway at half time.
         assert!(!done && half.scale > 1.5);
-        assert_eq!(glide.at(GLIDE), (glide.to, true));
+        assert_eq!(glide.at(crate::motion::ZOOM_GLIDE), (glide.to, true));
     }
 }

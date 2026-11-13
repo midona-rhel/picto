@@ -123,7 +123,7 @@ impl RenderOnce for Slider {
                     .bg(theme.text())
                     .when(self.filled, |thumb| {
                         thumb.border_1().border_color(theme.border()).shadow(vec![
-                            BoxShadow::new(px(0.), px(1.), rgba(0x00000040).into())
+                            BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_25).into())
                                 .blur_radius(px(2.)),
                         ])
                     }),

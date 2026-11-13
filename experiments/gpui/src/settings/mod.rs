@@ -12,7 +12,6 @@ use crate::session::Session;
 use gpui::*;
 use model::{AppSettings, GridDefaults};
 use registry::{KeyboardPreset, Overrides};
-use std::time::Duration;
 
 actions!(settings, [OpenSettings]);
 
@@ -202,10 +201,10 @@ impl SettingsModel {
             }
             Ok::<(), picto_library::LibraryError>(())
         });
-        // "Saving…" shows only for a save that takes longer than 160 ms.
+        // "Saving…" shows only for a save that takes longer than this.
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(160))
+                .timer(crate::motion::SAVING_MESSAGE_DELAY)
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.in_flight {

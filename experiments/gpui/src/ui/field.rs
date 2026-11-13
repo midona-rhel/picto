@@ -483,8 +483,8 @@ impl Field {
             .border_color(frame.border.1)
             .bg(theme.rail())
             .shadow(vec![
-                BoxShadow::new(px(0.), px(8.), rgba(0x00000038).into()).blur_radius(px(20.)),
-                BoxShadow::new(px(0.), px(1.), rgba(0x0000002e).into()).blur_radius(px(3.)),
+                BoxShadow::new(px(0.), px(8.), rgba(theme::BLACK_22).into()).blur_radius(px(20.)),
+                BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_18).into()).blur_radius(px(3.)),
             ])
             .opacity(shown)
             .cursor(CursorStyle::IBeam)

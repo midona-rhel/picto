@@ -280,7 +280,12 @@ impl RenderOnce for DatePicker {
                     cell.bg(theme.text())
                         .text_color(theme.background())
                         .shadow(vec![
-                            BoxShadow::new(px(0.), px(1.), rgba(0xffffff73).into()).inset(),
+                            BoxShadow::new(
+                                px(0.),
+                                px(1.),
+                                rgba(theme::DATE_SELECTED_HIGHLIGHT).into(),
+                            )
+                            .inset(),
                         ])
                 } else {
                     cell.hover(move |style| style.bg(theme.contrast(10.)))

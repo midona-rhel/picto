@@ -358,8 +358,82 @@ pub const AUDIO_TINT_FAR: u32 = 0xf7f8f80a;
 pub const BLACK_20: u32 = 0x00000033;
 /// `--color-black-30`
 pub const BLACK_30: u32 = 0x0000004d;
-/// rgba(0, 0, 0, 0.1), the bottom edge of `EmptyState`'s inner frame.
+/// `--color-black-10`, rgba(0, 0, 0, 0.1): thin dark rings and soft
+/// shadows (the bottom edge of `EmptyState`'s inner frame, a ticked check
+/// box, the inspector preview's edge).
 pub const BLACK_10: u32 = 0x0000001a;
+// Black at the other strengths component shadows are written in.
+/// rgba(0, 0, 0, 0.15): the subscription dialog's and the settings card's
+/// soft shadows.
+pub const BLACK_15: u32 = 0x00000026;
+/// rgba(0, 0, 0, 0.18): a field's dropdown (`0 1px 3px`) and the source
+/// list (`0 4px 10px`).
+pub const BLACK_18: u32 = 0x0000002e;
+/// rgba(0, 0, 0, 0.22): a field's dropdown (`0 8px 20px`).
+pub const BLACK_22: u32 = 0x00000038;
+/// rgba(0, 0, 0, 0.25): a slider thumb's shadow, and the subscription
+/// dialog's ring.
+pub const BLACK_25: u32 = 0x00000040;
+/// `CanvasGrid`'s magnifier corner: rgba(0, 0, 0, 0.4) under a glyph of
+/// rgba(255, 255, 255, 0.7).
+pub const GRID_MAGNIFIER_BACKGROUND: u32 = 0x00000066;
+pub const GRID_MAGNIFIER_GLYPH: u32 = 0xffffffb3;
+/// The grid's selected name pill and the inspector preview's format badge:
+/// white text, the same in every theme.
+pub const BADGE_STRONG_TEXT: u32 = 0xffffff;
+/// `.differenceComposite`: duplicate review's difference picture is drawn
+/// on black.
+pub const DIFFERENCE_BACKGROUND: u32 = 0x000000;
+/// `DatePickerButton.module.css` `.daySelected`:
+/// `inset 0 1px 0 rgba(255, 255, 255, 0.45)`.
+pub const DATE_SELECTED_HIGHLIGHT: u32 = 0xffffff73;
+/// `ToggleSwitch.module.css`: the off track, rgba(128, 128, 128, 0.25), and
+/// the white knob.
+pub const TOGGLE_TRACK_OFF: u32 = 0x80808040;
+pub const TOGGLE_KNOB: u32 = 0xffffff;
+/// The ring of a colour swatch beside a smart folder's colour field:
+/// rgba(255, 255, 255, 0.22).
+pub const COLOR_SWATCH_RING: u32 = 0xffffff38;
+/// Settings' "Auto" theme swatch: `linear-gradient(135deg, #f0f0f0 50%,
+/// #1a1a1e 50%)`.
+pub const THEME_SWATCH_AUTO: (u32, u32) = (0xf0f0f0, 0x1a1a1e);
+
+// `ColorFilterEditor.module.css`, fixed, not themed.
+/// `.cursor`: a white ring with a `0 0 0 1px rgba(0, 0, 0, .65)` halo.
+pub const COLOR_CURSOR_RING: u32 = 0xffffff;
+pub const COLOR_CURSOR_HALO: u32 = 0x000000a6;
+/// `.hue::-webkit-slider-thumb`: a `rgba(255,255,255,.9)` line over a
+/// `rgba(0,0,0,.6)` one.
+pub const COLOR_HUE_THUMB_LIGHT: u32 = 0xffffffe6;
+pub const COLOR_HUE_THUMB_DARK: u32 = 0x00000099;
+/// `.preset`: `border: 1px solid rgba(128,128,128,.3)`.
+pub const COLOR_PRESET_RING: u32 = 0x8080804d;
+/// `.none`: `#ccc`, struck through in `#6a6a6a`.
+pub const COLOR_NONE_FILL: u32 = 0xcccccc;
+pub const COLOR_NONE_STROKE: u32 = 0x6a6a6a;
+
+// The font viewer's preview papers (`FontViewer.module.css`), fixed, not
+// themed.
+/// `.root[data-preview-theme]`: each paper's `--font-page-bg` and
+/// `--font-page-fg`.
+pub const FONT_PAPER_LIGHT: (u32, u32) = (0xf7f8f8, 0x242529);
+pub const FONT_PAPER_DARK: (u32, u32) = (0x18191c, 0xf8f9fb);
+pub const FONT_PAPER_PURPLE: (u32, u32) = (0x2b2140, 0xfbf7ff);
+pub const FONT_PAPER_YELLOW: (u32, u32) = (0xf5df91, 0x312b1d);
+/// The paper swatches (`.theme`): `.light`, `.dark`, `.purple` and
+/// `.yellow`'s backgrounds and, where they set one, their colour; `.auto`
+/// is the light and dark swatches split diagonally, in `#888`.
+pub const FONT_SWATCH_LIGHT: (u32, u32) = (0xf7f8f8, 0x35363a);
+pub const FONT_SWATCH_DARK: u32 = 0x25262a;
+pub const FONT_SWATCH_PURPLE: u32 = 0x6e4ea2;
+pub const FONT_SWATCH_YELLOW: (u32, u32) = (0xd3a82e, 0x3a3017);
+pub const FONT_SWATCH_AUTO_TEXT: u32 = 0x888888;
+/// `.theme`: `color: rgba(255,255,255,.82)` and
+/// `box-shadow: inset 0 0 0 1px rgba(255,255,255,.12)`.
+pub const FONT_SWATCH_TEXT: u32 = 0xffffffd1;
+pub const FONT_SWATCH_RING: u32 = 0xffffff1f;
+/// `.glyphGrid span:hover`: `0 8px 22px rgba(0,0,0,.35)`.
+pub const FONT_GLYPH_SHADOW: u32 = 0x00000059;
 
 // The document viewers' page colours are fixed, not themed.
 /// `DocumentViewerShell.module.css` `.viewport`: `rgb(42, 42, 46)`.

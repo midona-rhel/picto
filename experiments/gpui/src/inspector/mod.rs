@@ -781,7 +781,8 @@ impl Inspector {
                     .rounded(px(theme::RADIUS_MD))
                     .overflow_hidden()
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into()).blur_radius(px(5.)),
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
+                            .blur_radius(px(5.)),
                     ])
                     .child(picture)
                     // The glass edge: a 1px ring over the image.
@@ -791,7 +792,7 @@ impl Inspector {
                             .inset_0()
                             .rounded(px(theme::RADIUS_MD))
                             .border_1()
-                            .border_color(rgba(0x0000001a)),
+                            .border_color(rgba(theme::BLACK_10)),
                     )
                     .child(label),
             )
@@ -1012,14 +1013,14 @@ impl Inspector {
                     .left(px(5.))
                     .w(px(18.))
                     .justify_center()
-                    .child(ui::icon("group", 14., white()))
+                    .child(ui::icon("group", 14., rgb(theme::BADGE_STRONG_TEXT)))
                     .into_any_element()
             } else {
                 ui::badge(3.)
                     .top(px(5.))
                     .left(px(5.))
                     .font_family(theme::FONT_UI)
-                    .text_color(white())
+                    .text_color(rgb(theme::BADGE_STRONG_TEXT))
                     .child(format::format_label(&media.facts.mime))
                     .into_any_element()
             };

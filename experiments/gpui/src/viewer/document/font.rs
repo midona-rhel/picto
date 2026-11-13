@@ -253,10 +253,19 @@ impl FontViewer {
         let app = theme::theme(cx);
         match self.paper {
             Paper::Auto => (app.background(), app.text()),
-            Paper::Light => (rgb(0xf7f8f8), rgb(0x242529)),
-            Paper::Dark => (rgb(0x18191c), rgb(0xf8f9fb)),
-            Paper::Purple => (rgb(0x2b2140), rgb(0xfbf7ff)),
-            Paper::Yellow => (rgb(0xf5df91), rgb(0x312b1d)),
+            Paper::Light => (
+                rgb(theme::FONT_PAPER_LIGHT.0),
+                rgb(theme::FONT_PAPER_LIGHT.1),
+            ),
+            Paper::Dark => (rgb(theme::FONT_PAPER_DARK.0), rgb(theme::FONT_PAPER_DARK.1)),
+            Paper::Purple => (
+                rgb(theme::FONT_PAPER_PURPLE.0),
+                rgb(theme::FONT_PAPER_PURPLE.1),
+            ),
+            Paper::Yellow => (
+                rgb(theme::FONT_PAPER_YELLOW.0),
+                rgb(theme::FONT_PAPER_YELLOW.1),
+            ),
         }
     }
 }
@@ -354,15 +363,27 @@ impl Render for FontViewer {
                     Paper::Auto => (
                         linear_gradient(
                             135.,
-                            linear_color_stop(rgb(0xf7f8f8), 0.5),
-                            linear_color_stop(rgb(0x25262a), 0.5),
+                            linear_color_stop(rgb(theme::FONT_SWATCH_LIGHT.0), 0.5),
+                            linear_color_stop(rgb(theme::FONT_SWATCH_DARK), 0.5),
                         ),
-                        rgb(0x888888),
+                        rgb(theme::FONT_SWATCH_AUTO_TEXT),
                     ),
-                    Paper::Light => (rgb(0xf7f8f8).into(), rgb(0x35363a)),
-                    Paper::Dark => (rgb(0x25262a).into(), rgba(0xffffffd1)),
-                    Paper::Purple => (rgb(0x6e4ea2).into(), rgba(0xffffffd1)),
-                    Paper::Yellow => (rgb(0xd3a82e).into(), rgb(0x3a3017)),
+                    Paper::Light => (
+                        rgb(theme::FONT_SWATCH_LIGHT.0).into(),
+                        rgb(theme::FONT_SWATCH_LIGHT.1),
+                    ),
+                    Paper::Dark => (
+                        rgb(theme::FONT_SWATCH_DARK).into(),
+                        rgba(theme::FONT_SWATCH_TEXT),
+                    ),
+                    Paper::Purple => (
+                        rgb(theme::FONT_SWATCH_PURPLE).into(),
+                        rgba(theme::FONT_SWATCH_TEXT),
+                    ),
+                    Paper::Yellow => (
+                        rgb(theme::FONT_SWATCH_YELLOW.0).into(),
+                        rgb(theme::FONT_SWATCH_YELLOW.1),
+                    ),
                 };
                 let pressed = self.paper == choice;
                 let ring = if pressed {
@@ -373,7 +394,7 @@ impl Render for FontViewer {
                     ]
                 } else {
                     vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0xffffff1f).into())
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::FONT_SWATCH_RING).into())
                             .spread_radius(px(1.))
                             .inset(),
                     ]
@@ -522,8 +543,12 @@ impl Render for FontViewer {
                                     .text_size(px(24. * scale))
                                     .hover(move |style| {
                                         style.bg(paper).shadow(vec![
-                                            BoxShadow::new(px(0.), px(8.), rgba(0x00000059).into())
-                                                .blur_radius(px(22.)),
+                                            BoxShadow::new(
+                                                px(0.),
+                                                px(8.),
+                                                rgba(theme::FONT_GLYPH_SHADOW).into(),
+                                            )
+                                            .blur_radius(px(22.)),
                                             BoxShadow::new(px(0.), px(0.), faded(ink, 16.).into())
                                                 .spread_radius(px(1.)),
                                         ])

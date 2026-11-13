@@ -63,7 +63,8 @@ impl RenderOnce for Tabs {
             tab = if chosen {
                 tab.bg(theme.surface_active())
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(0x00000033).into()).blur_radius(px(4.)),
+                        BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into())
+                            .blur_radius(px(4.)),
                     ])
                     .text_color(theme.text())
             } else {

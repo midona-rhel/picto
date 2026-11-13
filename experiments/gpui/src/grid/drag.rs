@@ -123,7 +123,7 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
                 .text_size(px(10.))
                 .line_height(px(BADGE_HEIGHT))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(0xffffff))
+                .text_color(theme.on_primary())
                 .child(count.to_string()),
         );
     }

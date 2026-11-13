@@ -789,7 +789,7 @@ impl SmartFolderEditor {
                             .flex_none()
                             .rounded(px(4.))
                             .border_1()
-                            .border_color(rgba(0xffffff38))
+                            .border_color(rgba(theme::COLOR_SWATCH_RING))
                             .bg(ui::color_picker::parse(&hex).unwrap_or(theme.text_tertiary())),
                     )
                     .child(text_field(&row.color, "color"))
