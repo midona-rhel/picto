@@ -118,12 +118,40 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Space/Enter/double-click preview, Escape back, previous/next item, and
   navigation through members of a collection. Thumbnail-first preview with
   asynchronous full decode; stale loads are fenced.
+- The Subscriptions screen, read from the library: the grid of 180px cards
+  (cover framed by its stored crop, name, status badge, item and source
+  counts) under a header with the count, any gallery downloads and the
+  Add, Add Gallery and Accounts buttons; click, Cmd-click and Shift-click
+  selection, Escape to clear, double-click or Enter to open, and the single
+  and bulk context menus. An opened subscription is a place: Back returns
+  to the grid and the scope title links back to it. Its workspace has the
+  rail (cover, name, status with the failure as its tooltip, actions, run
+  progress, run counts, last check, schedule, posts per run, destination
+  folders and tags) and the Sources, History and Problems tables, with the
+  sticky header, hover rows and row buttons. Names rename in place, from the
+  card's menu or a double-click on the rail's name, through the library's
+  published write. The reads are the application catalog's own, run through
+  the library's consistent auxiliary read; the list and the query rows use
+  `core/src/subscription_views.sql` and `subscription_query_views.sql`
+  directly.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-- Tags, Subscriptions and Duplicates are sidebar rows without screens.
+- Tags and Duplicates are sidebar rows without screens.
+- Subscriptions: running, pausing, holding, stopping, retrying and creating
+  subscriptions, galleries and sources need the source runners, which live
+  in `core`; their buttons and menu rows are drawn with hover states and
+  tooltips but do nothing, and the menu rows are shown disabled. Also not
+  built: the schedule submenu and select, the posts-per-run field, the cover
+  dialog, reset and delete confirmations, adding or removing destination
+  folders and tags, the source details and edit windows, the accounts
+  window and login warnings, the gallery progress total, and acknowledging
+  issues when a subscription is opened. Site names and example queries are
+  copied from the source catalog in `core`. Letter spacing on badges and
+  table headers, and the native `title` tooltips of truncated cells, are
+  not drawn.
 - Drawn with their hover states and tooltips but not wired: Settings, View
   options, the section headers' add buttons, the inspector's Add to Folder,
   Add Tags, Export, source-address list and Pin, and the library switcher.

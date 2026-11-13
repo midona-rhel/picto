@@ -140,6 +140,23 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
+    /// `--color-footer-surface`: table headers and tab tracks.
+    pub fn footer_surface(&self) -> Rgba {
+        translucent(self.contrast, 3.)
+    }
+    /// `--color-on-primary`: text on the primary colour.
+    pub fn on_primary(&self) -> Rgba {
+        rgb(0xffffff)
+    }
+    /// `--color-primary-60`
+    pub fn primary_60(&self) -> Rgba {
+        translucent(self.primary, 60.)
+    }
+    /// `color-mix(in srgb, var(--color-bg-app) 90%, var(--color-text-primary) 10%)`:
+    /// the select button's fill.
+    pub fn select_surface(&self) -> Rgba {
+        mixed(self.text, 10., self.background)
+    }
 }
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
@@ -210,6 +227,16 @@ pub fn tabular_figures() -> FontFeatures {
 /// A set star in `StarRating.module.css`.
 pub const RATING: u32 = 0xff9f0a;
 
+/// `--color-accent`, which no theme defines: its `#3297ff` fallback.
+pub const ACCENT: u32 = 0x3297ff;
+/// `--color-warning`, `--color-danger` and `--color-success`, which no theme
+/// defines: the fallbacks the subscription styles give them.
+pub const WARNING: u32 = 0xe8a33d;
+pub const DANGER: u32 = 0xef8b8b;
+pub const SUCCESS: u32 = 0x5fb56b;
+/// The subscription tables' warm failure text (`.qFailureText`).
+pub const FAILURE_TEXT: u32 = 0xf0ad91;
+
 /// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
 /// same in every theme.
 pub const GRID_SELECTION: u32 = 0x3297ff;
@@ -226,6 +253,9 @@ pub const FONT_UI: &str = ".SystemUIFont";
 /// `Picto Inspector Roboto`
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
+/// `--font-family-mono`. Its first name, SF Mono, is not available to apps
+/// by name, so Chromium draws the bundled Fira Mono.
+pub const FONT_MONO: &str = "Fira Mono";
 /// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
 /// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a
 /// fractional line box would put centred text half a pixel off.
@@ -249,6 +279,10 @@ pub const TEXT_CAPTION: f32 = 11.;
 pub const TEXT_SM: f32 = 12.;
 /// `--font-size-md`
 pub const TEXT_MD: f32 = 13.;
+/// `--font-size-xl`
+pub const TEXT_XL: f32 = 16.;
+/// `--font-size-title`
+pub const TEXT_TITLE: f32 = 18.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`
@@ -265,6 +299,8 @@ pub const CONTROL_SM: f32 = 26.;
 pub const CONTROL_MD: f32 = 28.;
 /// `--control-height-lg`
 pub const CONTROL_LG: f32 = 32.;
+/// `--action-button-height`
+pub const ACTION_BUTTON: f32 = 30.;
 /// `--icon-button-size`
 pub const ICON_BUTTON: f32 = 24.;
 /// The macOS window's corner radius, which its rim follows.

@@ -6,6 +6,8 @@ use std::time::Duration;
 pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 /// CSS `ease-in`.
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
 /// `ScrollToTopButton`: its rise and fade.
@@ -67,6 +69,12 @@ pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
+/// `.querySmallBtn`: a row button's opacity and fill, on `ease`.
+pub const SMALL_BUTTON: Duration = Duration::from_millis(100);
+/// `.followCover`: a subscription card's border on hover, on `ease`.
+pub const CARD_HOVER: Duration = Duration::from_millis(120);
+/// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
+pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
 /// `--duration-normal`: disclosure arrows, chips and field borders.
 pub const NORMAL: Duration = Duration::from_millis(200);
 /// The search field's border and background on focus.

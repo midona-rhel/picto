@@ -64,12 +64,15 @@ pub enum Kind {
     Sidebar,
     /// The inspector's name and notes.
     Inspector,
+    /// A name edited in place, in the UI font at the size of the text it
+    /// replaces.
+    Rename(f32),
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search => crate::theme::FONT_UI,
+            Kind::Search | Kind::Rename(_) => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector => crate::theme::FONT_INSPECTOR,
         }
     }
@@ -77,6 +80,7 @@ impl Kind {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
             Kind::Sidebar | Kind::Inspector => crate::theme::TEXT_MD,
+            Kind::Rename(size) => size,
         }
     }
     fn line_height(self) -> f32 {
@@ -84,6 +88,7 @@ impl Kind {
             Kind::Search => 22.,
             Kind::Sidebar => 26.,
             Kind::Inspector => 20.,
+            Kind::Rename(size) => size + 2.,
         }
     }
 }
@@ -771,6 +776,21 @@ impl TextInput {
         cx.on_blur(&input.focus_handle, window, |this, _, cx| this.commit(cx))
             .detach();
         input
+    }
+    /// A name edited in place: it commits when it loses focus, as the
+    /// inspector's fields do.
+    pub fn rename(size: f32, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::field("", window, cx);
+        input.kind = Kind::Rename(size);
+        input
+    }
+    /// Sets the size of a name edited in place, to match the text it
+    /// replaces.
+    pub fn set_rename_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        if matches!(self.kind, Kind::Rename(_)) && self.kind != Kind::Rename(size) {
+            self.kind = Kind::Rename(size);
+            cx.notify();
+        }
     }
     pub fn set_field(&mut self, key: picto_library::RootId, value: String, cx: &mut Context<Self>) {
         if self.field_key == Some(key) && self.content != self.original {

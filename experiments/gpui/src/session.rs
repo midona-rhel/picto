@@ -64,6 +64,8 @@ struct Visit {
     scope: usize,
     /// The viewer, opened on an item of this destination.
     viewing: bool,
+    /// A place inside a screen, such as the subscription it has open.
+    place: Option<i64>,
 }
 
 /// A destination's grid as it was left.
@@ -136,6 +138,8 @@ pub struct Session {
     blobs: PathBuf,
     pub library_cover: Option<PathBuf>,
     pub fixtures: tempfile::TempDir,
+    /// What the open place of a screen is called, for the scope title.
+    pub place_label: Option<SharedString>,
 }
 
 impl EventEmitter<Change> for Session {}
@@ -171,6 +175,7 @@ impl Session {
             history: vec![Visit {
                 scope: 0,
                 viewing: false,
+                place: None,
             }],
             history_index: 0,
             saved: HashMap::new(),
@@ -201,6 +206,42 @@ impl Session {
             blobs,
             library_cover,
             fixtures,
+            place_label: None,
+        }
+    }
+
+    /// The library's blob store.
+    pub fn blobs(&self) -> &std::path::Path {
+        &self.blobs
+    }
+
+    /// The place open inside the current screen, if any.
+    pub fn place(&self) -> Option<i64> {
+        self.history
+            .get(self.history_index)
+            .filter(|visit| visit.scope == self.scope)
+            .and_then(|visit| visit.place)
+    }
+
+    /// Opens a place inside the current screen, or the screen's own top
+    /// with `None`, as a step of Back and Forward.
+    pub fn open_place(&mut self, place: Option<i64>, cx: &mut Context<Self>) {
+        if self.place() == place {
+            return;
+        }
+        self.record(Visit {
+            scope: self.scope,
+            viewing: false,
+            place,
+        });
+        cx.emit(Change::Navigation);
+    }
+
+    /// Names the open place in the scope title, or clears the name.
+    pub fn set_place_label(&mut self, label: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.place_label != label {
+            self.place_label = label;
+            cx.emit(Change::Navigation);
         }
     }
 
@@ -409,12 +450,17 @@ impl Session {
     /// viewer is over it, which this closes.
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
+            // Choosing a screen from inside one of its places goes to its top.
+            if self.place().is_some() {
+                self.open_place(None, cx);
+            }
             self.close_viewer(cx);
             return;
         }
         self.record(Visit {
             scope: index,
             viewing: false,
+            place: None,
         });
         // A destination chosen afresh opens at its top.
         self.open(index, None, cx);
@@ -722,6 +768,7 @@ impl Session {
             self.record(Visit {
                 scope: self.scope,
                 viewing: true,
+                place: None,
             });
             cx.emit(Change::Viewer);
             cx.emit(Change::Navigation);
@@ -738,6 +785,7 @@ impl Session {
         let grid = Visit {
             scope: self.scope,
             viewing: false,
+            place: None,
         };
         if self.history_index > 0 && self.history[self.history_index - 1] == grid {
             self.history_index -= 1;

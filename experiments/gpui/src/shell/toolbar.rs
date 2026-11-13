@@ -71,6 +71,11 @@ impl Toolbar {
                 at = session.nav[index].parent;
             }
             crumbs.reverse();
+            // A screen's open place follows the screen, which links back to
+            // the screen's top.
+            if let Some(label) = session.place().and(session.place_label.clone()) {
+                crumbs.push((usize::MAX, label.to_string()));
+            }
             crumbs
         };
         let last = crumbs.len().saturating_sub(1);

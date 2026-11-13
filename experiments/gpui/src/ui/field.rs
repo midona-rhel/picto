@@ -12,6 +12,9 @@ pub enum Look {
     SidebarFilter,
     /// `InspectorField.module.css`
     Inspector,
+    /// `.renameInput`: a name edited in place, in a 20px box outlined in the
+    /// primary colour over the app background.
+    Rename,
 }
 
 struct Frame {
@@ -69,6 +72,16 @@ impl Look {
                 left: 10.,
                 right: 10.,
                 drop: 1.,
+            },
+            Look::Rename => Frame {
+                height: 20.,
+                radius: 3.,
+                border: (theme.primary(), theme.primary()),
+                fill: (theme.background(), theme.background()),
+                focus: Duration::ZERO,
+                left: 0.,
+                right: 0.,
+                drop: 0.,
             },
         }
     }
