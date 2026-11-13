@@ -601,6 +601,29 @@ pub enum Mark {
     Excluded,
 }
 
+/// `highlightMatch`: a row's label with the search's first match in bold,
+/// in the text colour and underlined.
+pub fn search_match(label: impl Into<SharedString>, query: &str, cx: &App) -> StyledText {
+    let theme = theme::theme(cx);
+    let label = label.into();
+    let range = crate::text::match_range(&label, query);
+    StyledText::new(label).with_highlights(range.map(|range| {
+        (
+            range,
+            HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                color: Some(theme.text().into()),
+                underline: Some(UnderlineStyle {
+                    color: Some(theme.contrast(20.).into()),
+                    thickness: px(1.),
+                    wavy: false,
+                }),
+                ..Default::default()
+            },
+        )
+    }))
+}
+
 /// `.checkBox`: 14px, the control surface ringed by the pressed overlay
 /// until it is filled.
 pub fn check_box(mark: Mark, cx: &App) -> Div {

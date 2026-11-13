@@ -81,14 +81,13 @@ impl RenderOnce for LibraryAvatar {
         if animating {
             window.request_animation_frame();
         }
-        let clear = |color: Rgba| Rgba { a: 0., ..color };
         let primary = theme.primary();
         let text = theme.text();
         let at = |color: Rgba, alpha: f32| Rgba { a: alpha, ..color };
         // The inner 2px ring and the outer 1px halo: the highlight's at 72%
         // and 24% primary, the hover's at 30% and 9% text.
         let tone = |highlit: f32, hovered: f32| {
-            let resting = theme::blend(clear(primary), at(primary, highlit), highlight);
+            let resting = theme::blend(theme::clear(primary), at(primary, highlit), highlight);
             theme::blend(resting, at(text, hovered), hover)
         };
         let outer = |spread: f32, color: Rgba| {

@@ -339,7 +339,7 @@ impl SubscriptionsScreen {
             .to_owned(),
             _ => format!(
                 "{} images downloaded",
-                format::count(job.progress.downloaded)
+                crate::grid::format::grouped(job.progress.downloaded)
             ),
         };
         let id = job.id;

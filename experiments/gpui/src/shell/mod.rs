@@ -19,7 +19,6 @@ use crate::grid::{
 use crate::inspector::Inspector;
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
-use crate::ui::menu::Menu;
 use crate::viewer::{
     Viewer, detail,
     quick_look::{self, QuickLook},
@@ -90,9 +89,9 @@ pub struct Shell {
     /// viewer stays in the pane and fades out with it, as `MediaView` does
     /// inside the fading workspace surface, until the destination replaces it.
     viewer_exit: bool,
-    /// The open context menu. It stays here while it fades out.
-    menu: Option<Entity<Menu>>,
-    _menu: Option<Subscription>,
+    /// The open context menu, the grid's, the sidebar's or the filter
+    /// bar's, above everything. The keyboard goes back to the grid after.
+    menu: ui::menu::Host,
     /// The filter bar under the titlebar, over the grid.
     filter_bar: Entity<FilterBar>,
     /// The view menu's panels while it is open, which show the rails.
@@ -180,8 +179,7 @@ impl Shell {
                 &sidebar,
                 window,
                 |this, _, event: &sidebar::ShowMenu, window, cx| {
-                    this._menu = None;
-                    this.show_menu(event.0.clone(), window, cx)
+                    this.menu.show(event.0.clone(), window, cx)
                 },
             ),
             cx.subscribe_in(
@@ -211,10 +209,7 @@ impl Shell {
                 &filter_bar,
                 window,
                 |this, _, event: &BarEvent, window, cx| match event {
-                    BarEvent::Menu(menu) => {
-                        this._menu = None;
-                        this.show_menu(menu.clone(), window, cx);
-                    }
+                    BarEvent::Menu(menu) => this.menu.show(menu.clone(), window, cx),
                 },
             ),
             cx.subscribe_in(
@@ -250,7 +245,7 @@ impl Shell {
             duplicates,
             grid,
             session,
-            focus,
+            focus: focus.clone(),
             sidebar_collapsed: false,
             inspector_collapsed: false,
             inspector_pinned: false,
@@ -266,8 +261,7 @@ impl Shell {
             inspector_available: None,
             inspector_presence: motion::Fade::at(true),
             viewer_exit: false,
-            menu: None,
-            _menu: None,
+            menu: ui::menu::Host::inline(ui::menu::Return::To(focus.clone())),
             filter_bar,
             view_panels: Vec::new(),
             _view_panels: Vec::new(),
@@ -292,17 +286,16 @@ impl Shell {
             cx,
         );
         self.watch_view_panels(&menu, panels, cx);
-        self._menu = None;
         self.toolbar
             .update(cx, |toolbar, cx| toolbar.watch_view_menu(menu.clone(), cx));
-        self.show_menu(menu, window, cx);
+        self.menu.show(menu, window, cx);
     }
 
     /// Keeps a menu's view panels while it is open: their rail switches
     /// toggle the rails, and the rails' state reaches them.
     fn watch_view_panels(
         &mut self,
-        menu: &Entity<Menu>,
+        menu: &Entity<ui::menu::Menu>,
         panels: view_menu::Panels,
         cx: &mut Context<Self>,
     ) {
@@ -354,25 +347,6 @@ impl Shell {
             );
         }
         cx.notify();
-    }
-
-    /// Puts a context menu above the window and gives it the keyboard.
-    fn show_menu(&mut self, menu: Entity<Menu>, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
-        cx.notify();
-    }
-
-    /// Dismisses the context menu, leaving it to fade out. Returns whether
-    /// one was open.
-    fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        match &self.menu {
-            Some(menu) if !menu.read(cx).finished() => {
-                menu.update(cx, |menu, cx| menu.dismiss(cx));
-                true
-            }
-            _ => false,
-        }
     }
 
     /// What the grid has open, for deciding what a key or click does.
@@ -834,7 +808,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
                 // Escape closes the menu, else the viewer, else deselects.
-                if !this.close_menu(cx) {
+                if !this.menu.close(cx) {
                     let handled = this.session.update(cx, |session, cx| {
                         if session.viewer {
                             session.close_viewer(cx);
@@ -893,18 +867,7 @@ impl Render for Shell {
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
 
-        // A dismissed menu stays until its 80 ms fade is over; the keyboard
-        // then goes back to the grid.
-        if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
-            self._menu = None;
-            // Unless its action moved the keyboard somewhere, such as into
-            // the name field. A menu shown in pop-up windows can outlive
-            // this by a moment, still holding the keyboard.
-            if window.focused(cx).is_none() || menu.read(cx).holds_focus(window, cx) {
-                window.focus(&self.focus, cx);
-            }
-        }
-        root = root.children(self.menu.clone());
+        root = root.children(self.menu.layer(window, cx));
         root = root.children(self.confirmation(window, cx));
         // The inspector's tag and folder pickers float over everything.
         let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();

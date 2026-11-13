@@ -8,7 +8,8 @@ mod grid;
 mod inspector;
 mod keymap;
 mod motion;
-#[cfg(test)]
+// Draws through the macOS text system and renderer.
+#[cfg(all(test, target_os = "macos"))]
 mod offscreen;
 mod pointer;
 mod screens;
@@ -16,6 +17,8 @@ mod session;
 mod settings;
 mod shell;
 mod stats;
+mod tags;
+mod text;
 mod theme;
 mod ui;
 mod viewer;
@@ -23,6 +26,11 @@ mod viewer;
 use gpui::*;
 use shell::*;
 use std::path::PathBuf;
+
+/// Now, in milliseconds since 1970, as the library stamps its records.
+pub fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
 
 /// The application menu. Its rows show the keys bound to their actions, so
 /// it is set again whenever the shortcuts are rebound.
@@ -122,6 +130,17 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // `--detach` after the copy: cut it loose from the real library's cloud
+    // sync, watched folders and queued runs, and stop. For opening the copy
+    // with another app (the Electron reference) that would otherwise resume
+    // that work.
+    if std::env::args().nth(2).as_deref() == Some("--detach") {
+        if let Err(error) = application::detach(&root) {
+            eprintln!("picto: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
     let (events, delivered) = std::sync::mpsc::channel();
     let application = application::Application::new(root.clone(), events);
     let closing = application.clone();

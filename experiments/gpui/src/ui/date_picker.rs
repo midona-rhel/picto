@@ -55,9 +55,9 @@ impl DatePicker {
 
 /// `parseDate`: a valid `YYYY-MM-DD` day.
 pub fn parse_day(value: &str) -> Option<NaiveDate> {
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    NaiveDate::parse_from_str(value, crate::text::date_format::DAY)
         .ok()
-        .filter(|date| date.format("%Y-%m-%d").to_string() == value)
+        .filter(|date| date.format(crate::text::date_format::DAY).to_string() == value)
 }
 
 /// `calendarDays`: six weeks from the Sunday on or before the month's first.
@@ -132,7 +132,10 @@ impl RenderOnce for DatePicker {
             (state.open, state.month, state.bounds.clone())
         };
         let display = selected
-            .map(|day| day.format("%b %-d, %Y").to_string())
+            .map(|day| {
+                day.format(crate::text::date_format::MEDIUM_DATE)
+                    .to_string()
+            })
             .unwrap_or_else(|| "Choose date".into());
         let toggle = state.clone();
         let mut trigger = div()
@@ -209,7 +212,7 @@ impl RenderOnce for DatePicker {
                     close(cx);
                     if let Some(handler) = &handler {
                         handler(
-                            day.map(|day| day.format("%Y-%m-%d").to_string())
+                            day.map(|day| day.format(crate::text::date_format::DAY).to_string())
                                 .unwrap_or_default(),
                             window,
                             cx,
@@ -251,7 +254,11 @@ impl RenderOnce for DatePicker {
                     .truncate()
                     .text(theme::TEXT_MD)
                     .font_weight(FontWeight::MEDIUM)
-                    .child(month.format("%B %Y").to_string()),
+                    .child(
+                        month
+                            .format(crate::text::date_format::MONTH_YEAR)
+                            .to_string(),
+                    ),
             )
             .child(step(1, "date-next-month", "date-next"));
         let weekdays = div()

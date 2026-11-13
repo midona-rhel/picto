@@ -106,11 +106,7 @@ fn input_with(
 }
 
 pub fn editor(tag: TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
-    let name = input_with(
-        "namespace:tag",
-        Some(model::tag_name(&tag.namespace, &tag.subname)),
-        cx,
-    );
+    let name = input_with("namespace:tag", Some(crate::tags::record_name(&tag)), cx);
     let submitted = cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_editor(cx));
     // The rename button follows what is typed.
     let typed = cx.observe(&name, |_, _, cx| cx.notify());
@@ -174,17 +170,14 @@ fn group_name(input: &Entity<TextInput>, current: Option<&str>, cx: &App) -> Opt
 /// `TagChip`'s namespace prefix, shown only with `showTagPrefixes` on.
 fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
     let show = crate::settings::current(cx).show_tag_prefixes;
-    model::group_of(namespace)
+    crate::tags::group_of(namespace)
         .filter(|_| show)
         .map(SharedString::from)
 }
 
 /// `.pickerHint` and the dialogs' help text.
 fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .text_color(theme::theme(cx).text_secondary())
-        .text(theme::TEXT_SM)
-        .child(text.into())
+    ui::modal::help_text(theme::theme(cx), text)
 }
 
 impl TagsScreen {
@@ -221,7 +214,7 @@ impl TagsScreen {
             return;
         };
         let value = value.trim().to_owned();
-        if !value.is_empty() && value != model::tag_name(&tag.namespace, &tag.subname) {
+        if !value.is_empty() && value != crate::tags::record_name(&tag) {
             self.rename_tag(&tag, value, true, cx);
         }
     }
@@ -352,35 +345,35 @@ impl TagsScreen {
                 .layer(10 + index)
                 .on_close(move |window, cx| dismiss(&(), window, cx))
         };
-        // `ConfirmModal`: a message and Cancel beside the confirming button.
+        // `ConfirmModal`, run by this screen: Cancel takes it away at once,
+        // and both buttons wait while an edit is running.
         let confirm = |title: &'static str,
                        message: String,
                        label: &'static str,
                        danger: bool,
                        action: Box<dyn Fn(&mut Self, &mut Context<Self>)>,
                        cx: &mut Context<Self>| {
-            dialog(title, Size::Small)
-                .child(
-                    div()
-                        .text(theme::TEXT_MD)
-                        .line_height(px(19.5))
-                        .text_color(theme.text_secondary())
-                        .child(message),
-                )
-                .footer(cancel_button(cx))
-                .footer(
-                    ui::action_button(
-                        ("confirm", index),
-                        if danger {
-                            ButtonLook::Danger
-                        } else {
-                            ButtonLook::Primary
-                        },
-                    )
-                    .label(label)
-                    .disabled(busy)
-                    .on_click(cx.listener(move |this, _, _, cx| action(this, cx))),
-                )
+            let dismiss = dismiss.clone();
+            let cancel = {
+                let focus = focus.clone();
+                cx.listener(move |this, _: &(), _, cx| this.cancel(&focus, cx))
+            };
+            let accept = cx.listener(move |this, _: &(), _, cx| action(this, cx));
+            ui::confirm::confirm(
+                ("tags-dialog", index),
+                title,
+                message,
+                label,
+                layer.presence,
+            )
+            .danger(danger)
+            .busy(busy)
+            .focus(&focus)
+            .layer(10 + index)
+            .on_close(move |window, cx| dismiss(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
+            .on_confirm(move |window, cx| accept(&(), window, cx))
+            .into_any_element()
         };
         let element = match &layer.dialog {
             Dialog::Editor { tag, name, .. } => {
@@ -419,7 +412,7 @@ impl TagsScreen {
                                                 ui::chip(
                                                     ("editor-chip", tag.tag_id.0 as usize),
                                                     tag.subname.clone(),
-                                                    model::chip_color(&tag.namespace),
+                                                    crate::tags::chip_color(&tag.namespace),
                                                 )
                                                 .namespace(prefix(&tag.namespace, cx)),
                                             ),
@@ -540,7 +533,7 @@ impl TagsScreen {
                                 ui::chip(
                                     ("merge-chip", position),
                                     target.subname.clone(),
-                                    model::chip_color(&target.namespace),
+                                    crate::tags::chip_color(&target.namespace),
                                 )
                                 .namespace(prefix(&target.namespace, cx)),
                             )
@@ -590,21 +583,21 @@ impl TagsScreen {
             }
             Dialog::DeleteTag { tag } => {
                 let id = tag.tag_id;
-                confirm(
+                return confirm(
                     "Delete tag",
                     format!(
                         "Delete {}? Existing media will remain untouched.",
-                        model::tag_name(&tag.namespace, &tag.subname)
+                        crate::tags::record_name(&tag)
                     ),
                     "Delete tag",
                     true,
                     Box::new(move |this, cx| this.delete_tag(id, cx)),
                     cx,
-                )
+                );
             }
             Dialog::DeleteGroup { group } => {
                 let deleted = group.clone();
-                confirm(
+                return confirm(
                     "Delete tag group",
                     format!(
                         "Delete the {} group? Its tags will move to General; no tags or media assignments will be deleted.",
@@ -614,12 +607,12 @@ impl TagsScreen {
                     false,
                     Box::new(move |this, cx| this.delete_group(deleted.clone(), cx)),
                     cx,
-                )
+                );
             }
             Dialog::Cleanup => {
                 let count = self.unused;
                 let focus = focus.clone();
-                confirm(
+                return confirm(
                     "Delete unused tags",
                     format!(
                         "Delete {} {} with no assignments anywhere in the library? Tags used by Inbox or Trash items are kept.",
@@ -633,7 +626,7 @@ impl TagsScreen {
                         this.delete_unused(cx);
                     }),
                     cx,
-                )
+                );
             }
             Dialog::RenameGroup { group, name, .. } => {
                 let ready = group_name(name, Some(&group.name), cx).is_some();
@@ -665,20 +658,10 @@ impl TagsScreen {
     }
 }
 
-/// `.error`: an edit or search that failed.
+/// `.error`: an edit or search that failed, inset from the screen's edges.
 pub fn error_banner(message: String, cx: &App) -> Div {
-    let theme = theme::theme(cx);
-    div()
+    ui::modal::error_banner(theme::theme(cx), message)
         .mt(px(12.))
         .mx(px(24.))
         .flex_none()
-        .px(px(12.))
-        .py(px(9.))
-        .rounded(px(theme::RADIUS_SM))
-        .border_1()
-        .border_color(theme.negative_at(35.))
-        .bg(theme.negative_at(8.))
-        .text_color(rgb(theme::ERROR_TEXT))
-        .text(theme::TEXT_SM)
-        .child(message)
 }

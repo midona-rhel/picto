@@ -5,6 +5,9 @@ use crate::{motion, theme};
 use gpui::*;
 use std::{rc::Rc, time::Instant};
 
+mod host;
+pub use host::{Dialog, Host};
+
 actions!(modal, [Close]);
 
 pub fn bind(cx: &mut App) {
@@ -128,6 +131,30 @@ pub struct Modal {
     on_close: Option<Handler>,
     focus: Option<FocusHandle>,
     priority: usize,
+}
+
+/// A dialog's help text (`.pickerHint`, `.inlineLabel`, `.settingHint`):
+/// small secondary text. Each place adds its own spacing.
+pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
+    div()
+        .text(theme::TEXT_SM)
+        .text_color(theme.text_secondary())
+        .child(text.into())
+}
+
+/// `.error`: an edit or search that failed, as a dialog or screen shows it
+/// above its content. Each place adds its own margins.
+pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
+    div()
+        .px(px(12.))
+        .py(px(9.))
+        .rounded(px(theme::RADIUS_SM))
+        .border_1()
+        .border_color(theme.negative_at(35.))
+        .bg(theme.negative_at(8.))
+        .text_color(rgb(theme::ERROR_TEXT))
+        .text(theme::TEXT_SM)
+        .child(message.into())
 }
 
 /// A dialog titled `title`. Draw it from the view that owns it; it covers

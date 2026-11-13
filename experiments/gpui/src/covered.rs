@@ -11,20 +11,8 @@ pub fn enabled() -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn keep_painting(window: &Window) {
-    use std::ffi::{c_char, c_void};
-    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-    #[link(name = "objc", kind = "dylib")]
-    unsafe extern "C" {
-        fn sel_registerName(name: *const c_char) -> *const c_void;
-        fn object_getClass(object: *mut c_void) -> *mut c_void;
-        fn class_replaceMethod(
-            class: *mut c_void,
-            selector: *const c_void,
-            implementation: *const c_void,
-            types: *const c_char,
-        ) -> *const c_void;
-        fn objc_msgSend();
-    }
+    use crate::ui::window_chrome::appkit;
+    use std::ffi::c_void;
     /// `NSWindowOcclusionStateVisible`.
     extern "C" fn visible(_: *mut c_void, _: *const c_void) -> usize {
         1 << 1
@@ -32,41 +20,28 @@ pub fn keep_painting(window: &Window) {
     if !enabled() {
         return;
     }
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return;
-    };
-    // SAFETY: `ns_view` is the live content view of this window. GPUI's
-    // window class is its own delegate and implements
-    // `windowDidChangeOcclusionState:`; `occlusionState` returns an
-    // `NSUInteger` and takes no arguments. Called on the main thread.
-    unsafe {
-        let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let send_object: extern "C" fn(*mut c_void, *const c_void, *mut c_void) =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let ns_window = send_id(
-            appkit.ns_view.as_ptr(),
-            sel_registerName(c"window".as_ptr()),
-        );
-        if ns_window.is_null() {
-            return;
+    appkit::with_ns_window(window, |ns_window| {
+        // SAFETY: GPUI's window class is its own delegate and implements
+        // `windowDidChangeOcclusionState:`; `occlusionState` returns an
+        // `NSUInteger` and takes no arguments, as `visible` does. Called on
+        // the main thread.
+        unsafe {
+            appkit::replace_method(
+                ns_window,
+                appkit::selector(c"occlusionState"),
+                visible as *const c_void,
+                c"Q@:",
+            );
+            // Have the window look at its (new) state and start its frames.
+            let send_object: extern "C" fn(*mut c_void, *const c_void, *mut c_void) =
+                std::mem::transmute(appkit::send());
+            send_object(
+                ns_window,
+                appkit::selector(c"windowDidChangeOcclusionState:"),
+                std::ptr::null_mut(),
+            );
         }
-        class_replaceMethod(
-            object_getClass(ns_window),
-            sel_registerName(c"occlusionState".as_ptr()),
-            visible as *const c_void,
-            c"Q@:".as_ptr(),
-        );
-        // Have the window look at its (new) state and start its frames.
-        send_object(
-            ns_window,
-            sel_registerName(c"windowDidChangeOcclusionState:".as_ptr()),
-            std::ptr::null_mut(),
-        );
-    }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]

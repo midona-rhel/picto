@@ -32,19 +32,7 @@ pub struct Found {
 impl Found {
     /// `formatTag`: the subname alone in General.
     pub fn name(&self) -> String {
-        if self.namespace.is_empty() || self.namespace == "general" {
-            self.subname.clone()
-        } else {
-            format!("{}:{}", self.namespace, self.subname)
-        }
-    }
-}
-
-/// `splitTag`: a typed tag's namespace (General without one) and subtag.
-pub fn split(tag: &str) -> (String, String) {
-    match tag.split_once(':') {
-        Some((namespace, subtag)) => (namespace.to_owned(), subtag.to_owned()),
-        None => ("general".to_owned(), tag.to_owned()),
+        crate::tags::name(&self.namespace, &self.subname)
     }
 }
 
@@ -218,16 +206,18 @@ impl Render for TagTokenInput {
                 window.focus(&this.input.focus_handle(cx), cx);
             }));
         for (position, tag) in self.values.iter().enumerate() {
-            let (namespace, subtag) = split(tag);
+            // `splitTag`: General when the tag has no namespace.
+            let (namespace, subtag) = crate::tags::split(tag);
+            let namespace = namespace.unwrap_or("general");
             let removed = tag.clone();
             surface = surface.child(
                 super::chip(
                     ("tag-token", position),
-                    subtag,
-                    crate::screens::tags::model::chip_color(&namespace),
+                    subtag.to_owned(),
+                    crate::tags::chip_color(namespace),
                 )
                 .namespace(
-                    crate::screens::tags::model::group_of(&namespace)
+                    crate::tags::group_of(namespace)
                         .filter(|_| crate::settings::current(cx).show_tag_prefixes)
                         .map(SharedString::from),
                 )
@@ -325,10 +315,10 @@ impl Render for TagTokenInput {
                             super::chip(
                                 ("tag-token-found", index),
                                 found.subname.clone(),
-                                crate::screens::tags::model::chip_color(&found.namespace),
+                                crate::tags::chip_color(&found.namespace),
                             )
                             .namespace(
-                                crate::screens::tags::model::group_of(&found.namespace)
+                                crate::tags::group_of(&found.namespace)
                                     .filter(|_| crate::settings::current(cx).show_tag_prefixes)
                                     .map(SharedString::from),
                             ),
@@ -350,12 +340,10 @@ impl Render for TagTokenInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{Found, split};
+    use super::Found;
 
     #[test]
-    fn tags_are_written_and_read_as_the_electron_input_does() {
-        assert_eq!(split("artist:ann"), ("artist".into(), "ann".into()));
-        assert_eq!(split("cat"), ("general".into(), "cat".into()));
+    fn tags_are_written_as_the_electron_input_does() {
         let general = Found {
             namespace: String::new(),
             subname: "cat".into(),

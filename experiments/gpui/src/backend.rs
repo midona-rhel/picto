@@ -82,14 +82,6 @@ fn is_empty_filter(filter: &FilterExpr) -> bool {
     matches!(filter, FilterExpr::All(rules) if rules.is_empty())
 }
 
-/// `#rrggbb` as a number.
-fn hex_color(text: &str) -> Option<u32> {
-    let digits = text.strip_prefix('#').unwrap_or(text);
-    (digits.len() == 6)
-        .then(|| u32::from_str_radix(digits, 16).ok())
-        .flatten()
-}
-
 fn append_tree(
     rows: &[(u32, Option<u32>, Navigation)],
     parent_key: Option<u32>,
@@ -190,7 +182,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     screen: None,
                     random: false,
                     icon: f.icon,
-                    tint: f.color.as_deref().and_then(hex_color),
+                    tint: f.color.as_deref().and_then(crate::theme::parse_hex),
                     group: false,
                     watched: f.watch_enabled,
                     depth: 0,
@@ -217,7 +209,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
                     screen: None,
                     random: false,
                     icon: f.icon,
-                    tint: f.color.as_deref().and_then(hex_color),
+                    tint: f.color.as_deref().and_then(crate::theme::parse_hex),
                     group,
                     watched: false,
                     depth: 0,
@@ -243,7 +235,7 @@ pub fn start(
             let (nav, tags) = navigation(library)?;
             replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
-            let seed = now_ms().to_string();
+            let seed = crate::now_ms().to_string();
             for request in requests {
                 let result = match request {
                     Request::Job(job) => {
@@ -323,21 +315,11 @@ pub fn start(
     });
     (tx, rx)
 }
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn colours_and_groups_are_read_as_the_sidebar_needs_them() {
-        assert_eq!(hex_color("#3297ff"), Some(0x3297ff));
-        assert_eq!(hex_color("868e96"), Some(0x868e96));
-        assert_eq!(hex_color("#fff"), None);
-        assert_eq!(hex_color("#zzzzzz"), None);
         assert!(is_empty_filter(&FilterExpr::default()));
         assert!(!is_empty_filter(&text_filter("midna")));
     }

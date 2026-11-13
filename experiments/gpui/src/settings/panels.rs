@@ -255,22 +255,6 @@ pub fn matched_panels(query: &str) -> Vec<usize> {
         .collect()
 }
 
-/// `formatBytes`
-pub fn format_bytes(value: i64) -> String {
-    if value < 1024 {
-        return format!("{value} B");
-    }
-    let units = ["KB", "MB", "GB", "TB"];
-    let mut amount = value as f64 / 1024.;
-    let mut unit = 0;
-    while amount >= 1024. && unit < units.len() - 1 {
-        amount /= 1024.;
-        unit += 1;
-    }
-    let digits = if amount >= 10. { 1 } else { 2 };
-    format!("{amount:.digits$} {}", units[unit])
-}
-
 /// `fmtSize` in the AI Models panel: decimal gigabytes with trailing zeros
 /// dropped, else whole megabytes.
 pub fn model_size(bytes: u64) -> String {
@@ -292,7 +276,7 @@ fn cloud_date(value: Option<&str>) -> String {
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|date| {
             date.with_timezone(&chrono::Local)
-                .format("%-m/%-d/%Y, %-I:%M:%S %p")
+                .format(crate::text::date_format::LOCALE_DATE_TIME)
                 .to_string()
         })
         .unwrap_or_else(|_| value.to_owned())
@@ -452,12 +436,9 @@ fn separator(theme: theme::Theme) -> Div {
 
 /// `.settingHint`
 fn hint(theme: theme::Theme, text: &'static str) -> Div {
-    div()
+    ui::modal::help_text(theme, text)
         .mt(px(8.))
-        .text(theme::TEXT_SM)
         .line_height(px(20.))
-        .text_color(theme.text_secondary())
-        .child(text)
 }
 
 /// `.staticValue`
@@ -903,7 +884,7 @@ impl SettingsWindow {
                         count(stats.active_items + stats.inbox_items + stats.trash_items),
                     ),
                     ("Media assets", count(stats.media_assets)),
-                    ("Size", format_bytes(stats.original_bytes)),
+                    ("Size", crate::text::size_to_terabytes(stats.original_bytes)),
                 ],
             ),
             section(
@@ -1898,7 +1879,7 @@ impl SettingsWindow {
                                     .size(px(8.))
                                     .flex_none()
                                     .rounded_full()
-                                    .bg(rgb(crate::inspector::tag_style(namespace).0))
+                                    .bg(rgb(crate::tags::group_preset_color(namespace)))
                                     .opacity(0.75),
                             )
                             .child(*name),
@@ -2154,7 +2135,7 @@ pub fn cloud_info(library: &picto_library::Library) -> CloudInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{PANELS, format_bytes, matched_panels, model_size};
+    use super::{PANELS, matched_panels, model_size};
 
     #[test]
     fn search_finds_sections_by_label_keyword_or_setting() {
@@ -2175,9 +2156,6 @@ mod tests {
 
     #[test]
     fn sizes_are_written_as_production_writes_them() {
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1536), "1.50 KB");
-        assert_eq!(format_bytes(15 * 1024 * 1024), "15.0 MB");
         assert_eq!(model_size(1_260_000_000), "1.26 GB");
         assert_eq!(model_size(2_000_000_000), "2 GB");
         assert_eq!(model_size(993_246_982), "993 MB");

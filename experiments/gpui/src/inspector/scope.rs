@@ -2,7 +2,7 @@
 //! (the scope state of `Inspector.tsx`). A folder card of its first covers,
 //! its name and notes, how many items it holds and their size, and for a
 //! folder whether it tags and watches.
-use super::{Inspector, PREVIEW, format_size};
+use super::{Inspector, PREVIEW};
 use crate::grid::format;
 use crate::session::{Change, Session};
 use crate::theme;
@@ -556,7 +556,11 @@ impl Inspector {
 
         let mut properties = div()
             .child(Self::property("Items", format::grouped(view.total), cx))
-            .child(Self::property("Size", format_size(view.size as u64), cx));
+            .child(Self::property(
+                "Size",
+                crate::text::size_to_gigabytes(view.size as u64),
+                cx,
+            ));
         if view.kind != Kind::System && view.total > 0 {
             // TODO: Export opens the export dialog for everything in this
             // folder or smart folder.

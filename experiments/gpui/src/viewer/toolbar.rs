@@ -32,11 +32,9 @@ pub struct ViewerToolbar {
     viewer: WeakEntity<super::Viewer>,
     surface: Entity<MediaSurface>,
     zoom: Entity<Zoom>,
-    /// The zoom percentage's menu, kept while it fades out, and where the
-    /// keyboard was before it opened.
-    menu: Option<Entity<Menu>>,
-    return_focus: Option<FocusHandle>,
-    _menu: Option<Subscription>,
+    /// The zoom percentage's menu. The keyboard goes back where it was
+    /// before it opened.
+    menu: menu::Host,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,9 +71,7 @@ impl ViewerToolbar {
             viewer,
             surface,
             zoom,
-            menu: None,
-            return_focus: None,
-            _menu: None,
+            menu: menu::Host::deferred(2, menu::Return::Opener),
             _subscriptions: subscriptions,
         }
     }
@@ -105,9 +101,8 @@ impl ViewerToolbar {
         );
         // `showSearch: false`, as `GridToolbar.tsx` opens it.
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
-        self._menu = Some(cx.subscribe(&menu, |this, _, event: &menu::Event, cx| {
-            let menu::Event::Chosen(action) = event;
-            this.surface.update(cx, |surface, cx| match *action {
+        self.menu.open(menu, window, cx, |this, _, action, _, cx| {
+            this.surface.update(cx, |surface, cx| match action {
                 "actual-size" => surface.actual_size(cx),
                 "fit-window" => surface.fit(cx),
                 action => {
@@ -116,11 +111,7 @@ impl ViewerToolbar {
                     }
                 }
             });
-        }));
-        self.return_focus = window.focused(cx);
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
-        cx.notify();
+        });
     }
 
     /// `.viewerBreadcrumb`: the parent, which goes back, a slash, and the
@@ -307,29 +298,7 @@ impl Render for ViewerToolbar {
                 ),
         );
 
-        // A dismissed menu stays until its fade is over; the keyboard then
-        // goes back where it was.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-            if let Some(focus) = self.return_focus.take() {
-                window.focus(&focus, cx);
-            }
-        }
-        // The menu covers the whole window, from its top-left corner.
-        let view = window.viewport_size();
-        let menu = self.menu.clone().map(|menu| {
-            deferred(
-                anchored()
-                    .position(point(px(0.), px(0.)))
-                    .child(div().w(view.width).h(view.height).child(menu)),
-            )
-            .with_priority(2)
-        });
+        let menu = self.menu.layer(window, cx);
 
         ui::drag_region("viewer-toolbar", window, cx)
             .relative()

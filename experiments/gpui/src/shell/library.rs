@@ -106,45 +106,6 @@ pub fn order(
     rows
 }
 
-/// `matchRank` in `searchRank.ts`: 0 exact, 1 prefix, 2 at the start of a
-/// word, 3 anywhere; `None` when absent. Both sides are lowercase.
-pub fn rank(text: &str, needle: &str) -> Option<u8> {
-    if text == needle {
-        return Some(0);
-    }
-    if text.starts_with(needle) {
-        return Some(1);
-    }
-    // Every occurrence, overlapping ones included, as `indexOf` steps.
-    let mut found = false;
-    let mut from = 0;
-    while let Some(at) = text[from..].find(needle).map(|at| at + from) {
-        found = true;
-        let before = text[..at].chars().next_back();
-        if before.is_some_and(|character| !character.is_alphanumeric()) {
-            return Some(2);
-        }
-        from = at + text[at..].chars().next().map_or(1, char::len_utf8);
-    }
-    found.then_some(3)
-}
-
-/// `rankMatches`: the positions of the names matching `query`, best rank
-/// first and otherwise in list order. A blank query keeps every row.
-pub fn rank_matches(names: &[&str], query: &str) -> Vec<usize> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return (0..names.len()).collect();
-    }
-    let mut ranked = names
-        .iter()
-        .enumerate()
-        .filter_map(|(index, name)| Some((rank(&name.to_lowercase(), &needle)?, index)))
-        .collect::<Vec<_>>();
-    ranked.sort();
-    ranked.into_iter().map(|(_, index)| index).collect()
-}
-
 /// The widths the row's flex layout gives the name and the folder: the
 /// name keeps its own width up to 70% of the room, less the gap, since the
 /// folder (`flex: 1`) never goes below 30%; the folder takes the rest.
@@ -318,7 +279,7 @@ impl LibraryPopover {
             (
                 session.library_root().map(Path::to_path_buf),
                 session.library_cover.clone(),
-                session.fixtures.path().to_path_buf(),
+                session.scratch.path().to_path_buf(),
             )
         };
         let task = cx
@@ -570,7 +531,14 @@ impl Render for LibraryPopover {
             .iter()
             .map(|library| library.name.as_str())
             .collect::<Vec<_>>();
-        let shown = rank_matches(&names, &query);
+        let shown = crate::text::rank_matches(
+            names.into_iter().enumerate().collect(),
+            &query,
+            |(_, name)| name,
+        )
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
         let mut rows = div().flex().flex_col();
         if shown.is_empty() {
             rows = rows.child(
@@ -662,7 +630,7 @@ impl Render for LibraryPopover {
 
 #[cfg(test)]
 mod tests {
-    use super::{info_widths, order, rank, rank_matches, split};
+    use super::{info_widths, order, split};
 
     #[test]
     fn a_path_splits_into_name_and_folders() {
@@ -708,18 +676,6 @@ mod tests {
         assert!(rows[0].current);
         assert_eq!((rows[0].name.as_str(), rows[0].dir.as_str()), ("Main", "x"));
         assert!(order(&[], &[], |_| true, |_| false, None).is_empty());
-    }
-
-    #[test]
-    fn search_ranks_exact_then_prefix_then_word_start_then_anywhere() {
-        assert_eq!(rank("main", "main"), Some(0));
-        assert_eq!(rank("main archive", "main"), Some(1));
-        assert_eq!(rank("old_main", "main"), Some(2));
-        assert_eq!(rank("domain", "main"), Some(3));
-        assert_eq!(rank("photos", "main"), None);
-        let names = ["Domain", "Old Main", "Main", "Photos", "Mainline"];
-        assert_eq!(rank_matches(&names, " MAIN "), [2, 4, 1, 0]);
-        assert_eq!(rank_matches(&names, "  "), [0, 1, 2, 3, 4]);
     }
 
     #[test]

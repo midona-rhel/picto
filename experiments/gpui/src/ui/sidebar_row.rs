@@ -45,20 +45,11 @@ pub struct Activity {
 /// 30% to full opacity with a 9px glow at 60% and back, each half on
 /// `ease-in-out`. Returns the opacity, the glow's blur and its strength.
 pub fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
-    let period = motion::STATUS_PULSE.as_secs_f32();
-    let phase = (elapsed.as_secs_f32() % period) / (period / 2.);
-    let along = motion::EASE_IN_OUT.ease(if phase < 1. { phase } else { 2. - phase });
+    let along = motion::pulse(elapsed);
     let between = |from: f32, to: f32| from + (to - from) * along;
     (between(0.65, 1.), between(3., 9.), between(30., 60.))
 }
 
-/// One clock for the pulse, so it does not restart when the row repaints.
-fn pulse_clock() -> std::time::Instant {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    *START.get_or_init(std::time::Instant::now)
-}
-
-/// Where a nested row sits in its tree, for the guide lines.
 #[derive(Clone, Default)]
 pub struct Branch {
     /// For each ancestor depth, whether that ancestor has siblings below it,
@@ -575,7 +566,7 @@ fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> imp
         Some(name) => super::icon(name, 14., theme.primary()).into_any_element(),
         None => {
             window.request_animation_frame();
-            let (opacity, blur, strength) = activity_pulse(pulse_clock().elapsed());
+            let (opacity, blur, strength) = activity_pulse(motion::loop_clock());
             div()
                 .size(px(8.))
                 .rounded_full()
