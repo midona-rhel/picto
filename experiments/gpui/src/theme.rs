@@ -219,6 +219,18 @@ pub const BADGE_BACKGROUND: u32 = 0x00000080;
 pub const BADGE_BORDER: u32 = 0x00000033;
 pub const BADGE_TEXT: u32 = 0xffffffcc;
 
+// The viewer's overlays are fixed, not themed (`MediaView.module.css`).
+/// `.boundaryLeft` / `.boundaryRight`: `rgba(0, 0, 0, 0.6)`.
+pub const VIEWER_NOTICE_BACKGROUND: u32 = 0x00000099;
+/// `.navigator`: `rgba(0, 0, 0, 0.4)`, bordered `rgba(255, 255, 255, 0.15)`.
+pub const NAVIGATOR_BACKGROUND: u32 = 0x00000066;
+pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
+/// `.navigatorViewport`: border `rgba(248, 249, 251, 0.9)`, fill
+/// `rgba(248, 249, 251, 0.06)`, and the `rgba(0, 0, 0, 0.58)` shade around it.
+pub const NAVIGATOR_VIEWPORT_BORDER: u32 = 0xf8f9fbe6;
+pub const NAVIGATOR_VIEWPORT_FILL: u32 = 0xf8f9fb0f;
+pub const NAVIGATOR_SHADE: u32 = 0x00000094;
+
 // ── Typography ──────────────────────────────────────────────────
 /// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
 /// family, so Chromium draws the system font; this is the same face.
@@ -226,6 +238,9 @@ pub const FONT_UI: &str = ".SystemUIFont";
 /// `Picto Inspector Roboto`
 pub const FONT_INSPECTOR: &str = "Roboto";
 pub const FONT_INSPECTOR_MONO: &str = "Fira Mono";
+/// `--font-family-mono`: SF Mono is not an installed family, so Chromium
+/// falls through to Fira Mono, which the app bundles.
+pub const FONT_MONO: &str = "Fira Mono";
 /// CSS `line-height: normal` for 13px UI text. Chromium rounds a font's
 /// ascent and descent to whole pixels, so the line is 15px, not 1.18em; a
 /// fractional line box would put centred text half a pixel off.

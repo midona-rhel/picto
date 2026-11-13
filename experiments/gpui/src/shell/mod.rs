@@ -82,6 +82,7 @@ impl Shell {
         window.focus(&focus, cx);
         let grid =
             cx.new(|cx| GridView::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
+        let viewer = cx.new(|cx| Viewer::new(session.clone(), window, cx));
         let subscriptions = vec![
             // The shell chooses what fills the centre: the grid, the viewer
             // or a screen.
@@ -100,9 +101,9 @@ impl Shell {
         ];
         Self {
             sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
-            toolbar: cx.new(|cx| Toolbar::new(session.clone(), cx)),
+            toolbar: cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx)),
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
-            viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
+            viewer,
             tags: cx.new(|cx| {
                 screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
             }),

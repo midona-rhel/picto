@@ -8,6 +8,17 @@ pub const EASE_DEFAULT: CubicBezier = CubicBezier::new(0.4, 0., 0.22, 1.);
 pub const EASE_IN: CubicBezier = CubicBezier::new(0.42, 0., 1., 1.);
 /// CSS `ease-in-out`.
 pub const EASE_IN_OUT: CubicBezier = CubicBezier::new(0.42, 0., 0.58, 1.);
+/// CSS `ease`.
+pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
+/// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
+/// and how long it stays up.
+pub const BOUNDARY_FADE: Duration = Duration::from_millis(200);
+pub const BOUNDARY_HOLD: Duration = Duration::from_millis(800);
+/// `NAVIGATOR_SHOW_DELAY_MS`: the viewer's navigator appears this long after
+/// the image first overflows the pane.
+pub const NAVIGATOR_DELAY: Duration = Duration::from_millis(80);
+/// `QuickLookNavigation`'s buttons: `transition: background 200ms ease`.
+pub const STRIP_BUTTON: Duration = Duration::from_millis(200);
 /// `ScrollToTopButton`: its rise and fade.
 pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 /// A context-menu row's highlight.
