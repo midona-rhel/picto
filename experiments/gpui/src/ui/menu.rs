@@ -1159,6 +1159,7 @@ impl Menu {
             let view = menu.clone();
             let opened = cx
                 .open_window(options, move |window, cx| {
+                    without_system_shadow(window);
                     window.focus(&focus, cx);
                     view
                 })
@@ -1747,6 +1748,46 @@ impl Render for Menu {
         }
     }
 }
+
+/// A transparent window still gets the system's own shadow and edge
+/// highlight, traced round whatever it draws, which shows as a second, glassy
+/// border round the panel. The panel draws its own shadow, so the system's
+/// is turned off. GPUI has no option for this, so it asks AppKit directly.
+#[cfg(target_os = "macos")]
+fn without_system_shadow(window: &Window) {
+    use std::ffi::{c_char, c_void};
+    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    #[link(name = "objc", kind = "dylib")]
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `ns_view` is the live content view of this window; `window`
+    // and `setHasShadow:` are AppKit methods with these signatures, called
+    // on the main thread.
+    unsafe {
+        let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let send_bool: extern "C" fn(*mut c_void, *const c_void, bool) =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let ns_window = send_id(
+            appkit.ns_view.as_ptr(),
+            sel_registerName(c"window".as_ptr()),
+        );
+        if !ns_window.is_null() {
+            send_bool(ns_window, sel_registerName(c"setHasShadow:".as_ptr()), false);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn without_system_shadow(_: &Window) {}
 
 #[cfg(test)]
 mod tests {
