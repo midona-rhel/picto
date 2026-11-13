@@ -480,7 +480,6 @@ impl SettingsWindow {
         let model = &self.model;
         let app = &model.read(cx).draft.app;
         let enabled = app.notification_popups_enabled;
-        // TODO: pop-up notifications; this prototype shows none yet.
         let mut content = card(theme).child(
             title(theme, "Pop-ups").child(div().ml_auto().flex().items_center().child(
                 ui::toggle("popups", enabled).on_toggle(edit(model, |draft| {

@@ -172,6 +172,7 @@ impl Imports {
                 self.report(
                     "Could not import Picto Pack",
                     "Drop one Picto Pack at a time without other files.",
+                    cx,
                 );
             }
             Dropped::Pack(path) => {
@@ -183,6 +184,7 @@ impl Imports {
                         "Picto Pack import is not built yet: {}",
                         path.to_string_lossy()
                     ),
+                    cx,
                 );
             }
             Dropped::Folder(path) => {
@@ -267,7 +269,7 @@ impl Imports {
             Some(Pasted::Picture(image)) => match write_picture(&image) {
                 Ok(path) => (vec![path], true),
                 Err(error) => {
-                    self.report("Could not paste import", &error.to_string());
+                    self.report("Could not paste import", &error.to_string(), cx);
                     return;
                 }
             },
@@ -275,6 +277,7 @@ impl Imports {
                 self.report(
                     "Could not paste import",
                     "The clipboard does not contain importable files or an image.",
+                    cx,
                 );
                 return;
             }
@@ -301,6 +304,7 @@ impl Imports {
         self.report(
             "An import is already running",
             &format!("Let “{title}” finish or stop it before starting another."),
+            cx,
         );
         false
     }
@@ -331,6 +335,18 @@ impl Imports {
 
     /// `addMedia`: starts the import; its task takes the foreground.
     fn enqueue(&mut self, paths: Vec<PathBuf>, params: Params, cx: &mut Context<Self>) {
+        self.enqueue_as("Could not import media", paths, params, cx);
+    }
+
+    /// [`Imports::enqueue`], a failure titled `failure` ("Could not import
+    /// folder" for the folder dialog).
+    fn enqueue_as(
+        &mut self,
+        failure: &'static str,
+        paths: Vec<PathBuf>,
+        params: Params,
+        cx: &mut Context<Self>,
+    ) {
         let args = params.enqueue(&paths);
         let answer = self.session.read(cx).dispatch("imports.enqueue", args);
         let folder = params.destination.folder;
@@ -347,18 +363,16 @@ impl Imports {
                     }
                     this.refresh(cx);
                 }
-                Ok(Err(error)) => this.report("Could not import media", &error),
+                Ok(Err(error)) => this.report(failure, &error, cx),
                 Err(_) => {}
             });
         })
         .detach();
     }
 
-    /// Errors production shows as a notification. There is no notification
-    /// host yet, so they are written to standard error.
-    fn report(&self, title: &str, message: &str) {
-        // TODO: show this as an error notification (`showErrorNotification`).
-        eprintln!("picto: {title}: {message}");
+    /// Errors production shows as a notification (`showErrorNotification`).
+    fn report(&self, title: &str, message: &str, cx: &mut App) {
+        crate::ui::notify::error(title.to_owned(), message.to_owned(), cx);
     }
 
     // ── The folder dialog ───────────────────────────────────────
@@ -477,7 +491,7 @@ impl Imports {
         let path = folder.path.clone();
         self.dialog.dismiss(cx);
         if self.allow(cx) {
-            self.enqueue(vec![path], params, cx);
+            self.enqueue_as("Could not import folder", vec![path], params, cx);
         }
     }
 
@@ -595,7 +609,7 @@ impl Imports {
             let result = answer.await;
             let _ = this.update(cx, |this, cx| match result {
                 Ok(Ok(list)) => this.apply(list, cx),
-                Ok(Err(error)) => this.report(failure, &error),
+                Ok(Err(error)) => this.report(failure, &error, cx),
                 Err(_) => {}
             });
         })

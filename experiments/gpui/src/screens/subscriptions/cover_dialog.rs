@@ -3,7 +3,7 @@
 //! image in a square that is dragged to place and zoomed with the wheel or
 //! the slider, and Confirm saves it (`subscriptions.cover.candidates`,
 //! `subscriptions.cover.set`).
-use super::dialogs::{Dialog, cover_load_failed};
+use super::dialogs::Dialog;
 use super::{SubscriptionsScreen, Tone, data, requests, show_notification};
 use crate::cover::Crop;
 use crate::theme::Text as _;
@@ -191,10 +191,16 @@ impl SubscriptionsScreen {
                         Tone::Error,
                         "Unable to load more subscription media",
                         &error,
+                        cx,
                     ),
                     Err(error) => {
                         cover.candidates = Rc::default();
-                        cover_load_failed(&error);
+                        show_notification(
+                            Tone::Error,
+                            "Unable to load subscription media",
+                            &error,
+                            cx,
+                        );
                     }
                 }
                 if let Some(cursor) = again {

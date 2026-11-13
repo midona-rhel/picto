@@ -110,6 +110,9 @@ impl SubscriptionActivity {
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
 /// How often the session takes in what the library's thread has sent.
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
+/// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
+/// this long.
+const VIEW_SAVE_DELAY: Duration = Duration::from_millis(500);
 /// `gridController.scheduleRefresh`: a refresh after background changes
 /// waits at least this long, and at most a second, three times as long as
 /// the last refresh took, counted from when it finished.
@@ -282,13 +285,19 @@ pub struct Session {
     pub place_label: Option<SharedString>,
     /// Folders items were added to, newest first, for the folder picker's
     /// Recent view and the grid menu's "Add to “…”" (`useRecentFolders`).
-    /// Production keeps them in the renderer's localStorage; here they last
-    /// for the session.
+    /// Production keeps them per library in the renderer's localStorage;
+    /// here they are kept in the app's state under the library the copy was
+    /// made from.
     pub recent_folders: Vec<picto_library::FolderId>,
     /// Tags put on items, newest first, for the Add Tags dialog's Recent
-    /// view (`picto-recent-tags`). Like the folders, they last for the
-    /// session.
+    /// view (`picto-recent-tags`), kept in the app's state.
     pub recent_tags: Vec<String>,
+    /// The recents changed since they were last kept. They are kept on the
+    /// next poll, which has the app to write to.
+    recents_changed: bool,
+    /// A zoom change waiting to be saved to its destination's view: the
+    /// destination's key, the tile size, and the timer.
+    tile_save: Option<(String, f32, Task<()>)>,
     /// A refresh in place is on its way: what the grid shows stays until it
     /// arrives, an empty state included.
     pub refreshing: bool,
@@ -317,6 +326,15 @@ impl Session {
         cx: &mut Context<Self>,
     ) -> Self {
         let blobs = root.join("blobs");
+        let (recent_folders, recent_tags) = {
+            let kept = crate::state::get(cx);
+            let folders = kept
+                .recent_folders
+                .get(&crate::state::library_key(&root))
+                .map(|ids| ids.iter().map(|id| picto_library::FolderId(*id)).collect())
+                .unwrap_or_default();
+            (folders, kept.recent_tags.clone())
+        };
         let (sender, receiver) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
             loop {
@@ -406,8 +424,10 @@ impl Session {
             refresh_started: None,
             refresh_took: Duration::ZERO,
             refresh_finished: None,
-            recent_folders: Vec::new(),
-            recent_tags: Vec::new(),
+            recent_folders,
+            recent_tags,
+            recents_changed: false,
+            tile_save: None,
         }
     }
 
@@ -716,7 +736,12 @@ impl Session {
             let _ = session.update(cx, |this: &mut Self, cx| {
                 this.subscriptions.busy = false;
                 if let Ok(Err(error)) = result {
-                    eprintln!("picto: {error}");
+                    let title = if paused {
+                        "Could not pause subscriptions"
+                    } else {
+                        "Could not resume subscriptions"
+                    };
+                    crate::ui::notify::error(title, error, cx);
                 }
                 cx.emit(Change::Activity);
                 this.refresh_activity(cx);
@@ -735,12 +760,28 @@ impl Session {
     /// folders, each kept once, at most 30.
     pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
         record_recent(&mut self.recent_folders, folder);
+        self.recents_changed = true;
     }
 
     /// `recordRecentItems('picto-recent-tags', …)`: the tags go to the front
     /// in their order, each kept once, at most 30.
     pub fn record_tags_use(&mut self, tags: &[String]) {
         record_recent_names(&mut self.recent_tags, tags);
+        self.recents_changed = true;
+    }
+
+    /// Keeps the recents in the app's state once they changed.
+    fn keep_recents(&mut self, cx: &mut App) {
+        if !std::mem::take(&mut self.recents_changed) {
+            return;
+        }
+        let library = crate::state::library_key(&self.root);
+        let folders = self.recent_folders.iter().map(|folder| folder.0).collect();
+        let tags = self.recent_tags.clone();
+        crate::state::update(cx, |state| {
+            state.recent_folders.insert(library, folders);
+            state.recent_tags = tags;
+        });
     }
 
     /// `requestReconcile`: background work (an import, a subscription
@@ -1063,6 +1104,23 @@ impl Session {
         merged.extend(fields.clone());
         self.view_patch = Some((self.generation, serde_json::Value::Object(merged)));
         let key = crate::grid::prefs::scope_key(&scope);
+        self.write_view(key, serde_json::Value::Object(fields));
+        if refetch {
+            self.close_viewer(cx);
+            if matches!(self.transition, Transition::Idle) {
+                self.transition = Transition::FadingOut(Instant::now());
+            }
+            self.query(cx);
+            cx.emit(Change::Navigation);
+        } else {
+            cx.emit(Change::Results);
+        }
+    }
+
+    /// Saves fields of a destination's view to its `view_pref` row, as
+    /// `settings.view.patch` does: out of undo.
+    fn write_view(&self, key: String, fields: serde_json::Value) {
+        let fields = fields.as_object().cloned().unwrap_or_default();
         let _ = self.sender.send(Request::Job(Box::new(move |library| {
             let saved = library.update_auxiliary_json(
                 "settings.view.patch",
@@ -1080,16 +1138,6 @@ impl Session {
                 eprintln!("picto: could not save the view of {key}: {error}");
             }
         })));
-        if refetch {
-            self.close_viewer(cx);
-            if matches!(self.transition, Transition::Idle) {
-                self.transition = Transition::FadingOut(Instant::now());
-            }
-            self.query(cx);
-            cx.emit(Change::Navigation);
-        } else {
-            cx.emit(Change::Results);
-        }
     }
 
     /// The preferences a page of `generation` brought, with any view change
@@ -1124,12 +1172,48 @@ impl Session {
         Some(name.trim_end_matches(".library").to_owned())
     }
 
+    /// Zooms the grid, and saves the zoom to the destination's view
+    /// (`saveViewPref({ target_size })`) once it has rested for 500 ms
+    /// (`VIEW_PREFS_SAVE_DEBOUNCE_MS`), so a slider drag writes once.
     pub fn set_tile(&mut self, tile: f32, cx: &mut Context<Self>) {
         self.tile = tile;
+        let scope = self
+            .nav
+            .get(self.scope)
+            .filter(|entry| entry.screen.is_none())
+            .map(|entry| entry.scope.clone());
+        if let Some(scope) = scope {
+            let patch = serde_json::json!({ "target_size": tile });
+            self.prefs = self.prefs.patched(&scope, &patch);
+            // A page of an earlier query keeps the new zoom.
+            let mut merged = match self.view_patch.take() {
+                Some((_, serde_json::Value::Object(earlier))) => earlier,
+                _ => serde_json::Map::new(),
+            };
+            merged.insert("target_size".into(), serde_json::json!(tile));
+            self.view_patch = Some((self.generation, serde_json::Value::Object(merged)));
+            let key = crate::grid::prefs::scope_key(&scope);
+            // A zoom of another destination still waiting is saved now.
+            if let Some((waiting, size, _)) = self.tile_save.take()
+                && waiting != key
+            {
+                self.write_view(waiting, serde_json::json!({ "target_size": size }));
+            }
+            let timer = cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(VIEW_SAVE_DELAY).await;
+                let _ = this.update(cx, |this, _| {
+                    if let Some((key, size, _)) = this.tile_save.take() {
+                        this.write_view(key, serde_json::json!({ "target_size": size }));
+                    }
+                });
+            });
+            self.tile_save = Some((key, tile, timer));
+        }
         cx.emit(Change::Results);
     }
 
     fn receive(&mut self, cx: &mut Context<Self>) {
+        self.keep_recents(cx);
         self.receive_events(cx);
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
@@ -1407,7 +1491,7 @@ impl Session {
         let saved = self
             .saved
             .remove(&visit.scope)
-            .filter(|saved| saved.search_text == self.search_text && saved.filters == filters);
+            .filter(|saved| saved.search_text.is_empty() && saved.filters == filters);
         self.open(visit.scope, saved, Some(filters), cx);
     }
 
@@ -1505,6 +1589,9 @@ impl Session {
         cx: &mut Context<Self>,
     ) {
         self.save_grid();
+        // Every destination opens without a search (`prepareNavigation`
+        // sets `searchText: ''`), Back and Forward included.
+        self.search_text.clear();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
             self.filters = filters;
@@ -1714,6 +1801,13 @@ impl Session {
         self.focus_on(Some(focus), cx);
     }
 
+    /// Whether the selection reaches past the items chosen one by one (the
+    /// whole destination, or a range), so that only the library knows all
+    /// it holds (production's `query_results` selection).
+    pub fn selects_whole(&self) -> bool {
+        self.selection.query_wide()
+    }
+
     /// How many items are selected, loaded or not.
     pub fn selection_count(&self) -> u64 {
         self.selection.count(self.total)
@@ -1905,34 +1999,65 @@ impl Session {
     /// went through. Hands back the edit's answer once the reads are asked
     /// for, so a view's own follow-up comes after them. What was shown stays
     /// until each read arrives. The sidebar's destinations and counts follow
-    /// the library's change events by themselves.
+    /// the library's change events by themselves. Production tells the user
+    /// of a failed edit only where the call says so; such a call uses
+    /// [`Session::edit_reporting`].
     pub fn edit<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
         &mut self,
         work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
         reread: Reread,
         cx: &mut Context<Self>,
     ) -> futures::channel::oneshot::Receiver<Result<T, E>> {
+        self.edit_reporting(Report::default(), work, reread, cx)
+    }
+
+    /// [`Session::edit`], telling the user what `report` says: a failure as
+    /// an error notification with its title, and a broad change as the
+    /// notification with Undo that production announces it with.
+    pub fn edit_reporting<T: Send + 'static, E: std::fmt::Display + Send + 'static>(
+        &mut self,
+        report: Report,
+        work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
+        reread: Reread,
+        cx: &mut Context<Self>,
+    ) -> futures::channel::oneshot::Receiver<Result<T, E>> {
         let (answer, receiver) = futures::channel::oneshot::channel();
+        let announce = report.announce;
         let job = self.run(move |library| {
+            let before = announce.map(|_| crate::history::newest(library));
             let result = work(library);
+            let announced = match (announce, &result) {
+                (Some(command), Ok(_)) => {
+                    crate::history::announced(library, command, before.flatten())
+                }
+                _ => None,
+            };
             let navigation = reread
                 .navigation
                 .then(|| backend::navigation(library).ok())
                 .flatten();
-            (result, navigation)
+            (result, navigation, announced)
         });
         cx.spawn(async move |session, cx| {
-            let Ok((result, navigation)) = job.await else {
+            let Ok((result, navigation, announced)) = job.await else {
                 return;
             };
             let _ = session.update(cx, |this, cx| {
                 if let Some((nav, tags)) = navigation {
                     this.replace_navigation(nav, tags, cx);
                 }
-                // TODO: show a failure as a notification, as production's
-                // `showErrorNotification` does.
                 if let Err(error) = &result {
-                    eprintln!("picto: {error}");
+                    let message = error.to_string();
+                    match &report.failure {
+                        Some(title) if report.shows(&message) => {
+                            crate::ui::notify::error(title.clone(), message, cx)
+                        }
+                        // Production leaves it to the console.
+                        _ => eprintln!("picto: {message}"),
+                    }
+                }
+                if let Some(entry) = &announced {
+                    crate::history::announce(entry, cx.entity(), cx);
                 }
                 this.reread(reread, cx);
             });
@@ -2021,18 +2146,90 @@ impl Session {
         .detach();
     }
 
-    /// Undoes the library's last edit, while an item is selected, and shows
-    /// that item as it is now.
+    /// Undoes the library's last edit, whatever is selected (`edit.undo` is
+    /// app-wide): an undone move to the trash brings back an item that is no
+    /// longer in the grid, and an undone folder edit changes the sidebar. So
+    /// the results, the selection and the destinations are read again.
     pub fn undo(&mut self, cx: &mut Context<Self>) {
-        if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.undo(), Reread::DETAILS, cx);
-        }
+        self.step_history_entry(true, cx);
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
-        if self.selected_item().is_some() {
-            let _ = self.edit(|library| library.redo(), Reread::DETAILS, cx);
+        self.step_history_entry(false, cx);
+    }
+
+    /// `historyRuntime.perform`: undoes or redoes the library's newest
+    /// change, and says what it did ("Undone — …") or why it could not
+    /// ("Could not undo").
+    pub fn step_history_entry(&mut self, undo: bool, cx: &mut Context<Self>) {
+        let failure = if undo {
+            "Could not undo"
+        } else {
+            "Could not redo"
+        };
+        let answer = self.edit_reporting(
+            Report::failure(failure),
+            move |library| crate::history::step(library, undo),
+            Reread::EVERYTHING,
+            cx,
+        );
+        cx.spawn(async move |session, cx| {
+            if let Ok(Ok(stepped)) = answer.await {
+                let _ = session.update(cx, |_, cx| {
+                    crate::history::show_step(&stepped, undo, cx.entity(), cx)
+                });
+            }
+        })
+        .detach();
+    }
+}
+
+/// What [`Session::edit_reporting`] tells the user about an edit, as the
+/// production call it stands for does.
+#[derive(Clone, Default)]
+pub struct Report {
+    /// The title of the error notification a failure shows.
+    pub failure: Option<SharedString>,
+    /// Only a folder nested too deep is reported (`warnOnFolderDepth`),
+    /// as the warning every error about it becomes.
+    pub folder_depth: bool,
+    /// The history command a broad change records, which is announced with
+    /// an Undo button (`announceUndoableMutation`).
+    pub announce: Option<&'static str>,
+}
+
+impl Report {
+    pub fn failure(title: impl Into<SharedString>) -> Self {
+        Self {
+            failure: Some(title.into()),
+            ..Self::default()
         }
+    }
+
+    pub fn folder_depth() -> Self {
+        Self {
+            failure: Some("Folder depth limit".into()),
+            folder_depth: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn announce(command: &'static str) -> Self {
+        Self {
+            announce: Some(command),
+            ..Self::default()
+        }
+    }
+
+    /// Whether a failure with `message` is shown.
+    fn shows(&self, message: &str) -> bool {
+        self.failure.is_some()
+            && (!self.folder_depth || message.contains(crate::ui::notify::FOLDER_DEPTH_LIMIT))
+    }
+
+    pub fn and_announce(mut self, command: &'static str) -> Self {
+        self.announce = Some(command);
+        self
     }
 }
 
@@ -2085,6 +2282,11 @@ impl Reread {
     pub const NAVIGATION: Self = Self {
         navigation: true,
         ..Self::NOTHING
+    };
+    /// Whatever an edit could have touched, for undo and redo.
+    pub const EVERYTHING: Self = Self {
+        navigation: true,
+        ..Self::RESULTS
     };
 }
 

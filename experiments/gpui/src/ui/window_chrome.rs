@@ -85,6 +85,43 @@ pub fn set_always_on_top(window: &Window, on_top: bool) {
     let _ = (window, on_top);
 }
 
+/// Takes the window off the screen without closing it (`orderOut:`), as a
+/// Mac app's main window goes when it is closed while the app runs on.
+pub fn order_out(window: &Window) {
+    #[cfg(target_os = "macos")]
+    appkit::with_ns_window(window, |ns_window| {
+        // SAFETY: `orderOut:` takes an object (the sender, nil here),
+        // called on the main thread.
+        unsafe {
+            let send_object: extern "C" fn(
+                *mut std::ffi::c_void,
+                *const std::ffi::c_void,
+                *mut std::ffi::c_void,
+            ) = std::mem::transmute(appkit::send());
+            send_object(
+                ns_window,
+                appkit::selector(c"orderOut:"),
+                std::ptr::null_mut(),
+            );
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// The Window menu's Bring All to Front (`arrangeInFront:`).
+pub fn bring_all_to_front(cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = cx;
+        appkit::arrange_in_front();
+    }
+    #[cfg(not(target_os = "macos"))]
+    for window in cx.windows() {
+        let _ = window.update(cx, |_, window, _| window.activate_window());
+    }
+}
+
 /// The few Objective-C runtime calls the app makes to AppKit for what GPUI
 /// has no option for.
 #[cfg(target_os = "macos")]
@@ -249,6 +286,29 @@ pub(crate) mod appkit {
     }
 
     /// Runs `work` with the window's NSWindow, if it has one.
+    /// `[NSApp arrangeInFront:nil]`: the app's windows in front of other
+    /// apps', in their order.
+    pub fn arrange_in_front() {
+        // SAFETY: `sharedApplication` is a class method returning the app,
+        // and `arrangeInFront:` takes an object (the sender, nil here);
+        // called on the main thread.
+        unsafe {
+            let class = objc_getClass(c"NSApplication".as_ptr());
+            if class.is_null() {
+                return;
+            }
+            let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+                std::mem::transmute(send());
+            let app = send_id(class, selector(c"sharedApplication"));
+            if app.is_null() {
+                return;
+            }
+            let send_object: extern "C" fn(*mut c_void, *const c_void, *mut c_void) =
+                std::mem::transmute(send());
+            send_object(app, selector(c"arrangeInFront:"), std::ptr::null_mut());
+        }
+    }
+
     pub fn with_ns_window(window: &Window, work: impl FnOnce(*mut c_void)) {
         let Ok(handle) = HasWindowHandle::window_handle(window) else {
             return;

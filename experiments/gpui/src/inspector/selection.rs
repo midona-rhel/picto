@@ -6,7 +6,7 @@ use super::stack::{self, Pose, Stack};
 use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
 use crate::grid::format;
-use crate::session::Reread;
+use crate::session::{Report, Reread};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, field::Look, text_input::TextInput};
@@ -213,8 +213,9 @@ impl Inspector {
 
     /// Applies an edit to every item in the selection shown, then reads its
     /// summary again.
-    fn edit_selection(
+    fn edit_selection_as(
         &mut self,
+        report: Report,
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
         + Send
         + 'static,
@@ -226,7 +227,12 @@ impl Inspector {
         let target = self.session.read(cx).target_for(ids);
         // The focused item was edited with the rest.
         let job = self.session.update(cx, |session, cx| {
-            session.edit(move |library| work(library, &target), Reread::DETAILS, cx)
+            session.edit_reporting(
+                report,
+                move |library| work(library, &target),
+                Reread::DETAILS,
+                cx,
+            )
         });
         cx.spawn(async move |this, cx| {
             if job.await.is_ok() {
@@ -237,7 +243,8 @@ impl Inspector {
     }
 
     pub(super) fn rate_selection(&mut self, rating: Rating, cx: &mut Context<Self>) {
-        self.edit_selection(
+        self.edit_selection_as(
+            Report::failure("Could not change rating"),
             move |library, target| library.set_rating(target, rating),
             cx,
         );

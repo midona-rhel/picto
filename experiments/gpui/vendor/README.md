@@ -41,7 +41,8 @@ does not need: lens, dispersion, tint and rim light).
   inserts a blur at the element opacity; `Window::paint_drop_shadows_outside`,
   which paints drop shadows with `inset: 2`, so that a translucent panel does
   not show (or blur in) its own shadow, as CSS never draws a `box-shadow`
-  under its element.
+  under its element. `Window::is_dirty` (test support only), so the
+  off-screen checks can draw only the frames a real window would.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -423,10 +424,12 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -1634,6 +1634,33 @@
+@@ -1632,6 +1632,33 @@
+         (false, false) => display_bounds.origin,
+     };
      window_bounds_ctor(Bounds::new(final_origin, base_size))
- }
- 
++}
++
 +/// What [`Window::paint_backdrop_blur`] does to the backdrop: CSS
 +/// `backdrop-filter: blur(blur_radius) saturate(saturation)
 +/// brightness(brightness)`.
@@ -452,15 +455,33 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            opacity: 1.,
 +        }
 +    }
-+}
-+
+ }
+ 
  impl Window {
-     pub(crate) fn new(
-         handle: AnyWindowHandle,
-@@ -4811,6 +4838,31 @@
-         corner_radii: Corners<Pixels>,
-         shadows: &[BoxShadow],
-     ) {
+@@ -2956,6 +2983,14 @@
+             callback(self, cx);
+         }
+         count
++    }
++
++    /// Whether the window has been invalidated since it was last drawn: what
++    /// the platform's frame loop asks before drawing a frame. Tests use it to
++    /// draw only the frames a real window would.
++    #[cfg(any(test, feature = "test-support"))]
++    pub fn is_dirty(&self) -> bool {
++        self.invalidator.is_dirty()
+     }
+ 
+     /// Spawn the future returned by the given closure on the application thread pool.
+@@ -4806,10 +4841,35 @@
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+     pub fn paint_drop_shadows(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
++    ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, false);
 +    }
 +
@@ -480,16 +501,15 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    }
 +
 +    fn paint_drop_shadows_cut(
-+        &mut self,
-+        bounds: Bounds<Pixels>,
-+        corner_radii: Corners<Pixels>,
-+        shadows: &[BoxShadow],
+         &mut self,
+         bounds: Bounds<Pixels>,
+         corner_radii: Corners<Pixels>,
+         shadows: &[BoxShadow],
 +        outside: bool,
-+    ) {
+     ) {
          self.invalidator.debug_assert_paint();
  
-         let scale_factor = self.scale_factor();
-@@ -4832,10 +4884,50 @@
+@@ -4832,12 +4892,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -498,8 +518,8 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  pad: 0,
              });
          }
-+    }
-+
+     }
+ 
 +    /// Show what has been painted beneath `bounds` so far blurred inside its
 +    /// rounded shape, as CSS `backdrop-filter` does; paint the element's
 +    /// fill and contents after it. The blur follows the element opacity, so
@@ -538,9 +558,11 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            brightness: filter.brightness,
 +            opacity: opacity.min(1.),
 +        });
-     }
- 
++    }
++
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
+     /// be called after the element's background so the shadow layers on top of the fill.
+     /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/src/metal_renderer.rs
 --- a/gpui-pre-apple/src/metal_renderer.rs	2006-07-24 03:21:28
 +++ b/gpui-pre-apple/src/metal_renderer.rs	2026-11-13 20:30:54

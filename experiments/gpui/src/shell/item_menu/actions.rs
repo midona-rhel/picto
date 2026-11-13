@@ -3,7 +3,7 @@
 use super::{File, Target, media_link};
 use crate::grid::format::grouped;
 use crate::grid::menu::Action;
-use crate::session::Reread;
+use crate::session::{Report, Reread};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootKind};
@@ -159,7 +159,17 @@ impl Shell {
                     self.session
                         .update(cx, |session, _| session.record_folder_use(folder));
                     let selection = target.selection(self.session.read(cx));
-                    self.edit(
+                    let node = format!("folder:{}", folder.0);
+                    let name = self
+                        .session
+                        .read(cx)
+                        .nav
+                        .iter()
+                        .find(|entry| entry.id() == node)
+                        .map(|entry| entry.label.clone())
+                        .unwrap_or_default();
+                    self.edit_as(
+                        Report::failure(format!("Could not add to {name}")),
                         Box::new(move |library| library.add_to_folder(&selection, folder)),
                         Reread::SELECTION,
                         cx,
@@ -192,7 +202,8 @@ impl Shell {
             }
             Action::SetFolderCover => {
                 if let (Some(folder), Some(id)) = (target.folder, ids.first().copied()) {
-                    self.edit(
+                    self.edit_as(
+                        Report::failure("Could not set folder cover"),
                         Box::new(move |library| library.set_folder_cover(folder, id)),
                         Reread::SELECTION,
                         cx,
@@ -349,9 +360,21 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = self
-            .session
-            .update(cx, |session, cx| session.edit(work, Reread::NOTHING, cx));
+        self.library_as(Report::default(), work, then, window, cx);
+    }
+
+    /// [`Shell::library`], telling the user what `report` says.
+    pub(in crate::shell) fn library_as<T: Send + 'static>(
+        &mut self,
+        report: Report,
+        work: Work<T>,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit_reporting(report, work, Reread::NOTHING, cx)
+        });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(value)) = answer.await {
                 let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
@@ -362,8 +385,20 @@ impl Shell {
 
     /// An edit of the selected items, and what to read again afterwards.
     fn edit<T: Send + 'static>(&mut self, work: Work<T>, reread: Reread, cx: &mut Context<Self>) {
+        self.edit_as(Report::default(), work, reread, cx);
+    }
+
+    /// [`Shell::edit`], telling the user what `report` says, as the
+    /// production menu row does.
+    fn edit_as<T: Send + 'static>(
+        &mut self,
+        report: Report,
+        work: Work<T>,
+        reread: Reread,
+        cx: &mut Context<Self>,
+    ) {
         self.session.update(cx, |session, cx| {
-            let _ = session.edit(work, reread, cx);
+            let _ = session.edit_reporting(report, work, reread, cx);
         });
     }
 
@@ -417,7 +452,8 @@ impl Shell {
             return;
         };
         let selection = target.selection(self.session.read(cx));
-        self.library(
+        self.library_as(
+            Report::failure("Could not create group").and_announce("collections.organize"),
             Box::new(move |library| {
                 let summary = library.selection_summary(&selection)?;
                 let notes = library.collection_note_draft(&selection)?;
@@ -476,7 +512,8 @@ impl Shell {
                 let selection = selection.clone();
                 this.session
                     .update(cx, |session, cx| session.clear_selection(cx));
-                this.edit(
+                this.edit_as(
+                    Report::failure("Could not ungroup items").and_announce("collections.ungroup"),
                     Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
                     Reread::RESULTS,
                     cx,

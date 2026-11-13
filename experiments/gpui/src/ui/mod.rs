@@ -17,6 +17,7 @@ pub mod icon_button;
 pub mod icon_picker;
 pub mod menu;
 pub mod modal;
+pub mod notify;
 pub mod number_input;
 pub mod overlay_shell;
 mod panel_section;

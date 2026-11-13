@@ -15,6 +15,7 @@ use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::inspector::{FolderPicker, TagPicker, folder_picker, tag_picker};
 use crate::session::{Change, Session};
+use crate::ui;
 use crate::ui::menu::{self, Menu};
 use crate::ui::modal;
 use crate::ui::text_input::{Submitted, TextInput};
@@ -169,11 +170,14 @@ pub enum Tone {
     Success,
 }
 
-/// Shows a notification as production's toasts do.
-// TODO: hand it to the window's notification host once it exists; until
-// then the message only reaches the log.
-pub fn show_notification(tone: Tone, title: &str, message: &str) {
-    eprintln!("picto: {tone:?} notification: {title}: {message}");
+/// Shows a notification as production's toasts do, through the window's
+/// notification host.
+pub fn show_notification(tone: Tone, title: &str, message: &str, cx: &mut App) {
+    let (title, message) = (title.to_owned(), message.to_owned());
+    match tone {
+        Tone::Error => crate::ui::notify::error(title, message, cx),
+        Tone::Success => crate::ui::notify::success(title, message, cx),
+    }
 }
 
 /// The tabs of a subscription's data plane.
@@ -432,7 +436,7 @@ impl SubscriptionsScreen {
             let _ = this.update(cx, |this, cx| {
                 this.busy -= 1;
                 if let Err(error) = &outcome {
-                    show_notification(Tone::Error, "Subscription action failed", error);
+                    show_notification(Tone::Error, "Subscription action failed", error, cx);
                 }
                 then(this, outcome, cx);
                 this.session
@@ -479,7 +483,7 @@ impl SubscriptionsScreen {
                         this.list = Some(list);
                     }
                     Err(error) => {
-                        show_notification(Tone::Error, "Subscriptions unavailable", &error)
+                        show_notification(Tone::Error, "Subscriptions unavailable", &error, cx)
                     }
                 }
                 this.settled(cx);
@@ -606,17 +610,17 @@ impl SubscriptionsScreen {
     fn settle_gallery(&mut self, id: i64, cx: &mut Context<Self>) {
         let runs = self.send(requests::runs(id), cx);
         cx.spawn(async move |this, cx| {
-            let latest =
-                runs.await
-                    .ok()
-                    .and_then(Result::ok)
-                    .and_then(|runs| {
-                        serde_json::from_value::<
+            let latest = runs
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .and_then(|runs| {
+                    serde_json::from_value::<
                             picto_core::subscription_activity::SubscriptionRunList,
                         >(runs)
                         .ok()
-                    })
-                    .and_then(|list| list.runs.into_iter().next());
+                })
+                .and_then(|list| list.runs.into_iter().next());
             let Some(latest) =
                 latest.filter(|run| !matches!(run.status.as_str(), "pending" | "running"))
             else {
@@ -651,11 +655,13 @@ impl SubscriptionsScreen {
                         Tone::Success,
                         "Gallery already exists",
                         &format!("{title} is already in the library."),
+                        cx,
                     ),
                     "succeeded" => show_notification(
                         Tone::Success,
                         "Gallery downloaded",
                         &format!("{title} has been downloaded."),
+                        cx,
                     ),
                     "cancelled" => {}
                     status => show_notification(
@@ -667,6 +673,7 @@ impl SubscriptionsScreen {
                                 latest.failure_kind.as_deref().unwrap_or(status)
                             )
                         }),
+                        cx,
                     ),
                 }
                 if let Some(list) = &mut this.list {
@@ -707,7 +714,7 @@ impl SubscriptionsScreen {
                 for (id, result) in settled {
                     this.acting.remove(&id);
                     if let Ok(Err(error)) = result {
-                        show_notification(Tone::Error, "Subscription action failed", &error);
+                        show_notification(Tone::Error, "Subscription action failed", &error, cx);
                     }
                 }
                 this.session
@@ -764,7 +771,16 @@ impl SubscriptionsScreen {
             let detail = match answer.await {
                 Ok(Ok(detail)) => detail,
                 Ok(Err(error)) => {
-                    show_notification(Tone::Error, "Subscription details unavailable", &error);
+                    let _ = this.update(cx, |this, cx| {
+                        if this.detail_generation == generation {
+                            show_notification(
+                                Tone::Error,
+                                "Subscription details unavailable",
+                                &error,
+                                cx,
+                            );
+                        }
+                    });
                     return;
                 }
                 Err(_) => return,
@@ -821,10 +837,17 @@ impl SubscriptionsScreen {
                 if this.detail_generation != generation {
                     return;
                 }
-                if let (Ok(Ok(page)), Some(detail)) = (result, this.detail.as_mut()) {
-                    detail.issues.items.extend(page.items);
-                    detail.issues.next = page.next;
-                    detail.issues.total = page.total;
+                match (result, this.detail.as_mut()) {
+                    (Ok(Ok(page)), Some(detail)) => {
+                        detail.issues.items.extend(page.items);
+                        detail.issues.next = page.next;
+                        detail.issues.total = page.total;
+                    }
+                    // `loadMoreHealth` runs through `act`.
+                    (Ok(Err(error)), _) => {
+                        ui::notify::error("Subscription action failed", error, cx)
+                    }
+                    _ => {}
                 }
                 cx.notify();
             });
@@ -1388,6 +1411,8 @@ fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
             let width = f32::from(bounds.size.width);
             if (cell.replace(width) - width).abs() > 0.5 {
                 cx.notify(view);
+                // A notification made while a frame is being drawn does not
+                // by itself bring another frame.
                 window.request_animation_frame();
             }
         },

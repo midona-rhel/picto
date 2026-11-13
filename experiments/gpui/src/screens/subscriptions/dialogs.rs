@@ -3,7 +3,7 @@
 //! source's edit (`QueryEditModal`) and details, the confirmations the
 //! screen asks before deleting or resetting, and the cover
 //! (`SubscriptionCoverDialog`, in [`super::cover_dialog`]).
-use super::{SubscriptionsScreen, Tone, cover_dialog, data, format, requests, show_notification};
+use super::{SubscriptionsScreen, cover_dialog, data, format, requests};
 use crate::theme::Text as _;
 use crate::ui::{
     self,
@@ -769,9 +769,4 @@ impl SubscriptionsScreen {
         };
         Some(element)
     }
-}
-
-/// The notification a failed load of the cover's candidates shows.
-pub(super) fn cover_load_failed(error: &str) {
-    show_notification(Tone::Error, "Unable to load subscription media", error);
 }
