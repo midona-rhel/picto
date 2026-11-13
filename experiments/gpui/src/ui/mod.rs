@@ -5,6 +5,7 @@ mod action_row;
 mod avatar;
 pub mod check;
 mod chip;
+pub mod confirm;
 mod empty_state;
 pub mod field;
 mod icon_button;

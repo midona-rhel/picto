@@ -5,6 +5,7 @@ pub mod empty;
 pub mod format;
 pub mod layout;
 pub mod marquee;
+pub mod menu;
 pub mod nav;
 pub mod originals;
 pub mod prefs;
@@ -25,6 +26,9 @@ use thumbnails::Thumbnails;
 
 /// A tile was right-clicked at this window position.
 pub struct MenuRequested(pub Point<Pixels>);
+
+/// Empty grid space was right-clicked at this window position.
+pub struct EmptyMenuRequested(pub Point<Pixels>);
 
 pub struct GridView {
     session: Entity<Session>,
@@ -81,6 +85,7 @@ fn aspect(item: &RootSummary) -> Option<f32> {
 }
 
 impl EventEmitter<MenuRequested> for GridView {}
+impl EventEmitter<EmptyMenuRequested> for GridView {}
 
 /// Where a tile's thumbnail is.
 #[derive(Clone, Copy, PartialEq)]
@@ -711,6 +716,8 @@ impl GridView {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        // The grid's own right-click is for empty space.
+                        cx.stop_propagation();
                         // A right-click inside the selection keeps it.
                         if !in_selection {
                             this.session
@@ -1034,6 +1041,12 @@ impl Render for GridView {
                     .id("grid-empty")
                     .size_full()
                     .opacity(fade)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|_, event: &MouseDownEvent, _, cx| {
+                            cx.emit(EmptyMenuRequested(event.position))
+                        }),
+                    )
                     .child(ui::empty_state(
                         "empty-photo",
                         copy.title,
@@ -1080,6 +1093,14 @@ impl Render for GridView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| this.pressed(event, cx)),
+                    )
+                    // A right-click no image took is on empty space.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            cx.emit(EmptyMenuRequested(event.position));
+                            window.focus(&this.focus, cx);
+                        }),
                     )
                     // A click that no image took is a click on empty space,
                     // unless it ends a rubber band.

@@ -80,6 +80,15 @@ fn match_chromium_text_weight() {
     }
 }
 
+/// Whether the database is a disposable copy the launcher made: its folder
+/// holds the snapshot marker. The app opens nothing else, and the edits that
+/// cannot be undone check it again before they run.
+pub fn marked_disposable(database: &std::path::Path) -> bool {
+    database
+        .parent()
+        .is_some_and(|folder| folder.join(".gpui-snapshot").is_file())
+}
+
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
@@ -87,7 +96,7 @@ fn main() {
     let database = PathBuf::from(args.next().expect("Pass a snapshot database from run.sh"));
     let blobs = PathBuf::from(args.next().expect("Pass the source blobs directory"));
     assert!(
-        database.parent().unwrap().join(".gpui-snapshot").is_file(),
+        marked_disposable(&database),
         "Only a marked disposable snapshot is accepted"
     );
     gpui_platform::application()

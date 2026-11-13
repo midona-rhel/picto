@@ -333,6 +333,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   shared action button (`actionButton.module.css`) and dialog fields.
 - Context menus have a row of colour swatches (`ColorPicker`), used by the
   Tags screen's group menu, in both presentations.
+- The item context menus of `gridContextMenu.tsx`, built by pure functions in
+  `grid/menu.rs` (tested against the cases of `gridContextMenu.test.tsx`):
+  a tile's menu for one item, several, a group, Inbox (Accept and Reject
+  first), Trash (Restore, Delete Permanently) and a folder (Remove from
+  Folder, Sort by, Set as Folder Cover), with production's order,
+  separators, icons, shortcut hints (the user's own bindings, none for
+  deferred shortcuts), labels with counts and disabled rules; empty grid
+  space's menu (New Folder, New Smart Folder, imports, Sort by in a folder,
+  the view options); the viewer's (`useViewerEntityContextMenu`, Flash
+  playback rows first); and the inspector preview's. A right-click inside
+  the selection keeps it, outside selects the tile, on empty space opens the
+  empty menu. Wired through the library: open with the default app, reveal,
+  copy path, name, link, the selection's paths, names and links, Accept,
+  Reject (to the Trash, or deleted when the setting says so), Move to Trash,
+  Restore, Delete Permanently (after `ConfirmModal`'s question, only on a
+  marked disposable copy), Add to Folder's last folder, New Folder (with
+  Selection) renamed in the sidebar, Remove from Folder, Sort by, Set as
+  Folder Cover, Group (when it needs no organizer), Ungroup (after its
+  question), Rename (in the inspector's name field), Copy Tags and Paste
+  Tags (an in-app tag clipboard, and the JSON on the clipboard), Set Rating
+  for any selection, and the view options (layout, sort, the display
+  switches, the rails), saved to the destination's view as production saves
+  them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
@@ -400,7 +423,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   items were chosen in this session, not the Electron query-selection order
   for ranges and Select All.
 - Not in the grid yet: dragging items out or to reorder, middle-click,
-  inline rename, the empty grid's context menu, and the subfolder tiles a
+  inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
@@ -427,19 +450,44 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
-- Context menus exist for grid items, the sidebar, the viewer's zoom
-  percentage, subscriptions, and tags and tag groups on the Tags screen. The
-  grid shell, the viewer toolbar, the Subscriptions screen and the Tags
-  screen each host the menu as a full-window layer; the menu itself chooses
-  between its pop-up windows and the in-window panel. Subscriptions' Schedule
-  row stays disabled rather than a submenu: setting a schedule also sets the
-  next run time, which the application's subscription catalog computes and
-  this prototype does not link. "Delete Permanently" is shown
-  disabled: the prototype reads the library's files in place and must never
-  delete them. "Set Rating" is offered for one item only (the library adapter
-  rates one item per request), and "More" is left out: nothing this
-  prototype can do belongs in it. Custom rows, right-click actions on rows
-  (`contextAction`) and nested submenus are not ported.
+- Context menus exist for grid items, empty grid space, the viewer, the
+  inspector's preview, the sidebar, the viewer's zoom percentage,
+  subscriptions, and tags and tag groups on the Tags screen. The grid shell,
+  the viewer toolbar, the Subscriptions screen and the Tags screen each host
+  the menu as a full-window layer; the menu itself chooses between its
+  pop-up windows and the in-window panel. Subscriptions' Schedule row stays
+  disabled rather than a submenu: setting a schedule also sets the next run
+  time, which the application's subscription catalog computes and this
+  prototype does not link. Custom rows, right-click actions on rows
+  (`contextAction`) and nested submenus are not ported, so the grid menus'
+  view panel (Layout and Sort by selects, the direction pill) and the
+  Display panel's switches are rows that check inside "Layout", "Sort by"
+  and "Display" submenus, kept open while they change. "Open With Other" is
+  the one-row chooser on every platform: the applications cannot be listed,
+  so macOS's submenu is not shown.
+- Item menu rows shown, enabled as production has them, that do nothing yet
+  (each with a `TODO` where it is received): Open With Other (the system's
+  application list), Copy and Copy for several items (GPUI's macOS
+  pasteboard drops file lists), Export Originals, Export As and Export as
+  Picto Pack (the application backend), Search by Image (production uploads
+  the original from a hidden browser window), Set as Library Cover (the
+  cover dialog that frames the square), Find Items with This Media (an
+  ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
+  Group (the collection editor), Group when the selection needs the group
+  organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
+  editor), Import Files, Import Folder and Paste Import, Flash's Play,
+  Stop and Mute, and Set as Thumbnail. "Open in New Window", "Add Tags" and
+  "Add to Folder" dispatch the `item::OpenInNewWindow`, `item::AddTags` and
+  `item::AddToFolder` actions from the shell for their owners to receive.
+  "Add to “…”" appears once a folder has been used, which only the folder
+  picker will record. Show Extension and Show Subfolder Content are saved
+  but the grid does not follow them yet. Delete Permanently leaves the files
+  a delete that cannot be undone frees where they are. Errors go to the
+  console, not to notifications. Edits that change what the destination
+  holds (Remove from Folder, Sort by, Group, Ungroup, the lifecycle rows,
+  deletes) fetch the grid again, which clears the selection; after a rating
+  or tags pasted on several items the inspector's selection summary is not
+  read again.
 - The pop-up menu windows have not been seen running. Not verified: that
   AppKit draws no titlebar buttons on them, what the system window shadow
   adds around the transparent window and the drawn shadow, the pointing-hand
@@ -459,7 +507,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which does not exist yet, so neither is ever shown; collections step
   through members with the bottom strip instead of the reader surface. No
   transparency checkerboard (off by default in Picto), no per-image zoom
-  memory, no viewer context menu, rating or copy shortcuts, and no video
+  memory, no rating or copy shortcuts, and no video
   shortcuts (there is no video playback). Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.

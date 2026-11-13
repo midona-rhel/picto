@@ -90,6 +90,11 @@ impl MediaSurface {
         self.mode == Mode::Image
     }
 
+    /// Whether a Flash movie is playing in the pane.
+    pub fn flash(&self) -> bool {
+        self.flash.is_some()
+    }
+
     /// The zoom as the toolbar shows it, in percent.
     pub fn percent(&self) -> f32 {
         self.camera.percent()
