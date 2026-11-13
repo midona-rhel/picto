@@ -75,7 +75,18 @@ const send = (method, params = {}) =>
     pending.set(id, { resolve, reject });
     socket.send(JSON.stringify({ id, method, params }));
   });
+// Makes the page draw a frame now, whether or not its window is showing.
+const frame = () =>
+  send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true }).catch(() => {});
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A window that is not in front drops presses and keys and throttles its
+// timers: have the page behave as the focused, visible one while a script
+// plays.
+const wake = async () => {
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  await send('Page.setWebLifecycleState', { state: 'active' }).catch(() => {});
+};
+await wake();
 const mouse = (type, x, y, button = 'none', clickCount = 0, extra = {}) =>
   send('Input.dispatchMouseEvent', { type, x, y, button, clickCount, ...extra });
 
@@ -121,19 +132,30 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   if (!line || line.startsWith('#')) continue;
   const [kind, ...rest] = line.split(' ');
   const numbers = rest.map(Number);
-  if (kind === 'wait') await sleep(numbers[0]);
+  if (kind === 'wait') {
+    // A window behind others makes no frames on its own; ask for one every
+    // 250 ms so that its observers, transitions and images keep running.
+    for (let left = numbers[0]; left > 0; left -= 250) {
+      await frame();
+      await sleep(Math.min(250, left));
+    }
+  }
   else if (kind === 'pace') pace = numbers[0];
   else if (kind === 'shot') {
-    const { data } = await send('Page.captureScreenshot', { format: 'png' });
+    const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
     writeFileSync(path.join(out, `${rest[0]}.png`), Buffer.from(data, 'base64'));
   } else if (kind === 'size') {
     await send('Emulation.setDeviceMetricsOverride', { width: numbers[0], height: numbers[1], deviceScaleFactor: 2, mobile: false });
     await sleep(500);
   } else if (kind === 'window') {
     await attach(numbers[0]);
+    await wake();
   } else if (kind === 'reload') {
     await send('Page.reload');
-    await sleep(4000);
+    for (let step = 0; step < 16; step++) {
+      await sleep(250);
+      await frame();
+    }
   } else if (kind === 'js') {
     const result = await send('Runtime.evaluate', { expression: rest.join(' '), returnByValue: true, awaitPromise: true });
     console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.text ?? null));
