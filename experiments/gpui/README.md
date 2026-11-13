@@ -103,8 +103,65 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Shift adds the shown rows from the last one clicked in the same section,
   a plain click selects the row alone and opens it. The row states of
   `SidebarRow.module.css`: selected, context menu open (hover fill and a
-  1px border), keyboard focus, drop target, drop inside and the 2px
-  before/after bars.
+  1px border), keyboard focus, a grid drop over the row, drop inside and the
+  2px before/after bars.
+- The sidebar's remaining menu rows, through the library: Delete asks first
+  in `ConfirmModal`'s words (one folder, one smart folder or group, or the
+  selection) through the shared `ui::confirm`; Sort Folders (this level or
+  with descendants, A–Z or Z–A) and Sort by (name, import date, dates,
+  size, notes) as submenus; Change Icon, a submenu holding the compact icon
+  picker (`ui::icon_picker`: the default tile and the 115 curated icons, ten
+  to a row, each with its tooltip, the chosen one marked); the colour row
+  (`ui::color_picker`, `FOLDER_COLORS`) for one node or the selection; a
+  smart folder's Move to... submenu (Top Level and every smart folder that
+  is not the node or under it); Add to and Remove from Quick Access; Set
+  Auto Tags...; Attach Watched Folder... and Remove Watched Folder (with
+  its confirmation); Edit Smart Folder..., Edit Rules..., New Smart Folder
+  and New Child Smart Folder. The visibility menu's rows stay open and their
+  checks follow the toggle.
+- Quick Access (`sidebarQuickAccess` in the settings model): the section
+  after the system rows with its count, folded under `quick_access`, its
+  rows opening and offering their menus as the tree's do.
+- Drag reorder (`Sidebar.tsx`'s folder drag): a press on a folder or smart
+  folder row that moves 5px drags it, or the selection it is part of; the
+  row under the pointer shows before, inside or after by the top 30%, the
+  middle and the bottom 30%, a node never over itself or its descendants;
+  the ghost is a 200px highlighted row (active surface, border, radius 5,
+  90%, shadow) under the pointer with the grabbing cursor, "N items" for a
+  selection; the release moves the topmost dragged nodes and reorders the
+  new parent's children (`planSidebarTreeDrop`, then `move_folder` and
+  `reorder_folder_children`, or the smart-folder equivalents). While
+  anything is dragged, the pointer lights no row.
+- Items dragged from the grid (`dragState.ts`): a press on an image that
+  moves 5px drags the selection, or that item when it is not selected,
+  with `DragGhost`'s stack of up to three 44px thumbnails and the count
+  badge; the rubber band still starts only on empty space. All, Inbox and
+  Trash set the items' lifecycle; a folder adds them, and makes them active
+  when they came from the Inbox or the Trash. The row under the pointer
+  shows the hover look while they are over it. The release that ends a
+  drag selects nothing.
+- The smart-folder editor (`SmartFolderModal.tsx`): New Smart Folder edits
+  everything, Edit Smart Folder... the name, icon (a trigger opening the
+  compact picker in a popover), colour and notes, Edit Rules... only the
+  rules at 760px. Rules come in groups matching all or any of their rules,
+  included or excluded, each rule a field, an operator and its value
+  (`ui::tag_token_input` for tags, the selects of file type, rating and
+  size unit, number fields with their unit, "between" with a second value),
+  at most ten, with the minus and plus buttons. The model
+  (`sidebar/rules.rs`) compiles to the library's `FilterExpr` as
+  `queryModel.ts` does and reads it back, tested both ways. While rules are
+  edited the folder is saved 100 ms after each change so the grid follows;
+  Cancel writes the rules it opened with back. Enter saves.
+- Set Auto Tags (`FolderAutoTagsModal`): the tags all chosen folders share,
+  saved at each change through `set_folder_auto_tags`. Auto-Import Folder
+  (`FolderWatchModal`): the directory from the system's folder chooser,
+  Enable Watch, Watch Subfolders, Import Status, Remove Watch, stored with
+  `set_folder_watch` or `clear_folder_watch`.
+- The sidebar's keyboard: from the tree filter, Down or Tab enters the
+  rows; Up, Down, Tab and Shift-Tab move with the focus look, scrolling the
+  row into view; Enter or Space opens it as a click does; Escape gives the
+  keyboard back. ⌘⇧⌥N opens New Smart Folder and ⌘⇧R the auto-tags editor
+  for the chosen or open folders.
 - Hover and pressed states from the Electron styles, with their timings: icon
   buttons (hover, pressed, toggled, disabled), sidebar rows and section
   headers (title pill, chevron, add button), the library switcher's highlight,
@@ -399,7 +456,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   tag editor, merge picker, group dialogs and confirmations use it, with the
   shared action button (`actionButton.module.css`) and dialog fields.
 - Context menus have a row of colour swatches (`ColorPicker`), used by the
-  Tags screen's group menu, in both presentations.
+  Tags screen's group menu and the sidebar's menus, in both presentations,
+  and can hold a view of their owner's (`menu::view`), as the sidebar's
+  Change Icon submenu holds the icon picker.
 - The item context menus of `gridContextMenu.tsx`, built by pure functions in
   `grid/menu.rs` (tested against the cases of `gridContextMenu.test.tsx`):
   a tile's menu for one item, several, a group, Inbox (Accept and Reject
@@ -491,28 +550,33 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   loading skeleton are not ported, and a selection's covers follow the order
   items were chosen in this session, not the Electron query-selection order
   for ranges and Select All.
-- Not in the grid yet: dragging items out or to reorder, inline rename, and the subfolder tiles a
+- Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
   folder shows above its items (an empty folder with subfolders shows the
   empty state). The Import buttons are drawn with a `TODO`. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
-  drops from the grid (the rows have the drop looks; nothing drives them),
-  Quick Access, keyboard movement through the rows (the focused look is
-  there; nothing moves focus to a row), the Set Folder Auto Tags shortcut,
-  and the confirmation before deleting a folder (it deletes at
-  once). Menu rows shown but not performed yet, each
-  with a `TODO`: Add to Quick Access, Move to..., Set Auto Tags..., Import
-  Folder (Here)..., Attach Watched Folder..., Edit Smart Folder..., Edit
-  Rules..., New Smart Folder and New Child Smart Folder (no smart-folder
-  editor), Change Icon, Sort Folders, Sort by and Export (submenus). The
-  visibility rows close the menu when chosen; the
-  colour picker row and Remove Watched Folder are not drawn. Empty Trash is
-  shown disabled. Folded nodes and sections are kept in memory, not persisted.
-  The sidebar's preferences (which system rows and sections show, counts,
-  guides, the double-click action) come from the settings model; its
-  visibility menu writes through it to the library at once, as production
-  patches the settings.
+- Not in the sidebar yet: the Subscriptions activity dot; Move to... for
+  folders, which opens the folder picker in its move mode (the row is shown
+  and does nothing, with a `TODO`); Import Folder (Here)... and Export
+  (`TODO`s); watching a directory, which needs the application backend (the
+  watch is stored, the watcher is a `TODO`, and the dialog does not check the
+  folder's structure); Empty Trash, shown disabled. Tab from the grid
+  toggles the panels as in production, so the rows are entered from the
+  tree filter; section headers are not in the keyboard order. The smart-folder
+  editor's notes are one line rather than a three-row text area, dates are
+  typed as YYYY-MM-DD rather than picked, a colour rule's hex is typed
+  rather than chosen in the colour editor popover, the file types are the
+  six built-in choices rather than the accepted formats, and a failed save
+  or preview shows in the dialog rather than as a notification. Set Auto
+  Tags edits the tags with the tag token input, not production's tag
+  assignment control and tag picker. The icon picker shows the sidebar's
+  glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
+  tiles light at once rather than over 50 ms. Dragging items out of the
+  window and reordering a folder's items by dragging are not built. Folded
+  nodes and sections are kept in memory, not persisted. The sidebar's
+  preferences (which system rows and sections show, counts, guides, the
+  double-click action, Quick Access) come from the settings model and are
+  written through it.
 - No video or audio playback, PDF, text, EPUB, CBZ, DjVu, JPEG XL or font
   viewers yet. Word and PowerPoint viewing is out of scope: those files import,
   keep their embedded thumbnail and open in the default application.
@@ -650,7 +714,11 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
 ```
 
-The regular tests cover the Tags screen's sections, rows, ordering, search
+The regular tests cover the sidebar's drop positions, valid drop targets,
+move targets and planned reorders, the smart-folder rule model compiled to
+`FilterExpr` and read back (dates, colours, ranges, exclusions), the
+deletion messages, the grid-drop rows, keyboard stepping through the rows
+and the drag threshold, the Tags screen's sections, rows, ordering, search
 ranking, shimmer and starred-tag edits, the dialogs' timing, the context menu's search ranking, separator
 cleaning, keyboard stepping and placement and flip arithmetic, the duplicate review's linked zoom, queue order,
 labels and difference picture, the three layout modes against hand-computed geometry,
