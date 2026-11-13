@@ -472,8 +472,16 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   end shows "First item" or "Last item" for 800 ms. The previous image stays
   until the next thumbnail has decoded; the original replaces the thumbnail
   once decoded, as `ImageCrossfadeFrame` swaps them.
-- A collection's members step with the bottom strip of
-  `QuickLookNavigation` (48×32 buttons, monospace counter).
+- A collection opens in `GroupSurface`'s reader (`viewer/group.rs`), in the
+  media view, Quick Look and the detail window alike: its members one under
+  another, each in a glass frame of its own shape the column's full width
+  (at least 180px tall), 16px apart and from the edges, beside the 8px
+  scrollbar gutter. A member shows its thumbnail; after 200 ms in view its
+  full media loads (an image's original fades in over 130 ms; a PDF, video
+  or other member opens in a media surface of its own, video not playing
+  by itself), the last 100 kept. The viewer toolbar then has no zoom and
+  shows "Edit group". A right-click on a member opens the viewer's menu for
+  it, with the search field.
 - Enter or a double-click opens the media view on the one selected item;
   Enter, Space or Escape close it. Originals decode off the drawing thread;
   stale loads are fenced.
@@ -530,7 +538,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   ⌘⌥C copies the file's path. It has the navigator. Several can be open at
   once; opening an item already open brings its window forward. A
   collection opens as `GroupDetailWindow`: its name, the pin and close
-  buttons, and its members on the strip.
+  buttons, and its members in the reader. A right-click on the media opens
+  the viewer's menu on the file alone (open, reveal, new window, copy rows,
+  Search by Image, More), as production's detail window has it.
 - Opening triggers per the Controls settings: a double-click opens the
   media view, or the default application under `gridDoubleClickAction:
   external` (media only); a middle-click opens the tile in a detail window
@@ -923,25 +933,26 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   MP3 with the visualizer, each with its controls. Not checked: timings,
   hover states, the volume and rate popups; what was checked headlessly is
   listed under Checks.
-- Collection members use previous/next controls, not the continuous collection
-  scroll surface (`GroupSurface`), in all three hosts: Quick Look shows a
-  collection's first member in the collection frame, and the detail window
-  steps its members with the strip.
+- Collection reader: no collection editor ("Edit group" does nothing yet,
+  so the breadcrumb never shows), no double-click opening a member alone,
+  no menu between members (Sort Contents, Ungroup...), and a member's menu
+  lacks "Remove from Group" and acts on the collection for its Trash row
+  only by a TODO. In the detail window members have no menu.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
-  corners do not clip a zoomed image. No right-click menu or Copy (the
-  file itself).
+  corners do not clip a zoomed image. No Copy (the file itself).
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
   the item. Space paging the grid jumps where production scrolls smoothly.
-- Detail window: no context menu, Copy (the file itself), per-image zoom
+- Detail window: its menu's Copy, Search by Image and More rows do nothing
+  yet; no Copy (the file itself) shortcut, per-image zoom
   memory, backdrop blur under the toolbar, or "Loading..." placeholder; the
   pinned button rests at full strength rather than production's 94%. Moving
   the window by its toolbar does not keep the toolbar showing as
   `picto:window-moved` does. Its size uses the primary display's work area,
   as production does, even when the main window is on another display.
   Always on top and the aspect lock are set through AppKit, on macOS only.
-- Context menus exist for grid items, empty grid space, the viewer, the
+- Context menus exist for grid items, empty grid space, the viewer (media view, Quick Look and detail window), the
   inspector's preview, the sidebar, the viewer's zoom percentage,
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
@@ -993,9 +1004,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - No import/export, cloud, localization or site login. The grid shown is
   not read again when background work (an import, a subscription run)
   changes it; going to another destination and back does.
-- Viewer: the breadcrumb and "Edit group" belong to the collection editor,
-  which does not exist yet, so neither is ever shown; collections step
-  through members with the bottom strip instead of the reader surface. No
+- Viewer: the breadcrumb belongs to the collection editor, which does not
+  exist yet. No
   transparency checkerboard (off by default in Picto), no per-image zoom
   memory, no copy shortcut and no Inbox review controls. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame

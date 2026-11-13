@@ -156,7 +156,7 @@ impl Media {
         details.media.get(member).map(|media| Self {
             name: details.root.name.clone().into(),
             key: media.facts.content_hash.clone(),
-            thumbnail: session.thumbnail(&media.facts.content_hash),
+            thumbnail: thumbnail_file(session.thumbnail(&media.facts.content_hash)),
             natural: size_of(media.facts.width, media.facts.height),
             path: PathBuf::from(&media.file_path),
             mime: media.facts.mime.clone(),
@@ -174,6 +174,17 @@ impl Media {
             cx,
         )
     }
+}
+
+/// The thumbnail file that exists: the JPEG the library writes, or the PNG
+/// written for audio waveforms and captured frames, as the media protocol
+/// looks for `jpg` then `png`.
+pub fn thumbnail_file(jpeg: PathBuf) -> PathBuf {
+    if jpeg.exists() {
+        return jpeg;
+    }
+    let png = jpeg.with_extension("png");
+    if png.exists() { png } else { jpeg }
 }
 
 /// What the session's viewer shows: the bundled sample, or the shown member
@@ -200,7 +211,7 @@ fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx:
         session.selected_item().map(|item| {
             (
                 item.content_hash.clone(),
-                session.thumbnail(&item.content_hash),
+                thumbnail_file(session.thumbnail(&item.content_hash)),
                 size_of(item.width, item.height),
             )
         })
