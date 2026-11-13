@@ -9,8 +9,6 @@ type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static
 
 /// Where a dragged folder would land relative to this row
 /// (`.dropBefore`, `.dropInside`, `.dropAfter`).
-// Nothing drags rows yet; the looks are here for when something does.
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DropPosition {
     Before,
@@ -57,8 +55,12 @@ pub struct SidebarRow {
     context: bool,
     /// The row holds keyboard focus (`.rowInteractive:focus-visible`).
     focused: bool,
-    /// The whole row takes a drop (`.dropTarget`).
-    drop_target: bool,
+    /// Items dragged from the grid are over the row
+    /// (`[data-drop-highlighted]`): the hover look, held.
+    drop_highlight: bool,
+    /// Something is being dragged, so the pointer lights no row
+    /// (`html[data-grid-drag-active]`, `[data-sidebar-drag-active]`).
+    dragging: bool,
     drop: Option<DropPosition>,
     /// The field that replaces the label while the row is renamed.
     rename: Option<Entity<TextInput>>,
@@ -70,6 +72,7 @@ pub struct SidebarRow {
     on_click: Option<ClickHandler>,
     on_toggle: Option<ClickHandler>,
     on_secondary: Option<PressHandler>,
+    on_press: Option<PressHandler>,
 }
 
 pub fn sidebar_row(
@@ -88,7 +91,8 @@ pub fn sidebar_row(
         selected: false,
         context: false,
         focused: false,
-        drop_target: false,
+        drop_highlight: false,
+        dragging: false,
         drop: None,
         rename: None,
         disclosure: None,
@@ -97,6 +101,7 @@ pub fn sidebar_row(
         on_click: None,
         on_toggle: None,
         on_secondary: None,
+        on_press: None,
     }
 }
 
@@ -132,8 +137,12 @@ impl SidebarRow {
         self.focused = focused;
         self
     }
-    pub fn drop_target(mut self, drop_target: bool) -> Self {
-        self.drop_target = drop_target;
+    pub fn drop_highlight(mut self, highlighted: bool) -> Self {
+        self.drop_highlight = highlighted;
+        self
+    }
+    pub fn dragging(mut self, dragging: bool) -> Self {
+        self.dragging = dragging;
         self
     }
     pub fn drop(mut self, drop: Option<DropPosition>) -> Self {
@@ -171,6 +180,14 @@ impl SidebarRow {
         self.on_toggle = Some(Box::new(handler));
         self
     }
+    /// A left-button press, which may start a drag.
+    pub fn on_press(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_press = Some(Box::new(handler));
+        self
+    }
     /// A right-button press: the row's context menu.
     pub fn on_secondary(
         mut self,
@@ -182,19 +199,19 @@ impl SidebarRow {
 }
 
 /// The highlight behind a row (`.row::before`) in the order the stylesheet
-/// resolves it: a drop inside, a drop target, then the active row, each
-/// forced; otherwise the hover colour, held on while the row is selected,
-/// focused or showing its menu, and fading with the pointer otherwise.
+/// resolves it: a drop inside, then the active row, each forced; otherwise
+/// the hover colour, held on while the row is selected, focused, showing
+/// its menu or under items dragged from the grid, and fading with the
+/// pointer otherwise, except while something is dragged.
 /// Returns the fill, the 1px border inside it, and its opacity.
 fn highlight(theme: theme::Theme, row: &SidebarRow, hover: f32) -> (Rgba, Option<Rgba>, f32) {
     if row.drop == Some(DropPosition::Inside) {
         (theme.primary_at(10.), Some(theme.primary_at(30.)), 1.)
-    } else if row.drop_target {
-        (theme.surface_drop(), Some(theme.primary()), 1.)
     } else if row.active {
         (theme.surface_active(), None, 1.)
     } else {
-        let held = row.selected || row.context || row.focused;
+        let held = row.selected || row.context || row.focused || row.drop_highlight;
+        let hover = if row.dragging { 0. } else { hover };
         (
             theme.surface_hover(),
             row.context.then(|| theme.border()),
@@ -305,7 +322,7 @@ impl RenderOnce for SidebarRow {
         let interactive = self.on_click.is_some();
         let (fill, edge, shown) = highlight(theme, &self, hover);
         // The icon brightens with the pointer and on the active row.
-        let lit = self.active || hovered;
+        let lit = self.active || (hovered && !self.dragging) || self.drop_highlight;
         let count_color = if self.active || self.selected {
             theme.text()
         } else {
@@ -487,6 +504,9 @@ impl RenderOnce for SidebarRow {
         }
         if let Some(handler) = self.on_secondary {
             row = row.on_mouse_down(MouseButton::Right, handler);
+        }
+        if let Some(handler) = self.on_press {
+            row = row.on_mouse_down(MouseButton::Left, handler);
         }
         row
     }

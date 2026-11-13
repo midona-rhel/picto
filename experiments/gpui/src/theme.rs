@@ -103,10 +103,6 @@ impl Theme {
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
     }
-    /// `--color-surface-drop`: `--color-primary-30`, a row taking a drop.
-    pub fn surface_drop(&self) -> Rgba {
-        translucent(self.primary, 30.)
-    }
     /// `::selection`: `--color-primary-30`.
     pub fn selection(&self) -> Rgba {
         translucent(self.primary, 30.)

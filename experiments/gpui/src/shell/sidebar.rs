@@ -21,6 +21,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 mod dialogs;
+mod drag;
 mod tree;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -237,10 +238,21 @@ pub struct Sidebar {
     // TODO: move keyboard focus through the rows, as the Electron rows'
     // `tabIndex` does; the row is drawn focused while this names it.
     keyboard_row: Option<String>,
-    // TODO: set while a folder is dragged over the sidebar (drag reorder
-    // and drops from the grid).
+    /// Where a dragged folder or smart folder would land.
     drop: Option<(String, DropPosition)>,
-    drop_target: Option<String>,
+    /// The row items dragged from the grid are over.
+    grid_drop: Option<String>,
+    /// Items are being dragged from the grid.
+    grid_dragging: bool,
+    /// Where the rows that take drops were last drawn.
+    bounds: drag::RowBounds,
+    /// A left press on a folder or smart-folder row, and where.
+    press: Option<(String, Point<Pixels>)>,
+    /// The row being dragged.
+    node_drag: Option<drag::NodeDrag>,
+    /// The click that ends a drag opens nothing.
+    swallow_click: bool,
+    _drags: Option<Subscription>,
     /// The open dialog.
     dialog: Option<dialogs::Layer>,
     /// The open context menu, whose checks follow what its rows toggle.
@@ -306,7 +318,13 @@ impl Sidebar {
             renaming: None,
             keyboard_row: None,
             drop: None,
-            drop_target: None,
+            grid_drop: None,
+            grid_dragging: false,
+            bounds: drag::RowBounds::default(),
+            press: None,
+            node_drag: None,
+            swallow_click: false,
+            _drags: None,
             dialog: None,
             menu: None,
             _menu: Vec::new(),
@@ -1874,6 +1892,19 @@ impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = Preferences::current(cx);
         crate::stats::rendered(crate::stats::View::Sidebar);
+        // The grid's drags are followed from the first frame on.
+        if self._drags.is_none() {
+            let drags = crate::grid::drag::model(cx);
+            self._drags = Some(cx.subscribe_in(
+                &drags,
+                window,
+                |this, _, event: &crate::grid::drag::DragEvent, window, cx| {
+                    this.grid_drag(event, window, cx)
+                },
+            ));
+        }
+        self.bounds.clear();
+        let dragging = self.grid_dragging || self.node_drag.is_some();
         let theme = theme::theme(cx);
         let filter = self.filter.read(cx).value().trim().to_lowercase();
         let filtering = !filter.is_empty();
@@ -1943,28 +1974,30 @@ impl Render for Sidebar {
             if section(index).is_some() || !prefs.visible_system.contains(ids[index].as_str()) {
                 continue;
             }
-            list = list.child(
-                ui::sidebar_row(
-                    ElementId::Name(ids[index].clone().into()),
-                    entry.icon.clone().unwrap_or_default(),
-                    entry.label.clone(),
-                )
-                .count(entry.count.filter(|_| prefs.show_counts))
-                .active(active == index)
-                .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
-                .drop_target(self.drop_target.as_ref() == Some(&ids[index]))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.selection.clear();
-                    this.session
-                        .update(cx, |session, cx| session.navigate(index, cx));
-                    cx.notify();
-                }))
-                .on_secondary(cx.listener(
-                    move |this, event: &MouseDownEvent, window, cx| {
-                        this.system_menu(index, event.position, window, cx)
-                    },
-                )),
-            );
+            let row = ui::sidebar_row(
+                ElementId::Name(ids[index].clone().into()),
+                entry.icon.clone().unwrap_or_default(),
+                entry.label.clone(),
+            )
+            .count(entry.count.filter(|_| prefs.show_counts))
+            .active(active == index)
+            .focused(self.keyboard_row.as_ref() == Some(&ids[index]))
+            .drop_highlight(self.grid_drop.as_ref() == Some(&ids[index]))
+            .dragging(dragging)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selection.clear();
+                this.session
+                    .update(cx, |session, cx| session.navigate(index, cx));
+                cx.notify();
+            }))
+            .on_secondary(cx.listener(
+                move |this, event: &MouseDownEvent, window, cx| {
+                    this.system_menu(index, event.position, window, cx)
+                },
+            ));
+            list = list.child(div().relative().child(row).children(
+                drag::grid_drop(&ids[index]).map(|_| self.bounds.recorder(ids[index].clone())),
+            ));
         }
 
         let mut matches = 0;
@@ -2024,35 +2057,40 @@ impl Render for Sidebar {
                         list = list.child(div().h(px(2.)));
                     }
                     rendered.push(ids[index].clone());
+                    let recorder = self.bounds.recorder(ids[index].clone());
                     list = list.child(
-                        self.node_row(
-                            index,
-                            entry,
-                            &ids[index],
-                            active == index,
-                            (0..entries.len())
-                                .any(|other| entries[other].parent == Some(index) && kept[other]),
-                            filtering,
-                            {
-                                // Each ancestor's vertical guide continues through
-                                // this row while that ancestor has siblings still
-                                // to come.
-                                let mut continues = vec![false; entry.depth];
-                                let mut ancestor = entry.parent;
-                                while let Some(at) = ancestor {
-                                    let depth = entries[at].depth;
-                                    if depth < continues.len() {
-                                        continues[depth] = has_next_sibling(at);
+                        div()
+                            .relative()
+                            .child(self.node_row(
+                                index,
+                                entry,
+                                &ids[index],
+                                active == index,
+                                (0..entries.len()).any(|other| {
+                                    entries[other].parent == Some(index) && kept[other]
+                                }),
+                                filtering,
+                                {
+                                    // Each ancestor's vertical guide continues through
+                                    // this row while that ancestor has siblings still
+                                    // to come.
+                                    let mut continues = vec![false; entry.depth];
+                                    let mut ancestor = entry.parent;
+                                    while let Some(at) = ancestor {
+                                        let depth = entries[at].depth;
+                                        if depth < continues.len() {
+                                            continues[depth] = has_next_sibling(at);
+                                        }
+                                        ancestor = entries[at].parent;
                                     }
-                                    ancestor = entries[at].parent;
-                                }
-                                Branch {
-                                    continues,
-                                    last_child: !has_next_sibling(index),
-                                }
-                            },
-                            cx,
-                        ),
+                                    Branch {
+                                        continues,
+                                        last_child: !has_next_sibling(index),
+                                    }
+                                },
+                                cx,
+                            ))
+                            .child(recorder),
                     );
                 }
             }
@@ -2099,6 +2137,7 @@ impl Render for Sidebar {
                             .flex_1()
                             .min_h_0()
                             .child(list)
+                            .child(self.bounds.list_recorder())
                             .child(ui::scrollbar("sidebar-scrollbar", &self.scroll, window, cx))
                             .children(ui::scroll_to_top(
                                 "sidebar-return-to-top",
@@ -2136,6 +2175,8 @@ impl Render for Sidebar {
                     })),
             )
             .children(dialog)
+            .children(self.drag_capture(cx))
+            .children(self.drag_ghost(window, cx))
     }
 }
 
@@ -2184,7 +2225,8 @@ impl Sidebar {
         .selected(!active && self.selection.contains(id))
         .context_highlight(!active && self.context.as_deref() == Some(id))
         .focused(self.keyboard_row.as_deref() == Some(id))
-        .drop_target(self.drop_target.as_deref() == Some(id))
+        .drop_highlight(self.grid_drop.as_deref() == Some(id))
+        .dragging(self.grid_dragging || self.node_drag.is_some())
         .drop(
             self.drop
                 .as_ref()
@@ -2199,7 +2241,17 @@ impl Sidebar {
         )
         .disclosure(has_children.then_some(expanded))
         .branch(branch)
+        .on_press({
+            let node = id.to_owned();
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.press_node(node.clone(), event.position, cx)
+            })
+        })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            // The release that ends a drag opens nothing.
+            if std::mem::take(&mut this.swallow_click) {
+                return;
+            }
             // A group is not a destination: a click folds or opens it.
             if group {
                 if has_children && !filtering {
