@@ -1031,11 +1031,22 @@ pub fn bind(cx: &mut App) {
             Some(Box::new(crate::shell::SelectAll)),
         )
     });
-    // TODO: in a text field, undo and redo the field's own edits once the
-    // field keeps a history; until then the library's history is left alone
-    // while a field has the keyboard.
-    cx.on_action(|_: &EditUndo, cx| edit(cx, None, Some(Box::new(crate::shell::Undo))));
-    cx.on_action(|_: &EditRedo, cx| edit(cx, None, Some(Box::new(crate::shell::Redo))));
+    // A text field undoes its own edits first, and passes the action on to
+    // the library's history when it has none.
+    cx.on_action(|_: &EditUndo, cx| {
+        edit(
+            cx,
+            Some(Box::new(crate::ui::text_input::Undo)),
+            Some(Box::new(crate::shell::Undo)),
+        )
+    });
+    cx.on_action(|_: &EditRedo, cx| {
+        edit(
+            cx,
+            Some(Box::new(crate::ui::text_input::Redo)),
+            Some(Box::new(crate::shell::Redo)),
+        )
+    });
 }
 
 /// An action by its name, for the off-screen tool's `action` lines: the
