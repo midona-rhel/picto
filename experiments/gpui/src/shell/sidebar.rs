@@ -34,6 +34,7 @@ pub struct Sidebar {
     filter: Entity<TextInput>,
     /// Destinations whose children are folded away.
     collapsed: HashSet<usize>,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -61,13 +62,15 @@ impl Sidebar {
             thumbnails,
             filter,
             collapsed: HashSet::new(),
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
     }
 }
 
 impl Render for Sidebar {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Sidebar);
         let theme = theme::theme(cx);
         let filter = self.filter.read(cx).value().to_lowercase();
         let (entries, active, cover) = {
@@ -86,10 +89,13 @@ impl Render for Sidebar {
         };
         let mut list = div()
             .id("navigation")
-            .flex_1()
+            .size_full()
             .overflow_y_scroll()
-            .pr(px(8.));
+            .track_scroll(&self.scroll)
+            .pr(px(ui::scrollbar::GUTTER + theme::SIDEBAR_LIST_PADDING));
         let mut shown = [false; 2];
+        // A section's first row sits 2px below its header.
+        let mut after_header = false;
         for (index, entry) in entries.iter().enumerate() {
             // Both headers always show, in order, even above an empty section.
             if let Some(section) = section_of(&entry.scope, entry.screen) {
@@ -98,6 +104,7 @@ impl Render for Sidebar {
                     if due && !shown[slot] {
                         shown[slot] = true;
                         list = list.child(ui::section_header(label, count_of(header), cx));
+                        after_header = true;
                     }
                 }
             }
@@ -115,6 +122,9 @@ impl Render for Sidebar {
             }
             if hidden {
                 continue;
+            }
+            if std::mem::take(&mut after_header) {
+                list = list.child(div().h(px(2.)));
             }
             let has_children = entries.iter().any(|other| other.parent == Some(index));
             let expanded = !self.collapsed.contains(&index);
@@ -191,7 +201,14 @@ impl Render for Sidebar {
                     .child(div().flex_1().child("Main"))
                     .child(ui::icon("selector", 14., theme.text_tertiary())),
             )
-            .child(list)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .child(ui::scrollbar("sidebar-scrollbar", &self.scroll, window, cx)),
+            )
             .child(
                 div().h(px(38.)).px(px(10.)).pb(px(10.)).flex_none().child(
                     div()

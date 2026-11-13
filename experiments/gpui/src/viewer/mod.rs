@@ -86,6 +86,7 @@ impl Viewer {
 
 impl Render for Viewer {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Viewer);
         let theme = theme::theme(cx);
         let (name, members, member) = {
             let session = self.session.read(cx);

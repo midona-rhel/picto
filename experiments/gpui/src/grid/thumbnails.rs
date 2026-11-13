@@ -69,8 +69,10 @@ impl ImageCache for Thumbnails {
                 && let Some(Ok(image)) = item.get()
             {
                 cx.drop_image(image, Some(window));
+                crate::stats::thumbnail_evicted();
             }
         }
+        crate::stats::thumbnail_read();
         let item = ImageCacheItem::new(resource, cx);
         let result = item.use_image(window);
         self.loads += 1;

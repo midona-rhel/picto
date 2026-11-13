@@ -104,6 +104,10 @@ impl Theme {
     pub fn primary(&self) -> Rgba {
         rgb(self.primary)
     }
+    /// `::selection`: `--color-primary-30`.
+    pub fn selection(&self) -> Rgba {
+        translucent(self.primary, 30.)
+    }
     /// `--glass-bg`: floating surfaces.
     pub fn glass(&self) -> Rgba {
         translucent(self.background, 92.)
@@ -121,6 +125,9 @@ pub fn panel_shadow() -> Vec<BoxShadow> {
         BoxShadow::new(px(0.), px(0.), rgba(0x00000080).into()).spread_radius(px(1.)),
     ]
 }
+
+/// A set star in `StarRating.module.css`.
+pub const RATING: u32 = 0xff9f0a;
 
 // Grid badges are fixed, not themed (`gridAppearance.ts`).
 pub const BADGE_BACKGROUND: u32 = 0x00000080;
@@ -172,6 +179,10 @@ pub const SIDEBAR_ROW: f32 = 27.;
 pub const SIDEBAR_INDENT: f32 = 20.;
 /// `--sidebar-content-inset`: the left edge rows and section labels share.
 pub const SIDEBAR_INSET: f32 = 16.;
+/// `--sidebar-section-control-inset`: section labels sit this far in.
+pub const SIDEBAR_SECTION_INSET: f32 = 5.;
+/// `--sidebar-list-right-padding`, beside the scrollbar gutter.
+pub const SIDEBAR_LIST_PADDING: f32 = 8.;
 /// `--sidebar-glyph-column`
 pub const SIDEBAR_GLYPH_COLUMN: f32 = 26.;
 /// `--sidebar-disclosure-column`

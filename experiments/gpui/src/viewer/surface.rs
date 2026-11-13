@@ -242,7 +242,7 @@ impl Render for MediaSurface {
                     .bottom_0()
                     .w_full()
                     .p_3()
-                    .bg(rgb(0x292a2d))
+                    .bg(crate::theme::theme(cx).glass())
                     .text_size(px(12.))
                     .child(error.clone()),
             );
@@ -256,7 +256,7 @@ impl Render for MediaSurface {
                     .bottom_0()
                     .px_2()
                     .text_size(px(11.))
-                    .bg(rgb(0x292a2d))
+                    .bg(crate::theme::theme(cx).glass())
                     .child(format!("Ruffle: {trace}")),
             );
         }

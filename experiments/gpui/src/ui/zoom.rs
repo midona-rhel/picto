@@ -90,7 +90,7 @@ impl Render for Zoom {
                     .absolute()
                     .left_0()
                     .right_0()
-                    .top(px((theme::ICON_BUTTON - 3.) / 2.))
+                    .top(px(11.))
                     .h(px(3.))
                     .rounded_full()
                     .bg(theme.contrast(12.)),

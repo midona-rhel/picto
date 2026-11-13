@@ -1,11 +1,13 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
 //! Electron frontend. Views compose these and style nothing themselves.
 mod icon_button;
+pub mod scrollbar;
 mod sidebar_row;
 pub mod text_input;
 pub mod zoom;
 
 pub use icon_button::icon_button;
+pub use scrollbar::scrollbar;
 pub use sidebar_row::sidebar_row;
 
 use crate::theme;
@@ -85,9 +87,8 @@ pub fn badge(padding: f32) -> Div {
 /// A sidebar section title, with its item count when it has any.
 pub fn section_header(label: &'static str, count: usize, cx: &App) -> Div {
     let mut header = div()
-        .pl(px(theme::SIDEBAR_INSET))
+        .pl(px(theme::SIDEBAR_INSET + theme::SIDEBAR_SECTION_INSET))
         .mt(px(8.))
-        .mb(px(2.))
         .h(px(24.))
         .flex()
         .items_center()

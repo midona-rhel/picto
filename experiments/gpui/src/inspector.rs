@@ -40,6 +40,7 @@ pub struct Inspector {
     name: Entity<TextInput>,
     notes: Entity<TextInput>,
     collapsed: HashSet<&'static str>,
+    scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -95,6 +96,7 @@ impl Inspector {
             name,
             notes,
             collapsed: HashSet::new(),
+            scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -191,14 +193,16 @@ impl Inspector {
     }
 }
 
-impl Render for Inspector {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl Inspector {
+    /// The scrolling column of fields and sections for the selected item.
+    fn body(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let mut panel = div()
             .id("inspector")
             .size_full()
             .overflow_y_scroll()
-            .px(px(16.))
+            .track_scroll(&self.scroll)
+            .px(px(24.))
             .pt(px(10.))
             .pb(px(48.))
             .font_family(theme::FONT_INSPECTOR);
@@ -422,7 +426,7 @@ impl Render for Inspector {
                     .justify_center()
                     .text_size(px(15.))
                     .text_color(if active {
-                        rgba(0xff9f0aff)
+                        rgb(theme::RATING)
                     } else {
                         theme.contrast(25.)
                     })
@@ -457,5 +461,22 @@ impl Render for Inspector {
                 .child(Self::property("Type", media.facts.mime.clone(), cx));
         }
         panel.child(self.section("Properties", properties.into_any_element(), cx))
+    }
+}
+
+impl Render for Inspector {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Inspector);
+        let body = self.body(cx);
+        div()
+            .relative()
+            .size_full()
+            .child(body)
+            .child(ui::scrollbar(
+                "inspector-scrollbar",
+                &self.scroll,
+                window,
+                cx,
+            ))
     }
 }

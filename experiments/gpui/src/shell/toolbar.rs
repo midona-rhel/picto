@@ -50,6 +50,7 @@ impl Toolbar {
 
 impl Render for Toolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Toolbar);
         let theme = theme::theme(cx);
         let (title, opacity, animating, back, forward, filtered) = {
             let session = self.session.read(cx);
@@ -84,7 +85,6 @@ impl Render for Toolbar {
             .px(px(8.))
             .flex()
             .items_center()
-            .gap(px(2.))
             .child(history("history-back", "history-back", -1, back, cx))
             .child(history(
                 "history-forward",
@@ -94,19 +94,31 @@ impl Render for Toolbar {
                 cx,
             ))
             .child(
+                // The zoom is centred in the space between the history
+                // buttons and the right-hand controls; the title sits at the
+                // left of that same space.
                 div()
-                    .ml(px(10.))
-                    .w(px(160.))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .opacity(opacity)
-                    .child(title),
-            )
-            .child(
-                div()
+                    .relative()
                     .flex_1()
+                    .min_w_0()
+                    .h_full()
                     .flex()
+                    .items_center()
                     .justify_center()
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(24.))
+                            .top_0()
+                            .bottom_0()
+                            .max_w(px(200.))
+                            .flex()
+                            .items_center()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .opacity(opacity)
+                            .child(title),
+                    )
                     .child(div().occlude().child(self.zoom.clone())),
             );
         if filtered {
@@ -119,12 +131,13 @@ impl Render for Toolbar {
         }
         toolbar
             .child(ui::icon_button("view-options", "toolbar-layout"))
+            .child(div().w(px(4.)).flex_none())
             .child(ui::icon_button("filter-library", "toolbar-filter"))
             .child(
                 div()
                     .occlude()
                     .ml(px(4.))
-                    .w(px(160.))
+                    .w(px(148.))
                     .h(px(theme::ICON_BUTTON))
                     .rounded(px(theme::RADIUS_MD))
                     .border_1()

@@ -444,7 +444,10 @@ impl Element for TextElement {
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), hsla(0., 0., 0.6, 1.))
+            (
+                input.placeholder.clone(),
+                crate::theme::theme(cx).text_tertiary().into(),
+            )
         } else if content.contains(['\n', '\r']) {
             // This element shapes one line, and a line break panics the shaper.
             // A space is the same byte length, so cursor offsets stay valid and
@@ -506,7 +509,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    gpui::blue(),
+                    crate::theme::theme(cx).text(),
                 )),
             )
         } else {
@@ -522,7 +525,7 @@ impl Element for TextElement {
                             bounds.bottom(),
                         ),
                     ),
-                    rgba(0x3311ff30),
+                    crate::theme::theme(cx).selection(),
                 )),
                 None,
             )
@@ -610,21 +613,24 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(rgb(0x141518))
+            .bg(crate::theme::theme(cx).control_surface())
             .font_family(if self.inspector {
-                "Roboto"
+                crate::theme::FONT_INSPECTOR
             } else {
-                "SF Pro Text"
+                crate::theme::FONT_UI
             })
             .line_height(px(if self.inspector { 20. } else { 22. }))
-            .text_size(px(if self.inspector { 13. } else { 12. }))
+            .text_size(px(if self.inspector {
+                crate::theme::TEXT_MD
+            } else {
+                crate::theme::TEXT_SM
+            }))
             .child(
                 div()
                     .h(px(if self.inspector { 32. } else { 24. }))
                     .w_full()
                     .px(px(if self.inspector { 10. } else { 6. }))
                     .py(px(if self.inspector { 6. } else { 0. }))
-                    .bg(rgb(0x141518))
                     .child(TextElement { input: cx.entity() }),
             )
     }

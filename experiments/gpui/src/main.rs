@@ -6,6 +6,7 @@ mod inspector;
 mod motion;
 mod session;
 mod shell;
+mod stats;
 mod theme;
 mod ui;
 mod viewer;
@@ -64,6 +65,7 @@ fn main() {
                 ])
                 .expect("load bundled inspector font");
             cx.set_global(theme::DARK);
+            stats::start_reporting(cx);
             ui::text_input::bind(cx);
             cx.bind_keys(key_bindings());
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -82,7 +84,16 @@ fn main() {
                     disabled: false,
                 },
             ]);
-            let bounds = Bounds::centered(None, size(px(1320.), px(850.)), cx);
+            // `PICTO_GPUI_WINDOW=1213x865` opens at an exact size, so a capture
+            // can be compared pixel for pixel with the Electron window's.
+            let (width, height) = std::env::var("PICTO_GPUI_WINDOW")
+                .ok()
+                .and_then(|value| {
+                    let (width, height) = value.split_once('x')?;
+                    Some((width.parse().ok()?, height.parse().ok()?))
+                })
+                .unwrap_or((1320., 850.));
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),

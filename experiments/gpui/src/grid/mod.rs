@@ -79,7 +79,7 @@ impl GridView {
     /// scrolls the new selection into view.
     pub fn move_selection(&mut self, action: nav::Move, cx: &mut Context<Self>) {
         let (width, height) = (
-            f32::from(self.bounds.size.width),
+            f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER,
             f32::from(self.bounds.size.height),
         );
         let (target, gap) = {
@@ -249,7 +249,7 @@ impl GridView {
                             .bg(if selected {
                                 theme.primary()
                             } else {
-                                rgba(0x00000000)
+                                gpui::transparent_black().into()
                             })
                             .overflow_hidden()
                             .text_ellipsis()
@@ -303,11 +303,14 @@ impl GridView {
 
 impl Render for GridView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Grid);
+        let build_started = std::time::Instant::now();
         self.session
             .update(cx, |session, cx| session.advance_transition(cx));
         let theme = theme::theme(cx);
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
-        let width = f32::from(self.bounds.size.width);
+        // The scrollbar's gutter is not grid: tiles lay out beside it.
+        let width = (f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER).max(0.);
         let viewport = f32::from(self.bounds.size.height);
         let top = -f32::from(self.scroll.offset().y);
 
@@ -386,6 +389,7 @@ impl Render for GridView {
             self.session.update(cx, |session, cx| session.load_more(cx));
         }
 
+        let tile_count = tiles.len();
         let decoded = {
             let thumbnails = self.thumbnails.read(cx);
             tiles
@@ -443,6 +447,12 @@ impl Render for GridView {
                 .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
                 .child(content)
         };
-        div().relative().size_full().child(measure).child(body)
+        crate::stats::grid_built(build_started, tile_count);
+        div()
+            .relative()
+            .size_full()
+            .child(measure)
+            .child(body)
+            .child(ui::scrollbar("grid-scrollbar", &self.scroll, window, cx))
     }
 }

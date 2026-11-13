@@ -199,7 +199,7 @@ impl Shell {
             })
             .border_r_1()
             .border_color(if self.sidebar_collapsed {
-                rgba(0x00000000)
+                gpui::transparent_black().into()
             } else {
                 theme.border_secondary()
             })
@@ -255,6 +255,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
         let viewer_open = self.session.read(cx).viewer;
         // The rails give up their width at once; only their own slide is animated.
