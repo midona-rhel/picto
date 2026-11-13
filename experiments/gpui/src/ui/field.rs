@@ -13,6 +13,14 @@ pub enum Look {
     SidebarFilter,
     /// `InspectorField.module.css`
     Inspector,
+    /// `TagManagerScreen.module.css` `.titlebarSearch input`: the Tags
+    /// screen's search in the titlebar.
+    TitlebarSearch,
+    /// `GlassInput.module.css` `.input`: a text field in a dialog.
+    Modal,
+    /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
+    /// the text with no frame of their own.
+    ModalSearch,
     /// `Settings.module.css` `.sidebarSearch`, with room for its glyph.
     SettingsSearch,
     /// `ShortcutsPanel.module.css` `.searchInput`.
@@ -30,8 +38,10 @@ struct Frame {
     radius: f32,
     border: (Rgba, Rgba),
     fill: (Rgba, Rgba),
-    /// How long the border and fill take to change on focus.
+    /// How long the border and fill take to change on focus, and on what
+    /// curve.
     focus: Duration,
+    curve: motion::CubicBezier,
     /// Space left of the text, inside the border.
     left: f32,
     right: f32,
@@ -57,6 +67,7 @@ impl Look {
                     theme.control_surface(),
                 ),
                 focus: motion::FIELD_FOCUS,
+                curve: motion::EASE_DEFAULT,
                 left: 27.,
                 right: 6.,
                 drop: 0.,
@@ -67,6 +78,7 @@ impl Look {
                 border: (theme.border_secondary(), theme.border_focus()),
                 fill: (theme.control_surface(), theme.control_surface()),
                 focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
                 left: 30.,
                 right: 10.,
                 drop: 0.,
@@ -77,16 +89,55 @@ impl Look {
                 border: (theme.border_secondary(), theme.primary()),
                 fill: (theme.control_surface(), theme.surface_hover()),
                 focus: motion::NORMAL,
+                curve: motion::EASE_DEFAULT,
                 left: 10.,
                 right: 10.,
                 drop: 1.,
             },
+            Look::TitlebarSearch => Frame {
+                height: theme::CONTROL_SM,
+                radius: theme::RADIUS_CONTROL,
+                border: (theme.border(), theme.border_focus()),
+                fill: (theme.surface_hover(), theme.control_surface()),
+                focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
+                left: 24.,
+                right: 24.,
+                drop: 0.,
+            },
+            Look::Modal => Frame {
+                height: theme::CONTROL_LG,
+                radius: theme::RADIUS_SM,
+                border: (theme.border(), theme.primary_at(50.)),
+                fill: (theme.control_surface(), theme.control_surface()),
+                focus: motion::FIELD_BORDER,
+                curve: motion::EASE,
+                left: 10.,
+                right: 10.,
+                drop: 0.,
+            },
+            Look::ModalSearch => {
+                let clear: Rgba = gpui::transparent_black().into();
+                Frame {
+                    height: 36.,
+                    radius: 0.,
+                    border: (clear, clear),
+                    fill: (clear, clear),
+                    focus: Duration::ZERO,
+                    curve: motion::EASE_DEFAULT,
+                    // 10px in, a 14px icon and a 6px gap; the border is clear.
+                    left: 29.,
+                    right: 0.,
+                    drop: 0.,
+                }
+            }
             Look::SettingsSearch | Look::Form => Frame {
                 height: theme::CONTROL_LG,
                 radius: theme::RADIUS_MD,
                 border: (theme.border(), theme.primary_at(60.)),
                 fill: (theme.control_surface(), theme.control_surface()),
                 focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
                 left: if self == Look::Form { 12. } else { 30. },
                 right: if self == Look::Form { 12. } else { 8. },
                 drop: 0.,
@@ -97,6 +148,7 @@ impl Look {
                 border: (theme.border(), theme.primary_at(50.)),
                 fill: (theme.control_surface(), theme.control_surface()),
                 focus: motion::STEPPER,
+                curve: motion::EASE_DEFAULT,
                 left: 8.,
                 right: 25.,
                 drop: 0.,
@@ -107,6 +159,7 @@ impl Look {
                 border: (theme.primary(), theme.primary()),
                 fill: (theme.background(), theme.background()),
                 focus: Duration::ZERO,
+                curve: motion::EASE_DEFAULT,
                 left: 0.,
                 right: 0.,
                 drop: 0.,
@@ -187,7 +240,7 @@ impl RenderOnce for Field {
         if fade.read(cx).on() != focused {
             fade.update(cx, |fade, _| fade.set(focused, frame.focus));
         }
-        let strength = fade.read(cx).value();
+        let strength = fade.read(cx).value_with(frame.curve);
         if fade.read(cx).animating() {
             window.request_animation_frame();
         }
@@ -239,12 +292,44 @@ impl RenderOnce for Field {
             div()
                 .size_full()
                 .pl(px(frame.left))
-                .pr(px(if clear { 26. } else { frame.right }))
+                .pr(px(if clear && self.look != Look::TitlebarSearch {
+                    26.
+                } else {
+                    frame.right
+                }))
                 // The input centres its line, so twice the drop above it.
                 .pt(px(2. * frame.drop))
                 .child(self.input.clone()),
         );
-        if clear {
+        if clear && self.look == Look::TitlebarSearch {
+            // `.titlebarSearch button`: 24px, 1px in from the right edge, with
+            // its own hover fill.
+            let input = self.input;
+            field = field.child(
+                div()
+                    .id("clear")
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .size(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme::RADIUS_CONTROL))
+                    .group("clear")
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(theme.subtle_overlay()))
+                    .child(
+                        svg()
+                            .path("x")
+                            .size(px(12.))
+                            .text_color(theme.text_secondary())
+                            .group_hover("clear", move |style| style.text_color(theme.text())),
+                    )
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| input.update(cx, |input, cx| input.clear(cx))),
+            );
+        } else if clear {
             let input = self.input;
             field = field.child(
                 div()

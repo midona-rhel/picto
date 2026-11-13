@@ -139,20 +139,23 @@ impl Shell {
                 cx,
             )
         });
+        let tags = cx.new(|cx| {
+            screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
+        });
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         // A screen's titlebar controls take the grid's place in the toolbar.
         let controls = duplicates.read(cx).toolbar();
+        let tag_controls = tags.read(cx).toolbar();
         toolbar.update(cx, |toolbar, _| {
-            toolbar.set_screen_controls(Screen::Duplicates, controls.into())
+            toolbar.set_screen_controls(Screen::Duplicates, controls.into());
+            toolbar.set_screen_controls(Screen::Tags, tag_controls.into());
         });
         Self {
             sidebar,
             toolbar,
             inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
             viewer,
-            tags: cx.new(|cx| {
-                screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
-            }),
+            tags,
             subscriptions: cx.new(|cx| {
                 screens::subscriptions::SubscriptionsScreen::new(
                     session.clone(),

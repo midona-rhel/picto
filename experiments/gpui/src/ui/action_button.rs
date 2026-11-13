@@ -15,6 +15,9 @@ pub enum Look {
     Standard,
     /// `.btn.btnPrimary`: the primary colour, at 60% under the pointer.
     Primary,
+    /// `.btn.btnDanger`: a negative tint with a pale red label, deepening
+    /// from 8% to 15% under the pointer.
+    Danger,
     /// `Settings.module.css` `.footerBtn` and `.inlineButton`: 36px, regular
     /// weight, no ring, deepening to the active surface over 150 ms `ease`.
     Settings,
@@ -67,7 +70,7 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         gap: if settings { 6. } else { 8. },
         text_size: theme::TEXT_MD,
         weight: match look {
-            Look::Standard | Look::Primary => FontWeight::MEDIUM,
+            Look::Standard | Look::Primary | Look::Danger => FontWeight::MEDIUM,
             Look::Settings => FontWeight::NORMAL,
             Look::SettingsPrimary => FontWeight::SEMIBOLD,
         },
@@ -183,6 +186,11 @@ impl RenderOnce for ActionButton {
                 let color = theme::blend(theme.primary(), theme.primary_at(60.), hover);
                 (color, color, theme.on_primary())
             }
+            Look::Danger => (
+                theme::blend(theme.negative_at(8.), theme.negative_at(15.), hover),
+                theme.negative_at(35.),
+                rgb(theme::DANGER_TEXT),
+            ),
             Look::Settings => (
                 theme::blend(theme.surface_hover(), theme.surface_active(), hover),
                 theme.border(),

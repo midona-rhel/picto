@@ -144,7 +144,15 @@ impl Theme {
     pub fn glass_border(&self) -> Rgba {
         rgba(0xffffff26)
     }
-    /// `--color-footer-surface`: table headers and tab tracks.
+    /// `--color-subtle-overlay`: `--color-contrast-10`.
+    pub fn subtle_overlay(&self) -> Rgba {
+        translucent(self.contrast, 10.)
+    }
+    /// `--color-pressed-overlay`: `--color-contrast-20`.
+    pub fn pressed_overlay(&self) -> Rgba {
+        translucent(self.contrast, 20.)
+    }
+    /// `--color-footer-surface`: table headers, tab tracks and dialog footers.
     pub fn footer_surface(&self) -> Rgba {
         translucent(self.contrast, 3.)
     }
@@ -186,6 +194,13 @@ impl Theme {
         rgb(0xffa500)
     }
 }
+
+/// `.btnDanger`'s label colour.
+pub const DANGER_TEXT: u32 = 0xff9aa4;
+/// The error banner's text (`TagManagerScreen.module.css` `.error`).
+pub const ERROR_TEXT: u32 = 0xffb4b4;
+/// `GlassModal` `.backdrop`: black at 55%.
+pub const MODAL_BACKDROP: u32 = 0x0000008c;
 
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
 /// transition passes through it (interpolated with alpha premultiplied).
@@ -341,6 +356,8 @@ pub const TEXT_SM: f32 = 12.;
 pub const TEXT_MD: f32 = 13.;
 /// `--font-size-lg`
 pub const TEXT_LG: f32 = 14.;
+/// `--line-height-md`
+pub const LINE_HEIGHT_MD: f32 = 20.;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
 /// `--font-size-title`

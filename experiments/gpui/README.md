@@ -300,12 +300,38 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   the library's consistent auxiliary read; the list and the query rows use
   `core/src/subscription_views.sql` and `subscription_query_views.sql`
   directly.
+- The Tags screen (`TagManagerScreen.tsx`): the 184px rail of All, General,
+  Starred, the groups in their preset order and colours with their counts,
+  "Create tag group" and "Delete Unused"; the tags of the chosen group in
+  letter sections (or one "Matches" section while searching), as many
+  columns as fit, with the group's dot, the star, the count and the section
+  rules. Pages of 500 load as the list nears what is loaded, with shimmering
+  placeholders for the rest. Changing group fades the list out over 100 ms
+  and the new one in over 140 ms. The titlebar shows the tag search in place
+  of the grid's controls; the library ranks the matches.
+- The Tags screen's actions, through the library: rename (or merge into a
+  tag of that name), merge into a chosen tag, delete, move to or out of a
+  group, create, rename, recolour and delete groups, delete unused tags, star
+  and unstar and group colours (through the settings model, which writes
+  them to the library's application settings), copy a tag's name, and "Filter Items with This Tag", which opens
+  All filtered to the tag as a step of history.
+- Dialogs as `GlassModal` draws them (`ui::modal`): backdrop, glass panel,
+  title bar with its close button, body and footer, the 150 ms fade and rise
+  in and 120 ms fade out, Escape and a click on the backdrop to close. The
+  tag editor, merge picker, group dialogs and confirmations use it, with the
+  shared action button (`actionButton.module.css`) and dialog fields.
+- Context menus have a row of colour swatches (`ColorPicker`), used by the
+  Tags screen's group menu, in both presentations.
 - SVG originals through GPUI's SVG loader. Flash through native Ruffle 0.5.0
   (wgpu offscreen rendering, mouse and keyboard forwarding, optional CPAL audio).
 
 ## Not yet equivalent to Picto
 
-- Tags is a sidebar row without a screen.
+- Tags screen: ⌘F does not move to its search; a failed save of the tag
+  preferences is held as the settings model's error, not shown as a toast; the editor's
+  name field is dimmed while an edit runs but still takes typing; Undo does
+  not reach tag edits; tag and group changes made elsewhere show when the
+  screen is opened again, not live.
 - Duplicates: Keep left, Keep right and Smart merge (Z, X, S) are drawn
   disabled, because they merge one item into the other and free the other
   file for deletion from disk, which this prototype must never cause; with
@@ -391,7 +417,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
 - Context menus exist for grid items, the sidebar, the viewer's zoom
-  percentage and subscriptions. The grid shell, the viewer toolbar and the Subscriptions
+  percentage, subscriptions, and tags and tag groups on the Tags screen. The
+  grid shell, the viewer toolbar, the Subscriptions screen and the Tags
   screen each host the menu as a full-window layer; the menu itself chooses
   between its pop-up windows and the in-window panel. Subscriptions' Schedule
   row stays disabled rather than a submenu: setting a schedule also sets the
@@ -426,7 +453,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured. When the viewer closes by going to another
   destination, the pane shows the fading grid rather than the fading viewer.
-- Motion still to port: modal enter/exit, the inspector's fade when entering
+- Motion still to port: the dialogs' scale (they fade and rise but cannot
+  scale), the inspector's fade when entering
   the grid from the viewer, toasts, smooth paging,
   progress and spinner loops. A scope change does not yet restore the previous
   scroll position as the Electron grid does.
@@ -454,7 +482,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
 ```
 
-The regular tests cover the context menu's search ranking, separator
+The regular tests cover the Tags screen's sections, rows, ordering, search
+ranking, shimmer and starred-tag edits, the dialogs' timing, the context menu's search ranking, separator
 cleaning, keyboard stepping and placement and flip arithmetic, the duplicate review's linked zoom, queue order,
 labels and difference picture, the three layout modes against hand-computed geometry,
 the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
@@ -512,7 +541,7 @@ One model, separate views, shared components:
   arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
   shows) and `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu (with submenus and search), popover, library avatar, sidebar row, section
+  tooltip, context menu (with submenus, search and swatches), dialog, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom

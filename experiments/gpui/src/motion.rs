@@ -42,6 +42,10 @@ pub const MENU_OUT: Duration = Duration::from_millis(80);
 pub const MENU_SUBMENU_GRACE: Duration = Duration::from_millis(150);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
+/// `GlassModal`: `modalIn` and `backdropIn`.
+pub const MODAL_IN: Duration = Duration::from_millis(150);
+/// `GlassModal`: `EXIT_MS`, `modalOut` and `backdropOut`.
+pub const MODAL_OUT: Duration = Duration::from_millis(120);
 /// `HoverPreviewPortal.tsx`: the backdrop and the original fade in together.
 pub const HOVER_PREVIEW_FADE: Duration = Duration::from_millis(150);
 /// `EmptyState.module.css` `.action`: its background on hover.
@@ -120,6 +124,8 @@ pub const ROW_HOVER: Duration = Duration::from_millis(100);
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
+/// `GlassInput`: a dialog field's border on focus.
+pub const FIELD_BORDER: Duration = Duration::from_millis(120);
 /// `KbdTooltip`: `openDelay`, the `pop` transition, and `offset`.
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);

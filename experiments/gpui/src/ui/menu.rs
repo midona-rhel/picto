@@ -88,6 +88,8 @@ pub enum Entry {
     Separator,
     /// A row that opens its own rows beside the menu. Submenus do not nest.
     Submenu(Submenu),
+    /// A row of colour swatches (`ColorPicker`).
+    Swatches(Swatches),
 }
 
 pub struct Item {
@@ -104,6 +106,8 @@ pub struct Item {
     checked: Option<bool>,
     excluded: bool,
     keep_open: bool,
+    /// Tells rows that share an action apart; see [`Menu::chosen_value`].
+    value: Option<SharedString>,
 }
 
 pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
@@ -118,10 +122,17 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
         checked: None,
         excluded: false,
         keep_open: false,
+        value: None,
     }
 }
 
 impl Item {
+    /// What [`Menu::chosen_value`] gives when this row is chosen, for rows
+    /// that share an action, such as one row per group.
+    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
         self
@@ -211,6 +222,42 @@ impl From<Submenu> for Entry {
     }
 }
 
+/// One colour of a swatch row.
+pub struct Swatch {
+    /// Its tooltip.
+    pub label: SharedString,
+    /// `None` is the default colour, drawn in the primary text colour.
+    pub color: Option<Rgba>,
+    /// What [`Menu::chosen_value`] gives when it is picked.
+    pub value: SharedString,
+}
+
+pub struct Swatches {
+    action: &'static str,
+    swatches: Vec<Swatch>,
+    selected: Option<usize>,
+}
+
+/// A row of colour swatches. Picking one tells the owner, with the swatch's
+/// value, and leaves the menu open with the new choice ringed.
+pub fn swatches(action: &'static str, swatches: Vec<Swatch>, selected: Option<usize>) -> Swatches {
+    Swatches {
+        action,
+        swatches,
+        selected,
+    }
+}
+
+impl From<Swatches> for Entry {
+    fn from(swatches: Swatches) -> Self {
+        Entry::Swatches(swatches)
+    }
+}
+
+/// `ColorPicker`'s row: 18px swatches with 4px above and below.
+const SWATCH_ROW: f32 = 26.;
+const SWATCH: f32 = 18.;
+
 pub enum Event {
     /// A row was chosen. Unless it keeps the menu open, the menu is already
     /// closing.
@@ -229,6 +276,8 @@ struct Path {
 enum Row {
     Entry(Path),
     Separator,
+    /// A swatch row: not a stop for the arrow keys, nor found by a search.
+    Swatches(Path),
 }
 
 /// A rectangle in the coordinates of the window or display it is placed in.
@@ -347,6 +396,7 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
                 }
             }
             Entry::Submenu(_) if parent.is_some() => {}
+            Entry::Swatches(_) => rows.push(Row::Swatches(path)),
             _ => rows.push(Row::Entry(path)),
         }
     }
@@ -410,7 +460,7 @@ fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
     let mut order = 0;
     let mut visit = |entry: &Entry, path: Path| {
         let found = match entry {
-            Entry::Separator => return,
+            Entry::Separator | Entry::Swatches(_) => return,
             Entry::Item(item) if item.disabled => None,
             Entry::Item(item) => matching(&item.label, &item.keywords),
             Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
@@ -464,6 +514,7 @@ fn row_height(row: &Row) -> f32 {
     match row {
         Row::Entry(_) => theme::CONTROL_SM,
         Row::Separator => SEPARATOR,
+        Row::Swatches(_) => SWATCH_ROW,
     }
 }
 
@@ -542,6 +593,8 @@ pub struct Menu {
     /// Set once dismissed: the menu shrinks and fades for 80 ms (`menuOut`)
     /// and takes no more input.
     closing: Option<Instant>,
+    /// The value of the row or swatch last chosen.
+    chosen: Option<SharedString>,
     presentation: Presentation,
     /// The window the owner draws the menu in.
     main: Option<AnyWindowHandle>,
@@ -606,6 +659,7 @@ impl Menu {
             focus: cx.focus_handle(),
             shown: None,
             closing: None,
+            chosen: None,
             presentation: presentation(),
             main: None,
             viewport: Rect::default(),
@@ -666,6 +720,12 @@ impl Menu {
             }));
         }
         cx.notify();
+    }
+
+    /// The value of the row or swatch last chosen, for rows that share an
+    /// action ([`Item::value`], [`Swatch::value`]).
+    pub fn chosen_value(&self) -> Option<SharedString> {
+        self.chosen.clone()
     }
 
     /// Whether the menu has faded out and can be dropped.
@@ -731,9 +791,9 @@ impl Menu {
                 Row::Entry(path) => match self.entry(*path) {
                     Entry::Item(item) => !item.disabled,
                     Entry::Submenu(_) => true,
-                    Entry::Separator => false,
+                    Entry::Separator | Entry::Swatches(_) => false,
                 },
-                Row::Separator => false,
+                Row::Separator | Row::Swatches(_) => false,
             })
             .collect()
     }
@@ -743,9 +803,9 @@ impl Menu {
             Row::Entry(path) => match self.entry(*path) {
                 Entry::Item(item) => item.icon.is_some(),
                 Entry::Submenu(submenu) => submenu.icon.is_some(),
-                Entry::Separator => false,
+                Entry::Separator | Entry::Swatches(_) => false,
             },
-            Row::Separator => false,
+            Row::Separator | Row::Swatches(_) => false,
         })
     }
 
@@ -769,7 +829,7 @@ impl Menu {
         let mut found = 0;
         for entry in &self.entries {
             match entry {
-                Entry::Separator => {}
+                Entry::Separator | Entry::Swatches(_) => {}
                 Entry::Item(_) => found += 1,
                 Entry::Submenu(submenu) => {
                     found += 1 + submenu
@@ -951,6 +1011,7 @@ impl Menu {
             return;
         }
         let (action, keep_open) = (item.action, item.keep_open);
+        self.chosen = item.value.clone();
         cx.emit(Event::Chosen(action));
         if !keep_open {
             self.dismiss(cx);
@@ -1024,7 +1085,7 @@ impl Menu {
                     ),
                     _ => None,
                 },
-                Row::Separator => None,
+                Row::Separator | Row::Swatches(_) => None,
             })
             .fold(0f32, f32::max);
         (2. * PADDING + widest).ceil()
@@ -1409,7 +1470,7 @@ impl Menu {
         let (label, icon) = match entry {
             Entry::Item(item) => (item.label.clone(), item.icon),
             Entry::Submenu(submenu) => (submenu.label.clone(), submenu.icon),
-            Entry::Separator => (SharedString::default(), None),
+            Entry::Separator | Entry::Swatches(_) => (SharedString::default(), None),
         };
         let item = match entry {
             Entry::Item(item) => Some(item),
@@ -1522,15 +1583,23 @@ impl Menu {
         rows: &[Row],
         rect: Rect,
         at: (f32, f32),
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let has_icons = self.has_icons(rows);
         let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));
         for (index, row) in rows.iter().enumerate() {
-            let Row::Entry(path) = *row else {
-                list = list.child(separator(cx));
-                continue;
+            let path = match *row {
+                Row::Entry(path) => path,
+                Row::Swatches(path) => {
+                    list = list.child(self.swatch_row(path, window, cx));
+                    continue;
+                }
+                Row::Separator => {
+                    list = list.child(separator(cx));
+                    continue;
+                }
             };
             let entry = self.entry(path);
             let element = self.row(
@@ -1633,15 +1702,23 @@ impl Menu {
         &self,
         open: &Opened,
         at: (f32, f32),
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let rows = self.submenu_rows(open.top);
         let has_icons = self.has_icons(&rows);
         let mut list = div().flex().flex_col().p(px(PADDING)).gap(px(GAP));
         for (index, row) in rows.iter().enumerate() {
-            let Row::Entry(path) = *row else {
-                list = list.child(separator(cx));
-                continue;
+            let path = match *row {
+                Row::Entry(path) => path,
+                Row::Swatches(path) => {
+                    list = list.child(self.swatch_row(path, window, cx));
+                    continue;
+                }
+                Row::Separator => {
+                    list = list.child(separator(cx));
+                    continue;
+                }
             };
             let entry = self.entry(path);
             let element = self.row(
@@ -1716,9 +1793,14 @@ impl Menu {
                 self.shown.get_or_insert_with(Instant::now);
                 let rows = self.rows();
                 let rect = self.root_rect(&rows);
-                layer = layer.child(self.root_panel(&rows, rect, (rect.x, rect.y), cx));
+                layer = layer.child(self.root_panel(&rows, rect, (rect.x, rect.y), window, cx));
                 if let Some(open) = &self.submenu {
-                    layer = layer.child(self.submenu_panel(open, (open.rect.x, open.rect.y), cx));
+                    layer = layer.child(self.submenu_panel(
+                        open,
+                        (open.rect.x, open.rect.y),
+                        window,
+                        cx,
+                    ));
                 }
             }
             Presentation::PopUpWindows => {
@@ -1770,17 +1852,102 @@ impl Menu {
                     let rows = self.rows();
                     let rect = self.root_rect(&rows);
                     let at = (rect.x - screen.bounds.x, rect.y - screen.bounds.y);
-                    root = root.child(self.root_panel(&rows, rect, at, cx));
+                    root = root.child(self.root_panel(&rows, rect, at, window, cx));
                 }
             }
             Role::Submenu(serial) => {
                 if let Some(open) = self.submenu.as_ref().filter(|open| open.serial == serial) {
                     let at = (open.rect.x - open.bounds.x, open.rect.y - open.bounds.y);
-                    root = root.child(self.submenu_panel(open, at, cx));
+                    root = root.child(self.submenu_panel(open, at, window, cx));
                 }
             }
         }
         root.into_any_element()
+    }
+}
+
+impl Menu {
+    /// Picks a swatch: the owner is told, and the menu stays open with the
+    /// new choice ringed.
+    fn pick_swatch(&mut self, path: Path, swatch: usize, cx: &mut Context<Self>) {
+        if self.closing.is_some() {
+            return;
+        }
+        let entry = match (&mut self.entries[path.top], path.child) {
+            (Entry::Submenu(submenu), Some(child)) => &mut submenu.children[child],
+            (entry, _) => entry,
+        };
+        if let Entry::Swatches(row) = entry
+            && let Some(choice) = row.swatches.get(swatch)
+        {
+            row.selected = Some(swatch);
+            self.chosen = Some(choice.value.clone());
+            cx.emit(Event::Chosen(row.action));
+            cx.notify();
+        }
+    }
+
+    /// `ColorPicker`: swatches spread across the row, the chosen one ringed
+    /// in its colour over the app background, with a check.
+    fn swatch_row(&self, path: Path, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = theme::theme(cx);
+        let Entry::Swatches(row) = self.entry(path) else {
+            return div().id("menu-swatches");
+        };
+        let mut line = div()
+            .id(("menu-swatches", path.top))
+            .relative()
+            .h(px(SWATCH_ROW))
+            .flex_none()
+            .px(px(ROW_PADDING))
+            .flex()
+            .items_center()
+            .justify_between()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.set_current(None, cx);
+                    this.leave_submenu(cx);
+                }
+            }));
+        for (position, swatch) in row.swatches.iter().enumerate() {
+            let color = swatch.color.unwrap_or(theme.text());
+            let selected = row.selected == Some(position);
+            let check = if swatch.color.is_some() {
+                theme.on_primary()
+            } else {
+                theme.background()
+            };
+            let mut ring = div()
+                .size(px(SWATCH))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(color)
+                .children(selected.then(|| super::icon("swatch-check", 10., check)));
+            if selected {
+                // `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`
+                ring = ring.shadow(vec![
+                    BoxShadow::new(px(0.), px(0.), theme.background().into())
+                        .spread_radius(px(1.5)),
+                    BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
+                ]);
+            }
+            let target = div()
+                .id(("menu-swatch", position))
+                .cursor_pointer()
+                .child(ring)
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_swatch(path, position, cx)));
+            line = line.child(super::tooltip::attach(
+                target,
+                ("menu-swatch-tip", position),
+                super::tip(swatch.label.clone()),
+                SWATCH,
+                window,
+                cx,
+            ));
+        }
+        line
     }
 }
 

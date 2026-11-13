@@ -248,7 +248,20 @@ impl Render for Toolbar {
                 .iter()
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
-            return toolbar.children(controls).into_any_element();
+            // `.titlebarToolbar`: the controls take the rest of the row and
+            // sit at its right end, clear of the scope title.
+            return toolbar
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .children(controls),
+                )
+                .into_any_element();
         }
         toolbar
             .child(

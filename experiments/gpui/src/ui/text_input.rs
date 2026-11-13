@@ -49,6 +49,8 @@ pub struct TextInput {
     field_key: Option<u64>,
     original: SharedString,
     kind: Kind,
+    /// Enter submits the field and Escape is left to what holds it.
+    submits: bool,
     /// How far the text is scrolled left to keep the caret in view.
     scroll: Pixels,
     /// When the caret last moved; it shows for 500 ms from then, and blinks.
@@ -134,6 +136,9 @@ const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
 /// A stored field's new value, with the key it was set for.
 pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
+/// Enter was pressed in a field made with [`TextInput::dialog`].
+pub struct Submitted;
+impl gpui::EventEmitter<Submitted> for TextInput {}
 
 /// How an in-place rename ended: Enter or leaving the field commits the
 /// trimmed text, Escape cancels (`useInlineRename.ts`).
@@ -746,10 +751,19 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(|this, _: &Commit, window, cx| {
+                if this.submits {
+                    cx.emit(Submitted);
+                    return;
+                }
                 this.commit(cx);
                 window.blur(cx);
             }))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                // A dialog or screen decides what Escape does in its field.
+                if this.submits {
+                    cx.propagate();
+                    return;
+                }
                 this.finish_rename(false, cx);
                 // The sidebar filter empties on Escape; a stored field goes
                 // back to its saved value.
@@ -794,6 +808,7 @@ impl TextInput {
             field_key: None,
             original: "".into(),
             kind: Kind::Search,
+            submits: false,
             scroll: px(0.),
             blink: std::time::Instant::now(),
             blink_task: None,
@@ -864,6 +879,13 @@ impl TextInput {
     }
     pub fn value(&self) -> String {
         self.content.to_string()
+    }
+    /// A form field whose Enter submits it ([`Submitted`]) and whose Escape
+    /// is left to what holds it: dialog fields and the Tags screen's search.
+    pub fn dialog(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::form(placeholder, cx);
+        input.submits = true;
+        input
     }
     /// A form field, at the UI font's 13px.
     pub fn form(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
