@@ -544,3 +544,7 @@ mod tests {
         assert_eq!(progress(Duration::from_secs(1), duration), 1.);
     }
 }
+
+/// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
+/// before going back once the pointer leaves it.
+pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);

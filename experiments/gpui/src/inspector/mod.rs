@@ -2,6 +2,7 @@
 //! showing when nothing is selected, the selected item, or a summary of
 //! several. Layout follows InspectorSkeleton, InspectorField, TagChip and
 //! PropertyRow.
+mod colors;
 mod edits;
 pub mod folder_picker;
 mod membership;
@@ -10,6 +11,7 @@ mod selection;
 mod sources;
 mod stack;
 pub mod tag_picker;
+mod turned;
 
 pub use folder_picker::FolderPicker;
 pub use tag_picker::TagPicker;
@@ -24,6 +26,7 @@ use crate::ui::{
     menu, modal,
     text_input::{self, TextInput},
 };
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::{FolderId, RootDetails, RootId, TagRecord};
 use std::cell::RefCell;
@@ -118,6 +121,8 @@ fn format_date(milliseconds: i64) -> Option<String> {
 enum ChipMenu {
     Tag(TagRecord),
     Folder(FolderId),
+    /// A palette swatch; its menu keeps the colour itself.
+    Swatch,
 }
 
 /// A change to every selected item that would replace what some of them
@@ -155,6 +160,8 @@ pub struct Inspector {
     sources: sources::SourcesState,
     menu: menu::Host,
     menu_target: Option<ChipMenu>,
+    /// The swatch colour copied last, whose tooltip says so for 1.5 s.
+    copied: Option<u32>,
     confirm: modal::Host<Confirm>,
     /// The destination the pickers were opened on; they close when it changes.
     picker_destination: Option<String>,
@@ -320,6 +327,7 @@ impl Inspector {
             sources,
             menu: menu::Host::deferred(30, menu::Return::Opener),
             menu_target: None,
+            copied: None,
             confirm: modal::Host::default(),
             picker_destination: None,
             _subscriptions: subscriptions,
@@ -546,6 +554,46 @@ impl Inspector {
         .into_any_element()
     }
 
+    /// The in-flow Auto Tag action after the properties
+    /// (`InspectorAutoTagAction`): "Auto Tag N Images" for more than one,
+    /// dimmed without a tooltip when nothing in it is an image.
+    fn auto_tag(
+        &self,
+        id: &'static str,
+        count: u64,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let label = if count > 1 {
+            format!("Auto Tag {} Images", format::grouped(count))
+        } else {
+            "Auto Tag".to_owned()
+        };
+        let row = ui::action_row(
+            SharedString::from(format!("{id}-action")),
+            "inspector-auto-tag",
+            label,
+        )
+        .glyph(14.)
+        .height(theme::CONTROL_MD)
+        .disabled(!enabled);
+        let row = div().mt(px(12.)).child(row);
+        if !enabled {
+            return row.into_any_element();
+        }
+        // TODO: Auto Tag opens the AI tagger beside the rail for these items.
+        ui::tooltip::attach(
+            div().id(id).child(row),
+            SharedString::from(format!("{id}-tip")),
+            ui::tip("Suggest tags with AI").shortcut("organize.autoTag", cx),
+            theme::CONTROL_MD,
+            window,
+            cx,
+        )
+        .into_any_element()
+    }
+
     /// The Folders section's content: the chips and a "+" after them, or one
     /// wide "Add to Folder" button when there are none.
     fn folders_row(
@@ -661,13 +709,18 @@ impl Inspector {
         label: AnyElement,
         cx: &mut Context<Self>,
     ) -> Div {
-        let (width, height) = fitted(dimensions);
-        // `ThumbnailImage`: a thumbnail that cannot be loaded gives way to
-        // the torn page, fitted inside the same frame.
-        let failed = self
+        // `.previewImage` shows the thumbnail at its own size, at most 200px
+        // each way; until it is decoded the media's shape stands in.
+        let resource = Resource::Path(thumbnail.clone().into());
+        let natural = self
             .thumbnails
             .read(cx)
-            .is_failed(&Resource::Path(thumbnail.clone().into()));
+            .size(&resource)
+            .map(|(width, height)| (width.round() as u32, height.round() as u32));
+        let (width, height) = fitted(natural.or(dimensions));
+        // `ThumbnailImage`: a thumbnail that cannot be loaded gives way to
+        // the torn page, fitted inside the same frame.
+        let failed = self.thumbnails.read(cx).is_failed(&resource);
         let picture = if failed {
             use crate::grid::art;
             let surface = theme::theme(cx).surface_2();
@@ -738,7 +791,12 @@ impl Inspector {
 
     /// The colour pill (`ColorPalette`). It keeps its height when there are
     /// no colours, so the fields below never move.
-    fn palette(&self, colors: &[picto_library::LabColor], cx: &mut Context<Self>) -> Div {
+    fn palette(
+        &self,
+        colors: &[picto_library::LabColor],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = theme::theme(cx);
         let mut swatches = div()
             .h(px(theme::CONTROL_SM))
@@ -756,51 +814,64 @@ impl Inspector {
             swatches = swatches.invisible();
         }
         for (index, color) in colors.iter().enumerate() {
-            let color = color.clone();
+            let color = format::lab_to_rgb(color.l, color.a, color.b);
             let group = SharedString::from(format!("swatch-{index}"));
-            swatches = swatches.child(
-                div()
-                    .id(("palette", index))
-                    .group(group.clone())
-                    .relative()
-                    .size(px(16.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    // The hover ring sits one pixel outside the swatch's cell.
-                    .child(
-                        div()
-                            .absolute()
-                            .inset(px(-1.))
-                            .rounded_full()
-                            .border_1()
-                            .border_color(gpui::transparent_black())
-                            .group_hover(group, move |style| {
-                                style.border_color(theme.text_tertiary())
-                            }),
-                    )
-                    .child(
-                        div()
-                            .size(px(14.))
-                            .rounded_full()
-                            .bg(rgb(format::lab_to_rgb(color.l, color.a, color.b)))
-                            .border_1()
-                            .border_color(theme.contrast(10.)),
-                    )
-                    // `ColorPalette`'s `onFilter`: the filter bar opens with
-                    // this colour in its colour filter.
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let hex = format!("#{:06x}", format::lab_to_rgb(color.l, color.a, color.b));
-                        this.session.update(cx, |session, cx| {
-                            session.set_filter_bar_open(true, cx);
-                            let mut filters = session.filters.clone();
-                            filters.color = Some(hex);
-                            session.set_filters(filters, cx);
-                        });
-                    })),
-            );
+            let swatch = div()
+                .id(("palette", index))
+                .group(group.clone())
+                .relative()
+                .size(px(16.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                // The hover ring sits one pixel outside the swatch's cell.
+                .child(
+                    div()
+                        .absolute()
+                        .inset(px(-1.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(gpui::transparent_black())
+                        .group_hover(group, move |style| {
+                            style.border_color(theme.text_tertiary())
+                        }),
+                )
+                .child(
+                    div()
+                        .size(px(14.))
+                        .rounded_full()
+                        .bg(rgb(color))
+                        .border_1()
+                        .border_color(theme.contrast(10.)),
+                )
+                // `ColorPalette`'s `onFilter`: the filter bar opens with
+                // this colour in its colour filter.
+                .on_click(cx.listener(move |this, _, _, cx| this.filter_by_color(color, cx)))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_swatch_menu(color, event.position, window, cx);
+                    }),
+                );
+            let tip = if self.copied == Some(color) {
+                "Copied!".to_owned()
+            } else {
+                format!(
+                    "{} · Click to filter · Right-click for actions",
+                    colors::hex(color)
+                )
+            };
+            swatches = swatches.child(ui::tooltip::attach(
+                swatch,
+                SharedString::from(format!("swatch-tip-{index}")),
+                ui::tip(tip),
+                16.,
+                window,
+                cx,
+            ));
         }
         div()
             .h(px(theme::CONTROL_SM))
@@ -808,6 +879,77 @@ impl Inspector {
             .flex()
             .justify_center()
             .child(swatches)
+    }
+
+    /// `onFilter`: the filter bar opens with this colour as its colour
+    /// filter.
+    fn filter_by_color(&mut self, color: u32, cx: &mut Context<Self>) {
+        let hex = colors::hex(color);
+        self.session.update(cx, |session, cx| {
+            session.set_filter_bar_open(true, cx);
+            let mut filters = session.filters.clone();
+            filters.color = Some(hex);
+            session.set_filters(filters, cx);
+        });
+    }
+
+    /// A swatch's menu (`ColorPalette`'s `openMenu`): Filter by color, then
+    /// the colour copied in seven notations.
+    fn open_swatch_menu(
+        &mut self,
+        color: u32,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let copy = |action: &'static str, label: &'static str| -> menu::Entry {
+            menu::item(action, label).icon("menu-copy").into()
+        };
+        let entries = vec![
+            menu::item("filter", "Filter by color")
+                .icon("menu-funnel")
+                .into(),
+            menu::Entry::Separator,
+            copy("hex", "Copy HEX"),
+            copy("rgb", "Copy RGB"),
+            copy("rgba", "Copy RGBA"),
+            copy("hsl", "Copy HSL"),
+            menu::Entry::Separator,
+            copy("hsv", "Copy HSV"),
+            copy("hwb", "Copy HWB"),
+            copy("cmyk", "Copy CMYK"),
+        ];
+        let menu = cx.new(|cx| menu::Menu::new(entries, position, cx).search(false));
+        self.menu
+            .open(menu, window, cx, move |this, _, action, _, cx| {
+                let text = match action {
+                    "filter" => return this.filter_by_color(color, cx),
+                    "hex" => colors::hex(color).to_uppercase(),
+                    "rgb" => colors::rgb(color),
+                    "rgba" => colors::rgba(color),
+                    "hsl" => colors::hsl(color),
+                    "hsv" => colors::hsv(color),
+                    "hwb" => colors::hwb(color),
+                    "cmyk" => colors::cmyk(color),
+                    _ => return,
+                };
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                this.copied = Some(color);
+                cx.notify();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(1500))
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.copied == Some(color) {
+                            this.copied = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            });
+        self.menu_target = Some(ChipMenu::Swatch);
     }
 
     /// The rating row (`StarRating`): the stars up to the one under the
@@ -821,11 +963,12 @@ impl Inspector {
             .items_center()
             .text(theme::TEXT_CAPTION)
             .child(div().flex_1().child("Rating"));
+        // The stars sit in the row's value cell, which is drawn at 80%.
         for value in 1..=5 {
             let star = if value <= shown {
-                ui::icon("star-filled", 12., rgb(theme::RATING))
+                ui::icon("star-filled", 12., rgb(theme::RATING)).opacity(0.8)
             } else {
-                ui::icon("star", 12., theme.text_secondary()).opacity(0.25)
+                ui::icon("star", 12., theme.text_secondary()).opacity(0.25 * 0.8)
             };
             row = row.child(
                 div()
@@ -971,7 +1114,7 @@ impl Inspector {
         }
         let palette = cover.map_or(&[][..], |media| &media.facts.palette[..]);
         panel = panel
-            .child(self.palette(palette, cx))
+            .child(self.palette(palette, window, cx))
             .child(
                 div()
                     .mb(px(8.))
@@ -1046,17 +1189,25 @@ impl Inspector {
                 properties = properties.child(Self::property(label, date, cx));
             }
         }
+        let images = details
+            .media
+            .iter()
+            .any(|media| media.facts.mime.starts_with("image/"));
+        let auto_tag = self.auto_tag("auto-tag", details.media.len() as u64, images, window, cx);
         // TODO: Export opens the export dialog for this item.
         scroller.child(
             panel
                 .child(self.section("Properties", Some(properties.into_any_element()), cx))
-                .child(
-                    div().mt(px(12.)).child(
-                        ui::action_row("export", "inspector-export", "Export")
-                            .glyph(16.)
-                            .height(theme::CONTROL_MD),
-                    ),
-                ),
+                .when(!details.media.is_empty(), |panel| {
+                    panel.child(
+                        div().mt(px(12.)).child(
+                            ui::action_row("export", "inspector-export", "Export")
+                                .glyph(16.)
+                                .height(theme::CONTROL_MD),
+                        ),
+                    )
+                })
+                .child(auto_tag),
         )
     }
 }
@@ -1064,11 +1215,16 @@ impl Inspector {
 impl Inspector {
     /// `UnavailableInspectorSkeleton`: the rows a state will have, with
     /// dashes for values, while there is nothing to show yet.
-    fn skeleton(&mut self, mode: Mode, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn skeleton(
+        &mut self,
+        mode: Mode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let error = self.session.read(cx).error.clone();
         let mut panel = Self::panel()
             .child(div().h(px(PREVIEW)).mb(px(8.)))
-            .child(self.palette(&[], cx))
+            .child(self.palette(&[], window, cx))
             .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)))
             .child(div().mb(px(8.)).child(ui::field::read_only("—", cx)));
         if mode != Mode::Scope {
@@ -1109,9 +1265,9 @@ impl Render for Inspector {
             (Mode::Empty, _) => self.scroller(),
             (Mode::Scope, false) if launching => self.scroller(),
             (Mode::Item, true) => self.body(window, cx),
-            (Mode::Scope, true) => self.scope_body(cx),
+            (Mode::Scope, true) => self.scope_body(window, cx),
             (Mode::Selection, true) => self.selection_body(window, cx),
-            (mode, false) => self.skeleton(mode, cx),
+            (mode, false) => self.skeleton(mode, window, cx),
         };
         let menu = self.menu.layer(window, cx);
         let confirm = self.confirm_dialog(window, cx);

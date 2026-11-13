@@ -44,6 +44,22 @@ pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<
     order
 }
 
+/// The file a thumbnail is read from. Thumbnails are JPEG, except those the
+/// derivative worker writes as PNG (audio waveforms, documents), which keep
+/// the same name with `.png`; the media protocol tries `.jpg`, then `.png`.
+fn stored(resource: &Resource) -> Resource {
+    if let Resource::Path(path) = resource
+        && path.extension().is_some_and(|extension| extension == "jpg")
+        && !path.exists()
+    {
+        let png = path.with_extension("png");
+        if png.exists() {
+            return Resource::Path(png.into());
+        }
+    }
+    resource.clone()
+}
+
 impl Thumbnails {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.on_release(|cache, cx| {
@@ -91,9 +107,25 @@ impl Thumbnails {
         self.wanted.contains(resource) || self.pins.values().any(|pinned| pinned == resource)
     }
 
+    /// The decoded thumbnail, once it is ready.
+    pub fn image(&self, resource: &Resource) -> Option<Arc<RenderImage>> {
+        self.entries.get(resource)?.get()?.ok()
+    }
+
+    /// The decoded size of a thumbnail, in its pixels, once it is ready.
+    pub fn size(&self, resource: &Resource) -> Option<(f32, f32)> {
+        match self.entries.get(resource)?.get()? {
+            Ok(image) => {
+                let size = image.size(0);
+                Some((size.width.0 as f32, size.height.0 as f32))
+            }
+            Err(_) => None,
+        }
+    }
+
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
         crate::stats::thumbnail_read();
-        let item = ImageCacheItem::new(resource, cx);
+        let item = ImageCacheItem::new(&stored(resource), cx);
         // The view that asked is told when it is ready.
         item.use_image(window);
         self.loads += 1;

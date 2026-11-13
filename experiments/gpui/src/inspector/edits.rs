@@ -482,6 +482,7 @@ impl Inspector {
                 menu::item("open-folder", "Open Folder").into(),
                 menu::item("remove", "Remove").into(),
             ],
+            ChipMenu::Swatch => return,
         };
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
         self.menu
@@ -513,7 +514,7 @@ impl Inspector {
                 "remove" => self.set_membership(folder, false, cx),
                 _ => {}
             },
-            None => {}
+            Some(ChipMenu::Swatch) | None => {}
         }
     }
 

@@ -527,13 +527,17 @@ impl Inspector {
     /// The scope state's column: the folder card, the name (read-only for a
     /// built-in destination), the notes of a folder or smart folder, the
     /// item count and size, Export, and the Details section.
-    pub(super) fn scope_body(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(super) fn scope_body(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let Some(view) = self.scope.view.clone() else {
             return self.scroller();
         };
         let mut panel = Self::panel()
             .child(self.collage(&view.covers, cx))
-            .child(self.palette(&[], cx));
+            .child(self.palette(&[], window, cx));
         panel = if view.kind == Kind::System {
             panel.child(
                 div()
