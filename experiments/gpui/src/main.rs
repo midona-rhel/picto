@@ -8,7 +8,8 @@ mod grid;
 mod inspector;
 mod keymap;
 mod motion;
-#[cfg(test)]
+// Draws through the macOS text system and renderer.
+#[cfg(all(test, target_os = "macos"))]
 mod offscreen;
 mod pointer;
 mod screens;
