@@ -76,6 +76,10 @@ fn plays_a_script() {
         })
         .unwrap();
     let main: AnyWindowHandle = window.into();
+    // A window on screen is the active one, which is what makes focus
+    // changes report blurs to the views that lose it.
+    cx.update_window(main, |_, window, _| window.activate_window())
+        .unwrap();
     let mut window = main;
     let mut pace = Duration::from_millis(200);
     // The library opens and the first page and its thumbnails arrive.
