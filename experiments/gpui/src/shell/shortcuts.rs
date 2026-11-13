@@ -41,20 +41,14 @@ impl Shell {
 
     /// The selected items, in grid order.
     fn selected_ids(&self, cx: &App) -> Vec<RootId> {
-        let session = self.session.read(cx);
-        session
-            .selection
-            .iter()
-            .filter_map(|index| session.items.get(*index))
-            .map(|item| item.root_id)
-            .collect()
+        self.session.read(cx).selected_ids()
     }
 
     /// The one selected item, unless it is a collection (`singleFileHash`
     /// with `kind !== 'collection'`).
     fn single_media(&self, cx: &App) -> bool {
         let session = self.session.read(cx);
-        session.selection.len() == 1
+        session.selection_count() == 1
             && session
                 .selected_item()
                 .is_some_and(|item| item.kind != RootKind::Collection)
@@ -69,7 +63,7 @@ impl Shell {
 
     /// `view.detailView`: opens the viewer on the one selected item.
     pub(super) fn open_selected(&mut self, cx: &mut Context<Self>) {
-        if self.session.read(cx).selection.len() == 1 {
+        if self.session.read(cx).selection_count() == 1 {
             self.session
                 .update(cx, |session, cx| session.open_viewer(cx));
         } else {
@@ -177,7 +171,7 @@ impl Shell {
     /// elsewhere it moves the selection to the Trash.
     fn delete_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let kind = self.scope_kind(cx);
-        let count = self.session.read(cx).selection.len();
+        let count = self.session.read(cx).selection_count();
         if (kind.folder.is_some() && !kind.trash) || count == 0 {
             cx.propagate();
         } else if kind.trash {
@@ -272,7 +266,7 @@ impl Shell {
 
     /// `edit.rename`: the inspector's name field for one item.
     fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.read(cx).selection.len() {
+        match self.session.read(cx).selection_count() {
             1 if self.selection_shown(cx) => {
                 if self.inspector_collapsed {
                     self.toggle_rails(false, true, cx);

@@ -2,14 +2,14 @@
 //! viewer. One model that every view reads, so a view repaints only for the
 //! kind of change it shows and no view owns another's state.
 use crate::application::{self, Application, Event};
-use crate::backend::{self, Navigation, Reply, Request};
-use crate::grid::{filters::Filters, nav, prefs::ViewPrefs};
+use crate::backend::{self, Arrived, Fetch, Navigation, Reply, Request};
+use crate::grid::selection::{End, Selection};
+use crate::grid::{filters::Filters, nav, prefs::ViewPrefs, window};
 use crate::motion;
 use gpui::*;
 use picto_library::predicate::FilterExpr;
-use picto_library::query::{RootPage, RootQuery, RootSummary};
+use picto_library::query::{RootQuery, RootSummary, WindowRequest};
 use picto_library::{RootDetails, RootId, TagRecord};
-use std::collections::BTreeSet;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -110,8 +110,6 @@ impl SubscriptionActivity {
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
 /// How often the session takes in what the library's thread has sent.
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
-/// The grid reads its results in pages of this many items.
-const PAGE: usize = 500;
 /// `gridController.scheduleRefresh`: a refresh after background changes
 /// waits at least this long, and at most a second, three times as long as
 /// the last refresh took, counted from when it finished.
@@ -131,21 +129,40 @@ struct Visit {
     place: Option<i64>,
 }
 
-/// A destination's grid as it was left.
+/// A destination's grid as it was left: its window, where it lay, and
+/// what was selected.
 struct SavedGrid {
     items: Vec<RootSummary>,
+    start: usize,
+    head: Vec<RootSummary>,
     total: u64,
     total_size_bytes: u128,
-    cursor: Option<String>,
     prefs: ViewPrefs,
     tile: f32,
-    selection: std::collections::BTreeSet<usize>,
-    focus: Option<usize>,
+    selection: Selection,
+    focus: Option<Focused>,
+    anchor: Option<End>,
+    ran: Option<RootQuery>,
     scroll: f32,
+    density: Option<Density>,
+    window_top: f32,
     /// The search and filters the results were for.
     search_text: String,
     filters: Filters,
 }
+
+/// The item the inspector and viewer show, and where it is in the
+/// destination; it stays known when the grid's window moves away from it.
+#[derive(Clone)]
+struct Focused {
+    ordinal: usize,
+    item: RootSummary,
+}
+
+/// The height per item the grid measured for a layout geometry (width,
+/// zoom, spacing, mode, text rows), which the scrollable height of a
+/// destination is estimated from.
+pub type Density = ((u32, u32, u32, crate::grid::layout::ViewMode, u32), f32);
 
 pub struct Session {
     sender: Sender<Request>,
@@ -182,15 +199,44 @@ pub struct Session {
     /// Where the grid should scroll to when it lays out the restored results.
     pub restore_scroll: Option<f32>,
     pub transition: Transition,
-    /// A destination's first page that arrived before the fade-out finished.
-    pending_page: Option<(RootPage, ViewPrefs, Box<RootQuery>)>,
+    /// A destination's first window that arrived before the fade-out
+    /// finished.
+    pending_page: Option<Box<Arrived>>,
+    /// The window of the results that is held: at most `window::WINDOW`
+    /// items, the first at ordinal `start` of the destination's order.
     pub items: Vec<RootSummary>,
-    /// Counts each time the items are replaced rather than extended.
+    pub start: usize,
+    /// The destination's first items, wherever the window is, for the
+    /// inspector's preview of it.
+    pub head: Vec<RootSummary>,
+    /// Counts each time the results are another destination's, or read
+    /// afresh, rather than another window of the same.
     pub results_epoch: u64,
+    /// Counts each time the window's items change: another window, or the
+    /// same read again in place.
+    pub window_epoch: u64,
+    /// Every item of the results, not only the window's.
     pub total: u64,
     /// The size of every item in the results, not only the loaded ones.
     pub total_size_bytes: u128,
-    cursor: Option<String>,
+    /// The latest window asked for (`requestWindowAt`): its number, and
+    /// the one on its way and the one waiting behind it, each with its
+    /// start. Only the latest is shown when it arrives.
+    window_request: u64,
+    window_active: Option<(u64, usize)>,
+    window_queued: Option<(u64, usize)>,
+    /// An item moved to by the keyboard or a viewer outside the window: it
+    /// is selected (with `true`, as a range) once its window arrives.
+    pending_focus: Option<(usize, bool)>,
+    /// An ordinal the grid should bring into view once it is laid out.
+    pub reveal: Option<usize>,
+    /// The height per item the grid measured, kept with the results so
+    /// the scrollable height stays the same as the window moves.
+    pub density: Option<Density>,
+    /// Where the grid's window lay, as the grid last placed it, and where a
+    /// restored window should lie again.
+    pub window_top: f32,
+    pub restore_window_top: Option<f32>,
     pub loading: bool,
     pub error: Option<String>,
     generation: u64,
@@ -198,19 +244,16 @@ pub struct Session {
     prefs_scope: Option<usize>,
     /// The zoom: the target tile size.
     pub tile: f32,
-    /// The selected items, by position in `items`.
-    pub selection: std::collections::BTreeSet<usize>,
-    /// Set while Select All holds: the selection is everything the
-    /// destination holds, loaded or not, except these items taken out of it
-    /// since. Edits then address the query itself (`target_for`), as
-    /// production's query selections do.
-    whole: Option<BTreeSet<RootId>>,
+    /// The selected items, by id, or query-wide: everything, or spans of
+    /// the order. Edits address query-wide selections through the query
+    /// (`target_for`), as production's do.
+    pub selection: Selection,
     /// The query the shown results were read with.
     ran: Option<RootQuery>,
     /// The selected item the inspector and viewer show: the one last chosen.
-    pub focus: Option<usize>,
+    focus: Option<Focused>,
     /// Where a shift-click or shift-move range starts.
-    anchor: Option<usize>,
+    anchor: Option<End>,
     pub details: Option<RootDetails>,
     pub viewer: bool,
     /// Which member of a collection the viewer shows.
@@ -246,15 +289,9 @@ pub struct Session {
     /// view (`picto-recent-tags`). Like the folders, they last for the
     /// session.
     pub recent_tags: Vec<String>,
-    /// The selected items and the one shown, to select again by id once a
-    /// [`Session::refresh_results`] page is in.
-    reselect: Option<(Vec<RootId>, Option<RootId>)>,
     /// A refresh in place is on its way: what the grid shows stays until it
     /// arrives, an empty state included.
     pub refreshing: bool,
-    /// The results were last replaced by a refresh in place, so the grid
-    /// keeps its topmost item where it was rather than its scroll offset.
-    pub refreshed_in_place: bool,
     /// The grid has the pointer for a gesture (a press, a rubber band, a
     /// drag) that a refresh would cut short. The grid says so as it paints.
     pub pointer_busy: bool,
@@ -322,20 +359,29 @@ impl Session {
             restore_scroll: None,
             transition: Transition::Idle,
             pending_page: None,
-            whole: None,
             ran: None,
             items: Vec::new(),
+            start: 0,
+            head: Vec::new(),
             results_epoch: 0,
+            window_epoch: 0,
             total: 0,
             total_size_bytes: 0,
-            cursor: None,
+            window_request: 0,
+            window_active: None,
+            window_queued: None,
+            pending_focus: None,
+            reveal: None,
+            density: None,
+            window_top: 0.,
+            restore_window_top: None,
             loading: true,
             error: None,
             generation: 0,
             prefs: ViewPrefs::default(),
             prefs_scope: None,
             tile: 200.,
-            selection: Default::default(),
+            selection: Selection::default(),
             focus: None,
             anchor: None,
             details: None,
@@ -353,9 +399,7 @@ impl Session {
             library_cover,
             scratch,
             place_label: None,
-            reselect: None,
             refreshing: false,
-            refreshed_in_place: false,
             pointer_busy: false,
             refresh_wanted: false,
             refresh_timer: None,
@@ -433,7 +477,68 @@ impl Session {
     }
 
     pub fn selected_item(&self) -> Option<&RootSummary> {
-        self.items.get(self.focus?)
+        self.focus.as_ref().map(|focused| &focused.item)
+    }
+
+    /// Where the item shown in the inspector and viewer is in the
+    /// destination's order.
+    pub fn focus_ordinal(&self) -> Option<usize> {
+        self.focus.as_ref().map(|focused| focused.ordinal)
+    }
+
+    /// The item at `ordinal` of the destination, if the window holds it.
+    pub fn item_at(&self, ordinal: usize) -> Option<&RootSummary> {
+        self.items.get(ordinal.checked_sub(self.start)?)
+    }
+
+    fn end_at(&self, ordinal: usize) -> Option<End> {
+        self.item_at(ordinal).map(|item| End {
+            id: item.root_id,
+            ordinal,
+        })
+    }
+
+    /// Whether the item at `ordinal`, held in the window, is selected.
+    pub fn is_selected(&self, ordinal: usize) -> bool {
+        self.item_at(ordinal)
+            .is_some_and(|item| self.selection.contains(item.root_id, ordinal))
+    }
+
+    /// The selected items the window holds, in the grid's order.
+    pub fn selected_loaded(&self) -> Vec<&RootSummary> {
+        if self.selection.is_empty() {
+            return Vec::new();
+        }
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(offset, item)| self.selection.contains(item.root_id, self.start + offset))
+            .map(|(_, item)| item)
+            .collect()
+    }
+
+    /// The selected items by id, in the grid's order: every item chosen one
+    /// by one, loaded or not; of a query-wide selection, the ones loaded
+    /// (an edit of them addresses the whole selection, see `target_for`).
+    pub fn selected_ids(&self) -> Vec<RootId> {
+        if self.selection.query_wide() {
+            self.selected_loaded()
+                .into_iter()
+                .map(|item| item.root_id)
+                .collect()
+        } else {
+            self.selection.chosen()
+        }
+    }
+
+    /// Whether the destination has items after the window.
+    pub fn has_following(&self) -> bool {
+        self.start + self.items.len() < self.total as usize
+    }
+
+    /// A window of the results is on its way.
+    pub fn window_loading(&self) -> bool {
+        self.window_active.is_some() || self.window_queued.is_some()
     }
 
     /// The details of the selected item, once they have arrived. `details`
@@ -623,7 +728,7 @@ impl Session {
     /// Fetches the current destination again, after an edit made elsewhere.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.saved.clear();
-        self.query(false, cx);
+        self.query(cx);
     }
 
     /// `recordRecentFolderUse`: the folder moves to the front of the recent
@@ -693,20 +798,33 @@ impl Session {
         {
             return;
         }
-        let ids = self
-            .selection
-            .iter()
-            .filter_map(|index| self.items.get(*index))
-            .map(|item| item.root_id)
-            .collect();
-        self.reselect = Some((ids, self.selected_item().map(|item| item.root_id)));
-        self.restore_scroll = Some(self.grid_scroll);
+        let Some(query) = self.ran.clone() else {
+            self.query(cx);
+            return;
+        };
         self.saved.clear();
         self.refreshing = true;
-        // As many items as are loaded, so the grid keeps what it had below
-        // the first page.
-        let limit = self.items.len().max(PAGE);
-        self.query_with(false, limit, cx);
+        self.generation += 1;
+        self.loading = true;
+        self.error = None;
+        self.window_active = None;
+        self.window_queued = None;
+        // Where the selection's items and the shown item are now is read
+        // with the window.
+        let mut tracked = self.selection.tracked();
+        tracked.extend(self.selected_item().map(|item| item.root_id));
+        tracked.extend(self.anchor.map(|anchor| anchor.id));
+        tracked.sort_unstable();
+        tracked.dedup();
+        // The same window, as many items as it holds (`reconcileSnapshot`).
+        let limit = self.items.len().clamp(window::PAGE, window::WINDOW);
+        let _ = self.sender.send(Request::Window(
+            self.generation,
+            Box::new(query),
+            WindowRequest::at(self.start, limit),
+            Fetch::Refresh(tracked),
+        ));
+        cx.emit(Change::Results);
     }
 
     /// Puts a rebuilt destination list in place of the current one, after
@@ -778,12 +896,9 @@ impl Session {
 
     // ── Results ─────────────────────────────────────────────────
 
-    fn query(&mut self, append: bool, cx: &mut Context<Self>) {
+    /// Reads the destination afresh, from its first page (`loadFirstPage`).
+    fn query(&mut self, cx: &mut Context<Self>) {
         self.refreshing = false;
-        self.query_with(append, PAGE, cx);
-    }
-
-    fn query_with(&mut self, append: bool, limit: usize, cx: &mut Context<Self>) {
         let Some(entry) = self.nav.get(self.scope) else {
             return;
         };
@@ -793,6 +908,9 @@ impl Session {
         self.generation += 1;
         self.loading = true;
         self.error = None;
+        self.window_active = None;
+        self.window_queued = None;
+        self.pending_focus = None;
         let _ = self.sender.send(Request::Query(
             self.generation,
             entry.scope.clone(),
@@ -800,39 +918,76 @@ impl Session {
                 backend::text_filter(&self.search_text),
                 self.filter.clone().unwrap_or_default(),
             ]),
-            if append { self.cursor.clone() } else { None },
             entry.random,
-            limit,
+            WindowRequest::at(0, window::PAGE),
         ));
         cx.emit(Change::Results);
     }
 
-    /// Whether more of the destination follows the loaded items.
-    pub fn has_following(&self) -> bool {
-        self.cursor.is_some()
+    /// `requestWindowAt`: asks for the window that shows `ordinal`, unless
+    /// it is held or already asked for. One read is on its way at a time;
+    /// a newer ask waits behind it and replaces any that waited before.
+    pub fn request_window_at(&mut self, ordinal: usize, cx: &mut Context<Self>) {
+        let total = self.total as usize;
+        if self.loading || total == 0 || self.ran.is_none() {
+            return;
+        }
+        let start = window::start_at(ordinal, total);
+        if window::holds(self.start, self.items.len(), start, total) {
+            // What is on its way is no longer wanted.
+            self.window_request += 1;
+            self.window_queued = None;
+            return;
+        }
+        let latest = self.window_request;
+        let pending = self.window_queued.or(self.window_active);
+        if pending == Some((latest, start)) {
+            return;
+        }
+        self.window_request += 1;
+        let request = (self.window_request, start);
+        if self.window_active.is_some() {
+            self.window_queued = Some(request);
+        } else {
+            self.send_window(request, cx);
+        }
     }
 
-    /// Fetches the next page once the grid is scrolled near the end.
+    fn send_window(&mut self, (id, start): (u64, usize), cx: &mut Context<Self>) {
+        let Some(query) = self.ran.clone() else {
+            return;
+        };
+        self.window_active = Some((id, start));
+        crate::stats::window_asked();
+        let _ = self.sender.send(Request::Window(
+            self.generation,
+            Box::new(query),
+            WindowRequest::at(start, window::WINDOW),
+            Fetch::Move(id),
+        ));
+        cx.emit(Change::Results);
+    }
+
+    /// Asks for the window after the one held, as the Inbox review does
+    /// before moving past the window's last item.
     pub fn load_more(&mut self, cx: &mut Context<Self>) {
-        if self.cursor.is_some() && !self.loading {
-            self.query(true, cx);
+        if self.has_following() {
+            self.request_window_at(self.start + self.items.len(), cx);
         }
     }
 
     pub fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
         if text != self.search_text {
-            self.reselect = None;
             self.search_text = text;
-            self.query(false, cx);
+            self.query(cx);
         }
     }
 
     /// Narrows the current destination, or clears the narrowing.
     pub fn set_filter(&mut self, filter: Option<FilterExpr>, cx: &mut Context<Self>) {
-        self.reselect = None;
         self.filter = filter;
         self.close_viewer(cx);
-        self.query(false, cx);
+        self.query(cx);
     }
 
     /// Replaces the filter bar's filters and narrows the grid by them.
@@ -930,7 +1085,7 @@ impl Session {
             if matches!(self.transition, Transition::Idle) {
                 self.transition = Transition::FadingOut(Instant::now());
             }
-            self.query(false, cx);
+            self.query(cx);
             cx.emit(Change::Navigation);
         } else {
             cx.emit(Change::Results);
@@ -982,24 +1137,39 @@ impl Session {
                     self.nav = nav;
                     self.tags = tags.into_iter().map(|tag| (tag.tag_id.0, tag)).collect();
                     cx.emit(Change::Navigation);
-                    self.query(false, cx);
+                    self.query(cx);
                     self.refresh_activity(cx);
                 }
-                Reply::Page(generation, append, page, prefs, query)
+                Reply::Arrived(arrived) if arrived.generation == self.generation => {
+                    match arrived.fetch {
+                        Fetch::Open => {
+                            if matches!(self.transition, Transition::FadingOut(_)) {
+                                // The previous grid is still fading out. Hold
+                                // the destination until it is gone.
+                                self.pending_page = Some(arrived);
+                            } else {
+                                self.apply_open(arrived, cx);
+                            }
+                        }
+                        Fetch::Move(id) => self.apply_move(id, arrived, cx),
+                        Fetch::Refresh(_) => self.apply_refresh(arrived, cx),
+                    }
+                }
+                Reply::Failed(generation, Fetch::Move(id), error)
                     if generation == self.generation =>
                 {
-                    let prefs = self.fresh_prefs(generation, prefs);
-                    if !append && matches!(self.transition, Transition::FadingOut(_)) {
-                        // The previous grid is still fading out. Hold the
-                        // destination until it is gone.
-                        self.pending_page = Some((page, prefs, query));
-                    } else {
-                        self.apply_page(append, page, prefs, query, cx);
+                    eprintln!("picto: {error}");
+                    if self.window_active.is_some_and(|(active, _)| active == id) {
+                        self.window_active = None;
                     }
+                    if let Some(queued) = self.window_queued.take() {
+                        self.send_window(queued, cx);
+                    }
+                    cx.emit(Change::Results);
                 }
                 // A query that failed is the grid's error, shown in place of
                 // the destination. A failed edit leaves the grid as it is.
-                Reply::Error(error) if self.loading => {
+                Reply::Failed(generation, _, error) if generation == self.generation => {
                     self.error = Some(error);
                     self.loading = false;
                     self.refreshing = false;
@@ -1014,15 +1184,22 @@ impl Session {
         }
     }
 
-    fn apply_page(
-        &mut self,
-        append: bool,
-        page: RootPage,
-        prefs: ViewPrefs,
-        query: Box<RootQuery>,
-        cx: &mut Context<Self>,
-    ) {
-        self.ran = Some(*query);
+    /// Puts a window's items in place of the held ones.
+    fn take_window(&mut self, arrived: &mut Arrived) {
+        let window = &mut arrived.window;
+        self.items = std::mem::take(&mut window.page.items);
+        self.start = window.start;
+        self.head = std::mem::take(&mut window.head_items);
+        self.total = window.page.total;
+        self.total_size_bytes = window.page.total_size_bytes;
+        self.window_epoch += 1;
+    }
+
+    /// A destination's first window, read afresh: it opens with nothing
+    /// selected.
+    fn apply_open(&mut self, mut arrived: Box<Arrived>, cx: &mut Context<Self>) {
+        let prefs = arrived.prefs.take().unwrap_or_else(|| self.prefs.clone());
+        let prefs = self.fresh_prefs(arrived.generation, prefs);
         // A scope opens at its saved zoom. Searching inside it keeps
         // whatever the zoom control was moved to since.
         if self.prefs_scope != Some(self.scope) {
@@ -1030,72 +1207,133 @@ impl Session {
             self.tile = prefs.target_size;
         }
         self.prefs = prefs;
-        self.total = page.total;
-        self.total_size_bytes = page.total_size_bytes;
-        self.cursor = page.next_cursor;
+        self.take_window(&mut arrived);
+        self.ran = Some(arrived.query.clone());
         self.loading = false;
-        if append {
-            let first = self.items.len();
-            self.items.extend(page.items);
-            // With the whole destination selected, the items that arrive
-            // are selected too.
-            if let Some(excluded) = &self.whole {
-                for (index, item) in self.items.iter().enumerate().skip(first) {
-                    if !excluded.contains(&item.root_id) {
-                        self.selection.insert(index);
+        self.refreshing = false;
+        self.results_epoch += 1;
+        self.density = None;
+        self.restore_scroll = None;
+        self.restore_window_top = None;
+        self.forget_selection();
+        crate::stats::results_opened(self.total);
+        self.displayed = self.scope;
+        if matches!(self.transition, Transition::Waiting) {
+            self.transition = Transition::FadingIn(Instant::now());
+        }
+        cx.emit(Change::Navigation);
+        cx.emit(Change::Selection);
+        cx.emit(Change::Results);
+    }
+
+    /// Another window of the results arrived. Only the latest asked for is
+    /// shown; the one waiting behind it is asked for next.
+    fn apply_move(&mut self, id: u64, mut arrived: Box<Arrived>, cx: &mut Context<Self>) {
+        if self.window_active.is_some_and(|(active, _)| active == id) {
+            self.window_active = None;
+        }
+        if id == self.window_request {
+            crate::stats::window_arrived(arrived.window.start, arrived.window.page.items.len());
+            self.take_window(&mut arrived);
+            // A move to an item that was not held lands now, or, when a
+            // later scroll asked for another window, not at all.
+            if let Some((ordinal, extend)) = self.pending_focus.take() {
+                if self.item_at(ordinal).is_none() {
+                    if self.reveal == Some(ordinal) {
+                        self.reveal = None;
                     }
+                } else if extend {
+                    self.select_to(ordinal, false, cx);
+                } else {
+                    self.select(ordinal, cx);
                 }
             }
-        } else {
-            self.items = page.items;
-            self.results_epoch += 1;
-            self.refreshing = false;
-            if let Some(started) = self.refresh_started.take() {
-                self.refresh_took = started.elapsed();
-                self.refresh_finished = Some(Instant::now());
-            }
-            self.refreshed_in_place = self.reselect.is_some();
-            if let Some((ids, focus)) = self.reselect.take() {
-                // A refresh in place: the same items stay selected.
-                let positions = self
-                    .items
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| (item.root_id, index))
-                    .collect::<HashMap<_, _>>();
-                self.selection = match &self.whole {
-                    // The whole destination stays selected, whatever it
-                    // holds now.
-                    Some(excluded) => self
-                        .items
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, item)| !excluded.contains(&item.root_id))
-                        .map(|(index, _)| index)
-                        .collect(),
-                    None => ids
-                        .iter()
-                        .filter_map(|id| positions.get(id).copied())
-                        .collect(),
-                };
-                self.anchor = None;
-                let focus = focus
-                    .and_then(|id| positions.get(&id).copied())
-                    .or_else(|| self.selection.iter().next_back().copied());
-                self.focus_on(focus, cx);
-                cx.emit(Change::Results);
-                return;
-            }
-            // A new result set opens with nothing selected.
-            self.forget_selection();
-            self.displayed = self.scope;
-            if matches!(self.transition, Transition::Waiting) {
-                self.transition = Transition::FadingIn(Instant::now());
-            }
-            cx.emit(Change::Navigation);
-            cx.emit(Change::Selection);
+        }
+        if let Some(queued) = self.window_queued.take() {
+            self.send_window(queued, cx);
         }
         cx.emit(Change::Results);
+    }
+
+    /// The window read again in place: the same items stay selected, each
+    /// followed to where it is now, and the grid keeps the topmost item it
+    /// shows where it was.
+    fn apply_refresh(&mut self, mut arrived: Box<Arrived>, cx: &mut Context<Self>) {
+        let Fetch::Refresh(tracked) = std::mem::replace(&mut arrived.fetch, Fetch::Open) else {
+            return;
+        };
+        self.take_window(&mut arrived);
+        crate::stats::window_refreshed(self.start, self.items.len());
+        self.ran = Some(arrived.query.clone());
+        self.loading = false;
+        self.refreshing = false;
+        if let Some(started) = self.refresh_started.take() {
+            self.refresh_took = started.elapsed();
+            self.refresh_finished = Some(Instant::now());
+        }
+        let places = tracked
+            .into_iter()
+            .zip(
+                arrived
+                    .places
+                    .iter()
+                    .map(|place| place.map(|ordinal| ordinal as usize)),
+            )
+            .collect::<HashMap<_, _>>();
+        self.selection.reconcile(&places);
+        let moved = |end: End| match places.get(&end.id) {
+            Some(Some(ordinal)) => Some(End {
+                id: end.id,
+                ordinal: *ordinal,
+            }),
+            Some(None) => None,
+            None => Some(end),
+        };
+        self.anchor = self.anchor.and_then(moved);
+        // The shown item stays, where it is now; if it left, the last
+        // selected item the window holds is shown.
+        let shown = self.focus.as_ref().and_then(|focused| {
+            moved(End {
+                id: focused.item.root_id,
+                ordinal: focused.ordinal,
+            })
+        });
+        match shown {
+            Some(end) => {
+                if let Some(item) = self.item_at(end.ordinal).cloned() {
+                    self.focus = Some(Focused {
+                        ordinal: end.ordinal,
+                        item,
+                    });
+                } else if let Some(focused) = &mut self.focus {
+                    focused.ordinal = end.ordinal;
+                }
+                cx.emit(Change::Selection);
+            }
+            None => {
+                let last = self
+                    .selected_loaded()
+                    .last()
+                    .and_then(|item| self.position_of(item.root_id));
+                self.focus_on(last, cx);
+            }
+        }
+        cx.emit(Change::Results);
+    }
+
+    /// The selected items the window holds, by ordinal.
+    pub fn selected_ordinals(&self) -> Vec<usize> {
+        (self.start..self.start + self.items.len())
+            .filter(|ordinal| self.is_selected(*ordinal))
+            .collect()
+    }
+
+    /// Where the window holds an item, as an ordinal.
+    pub fn position_of(&self, id: RootId) -> Option<usize> {
+        self.items
+            .iter()
+            .position(|item| item.root_id == id)
+            .map(|offset| self.start + offset)
     }
 
     // ── Navigation ──────────────────────────────────────────────
@@ -1187,14 +1425,19 @@ impl Session {
             self.displayed,
             SavedGrid {
                 items: self.items.clone(),
+                start: self.start,
+                head: self.head.clone(),
                 total: self.total,
                 total_size_bytes: self.total_size_bytes,
-                cursor: self.cursor.clone(),
                 prefs: self.prefs.clone(),
                 tile: self.tile,
                 selection: self.selection.clone(),
-                focus: self.focus,
+                focus: self.focus.clone(),
+                anchor: self.anchor,
+                ran: self.ran.clone(),
                 scroll: self.grid_scroll,
+                density: self.density,
+                window_top: self.window_top,
                 search_text: self.search_text.clone(),
                 filters: self.filters.clone(),
             },
@@ -1204,21 +1447,44 @@ impl Session {
     /// Puts a saved grid on the hidden surface and fades it in.
     fn restore_grid(&mut self, saved: SavedGrid, cx: &mut Context<Self>) {
         self.items = saved.items;
+        self.start = saved.start;
+        self.head = saved.head;
         self.total = saved.total;
         self.total_size_bytes = saved.total_size_bytes;
-        self.cursor = saved.cursor;
         self.prefs = saved.prefs;
         self.prefs_scope = Some(self.scope);
         self.tile = saved.tile;
+        self.ran = saved.ran;
         self.loading = false;
+        self.window_active = None;
+        self.window_queued = None;
+        self.pending_focus = None;
         self.results_epoch += 1;
+        self.window_epoch += 1;
+        // The window lies where it lay, in the same estimated height, so
+        // the scroll offset shows what it showed.
+        self.density = saved.density;
+        self.restore_window_top = Some(saved.window_top);
         self.restore_scroll = Some(saved.scroll);
         self.selection = saved.selection;
-        self.whole = None;
-        self.anchor = saved.focus;
+        self.anchor = saved.anchor;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
-        self.focus_on(saved.focus, cx);
+        let showing = self.selected_details().map(|details| details.root.root_id);
+        self.focus = saved.focus;
+        self.demo = None;
+        match self.selected_item().map(|item| item.root_id) {
+            Some(id) if showing != Some(id) => {
+                self.member = 0;
+                self.read_details(id, cx);
+            }
+            Some(_) => {}
+            None => {
+                self.member = 0;
+                self.details = None;
+            }
+        }
+        cx.emit(Change::Selection);
         // An entry that was the viewer opens it again on the same item.
         let viewing = self.history[self.history_index].viewing && self.focus.is_some();
         if self.viewer != viewing {
@@ -1238,7 +1504,6 @@ impl Session {
         filters: Option<Filters>,
         cx: &mut Context<Self>,
     ) {
-        self.reselect = None;
         self.save_grid();
         if let Some(filters) = filters {
             self.filter = Self::filter_of(&filters);
@@ -1285,19 +1550,15 @@ impl Session {
                 self.pending_restore = Some(saved);
             }
         } else {
-            self.query(false, cx);
+            self.query(cx);
         }
         cx.emit(Change::Navigation);
     }
 
     /// Shows a destination that is a screen, not a grid, on the hidden surface.
     fn commit_screen(&mut self) {
-        self.items.clear();
-        self.results_epoch += 1;
-        self.forget_selection();
-        self.total = 0;
+        self.clear_results();
         self.total_size_bytes = 0;
-        self.cursor = None;
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
     }
@@ -1305,15 +1566,25 @@ impl Session {
     /// Fades the destination in on its error, which takes the grid's place.
     /// The previous destination's items go, so a retry never shows them.
     fn show_error(&mut self, cx: &mut Context<Self>) {
-        self.items.clear();
-        self.results_epoch += 1;
-        self.forget_selection();
-        self.total = 0;
-        self.cursor = None;
+        self.clear_results();
         self.displayed = self.scope;
         self.transition = Transition::FadingIn(Instant::now());
         cx.emit(Change::Navigation);
         cx.emit(Change::Selection);
+    }
+
+    /// No results: an empty window over nothing.
+    fn clear_results(&mut self) {
+        self.items.clear();
+        self.head.clear();
+        self.start = 0;
+        self.total = 0;
+        self.results_epoch += 1;
+        self.window_epoch += 1;
+        self.window_active = None;
+        self.window_queued = None;
+        self.pending_focus = None;
+        self.forget_selection();
     }
 
     /// Moves a scope change along once its current stage has run its time.
@@ -1332,8 +1603,8 @@ impl Session {
                     cx.emit(Change::Selection);
                 } else if let Some(saved) = self.pending_restore.take() {
                     self.restore_grid(saved, cx);
-                } else if let Some((page, prefs, query)) = self.pending_page.take() {
-                    self.apply_page(false, page, prefs, query, cx);
+                } else if let Some(arrived) = self.pending_page.take() {
+                    self.apply_open(arrived, cx);
                 } else if self.error.is_some() && !self.loading {
                     self.show_error(cx);
                 }
@@ -1350,22 +1621,25 @@ impl Session {
     // ── Selection ───────────────────────────────────────────────
 
     fn forget_selection(&mut self) {
-        self.selection.clear();
-        self.whole = None;
+        self.selection = Selection::default();
         self.focus = None;
         self.anchor = None;
         self.member = 0;
         self.details = None;
     }
 
-    /// Shows `index` in the inspector, or nothing. The previous item's
-    /// details stay up until this one's arrive, and choosing the item already
-    /// shown asks for nothing.
-    fn focus_on(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+    /// Shows the item at `ordinal` in the inspector, or nothing. The
+    /// previous item's details stay up until this one's arrive, and
+    /// choosing the item already shown asks for nothing.
+    fn focus_on(&mut self, ordinal: Option<usize>, cx: &mut Context<Self>) {
         self.demo = None;
-        let index = index.filter(|index| *index < self.items.len());
         let showing = self.selected_details().map(|details| details.root.root_id);
-        self.focus = index;
+        self.focus = ordinal.and_then(|ordinal| {
+            Some(Focused {
+                ordinal,
+                item: self.item_at(ordinal)?.clone(),
+            })
+        });
         match self.selected_item().map(|item| item.root_id) {
             Some(id) if showing == Some(id) => {}
             Some(id) => {
@@ -1381,109 +1655,128 @@ impl Session {
     }
 
     /// Selects one item alone, as a plain click does.
-    pub fn select(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.items.len() {
+    pub fn select(&mut self, ordinal: usize, cx: &mut Context<Self>) {
+        let Some(end) = self.end_at(ordinal) else {
             return;
-        }
-        self.selection = [index].into();
-        self.whole = None;
-        self.anchor = Some(index);
-        self.focus_on(Some(index), cx);
+        };
+        self.selection = Selection::only(end);
+        self.anchor = Some(end);
+        self.focus_on(Some(ordinal), cx);
     }
 
     /// Adds or removes one item, as a command-click does.
-    pub fn toggle(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.items.len() {
+    pub fn toggle(&mut self, ordinal: usize, cx: &mut Context<Self>) {
+        let Some(end) = self.end_at(ordinal) else {
             return;
-        }
-        let root = self.items[index].root_id;
-        if self.selection.remove(&index) {
-            if let Some(excluded) = &mut self.whole {
-                excluded.insert(root);
-            }
-            let last = self.selection.iter().next_back().copied();
-            self.focus_on(last, cx);
+        };
+        self.selection.toggle(end, self.total);
+        if self.selection.contains(end.id, ordinal) {
+            self.anchor = Some(end);
+            self.focus_on(Some(ordinal), cx);
         } else {
-            if let Some(excluded) = &mut self.whole {
-                excluded.remove(&root);
-            }
-            self.selection.insert(index);
-            self.anchor = Some(index);
-            self.focus_on(Some(index), cx);
+            let last = self
+                .selected_loaded()
+                .last()
+                .and_then(|item| self.position_of(item.root_id));
+            self.focus_on(last, cx);
         }
     }
 
-    /// Selects from the anchor to `index`, as a shift-click or shift-move
-    /// does; `keep` adds the range to what is selected already.
-    pub fn select_to(&mut self, index: usize, keep: bool, cx: &mut Context<Self>) {
-        if index >= self.items.len() {
+    /// Selects from the anchor to `ordinal`, as a shift-click or shift-move
+    /// does; `keep` adds the range to what is selected already. A range
+    /// from an anchor outside the window is a span of the order, which the
+    /// library resolves.
+    pub fn select_to(&mut self, ordinal: usize, keep: bool, cx: &mut Context<Self>) {
+        let Some(focus) = self.end_at(ordinal) else {
             return;
-        }
-        let anchor = *self.anchor.get_or_insert(index);
-        self.whole = None;
-        if !keep {
-            self.selection.clear();
-        }
-        self.selection.extend(anchor.min(index)..=anchor.max(index));
-        self.focus_on(Some(index), cx);
+        };
+        let anchor = *self.anchor.get_or_insert(focus);
+        let (start, items) = (self.start, &self.items);
+        self.selection.extend(anchor, focus, keep, |at| {
+            items.get(at.checked_sub(start)?).map(|item| item.root_id)
+        });
+        self.focus_on(Some(ordinal), cx);
     }
 
+    /// Everything the destination holds, loaded or not.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
-        if self.items.is_empty() {
+        if self.total == 0 {
             return;
         }
-        self.selection = (0..self.items.len()).collect();
-        // Everything the destination holds, not only what has been loaded.
-        self.whole = Some(BTreeSet::new());
-        let focus = self.focus.unwrap_or(0);
-        self.anchor.get_or_insert(focus);
+        self.selection = Selection::whole();
+        let focus = self
+            .focus_ordinal()
+            .filter(|ordinal| self.item_at(*ordinal).is_some())
+            .unwrap_or(self.start);
+        if self.anchor.is_none() {
+            self.anchor = self.end_at(focus);
+        }
         self.focus_on(Some(focus), cx);
     }
 
-    /// How many items are selected: with the whole destination selected,
-    /// all it holds less those taken out, however few are loaded.
+    /// How many items are selected, loaded or not.
     pub fn selection_count(&self) -> u64 {
-        match &self.whole {
-            Some(excluded) => self.total.saturating_sub(excluded.len() as u64),
-            None => self.selection.len() as u64,
-        }
+        self.selection.count(self.total)
     }
 
-    /// What an edit of the grid's selection addresses. `ids` are the loaded
-    /// selected items; while the whole destination is selected and `ids` are
-    /// that selection, the edit addresses the destination's query instead,
-    /// so that it reaches the items not loaded yet.
+    /// What an edit of the grid's selection addresses.
+    pub fn selection_target(&self) -> Option<picto_library::selection::SelectionTarget> {
+        if self.selection.is_empty() {
+            return None;
+        }
+        self.selection.target(self.ran.as_ref())
+    }
+
+    /// What an edit of `ids` addresses. When they are the grid's
+    /// selection, as [`Session::selected_ids`] or the window gives it, the
+    /// edit addresses all of it: the items chosen that are not loaded, or
+    /// the destination's query for a query-wide selection, so that it
+    /// reaches every item. Other ids (the viewer's item, a tile dragged
+    /// alone) are addressed as they are.
     pub fn target_for(&self, ids: Vec<RootId>) -> picto_library::selection::SelectionTarget {
         use picto_library::selection::SelectionTarget;
-        match (&self.whole, &self.ran) {
-            (Some(excluded), Some(query)) if whole_selection(ids.len(), self.selection.len()) => {
-                SelectionTarget::Query {
-                    query: query.clone(),
-                    excluded_root_ids: excluded.iter().copied().collect(),
-                }
-            }
-            _ => SelectionTarget::Explicit { root_ids: ids },
+        let loaded = self
+            .selected_loaded()
+            .into_iter()
+            .map(|item| item.root_id)
+            .collect::<Vec<_>>();
+        let whole = same_items(&ids, &loaded) || same_items(&ids, &self.selected_ids());
+        match self.selection_target().filter(|_| whole) {
+            Some(target) => target,
+            None => SelectionTarget::Explicit { root_ids: ids },
         }
     }
 
-    /// Replaces the selection, as a finished rubber band does. The item shown
-    /// stays if it is still selected; otherwise the last one is shown. No
-    /// range anchor remains.
+    /// Replaces the selection with the items at these ordinals, as a
+    /// finished rubber band does; `keep` adds them to the items chosen. The
+    /// item shown stays if it is still selected; otherwise the last one is
+    /// shown. No range anchor remains.
     pub fn set_selection(
         &mut self,
-        selection: std::collections::BTreeSet<usize>,
+        ordinals: std::collections::BTreeSet<usize>,
+        keep: bool,
         cx: &mut Context<Self>,
     ) {
-        self.selection = selection
-            .into_iter()
-            .filter(|index| *index < self.items.len())
-            .collect();
-        self.whole = None;
+        let ends = ordinals
+            .iter()
+            .filter_map(|ordinal| self.end_at(*ordinal))
+            .collect::<Vec<_>>();
+        self.selection = if keep && !self.selection.query_wide() {
+            let mut kept = self.selection.clone();
+            for end in &ends {
+                if !kept.contains(end.id, end.ordinal) {
+                    kept.toggle(*end, self.total);
+                }
+            }
+            kept
+        } else {
+            Selection::of(ends.iter().copied())
+        };
         self.anchor = None;
         let focus = self
-            .focus
-            .filter(|focus| self.selection.contains(focus))
-            .or_else(|| self.selection.iter().next_back().copied());
+            .focus_ordinal()
+            .filter(|ordinal| self.is_selected(*ordinal))
+            .or_else(|| ends.last().map(|end| end.ordinal));
         self.focus_on(focus, cx);
     }
 
@@ -1493,15 +1786,15 @@ impl Session {
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() {
-            self.selection.clear();
-            self.whole = None;
+        if !self.selection.is_empty() || self.focus.is_some() {
+            self.selection = Selection::default();
             self.anchor = None;
             self.focus_on(None, cx);
         }
     }
 
-    /// The item a keyboard move lands on, given the grid's current geometry.
+    /// The ordinal a keyboard move lands on, given the grid's current
+    /// geometry, in the whole destination.
     pub fn move_target(&self, action: nav::Move, width: f32, height: f32) -> Option<usize> {
         let action = match action {
             // With the viewer open only the item changes, one at a time.
@@ -1510,16 +1803,42 @@ impl Session {
             _ => action,
         };
         // With nothing selected, any move selects the first item.
-        let Some(focus) = self.focus else {
-            return (!self.items.is_empty()).then_some(0);
+        let Some(focus) = self.focus_ordinal() else {
+            return (self.total > 0).then_some(0);
         };
         nav::target(
             action,
             focus,
-            self.items.len(),
+            self.total as usize,
             nav::column_count(width, self.tile, self.prefs.gap),
             nav::visible_rows(height, self.tile, self.prefs.gap),
         )
+    }
+
+    /// Moves to the item at `ordinal` (a keyboard move, the viewer's next
+    /// and previous), selecting it alone or, with `extend`, as a range,
+    /// and asks the grid to bring it into view. An item outside the window
+    /// is selected once its window arrives; until then what is shown stays.
+    pub fn move_to(&mut self, ordinal: usize, extend: bool, cx: &mut Context<Self>) {
+        if ordinal >= self.total as usize {
+            return;
+        }
+        if self.item_at(ordinal).is_some() {
+            self.reveal = Some(ordinal);
+            self.pending_focus = None;
+            if extend {
+                self.select_to(ordinal, false, cx);
+            } else {
+                self.select(ordinal, cx);
+            }
+        } else if !self.loading {
+            // While the destination is read again there is no window to
+            // move; the key does nothing.
+            self.reveal = Some(ordinal);
+            self.pending_focus = Some((ordinal, extend));
+            self.request_window_at(ordinal, cx);
+            cx.emit(Change::Results);
+        }
     }
 
     // ── Viewer ──────────────────────────────────────────────────
@@ -1644,12 +1963,7 @@ impl Session {
         lifecycle: picto_library::Lifecycle,
         cx: &mut Context<Self>,
     ) {
-        let ids = self
-            .selection
-            .iter()
-            .filter_map(|index| self.items.get(*index))
-            .map(|item| item.root_id)
-            .collect::<Vec<_>>();
+        let ids = self.selected_ids();
         if !ids.is_empty() {
             self.close_viewer(cx);
             let target = self.target_for(ids);
@@ -1690,8 +2004,12 @@ impl Session {
             };
             let _ = session.update(cx, |this, cx| match result {
                 Ok(details) if this.selected_item().is_some_and(|item| item.root_id == id) => {
-                    if let Some(item) = this.focus.and_then(|focus| this.items.get_mut(focus)) {
-                        item.name = details.root.name.clone();
+                    let name = details.root.name.clone();
+                    if let Some(focused) = &mut this.focus {
+                        focused.item.name = name.clone();
+                    }
+                    if let Some(item) = this.items.iter_mut().find(|item| item.root_id == id) {
+                        item.name = name;
                     }
                     this.details = Some(details);
                     cx.emit(Change::Details);
@@ -1816,11 +2134,18 @@ fn remap_history(
     (kept, current)
 }
 
-/// Whether `ids` items are the grid's whole selection of `selected` loaded
-/// items, rather than one item acted on by itself (the viewer's, a tile
-/// dragged alone).
-fn whole_selection(ids: usize, selected: usize) -> bool {
-    ids > 0 && ids == selected
+/// Whether `ids` are the same items as `selected`: the grid's selection,
+/// rather than one item acted on by itself (the viewer's, a tile dragged
+/// alone).
+fn same_items(ids: &[RootId], selected: &[RootId]) -> bool {
+    if ids.is_empty() || ids.len() != selected.len() {
+        return false;
+    }
+    let mut ids = ids.to_vec();
+    let mut selected = selected.to_vec();
+    ids.sort_unstable();
+    selected.sort_unstable();
+    ids == selected
 }
 
 /// How long a background refresh waits, `since` the last one finished,
@@ -1836,8 +2161,9 @@ fn refresh_delay(took: Duration, since: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::{
-        SubscriptionActivity, Visit, record_recent, refresh_delay, remap_history, whole_selection,
+        SubscriptionActivity, Visit, record_recent, refresh_delay, remap_history, same_items,
     };
+    use picto_library::RootId;
     use std::time::Duration;
 
     #[test]
@@ -1855,11 +2181,14 @@ mod tests {
 
     #[test]
     fn only_the_grid_selection_stands_for_the_whole_destination() {
-        // The loaded selection, acted on as one.
-        assert!(whole_selection(500, 500));
+        let ids = |range: std::ops::Range<u32>| range.map(RootId).collect::<Vec<_>>();
+        // The loaded selection, acted on as one, in any order.
+        let mut reversed = ids(0..500);
+        reversed.reverse();
+        assert!(same_items(&reversed, &ids(0..500)));
         // One item acted on by itself while everything is selected.
-        assert!(!whole_selection(1, 500));
-        assert!(!whole_selection(0, 0));
+        assert!(!same_items(&ids(3..4), &ids(0..500)));
+        assert!(!same_items(&[], &[]));
     }
 
     #[test]

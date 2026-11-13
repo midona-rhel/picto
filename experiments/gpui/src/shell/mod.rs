@@ -154,7 +154,7 @@ impl Shell {
                 &grid,
                 window,
                 |this, _, event: &grid::Activated, window, cx| {
-                    this.activate(event.index, event.middle, window, cx)
+                    this.activate(event.ordinal, event.middle, window, cx)
                 },
             ),
             // The shell chooses what fills the centre: the grid, the viewer
@@ -413,15 +413,15 @@ impl Shell {
         trigger::State {
             media_view: session.viewer,
             quick_look: self.quick_look.read(cx).is_open(),
-            single: session.selection.len() == 1 && session.focus.is_some(),
+            single: session.selection_count() == 1 && session.selected_item().is_some(),
         }
     }
 
-    /// A double- or middle-click on the tile at `index`, under the Controls
-    /// settings (`onTileDoubleClick`, `onTileMiddleClick`).
+    /// A double- or middle-click on the tile at `ordinal`, under the
+    /// Controls settings (`onTileDoubleClick`, `onTileMiddleClick`).
     fn activate(
         &mut self,
-        index: usize,
+        ordinal: usize,
         middle: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -429,8 +429,7 @@ impl Shell {
         let collection = self
             .session
             .read(cx)
-            .items
-            .get(index)
+            .item_at(ordinal)
             .is_some_and(|item| item.kind == picto_library::RootKind::Collection);
         let settings = crate::settings::current(cx);
         let action = if middle {
@@ -440,8 +439,8 @@ impl Shell {
         };
         match action {
             // A middle-click opens the clicked item alone.
-            trigger::Action::OpenWindow => self.open_in_window(vec![index], index, cx),
-            trigger::Action::OpenDefault => self.open_default(index, cx),
+            trigger::Action::OpenWindow => self.open_in_window(vec![ordinal], ordinal, cx),
+            trigger::Action::OpenDefault => self.open_default(ordinal, cx),
             action => self.perform(action, window, cx),
         }
     }
@@ -469,16 +468,21 @@ impl Shell {
     }
 
     /// `openGridItemInWindow`: opens the item at `start` in a detail window
-    /// that steps through the items at `indices`.
-    fn open_in_window(&mut self, indices: Vec<usize>, start: usize, cx: &mut Context<Self>) {
+    /// that steps through the items at `ordinals`, those the grid's window
+    /// holds.
+    fn open_in_window(&mut self, ordinals: Vec<usize>, start: usize, cx: &mut Context<Self>) {
         let (entries, at) = {
             let session = self.session.read(cx);
-            let entries = indices
+            let held = ordinals
+                .into_iter()
+                .filter(|ordinal| session.item_at(*ordinal).is_some())
+                .collect::<Vec<_>>();
+            let entries = held
                 .iter()
-                .filter_map(|index| session.items.get(*index))
+                .filter_map(|ordinal| session.item_at(*ordinal))
                 .map(detail::Entry::from)
                 .collect::<Vec<_>>();
-            let at = indices.iter().position(|index| *index == start);
+            let at = held.iter().position(|ordinal| *ordinal == start);
             (entries, at)
         };
         if let Some(at) = at {
@@ -487,12 +491,11 @@ impl Shell {
     }
 
     /// `openDefaultAppForHash`: the item's file in the system's application.
-    fn open_default(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn open_default(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let Some(root) = self
             .session
             .read(cx)
-            .items
-            .get(index)
+            .item_at(ordinal)
             .map(|item| item.root_id)
         else {
             return;
@@ -899,13 +902,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &OpenInNewWindow, _, cx| {
                 // `file.openNewWindow`: the shown item, with the rest of the
                 // selection to step through.
-                let (indices, start) = {
+                let (ordinals, start) = {
                     let session = this.session.read(cx);
-                    let indices = session.selection.iter().copied().collect::<Vec<_>>();
-                    (indices.clone(), session.focus.or(indices.first().copied()))
+                    let ordinals = session.selected_ordinals();
+                    let start = session.focus_ordinal().or(ordinals.first().copied());
+                    (ordinals, start)
                 };
                 if let Some(start) = start {
-                    this.open_in_window(indices, start, cx);
+                    this.open_in_window(ordinals, start, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))

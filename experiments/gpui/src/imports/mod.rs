@@ -756,7 +756,16 @@ fn path_from_text(line: &str) -> Option<PathBuf> {
         return None;
     }
     let path = match line.strip_prefix("file://") {
-        Some(rest) => PathBuf::from(percent_decode(rest)),
+        Some(rest) => {
+            let decoded = percent_decode(rest);
+            // `file:///C:/…`: on Windows the slash before the drive letter
+            // is the address's, not the path's.
+            let local = decoded
+                .strip_prefix('/')
+                .filter(|rest| cfg!(windows) && rest.as_bytes().get(1) == Some(&b':'))
+                .unwrap_or(&decoded);
+            PathBuf::from(local)
+        }
         None => PathBuf::from(line),
     };
     path.is_absolute().then_some(path)
@@ -822,14 +831,14 @@ mod tests {
 
     #[test]
     fn copied_text_counts_only_absolute_paths_and_file_addresses() {
-        assert_eq!(
-            path_from_text("/a/b c.png"),
-            Some(PathBuf::from("/a/b c.png"))
-        );
-        assert_eq!(
-            path_from_text("file:///a/b%20c.png"),
-            Some(PathBuf::from("/a/b c.png"))
-        );
+        // What an absolute path looks like differs by platform.
+        let (plain, address) = if cfg!(windows) {
+            (r"C:\a\b c.png", "file:///C:/a/b%20c.png")
+        } else {
+            ("/a/b c.png", "file:///a/b%20c.png")
+        };
+        assert_eq!(path_from_text(plain), Some(PathBuf::from(plain)));
+        assert!(path_from_text(address).is_some_and(|path| path.is_absolute()));
         assert_eq!(path_from_text("relative.png"), None);
         assert_eq!(path_from_text("# comment"), None);
         assert_eq!(path_from_text(""), None);

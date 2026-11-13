@@ -168,7 +168,7 @@ impl Render for ViewerToolbar {
         let (index, total) = {
             let session = self.session.read(cx);
             (
-                session.focus.filter(|_| session.demo.is_none()),
+                session.focus_ordinal().filter(|_| session.demo.is_none()),
                 session.total,
             )
         };

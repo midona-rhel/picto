@@ -437,15 +437,15 @@ impl Viewer {
     /// shows a notice for 800 ms instead; otherwise the shell moves the
     /// selection, as the arrow keys in the grid do.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let (index, total, loaded) = {
+        let (index, total) = {
             let session = self.session.read(cx);
             if session.demo.is_some() {
                 return;
             }
-            let Some(index) = session.focus else {
+            let Some(index) = session.focus_ordinal() else {
                 return;
             };
-            (index, session.total as usize, session.items.len())
+            (index, session.total as usize)
         };
         let target = index as isize + delta;
         if target < 0 || target as usize >= total {
@@ -454,17 +454,12 @@ impl Viewer {
             return;
         }
         self.boundary.clear();
-        // Fetch the next page before the step reaches the end of what is
-        // loaded.
-        if target as usize + 1 >= loaded {
-            self.session.update(cx, |session, cx| session.load_more(cx));
-        }
-        if (target as usize) < loaded {
-            if delta < 0 {
-                window.dispatch_action(Box::new(crate::shell::Previous), cx);
-            } else {
-                window.dispatch_action(Box::new(crate::shell::Next), cx);
-            }
+        // The grid's move reads the item's window first when it is not
+        // held; the item shown stays until it arrives.
+        if delta < 0 {
+            window.dispatch_action(Box::new(crate::shell::Previous), cx);
+        } else {
+            window.dispatch_action(Box::new(crate::shell::Next), cx);
         }
         cx.notify();
     }

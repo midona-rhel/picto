@@ -118,11 +118,7 @@ impl Shell {
     /// The grid's selection, in grid order, with the one item's cover file.
     fn selection_target(&self, cx: &App) -> Option<Target> {
         let session = self.session.read(cx);
-        let items: Vec<RootSummary> = session
-            .selection
-            .iter()
-            .filter_map(|index| session.items.get(*index).cloned())
-            .collect();
+        let items: Vec<RootSummary> = session.selected_loaded().into_iter().cloned().collect();
         let file = match items.as_slice() {
             [] => return None,
             [item] => Some(File {

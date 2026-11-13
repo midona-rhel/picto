@@ -16,7 +16,9 @@ pub mod prefs;
 pub mod preview;
 pub mod rendered;
 pub mod reveal;
+pub mod selection;
 pub mod thumbnails;
+pub mod window;
 
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
@@ -36,9 +38,10 @@ pub struct MenuRequested(pub Point<Pixels>);
 pub struct EmptyMenuRequested(pub Point<Pixels>);
 
 /// A tile was double-clicked (after selecting it) or middle-clicked; the
-/// shell opens it as the Controls settings say.
+/// shell opens it as the Controls settings say. `ordinal` is the item's
+/// place in the destination.
 pub struct Activated {
-    pub index: usize,
+    pub ordinal: usize,
     pub middle: bool,
 }
 
@@ -49,8 +52,19 @@ pub struct GridView {
     /// Keyboard focus returns here after a click on a tile.
     focus: FocusHandle,
     scroll: ScrollHandle,
+    /// The window's items laid out by themselves, from the top.
     layout: Layout,
-    layout_key: Option<(u32, u32, usize, u32, ViewMode, u32)>,
+    /// Where that layout lies in the whole destination's height.
+    placement: window::Placement,
+    /// Width, zoom, spacing, mode, text rows, and the session's window.
+    layout_key: Option<(u32, u32, u32, ViewMode, u32, u64)>,
+    /// The ordinal a scroll last asked for and where the viewport's middle
+    /// was then: the window that arrives puts that item's tile there
+    /// (`windowAnchorRef`). Any later scroll drops it.
+    window_anchor: Option<(usize, f32)>,
+    /// A scroll's ask for the window it needs, made at most once per
+    /// `window::REQUEST_INTERVAL` (`CoalescedGridRequest`).
+    window_timer: Option<Task<()>>,
     reveal: reveal::RevealTracker,
     /// The steady clock the reveal timings are measured on.
     clock: std::time::Instant,
@@ -73,8 +87,11 @@ pub struct GridView {
     marquee: Option<marquee::Marquee>,
     /// The click that ends a rubber band selects nothing.
     swallow_click: bool,
-    /// A press on a tile that becomes a drag after 5px: the tile, and where.
+    /// A press on a tile that becomes a drag after 5px: the item's ordinal,
+    /// and where.
     press: Option<(usize, Point<Pixels>)>,
+    /// The rubber band adds to the selection (Shift or Cmd held).
+    marquee_keep: bool,
     /// The tile's selected items are being dragged.
     dragging: bool,
     /// The click that ends a drag selects nothing.
@@ -82,8 +99,10 @@ pub struct GridView {
     preview: preview::HoverPreview,
     /// The broken-thumbnail and font artwork.
     art: Option<art::Art>,
-    /// The items the layout's tiles are for, by id.
+    /// The items the layout's tiles are for, by id, and the ordinal of the
+    /// first.
     layout_ids: Vec<u32>,
+    layout_start: usize,
     /// Files whose missing thumbnail the application was asked to render
     /// (`scheduleThumbnailAfterMiss`), each once.
     rendering: std::collections::HashSet<String>,
@@ -145,7 +164,11 @@ enum Thumb {
 
 /// What a tile draws, copied out of the session for the visible tiles only.
 struct TileData {
+    /// The tile in the window's layout.
     index: usize,
+    /// The item's place in the destination.
+    ordinal: usize,
+    /// The tile placed in the whole destination's height.
     tile: layout::Tile,
     item: RootSummary,
     thumbnail: PathBuf,
@@ -232,7 +255,10 @@ impl GridView {
             focus,
             scroll: ScrollHandle::new(),
             layout: Layout::default(),
+            placement: window::Placement::whole(0.),
             layout_key: None,
+            window_anchor: None,
+            window_timer: None,
             reveal: reveal::RevealTracker::default(),
             clock: std::time::Instant::now(),
             bounds: Bounds::default(),
@@ -246,11 +272,13 @@ impl GridView {
             marquee: None,
             swallow_click: false,
             press: None,
+            marquee_keep: false,
             dragging: false,
             swallow_tile_click: false,
             preview: preview::HoverPreview::default(),
             art: None,
             layout_ids: Vec::new(),
+            layout_start: 0,
             rendering: Default::default(),
             _session: subscription,
             _thumbnails: changed,
@@ -325,14 +353,69 @@ impl GridView {
         )
     }
 
-    /// The image under a window position, if any.
+    /// The image under a window position, if any: its tile in the window's
+    /// layout, and the position in that layout.
     fn image_at(&self, position: Point<Pixels>) -> Option<(usize, f32, f32)> {
         let (x, y) = self.local(position);
-        let y = y + self.scroll_top();
+        let y = y + self.scroll_top() - self.placement.top;
         if x < 0. || x >= self.grid_width() {
             return None;
         }
         marquee::image_at(&self.layout, x, y, self.text_height).map(|index| (index, x, y))
+    }
+
+    /// The tile at `index` of the window's layout, placed in the whole
+    /// destination's height.
+    fn placed(&self, index: usize) -> Option<layout::Tile> {
+        let tile = self.layout.tiles.get(index)?;
+        Some(layout::Tile {
+            y: tile.y + self.placement.top,
+            ..*tile
+        })
+    }
+
+    /// The scroll moved, or the window changed: asks, at most once per
+    /// interval, for the window the viewport then needs.
+    fn schedule_window(&mut self, cx: &mut Context<Self>) {
+        if self.window_timer.is_some() {
+            return;
+        }
+        self.window_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(window::REQUEST_INTERVAL)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.window_timer = None;
+                this.ask_for_window(cx);
+            });
+        }));
+    }
+
+    /// `gridWindowDestination`, for where the grid is scrolled now.
+    fn ask_for_window(&mut self, cx: &mut Context<Self>) {
+        let top = self.scroll_top();
+        let viewport = f32::from(self.bounds.size.height);
+        let (start, total) = {
+            let session = self.session.read(cx);
+            // Only the window this layout was made for.
+            if self.layout_key.map(|key| key.5) != Some(session.window_epoch) {
+                return;
+            }
+            (session.start, session.total as usize)
+        };
+        let tops = self
+            .layout
+            .tiles
+            .iter()
+            .map(|tile| tile.y + self.placement.top)
+            .collect::<Vec<_>>();
+        let Some(ordinal) = window::destination(self.placement, start, &tops, total, top, viewport)
+        else {
+            return;
+        };
+        self.window_anchor = Some((ordinal, top + viewport / 2.));
+        self.session
+            .update(cx, |session, cx| session.request_window_at(ordinal, cx));
     }
 
     /// Hover tracking: which image the pointer is over, and the hover
@@ -480,18 +563,24 @@ impl GridView {
         }
         // A press on an image may become a drag of the items.
         if let Some((index, _, _)) = self.image_at(event.position) {
-            self.press = Some((index, event.position));
+            self.press = Some((self.layout_start + index, event.position));
             cx.notify();
             return;
         }
         let modifiers = event.modifiers;
-        let base = if modifiers.shift || modifiers.platform || modifiers.control {
-            self.session.read(cx).selection.clone()
+        let keep = modifiers.shift || modifiers.platform || modifiers.control;
+        // The band works in the window's own layout.
+        let base = if keep {
+            let session = self.session.read(cx);
+            (0..self.layout.tiles.len())
+                .filter(|index| session.is_selected(self.layout_start + index))
+                .collect()
         } else {
             Default::default()
         };
+        self.marquee_keep = keep;
         self.marquee = Some(marquee::Marquee::new(
-            (x, y + self.scroll_top()),
+            (x, y + self.scroll_top() - self.placement.top),
             (x, y),
             base,
         ));
@@ -513,7 +602,7 @@ impl GridView {
             cx.notify();
             return;
         }
-        let Some((index, from)) = self.press else {
+        let Some((ordinal, from)) = self.press else {
             return;
         };
         if !drag::past_threshold(from, position) {
@@ -522,17 +611,19 @@ impl GridView {
         let items = {
             let session = self.session.read(cx);
             let theme = theme::theme(cx);
-            let indices = if session.selection.contains(&index) {
-                session.selection.iter().copied().collect::<Vec<_>>()
+            // The selection, loaded or not, when the tile is in it; the
+            // ghost shows the loaded ones.
+            let (roots, chosen) = if session.is_selected(ordinal) {
+                (session.selected_ids(), session.selected_loaded())
             } else {
-                vec![index]
+                let item = session.item_at(ordinal);
+                (
+                    item.iter().map(|item| item.root_id).collect(),
+                    item.into_iter().collect(),
+                )
             };
-            let chosen = indices
-                .iter()
-                .filter_map(|index| session.items.get(*index))
-                .collect::<Vec<_>>();
             drag::ItemDrag {
-                roots: chosen.iter().map(|item| item.root_id).collect(),
+                roots,
                 source: session
                     .nav
                     .get(session.displayed)
@@ -598,7 +689,7 @@ impl GridView {
     /// The pointer moved while a rubber band is out, anywhere in the window.
     fn marquee_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let local = self.local(position);
-        let top = self.scroll_top();
+        let top = self.scroll_top() - self.placement.top;
         let viewport = f32::from(self.bounds.size.height);
         if let Some(marquee) = &mut self.marquee {
             marquee.pointer = local;
@@ -616,8 +707,13 @@ impl GridView {
         };
         if let Some(selection) = marquee.committed() {
             self.swallow_click = true;
+            let ordinals = selection
+                .into_iter()
+                .map(|index| self.layout_start + index)
+                .collect();
+            let keep = self.marquee_keep;
             self.session
-                .update(cx, |session, cx| session.set_selection(selection, cx));
+                .update(cx, |session, cx| session.set_selection(ordinals, keep, cx));
         }
         window.focus(&self.focus, cx);
         cx.notify();
@@ -640,30 +736,15 @@ impl GridView {
             f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER,
             f32::from(self.bounds.size.height),
         );
-        let (target, gap) = {
-            let session = self.session.read(cx);
-            (
-                session.move_target(action, width, height),
-                session.prefs.gap,
-            )
-        };
+        let target = self.session.read(cx).move_target(action, width, height);
         let Some(target) = target else {
             return;
         };
-        self.session.update(cx, |session, cx| {
-            // Shift extends a range from where the selection started.
-            if extend {
-                session.select_to(target, false, cx)
-            } else {
-                session.select(target, cx)
-            }
-        });
-        if let Some(tile) = self.layout.tiles.get(target) {
-            let top = -f32::from(self.scroll.offset().y);
-            if let Some(offset) = nav::scroll_into_view(tile, top, height, gap) {
-                self.scroll.set_offset(point(px(0.), px(-offset)));
-            }
-        }
+        // Shift extends a range from where the selection started. The grid
+        // brings the item into view once it is laid out, its window read
+        // first when it is not held.
+        self.session
+            .update(cx, |session, cx| session.move_to(target, extend, cx));
         cx.notify();
     }
 
@@ -681,6 +762,7 @@ impl GridView {
         let theme = theme::theme(cx);
         let TileData {
             index,
+            ordinal,
             tile,
             item,
             thumbnail,
@@ -977,7 +1059,7 @@ impl GridView {
         let in_selection = selected;
         cell.child(
             div()
-                .id(index)
+                .id(ordinal)
                 .absolute()
                 .left_0()
                 .top_0()
@@ -992,17 +1074,17 @@ impl GridView {
                     let open = event.click_count() == 2;
                     this.session.update(cx, |session, cx| {
                         if modifiers.shift {
-                            session.select_to(index, modifiers.platform, cx);
+                            session.select_to(ordinal, modifiers.platform, cx);
                         } else if modifiers.platform {
-                            session.toggle(index, cx);
+                            session.toggle(ordinal, cx);
                         } else {
-                            session.select(index, cx);
+                            session.select(ordinal, cx);
                         }
                     });
                     window.focus(&this.focus, cx);
                     if open && !modifiers.shift && !modifiers.platform {
                         cx.emit(Activated {
-                            index,
+                            ordinal,
                             middle: false,
                         });
                     }
@@ -1012,7 +1094,7 @@ impl GridView {
                     cx.listener(move |_, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         cx.emit(Activated {
-                            index,
+                            ordinal,
                             middle: true,
                         });
                     }),
@@ -1025,7 +1107,7 @@ impl GridView {
                         // A right-click inside the selection keeps it.
                         if !in_selection {
                             this.session
-                                .update(cx, |session, cx| session.select(index, cx));
+                                .update(cx, |session, cx| session.select(ordinal, cx));
                         }
                         cx.emit(MenuRequested(event.position));
                         window.focus(&this.focus, cx);
@@ -1065,9 +1147,11 @@ impl Render for GridView {
             window.request_animation_frame();
         }
         // The session moves its scope change along, hears how far this grid
-        // is scrolled, and says where a restored grid should open.
+        // is scrolled and where its window lies, and says where a restored
+        // grid should open.
         let scrolled = self.scroll_top();
         let epoch = self.epoch;
+        let window_top = self.placement.top;
         // A press, rubber band or drag in progress holds back a refresh of
         // the results, which would move what it is on.
         let busy = self.marquee.is_some() || self.dragging || self.press.is_some();
@@ -1076,21 +1160,19 @@ impl Render for GridView {
             session.pointer_busy = busy;
             if session.results_epoch == epoch {
                 session.grid_scroll = scrolled;
+                session.window_top = window_top;
                 None
             } else {
                 Some((
                     session.restore_scroll.take().unwrap_or(0.),
-                    std::mem::take(&mut session.refreshed_in_place),
+                    session.restore_window_top.take(),
                 ))
             }
         });
-        let mut follow = false;
-        match restore {
-            // Read again in place: the items that stay keep their place on
-            // screen, laid out below.
-            Some((_, true)) => follow = true,
-            Some((offset, false)) => self.scroll.set_offset(point(px(0.), px(-offset))),
-            None => {}
+        let mut restored_top = None;
+        if let Some((offset, top)) = restore {
+            self.scroll.set_offset(point(px(0.), px(-offset)));
+            restored_top = top;
         }
         let theme = theme::theme(cx);
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
@@ -1100,9 +1182,12 @@ impl Render for GridView {
         let mut top = self.scroll_top();
         // Any scroll ends the hover and closes the preview at once; the
         // hover comes back 80 ms after the last one, where the pointer is.
-        if top != self.last_top {
+        let moved = top != self.last_top;
+        if moved {
             self.last_top = top;
             self.hovered = None;
+            // The anchor was for where the scroll was when it asked.
+            self.window_anchor = None;
             if let Some(image) = self.preview.clear() {
                 cx.drop_image(image, Some(window));
             }
@@ -1122,11 +1207,15 @@ impl Render for GridView {
 
         // Everything the frame needs from the session, copied for the visible
         // tiles only, so the listeners below can borrow the context.
-        let (fade, animating, prefs, surface, mut tiles) = {
+        let mut measured = None;
+        let mut revealed = None;
+        let (fade, animating, prefs, surface, windowed, mut tiles) = {
             let session = self.session.read(cx);
-            if session.results_epoch != self.epoch {
+            let fresh = session.results_epoch != self.epoch;
+            if fresh {
                 self.epoch = session.results_epoch;
                 self.layout_key = None;
+                self.window_anchor = None;
                 // Positions now mean other items.
                 self.marquee = None;
                 self.hovered = None;
@@ -1134,82 +1223,153 @@ impl Render for GridView {
             let prefs = session.prefs.clone();
             let text_height = prefs.text_height();
             self.text_height = text_height;
-            let key = Some((
+            let geometry = (
                 width as u32,
                 session.tile as u32,
-                session.items.len(),
                 prefs.gap as u32,
                 prefs.mode,
                 text_height as u32,
+            );
+            let key = Some((
+                geometry.0,
+                geometry.1,
+                geometry.2,
+                geometry.3,
+                geometry.4,
+                session.window_epoch,
             ));
             if key != self.layout_key {
+                let window_changed = self.layout_key.map(|key| key.5) != key.map(|key| key.5);
+                if window_changed {
+                    // Tiles of the window before mean other items now.
+                    self.marquee = None;
+                    self.hovered = None;
+                }
                 let aspects = session
                     .items
                     .iter()
                     // `gridLayoutModel.ts`: an unknown shape lays out as 3:2.
                     .map(|item| aspect(item).unwrap_or(1.5))
                     .collect::<Vec<_>>();
-                let previous = std::mem::replace(
-                    &mut self.layout,
+                let compute = |aspects: &[f64]| {
                     Layout::compute(
-                        &aspects,
+                        aspects,
                         width,
                         session.tile,
                         prefs.gap,
                         prefs.mode,
                         text_height,
-                    ),
+                    )
+                };
+                let next = compute(&aspects);
+                // The height per item, measured on the first items of the
+                // window the destination opened with (or of the one held
+                // when the geometry changed), as `densityRef` keeps it.
+                let density = match session.density {
+                    Some((measured_for, density)) if measured_for == geometry => density,
+                    _ => {
+                        let count = aspects.len().min(window::SAMPLE);
+                        let height = if count == aspects.len() {
+                            next.total_height
+                        } else {
+                            compute(&aspects[..count]).total_height
+                        };
+                        let density = window::density(height, count).unwrap_or(1.);
+                        if count > 0 {
+                            measured = Some((geometry, density));
+                        }
+                        density
+                    }
+                };
+                let anchor = self.window_anchor.filter(|_| window_changed);
+                let mut placement = window::place(
+                    next.total_height,
+                    session.start,
+                    session.items.len(),
+                    session.total as usize,
+                    density,
+                    anchor,
+                    |offset| next.tiles.get(offset).map(|tile| tile.y),
                 );
-                // The same items laid out anew (zoom, spacing, layout mode,
-                // labels, width), or the results read again in place: the
-                // topmost visible tile, followed by its item, stays where it
-                // was on screen, as `CanvasGrid` keeps it.
+                // A restored window lies where it lay when it was left.
+                if let Some(restored) = restored_top {
+                    let span = (placement.height - next.total_height).max(0.);
+                    placement.top = restored.clamp(0., span);
+                    placement.bottom = placement.top + next.total_height;
+                }
+                let previous = std::mem::replace(&mut self.layout, next);
+                let previous_top = std::mem::replace(&mut self.placement, placement).top;
+                // The same results laid out anew (zoom, spacing, layout mode,
+                // labels, width), another window of them, or the window read
+                // again in place: the topmost visible tile, followed by its
+                // item, stays where it was on screen, as `CanvasGrid` keeps it.
                 let ids = session
                     .items
                     .iter()
                     .map(|item| item.root_id.0)
                     .collect::<Vec<_>>();
-                if self.layout_key.is_some() || follow {
+                if self.layout_key.is_some() && !fresh {
                     let now = ids
                         .iter()
                         .enumerate()
                         .map(|(index, id)| (*id, index))
                         .collect::<std::collections::HashMap<_, _>>();
-                    let before = self
+                    let shift = |tiles: &[layout::Tile], by: f32| {
+                        tiles
+                            .iter()
+                            .map(|tile| layout::Tile {
+                                y: tile.y + by,
+                                ..*tile
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let before = shift(&previous.tiles, previous_top);
+                    let after = shift(&self.layout.tiles, self.placement.top);
+                    let selected = self
                         .layout_ids
                         .iter()
                         .enumerate()
-                        .map(|(index, id)| (*id, index))
-                        .collect::<std::collections::HashMap<_, _>>();
-                    let selected = session
-                        .selection
-                        .iter()
-                        .filter_map(|index| ids.get(*index))
-                        .filter_map(|id| before.get(id).copied())
+                        .filter(|(index, id)| {
+                            session
+                                .selection
+                                .contains(picto_library::RootId(**id), self.layout_start + index)
+                        })
+                        .map(|(index, _)| index)
                         .collect();
                     let moved = |index: usize| {
                         self.layout_ids
                             .get(index)
                             .and_then(|id| now.get(id).copied())
                     };
-                    if let Some(anchored) = layout::scroll_anchor(
-                        &previous.tiles,
-                        &self.layout.tiles,
-                        &selected,
-                        top,
-                        viewport,
-                        moved,
-                    ) && anchored != top
+                    if let Some(anchored) =
+                        layout::scroll_anchor(&before, &after, &selected, top, viewport, moved)
+                        && anchored != top
                     {
                         top = anchored;
+                        self.last_top = top;
                         self.scroll.set_offset(point(px(0.), px(-anchored)));
                     }
                 }
                 self.layout_ids = ids;
+                self.layout_start = session.start;
                 self.layout_key = key;
             }
+            // An item moved to (a key, the viewer) comes into view once its
+            // window is laid out.
+            if let Some(ordinal) = session.reveal
+                && let Some(tile) = ordinal
+                    .checked_sub(session.start)
+                    .and_then(|index| self.placed(index))
+            {
+                if let Some(offset) = nav::scroll_into_view(&tile, top, viewport, prefs.gap) {
+                    top = offset.max(0.);
+                    self.last_top = top;
+                    self.scroll.set_offset(point(px(0.), px(-top)));
+                }
+                revealed = Some(ordinal);
+            }
             if let Some(marquee) = &mut self.marquee {
-                marquee.track(top, &self.layout, text_height);
+                marquee.track(top - self.placement.top, &self.layout, text_height);
             }
             // `GridScreen.tsx`: an error first, then the tiles, and only a
             // scope known to be empty says so; a loading one shows nothing.
@@ -1230,19 +1390,33 @@ impl Render for GridView {
                     session.filter.is_some(),
                 ))
             };
+            // Only the window's tiles are laid out; the rest of the height
+            // is the destination's other items, drawn once their window
+            // arrives.
+            let local_top = top - self.placement.top;
+            let marquee_base = self.marquee.as_ref().map(|_| {
+                (0..self.layout.tiles.len())
+                    .filter(|index| session.is_selected(session.start + index))
+                    .collect::<std::collections::BTreeSet<_>>()
+            });
             let tiles = self
                 .layout
-                .visible(top - reveal::MARGIN, top + viewport + reveal::MARGIN)
+                .visible(
+                    local_top - reveal::MARGIN,
+                    local_top + viewport + reveal::MARGIN,
+                )
                 .into_iter()
                 .filter_map(|index| {
                     let item = session.items.get(index)?;
-                    let selected = match &self.marquee {
-                        Some(marquee) => marquee.shows_selected(index, &session.selection),
-                        None => session.selection.contains(&index),
+                    let ordinal = session.start + index;
+                    let selected = match (&self.marquee, &marquee_base) {
+                        (Some(marquee), Some(base)) => marquee.shows_selected(index, base),
+                        _ => session.selection.contains(item.root_id, ordinal),
                     };
                     Some(TileData {
                         index,
-                        tile: self.layout.tiles[index],
+                        ordinal,
+                        tile: self.placed(index)?,
                         item: item.clone(),
                         thumbnail: session.thumbnail(&item.content_hash),
                         selected,
@@ -1256,12 +1430,27 @@ impl Render for GridView {
                 session.transition.animating(),
                 prefs,
                 surface,
+                (session.total as usize) > session.items.len() && !session.loading,
                 tiles,
             )
         };
-        // `CanvasGrid`: fetch the next page within three viewports of the end.
-        if top + viewport * 4. >= self.layout.total_height && !tiles.is_empty() {
-            self.session.update(cx, |session, cx| session.load_more(cx));
+        if measured.is_some() || revealed.is_some() {
+            self.session.update(cx, |session, _| {
+                if measured.is_some() {
+                    session.density = measured;
+                }
+                if revealed.is_some() && session.reveal == revealed {
+                    session.reveal = None;
+                }
+            });
+        }
+        // `CanvasGrid`'s window requests: after a scroll, and whenever the
+        // viewport's middle has no tile of the window (a restored or
+        // revealed scroll position, a thumb dragged far away).
+        if windowed
+            && (moved || window::misses(self.placement, self.layout.tiles.len(), top, viewport))
+        {
+            self.schedule_window(cx);
         }
 
         let tile_count = tiles.len();
@@ -1460,7 +1649,9 @@ impl Render for GridView {
                     ))
             }
             Surface::Tiles => {
-                let mut content = div().relative().w_full().h(px(self.layout.total_height));
+                // The whole destination's height, so the scrollbar stands
+                // for every item, loaded or not.
+                let mut content = div().relative().w_full().h(px(self.placement.height));
                 for data in tiles {
                     content = content.child(self.tile(data, &prefs, now, window, cx));
                 }
@@ -1470,7 +1661,7 @@ impl Render for GridView {
                         div()
                             .absolute()
                             .left(px(rect.left))
-                            .top(px(rect.top))
+                            .top(px(rect.top + self.placement.top))
                             .w(px(rect.width))
                             .h(px(rect.height))
                             .bg(rgba(theme::MARQUEE_FILL))

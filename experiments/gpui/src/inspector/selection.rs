@@ -112,12 +112,7 @@ impl Inspector {
         let (selected, focus) = {
             let session = self.session.read(cx);
             (
-                session
-                    .selection
-                    .iter()
-                    .filter_map(|index| session.items.get(*index))
-                    .map(|item| item.root_id)
-                    .collect::<Vec<_>>(),
+                session.selected_ids(),
                 session.selected_item().map(|item| item.root_id),
             )
         };
@@ -333,9 +328,8 @@ impl Inspector {
             let sizes = &mut self.selection.sizes;
             for card in &cards {
                 if let Some(item) = session
-                    .selection
-                    .iter()
-                    .filter_map(|index| session.items.get(*index))
+                    .selected_loaded()
+                    .into_iter()
                     .find(|item| item.content_hash == card.hash)
                 {
                     sizes.insert(card.hash.clone(), item.width.zip(item.height));

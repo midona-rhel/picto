@@ -409,7 +409,7 @@ impl Inspector {
         wanted(
             session.screen().is_some(),
             session.viewer,
-            session.selection.len(),
+            session.selection_count() as usize,
         )
     }
 
