@@ -103,7 +103,8 @@ impl ViewerToolbar {
                 .shortcut("`")
                 .into(),
         );
-        let menu = cx.new(|cx| Menu::new(entries, position, cx));
+        // `showSearch: false`, as `GridToolbar.tsx` opens it.
+        let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
         self._menu = Some(cx.subscribe(&menu, |this, _, event: &menu::Event, cx| {
             let menu::Event::Chosen(action) = event;
             this.surface.update(cx, |surface, cx| match *action {

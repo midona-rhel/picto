@@ -33,6 +33,9 @@ pub const RETURN_TO_TOP: Duration = Duration::from_millis(150);
 pub const MENU_ROW: Duration = Duration::from_millis(30);
 /// `menuOut`: a dismissed context menu fades for this long.
 pub const MENU_OUT: Duration = Duration::from_millis(80);
+/// `handleSubmenuIntent`: an open submenu stays this long after the pointer
+/// moves onto another row of its menu.
+pub const MENU_SUBMENU_GRACE: Duration = Duration::from_millis(150);
 /// The grid and scope title fade for this long on each side of a scope change.
 pub const SCOPE_FADE: Duration = Duration::from_millis(170);
 /// `HoverPreviewPortal.tsx`: the backdrop and the original fade in together.

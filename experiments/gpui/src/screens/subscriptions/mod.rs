@@ -547,14 +547,12 @@ impl SubscriptionsScreen {
     /// The open menu, laid over the whole window as the shell lays the
     /// grid's, until its fade-out is over.
     fn menu_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
+        if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
             self._menu = None;
-            if window.focused(cx).is_none() {
+            // Unless its action moved the keyboard, as Rename does. A menu
+            // shown in pop-up windows can outlive this by a moment, still
+            // holding the keyboard.
+            if window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window) {
                 window.focus(&self.focus, cx);
             }
         }

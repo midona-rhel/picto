@@ -44,6 +44,9 @@ actions!(
     ]
 );
 
+/// The grid menu's "Set Rating" rows, from no rating to five stars.
+const RATE_ACTIONS: [&str; 6] = ["rate-0", "rate-1", "rate-2", "rate-3", "rate-4", "rate-5"];
+
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -226,6 +229,31 @@ impl Shell {
                     .into(),
                 menu::Entry::Separator,
             ]);
+            // The library rates one item per request here, so the row is
+            // offered for a single item, with its rating checked.
+            let rating = self
+                .session
+                .read(cx)
+                .selected_details()
+                .map(|details| details.rating);
+            let rows = picto_library::Rating::ALL
+                .iter()
+                .zip(RATE_ACTIONS)
+                .enumerate()
+                .map(|(stars, (value, action))| {
+                    let label = match stars {
+                        0 => "No Rating".to_owned(),
+                        _ => "★".repeat(stars),
+                    };
+                    menu::item(action, label)
+                        .checked(rating == Some(*value))
+                        .into()
+                })
+                .collect();
+            entries.extend([
+                menu::submenu("Set Rating", rows).icon("menu-star").into(),
+                menu::Entry::Separator,
+            ]);
         }
         let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
         if trash {
@@ -328,6 +356,13 @@ impl Shell {
                 self.inspector
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
+            }
+            rate if RATE_ACTIONS.contains(&rate) => {
+                let stars = RATE_ACTIONS.iter().position(|action| *action == rate);
+                let session = self.session.read(cx);
+                if let (Some(item), Some(stars)) = (session.selected_item(), stars) {
+                    session.rate(item.root_id, picto_library::Rating::ALL[stars]);
+                }
             }
             "trash" => self.session.update(cx, |session, cx| {
                 session.move_selection_to(picto_library::Lifecycle::Trash, cx)
@@ -665,16 +700,12 @@ impl Render for Shell {
 
         // A dismissed menu stays until its 80 ms fade is over; the keyboard
         // then goes back to the grid.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
+        if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
             self._menu = None;
             // Unless its action moved the keyboard somewhere, such as into
-            // the name field.
-            if window.focused(cx).is_none() {
+            // the name field. A menu shown in pop-up windows can outlive
+            // this by a moment, still holding the keyboard.
+            if window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window) {
                 window.focus(&self.focus, cx);
             }
         }

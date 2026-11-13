@@ -76,19 +76,21 @@ pub enum Kind {
     SidebarRename,
     /// The search at the top of a popover (`LibrarySwitcherPopover`).
     Popover,
+    /// A context menu's search row (`.searchInput`).
+    Menu,
 }
 
 impl Kind {
     fn font(self) -> &'static str {
         match self {
-            Kind::Search | Kind::Popover | Kind::Rename(_) => crate::theme::FONT_UI,
+            Kind::Search | Kind::Popover | Kind::Rename(_) | Kind::Menu => crate::theme::FONT_UI,
             Kind::Sidebar | Kind::Inspector | Kind::SidebarRename => crate::theme::FONT_INSPECTOR,
         }
     }
     fn size(self) -> f32 {
         match self {
             Kind::Search => crate::theme::TEXT_SM,
-            Kind::Sidebar | Kind::Inspector | Kind::Popover | Kind::SidebarRename => {
+            Kind::Sidebar | Kind::Inspector | Kind::Popover | Kind::SidebarRename | Kind::Menu => {
                 crate::theme::TEXT_MD
             }
             Kind::Rename(size) => size,
@@ -102,6 +104,7 @@ impl Kind {
             Kind::Rename(size) => size + 2.,
             Kind::SidebarRename => crate::theme::SIDEBAR_RENAME_HEIGHT - 2.,
             Kind::Popover => 48.,
+            Kind::Menu => 36.,
         }
     }
     /// The popover's input has no `::placeholder` rule, so it keeps
@@ -818,6 +821,14 @@ impl TextInput {
         let mut input = Self::new(cx);
         input.placeholder = placeholder.into();
         input.kind = Kind::Popover;
+        input
+    }
+    /// A context menu's search field. The menu takes its Enter, Escape and
+    /// arrows before the field sees them.
+    pub fn menu_search(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = "Search...".into();
+        input.kind = Kind::Menu;
         input
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {

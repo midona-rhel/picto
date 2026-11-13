@@ -110,13 +110,33 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   headers (title pill, chevron, add button), the library switcher's highlight,
   chips, the inspector's sections and action rows, the scrollbar thumb, and
   pointer cursors on everything that takes a click.
-- The grid's context menu as `ContextMenu.tsx` draws it: glass panel at the
-  pointer with a 12px margin from the window's edges, icons, shortcut hints,
-  separators, a 30 ms row highlight shared by the pointer and the arrow keys,
-  Enter and Escape, and an 80 ms fade when dismissed. A press outside closes
-  it and goes no further. Its rows are the ones this prototype can perform:
-  open with the default app, reveal, copy path and name, rename, move to
-  trash, and restore in the Trash.
+- The shared context menu as `ContextMenu.tsx` draws it: glass panel at the
+  pointer with a 12px margin, icons, shortcut hints, separators, a 30 ms row
+  highlight shared by the pointer and the arrow keys (which skip separators
+  and disabled rows and stop on submenus), Enter and Escape, and an 80 ms
+  fade when dismissed. A press outside closes it and goes no further. Rows
+  can carry a check slot, be `excluded` (struck through with a cross) or
+  keep the menu open when chosen, and the owner can check or uncheck them
+  while it is open. Submenus open on hover, Right arrow or Enter, beside
+  their row (4px right, 3px up, flipped left at the edge), close on Left
+  arrow or 150 ms after the pointer moves to another row, and take the
+  arrow keys once entered. A menu of seven or more rows has the search row,
+  focused on open, which filters as `searchMenuEntries` does (label start,
+  label, keywords, then letters in order; submenu rows found directly), with
+  "No results" when nothing matches. A menu taller than its area less 40px
+  scrolls. The grid's rows are the ones this prototype can perform: open
+  with the default app, reveal, copy path and name, rename, Set Rating
+  (with the item's rating checked), move to trash, and restore in the Trash.
+- On macOS each menu panel and open submenu is a pop-up window of its own
+  (`WindowKind::PopUp`, shown without taking the keyboard, transparent so
+  the panel's corners and drawn shadow show), kept 12px inside the display
+  rather than the window, so menus reach past the window's edge. The
+  keyboard stays with the main window, where the menu's layer takes it; the
+  search field types there through an invisible twin. The menu closes when
+  none of its windows has the keyboard (another application chosen).
+  `ui::menu::presentation()` is the one switch; `PICTO_GPUI_MENU=window`,
+  other platforms, and a pop-up window that fails to open use the in-window
+  overlay.
 - The library switcher opens `LibrarySwitcherPopover` under it: a glass
   panel 8px below the button, kept inside the window, that grows in from
   96% over 70 ms, closes on Escape (also from its search field) and on a
@@ -323,10 +343,27 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   keep their embedded thumbnail and open in the default application.
 - Collection members use previous/next controls, not the continuous collection
   scroll surface. Preview is embedded, not the three production shells.
-- Context menus have no submenus or search row yet, exist only for grid
-  items and the sidebar, and are drawn inside the window, so they cannot extend past its
-  edge. "Delete Permanently" is shown disabled: the prototype reads the
-  library's files in place and must never delete them.
+- Context menus exist for grid items, the sidebar, the viewer's zoom
+  percentage and subscriptions. The grid shell, the viewer toolbar and the Subscriptions
+  screen each host the menu as a full-window layer; the menu itself chooses
+  between its pop-up windows and the in-window panel. Subscriptions' Schedule
+  row stays disabled rather than a submenu: setting a schedule also sets the
+  next run time, which the application's subscription catalog computes and
+  this prototype does not link. "Delete Permanently" is shown
+  disabled: the prototype reads the library's files in place and must never
+  delete them. "Set Rating" is offered for one item only (the library adapter
+  rates one item per request), and "More" is left out: nothing this
+  prototype can do belongs in it. Custom rows, right-click actions on rows
+  (`contextAction`), nested submenus and the open scale-in are not ported.
+- The pop-up menu windows have not been seen running. Not verified: that
+  AppKit draws no titlebar buttons on them, what the system window shadow
+  adds around the transparent window and the drawn shadow, the pointing-hand
+  cursor (GPUI sets the cursor only from the key window), and the input
+  method's candidate window, which appears at the invisible twin near the
+  main window's corner. Clicking a panel makes its window the key window for
+  the moment of the click, so the main window may briefly look inactive; the
+  keyboard is handed back to it when the menu closes. The panels do not
+  follow the main window if it moves while a menu is open.
 - The library popover's glass has no blur, and only its surface scales in;
   its rows appear at full size. A library's folder has no hover title. A
   cover is cropped once per session, so a cover changed elsewhere meanwhile
@@ -370,7 +407,8 @@ PICTO_GPUI_TEST_DB=/tmp/picto-gpui-library.XXXXXX/library.sqlite \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored
 ```
 
-The regular tests cover the duplicate review's linked zoom, queue order,
+The regular tests cover the context menu's search ranking, separator
+cleaning, keyboard stepping and placement and flip arithmetic, the duplicate review's linked zoom, queue order,
 labels and difference picture, the three layout modes against hand-computed geometry,
 the viewer's fit, focal zoom, pan, glide and navigator arithmetic, the
 logarithmic zoom track,
@@ -427,7 +465,7 @@ One model, separate views, shared components:
   arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
   shows) and `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu, popover, library avatar, sidebar row, section
+  tooltip, context menu (with submenus and search), popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, zoom
   control, empty state and the titlebar drag region. Views compose these.
