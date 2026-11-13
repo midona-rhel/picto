@@ -211,6 +211,11 @@ fn close_button(on_close: Option<Handler>, cx: &App) -> Stateful<Div> {
 
 impl RenderOnce for Modal {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // A dialog that has faded out draws nothing, so that it cannot take
+        // a click in the frames before its owner drops it.
+        if self.presence.finished() {
+            return gpui::Empty.into_any_element();
+        }
         let theme = theme::theme(cx);
         if self.presence.animating() {
             window.request_animation_frame();
@@ -408,6 +413,7 @@ impl RenderOnce for Modal {
                 .child(layer.child(panel)),
         )
         .with_priority(self.priority)
+        .into_any_element()
     }
 }
 

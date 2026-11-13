@@ -1416,6 +1416,9 @@ impl Sidebar {
             this.reveal(&format!("smart:{}", id.0), cx);
             cx.notify();
         });
+        // The editor repaints itself while it fades out; the sidebar has to
+        // repaint too, to drop it when it is done.
+        cx.observe(&editor, |_, _, cx| cx.notify()).detach();
         self.smart_editor = Some((editor, subscription));
         cx.notify();
     }
