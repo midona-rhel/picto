@@ -50,18 +50,6 @@ pub fn similarity_label(distance: u32) -> String {
     }
 }
 
-/// `formatBytes`: bytes, then KB and MB to one decimal.
-pub fn format_bytes(bytes: i64) -> String {
-    let value = bytes as f64;
-    if value < 1024. {
-        format!("{bytes} B")
-    } else if value < 1024. * 1024. {
-        format!("{:.1} KB", value / 1024.)
-    } else {
-        format!("{:.1} MB", value / (1024. * 1024.))
-    }
-}
-
 /// `dimensions`: `W x H`, or Unknown.
 pub fn dimensions(width: Option<u32>, height: Option<u32>) -> String {
     match (width, height) {
@@ -79,7 +67,10 @@ pub fn short_date(milliseconds: i64) -> String {
         .single()
         .map_or_else(
             || "Unknown".into(),
-            |date| date.format("%-m/%-d/%Y").to_string(),
+            |date| {
+                date.format(crate::text::date_format::LOCALE_DATE)
+                    .to_string()
+            },
         )
 }
 
@@ -234,10 +225,7 @@ impl LinkedZoom {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Extent, LinkedZoom, Mode, dimensions, format_bytes, pair_key, select_stable,
-        similarity_label,
-    };
+    use super::{Extent, LinkedZoom, Mode, dimensions, pair_key, select_stable, similarity_label};
     use picto_library::FileId;
 
     #[test]
@@ -281,9 +269,6 @@ mod tests {
 
     #[test]
     fn sizes_and_dimensions_read_as_the_electron_rows() {
-        assert_eq!(format_bytes(900), "900 B");
-        assert_eq!(format_bytes(1536), "1.5 KB");
-        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3072.0 MB");
         assert_eq!(dimensions(Some(640), Some(480)), "640 x 480");
         assert_eq!(dimensions(None, Some(480)), "Unknown");
     }

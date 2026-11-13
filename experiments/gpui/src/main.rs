@@ -16,6 +16,8 @@ mod session;
 mod settings;
 mod shell;
 mod stats;
+mod tags;
+mod text;
 mod theme;
 mod ui;
 mod viewer;
@@ -23,6 +25,11 @@ mod viewer;
 use gpui::*;
 use shell::*;
 use std::path::PathBuf;
+
+/// Now, in milliseconds since 1970, as the library stamps its records.
+pub fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
 
 /// The application menu. Its rows show the keys bound to their actions, so
 /// it is set again whenever the shortcuts are rebound.

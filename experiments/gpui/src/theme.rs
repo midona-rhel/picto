@@ -202,6 +202,49 @@ pub const ERROR_TEXT: u32 = 0xffb4b4;
 /// `GlassModal` `.backdrop`: black at 55%.
 pub const MODAL_BACKDROP: u32 = 0x0000008c;
 
+/// `color` with no alpha: what a CSS transition from `transparent` toward
+/// it starts from, keeping its hue (see [`blend`]).
+pub fn clear(color: Rgba) -> Rgba {
+    Rgba { a: 0., ..color }
+}
+
+/// `#rrggbb` as a number; the `#` may be left out.
+pub fn parse_hex(text: &str) -> Option<u32> {
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    (digits.len() == 6 && digits.chars().all(|digit| digit.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(digits, 16).ok())
+        .flatten()
+}
+
+/// `#RRGGBB` with its `#`, as the colour editor's field takes a code.
+pub fn parse_hex_code(text: &str) -> Option<u32> {
+    text.starts_with('#').then(|| parse_hex(text)).flatten()
+}
+
+/// A colour as the settings store one: `#rgb`, `#rrggbb` or `rgb(r, g, b)`.
+pub fn parse_css_color(value: &str) -> Option<u32> {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#') {
+        return match hex.len() {
+            3 => parse_hex(
+                &hex.chars()
+                    .flat_map(|digit| [digit, digit])
+                    .collect::<String>(),
+            ),
+            _ => parse_hex(hex),
+        };
+    }
+    let inner = value.strip_prefix("rgb(")?.strip_suffix(')')?;
+    let channels = inner
+        .split(',')
+        .map(|channel| channel.trim().parse::<u8>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    match channels[..] {
+        [r, g, b] => Some((r as u32) << 16 | (g as u32) << 8 | b as u32),
+        _ => None,
+    }
+}
+
 /// The colour `amount` of the way from `from` to `to`, as a CSS colour
 /// transition passes through it (interpolated with alpha premultiplied).
 pub fn blend(from: Rgba, to: Rgba, amount: f32) -> Rgba {
@@ -485,7 +528,7 @@ pub const TILE_RADIUS: f32 = 4.;
 
 #[cfg(test)]
 mod tests {
-    use super::{DARK, blend};
+    use super::{DARK, blend, parse_css_color, parse_hex, parse_hex_code};
     use gpui::{Rgba, rgb, rgba};
 
     #[test]
@@ -517,5 +560,21 @@ mod tests {
         assert_eq!(DARK.border_secondary(), rgba(0xf8f9fb14));
         assert_eq!(DARK.text_tertiary(), rgba(0xf8f9fb99));
         assert_eq!(DARK.glass(), rgba(0x18191ceb));
+    }
+
+    #[test]
+    fn colour_codes_parse_as_strictly_as_their_callers_need() {
+        assert_eq!(parse_hex("#3297ff"), Some(0x3297ff));
+        assert_eq!(parse_hex("868e96"), Some(0x868e96));
+        assert_eq!(parse_hex("#fff"), None);
+        assert_eq!(parse_hex("#zzzzzz"), None);
+        assert_eq!(parse_hex("+12345"), None);
+        assert_eq!(parse_hex_code("#0000FF"), Some(0xff));
+        assert_eq!(parse_hex_code("0000FF"), None);
+        assert_eq!(parse_hex_code("#12345g"), None);
+        assert_eq!(parse_css_color("rgb(1, 2, 3)"), Some(0x010203));
+        assert_eq!(parse_css_color("#abc"), Some(0xaabbcc));
+        assert_eq!(parse_css_color(" #FA5252 "), Some(0xfa5252));
+        assert_eq!(parse_css_color("blue"), None);
     }
 }

@@ -74,41 +74,10 @@ enum Rate {
     Selection,
 }
 
-/// A chip's colour and sort order for a tag namespace (`NS_COLORS` in
-/// `TagChip.tsx`, `tagGroupOrder`). General tags come last.
-pub fn tag_style(namespace: &str) -> (u32, u8) {
-    match namespace {
-        "creator" => (0xff6667, 0),
-        "studio" => (0xff6667, 10),
-        "series" => (0xc499ff, 1),
-        "character" => (0x30d159, 2),
-        "person" => (0x30d159, 10),
-        "species" => (0x00aaff, 3),
-        "rating" => (0xffd60a, 4),
-        "system" => (0xff9f0a, 10),
-        "" | "general" => (0xbdbec0, 99),
-        _ => (0xbdbec0, 10),
-    }
-}
-
 /// A folder chip without a colour of its own.
 pub const FOLDER_COLOR: u32 = 0x868e96;
 /// The preview fits this square.
 const PREVIEW: f32 = 200.;
-
-fn is_general(tag: &picto_library::TagRecord) -> bool {
-    matches!(tag.namespace.as_str(), "" | "general" | "default")
-}
-
-/// A tag's full name (`namespace:subtag`, or the subtag alone for a general
-/// tag), as the library adds and removes it by.
-fn tag_raw(tag: &picto_library::TagRecord) -> String {
-    if is_general(tag) {
-        tag.subname.clone()
-    } else {
-        format!("{}:{}", tag.namespace, tag.subname)
-    }
-}
 
 /// A tag's chip in its namespace's colour (`TagChip`). With the
 /// `showTagPrefixes` setting off, it shows the tag without its group.
@@ -117,9 +86,12 @@ fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
     ui::chip(
         ("inspector-tag", tag.tag_id.0 as usize),
         tag.subname.clone(),
-        tag_style(&tag.namespace).0,
+        crate::tags::chip_color(&tag.namespace),
     )
-    .namespace((show_prefixes && !is_general(tag)).then(|| tag.namespace.clone().into()))
+    .namespace(
+        (show_prefixes && crate::tags::chip_shows_namespace(&tag.namespace))
+            .then(|| tag.namespace.clone().into()),
+    )
 }
 
 /// A preview's size: the media scaled down to fit the square, never up.
@@ -135,37 +107,11 @@ fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
     }
 }
 
-fn format_size(bytes: u64) -> String {
-    let bytes = bytes as f64;
-    if bytes < 1024. {
-        format!("{bytes} B")
-    } else if bytes < 1048576. {
-        format!("{:.1} KB", bytes / 1024.)
-    } else if bytes < 1073741824. {
-        format!("{:.1} MB", bytes / 1048576.)
-    } else {
-        format!("{:.2} GB", bytes / 1073741824.)
-    }
-}
-
 /// `YYYY/MM/DD HH:MM` in local time.
 fn format_date(milliseconds: i64) -> Option<String> {
     use chrono::TimeZone;
     let date = chrono::Local.timestamp_millis_opt(milliseconds).single()?;
-    Some(date.format("%Y/%m/%d %H:%M").to_string())
-}
-
-/// The short type name the Type row shows (`fmtExt`).
-fn format_type(mime: &str) -> String {
-    let subtype = mime.split_once('/').map_or("", |(_, subtype)| subtype);
-    match subtype {
-        "jpeg" => "JPG".into(),
-        "svg+xml" => "SVG".into(),
-        "quicktime" => "MOV".into(),
-        "x-matroska" => "MKV".into(),
-        "epub+zip" => "EPUB".into(),
-        other => other.trim_start_matches("x-").to_uppercase(),
-    }
+    Some(date.format(crate::text::date_format::INSPECTOR).to_string())
 }
 
 /// What a chip's context menu was opened for.
@@ -1086,7 +1032,7 @@ impl Inspector {
         }
         properties = properties.child(Self::property(
             "Size",
-            format_size(root.total_size_bytes),
+            crate::text::size_to_gigabytes(root.total_size_bytes),
             cx,
         ));
         let mut types = details
@@ -1098,7 +1044,7 @@ impl Inspector {
         types.dedup();
         if let Some(kind) = match types[..] {
             [] => None,
-            [one] => Some(format_type(one)),
+            [one] => Some(crate::text::inspector_type(one)),
             _ => Some("Mixed".into()),
         } {
             properties = properties.child(Self::property("Type", kind, cx));
@@ -1231,7 +1177,7 @@ impl Render for Inspector {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mode, fitted, format_size, format_type, tag_style, wanted};
+    use super::{Mode, fitted, wanted};
 
     #[test]
     fn the_rail_describes_the_viewer_then_the_selection_then_the_destination() {
@@ -1247,35 +1193,5 @@ mod tests {
         assert_eq!(fitted(Some((400, 200))), (200., 100.));
         assert_eq!(fitted(Some((100, 50))), (100., 50.));
         assert_eq!(fitted(None), (200., 200.));
-    }
-
-    #[test]
-    fn sizes_roll_over_to_the_next_unit() {
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1536), "1.5 KB");
-        assert_eq!(format_size(5 * 1048576), "5.0 MB");
-        assert_eq!(format_size(3 * 1073741824 / 2), "1.50 GB");
-    }
-
-    #[test]
-    fn the_type_row_shows_a_short_name() {
-        assert_eq!(format_type("image/jpeg"), "JPG");
-        assert_eq!(format_type("video/quicktime"), "MOV");
-        assert_eq!(format_type("video/x-matroska"), "MKV");
-        assert_eq!(format_type("image/svg+xml"), "SVG");
-        assert_eq!(
-            format_type("application/x-shockwave-flash"),
-            "SHOCKWAVE-FLASH"
-        );
-        assert_eq!(format_type("image/png"), "PNG");
-    }
-
-    #[test]
-    fn general_tags_sort_after_every_named_group() {
-        let order = |namespace| tag_style(namespace).1;
-        assert!(order("creator") < order("series"));
-        assert!(order("rating") < order("somethingelse"));
-        assert!(order("somethingelse") < order("general"));
-        assert_eq!(order(""), order("general"));
     }
 }

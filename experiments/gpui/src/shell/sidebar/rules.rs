@@ -1,6 +1,7 @@
 //! The smart-folder rule model (`fieldConfig.ts`, `queryModel.ts`): groups
 //! of rules as the editor shows them, compiled to the library's
 //! `FilterExpr` and read back from it.
+use crate::grid::filters::{day_key, day_start, hex_to_lab};
 use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode, TextField};
 use picto_library::{LabColor, Rating, TagId};
 
@@ -377,65 +378,15 @@ fn number_range(rule: &Rule, scale: f64) -> Result<Range, String> {
     })
 }
 
-/// Days since 1970-01-01 of a civil date.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let of_era = year - era * 400;
-    let month_index = (month + 9) % 12;
-    let of_year = (153 * month_index + 2) / 5 + day - 1;
-    let of_era_day = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
-    era * 146_097 + of_era_day - 719_468
-}
-
-/// The civil date of a day since 1970-01-01.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let of_era = days - era * 146_097;
-    let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
-    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * of_year + 2) / 153;
-    let day = of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-/// `Date.parse` of a `YYYY-MM-DD` date: midnight UTC, in milliseconds.
-pub fn parse_date(text: &str) -> Option<i64> {
-    let mut parts = text.trim().splitn(3, '-');
-    let year = parts.next()?.parse::<i64>().ok()?;
-    let month = parts.next()?.parse::<i64>().ok()?;
-    let day = parts.next()?.parse::<i64>().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    Some(days_from_civil(year, month, day) * DAY_MS)
-}
-
-/// `new Date(ms).toISOString().slice(0, 10)`.
-pub fn format_date(ms: i64) -> String {
-    let (year, month, day) = civil_from_days(ms.div_euclid(DAY_MS));
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
 /// Today in UTC, as the date field's default.
 pub fn today() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_millis() as i64)
-        .unwrap_or(0);
-    format_date(now)
+    day_key(crate::now_ms())
 }
 
 /// `dateRange`.
 fn date_range(rule: &Rule) -> Result<(Option<u64>, Option<u64>), String> {
-    let parse = |text: &str| parse_date(text).ok_or("Smart-folder date is invalid.".to_owned());
+    let parse =
+        |text: &str| day_start(text.trim()).ok_or("Smart-folder date is invalid.".to_owned());
     let value = parse(&rule.value)?;
     let value2 = parse(rule.value2.as_deref().unwrap_or(&rule.value))?;
     let clamp = |ms: i64| Some(ms.max(0) as u64);
@@ -681,7 +632,7 @@ fn range_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>, s
 
 /// `dateRule`.
 fn date_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>) -> Rule {
-    let date = |ms: u64| format_date(ms as i64);
+    let date = |ms: u64| day_key(ms as i64);
     match (minimum, maximum) {
         (Some(minimum), Some(maximum)) if maximum.saturating_sub(minimum) < DAY_MS as u64 => {
             rule(field, "eq", date(minimum))
@@ -852,46 +803,6 @@ pub fn from_filter(
 
 // ── Colour ─────────────────────────────────────────────────────────
 
-/// `hexToLab`.
-pub fn hex_to_lab(value: &str) -> LabColor {
-    let hex = value.trim_start_matches('#');
-    let normalized = if hex.len() == 3 {
-        hex.chars()
-            .flat_map(|part| [part, part])
-            .collect::<String>()
-    } else {
-        format!("{hex:0<6}").chars().take(6).collect()
-    };
-    let channel = |offset: usize| {
-        let value = u8::from_str_radix(normalized.get(offset..offset + 2).unwrap_or("0"), 16)
-            .unwrap_or(0) as f32
-            / 255.;
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    let (r, g, b) = (channel(0), channel(2), channel(4));
-    let x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
-    let y = r * 0.2126 + g * 0.7152 + b * 0.0722;
-    let z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
-    let convert = |part: f32| {
-        if part > 0.008856 {
-            part.cbrt()
-        } else {
-            7.787 * part + 16. / 116.
-        }
-    };
-    let (fx, fy, fz) = (convert(x), convert(y), convert(z));
-    LabColor {
-        l: 116. * fy - 16.,
-        a: 500. * (fx - fy),
-        b: 200. * (fy - fz),
-        weight: 1.,
-    }
-}
-
 /// `labToHex`.
 pub fn lab_to_hex(color: &LabColor) -> String {
     let fy = (color.l + 16.) / 116.;
@@ -927,8 +838,8 @@ pub fn lab_to_hex(color: &LabColor) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Group, Rule, compile, default_group, format_date, from_filter, hex_to_lab, lab_to_hex,
-        normalize, parse_date,
+        Group, Rule, compile, day_key, day_start, default_group, from_filter, hex_to_lab,
+        lab_to_hex, normalize,
     };
     use picto_library::TagId;
     use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode};
@@ -962,12 +873,12 @@ mod tests {
 
     #[test]
     fn dates_are_utc_midnights_as_date_parse_reads_them() {
-        assert_eq!(parse_date("1970-01-02"), Some(86_400_000));
+        assert_eq!(day_start("1970-01-02"), Some(86_400_000));
         assert_eq!(
-            parse_date("2024-02-29").map(format_date).as_deref(),
+            day_start("2024-02-29").map(day_key).as_deref(),
             Some("2024-02-29")
         );
-        assert_eq!(parse_date("2024-13-01"), None);
+        assert_eq!(day_start("2024-13-01"), None);
     }
 
     #[test]

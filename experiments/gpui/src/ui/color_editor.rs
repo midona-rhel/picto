@@ -53,7 +53,7 @@ pub struct Hsv {
 
 /// `hexToHsv`; anything that is not `#rrggbb` is mid grey.
 pub fn hex_to_hsv(hex: &str) -> Hsv {
-    let rgb = parse_hex(hex).unwrap_or(0x808080);
+    let rgb = theme::parse_hex_code(hex).unwrap_or(0x808080);
     let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.;
     let (red, green, blue) = (channel(16), channel(8), channel(0));
     let max = red.max(green).max(blue);
@@ -96,14 +96,6 @@ pub fn hsv_to_hex(hsv: Hsv) -> String {
     let matched = hsv.value - chroma;
     let byte = |component: f32| ((component + matched) * 255.).round().clamp(0., 255.) as u8;
     format!("#{:02X}{:02X}{:02X}", byte(red), byte(green), byte(blue))
-}
-
-/// `#RRGGBB` as a number, if it is one.
-pub fn parse_hex(hex: &str) -> Option<u32> {
-    let digits = hex.strip_prefix('#')?;
-    (digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()))
-        .then(|| u32::from_str_radix(digits, 16).ok())
-        .flatten()
 }
 
 /// The colour committed: a code or none, and the tolerance.
@@ -155,7 +147,7 @@ impl ColorEditor {
                 return;
             }
             this.shown = typed.clone();
-            if parse_hex(&typed).is_some() {
+            if theme::parse_hex_code(&typed).is_some() {
                 this.hsv = hex_to_hsv(&typed);
                 this.has_color = true;
                 this.schedule(Some(typed), cx);
@@ -311,7 +303,7 @@ impl ColorEditor {
 impl Render for ColorEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let pure_hue = rgb(parse_hex(&hsv_to_hex(Hsv {
+        let pure_hue = rgb(theme::parse_hex_code(&hsv_to_hex(Hsv {
             hue: self.hsv.hue,
             saturation: 1.,
             value: 1.,
@@ -518,7 +510,7 @@ impl Render for ColorEditor {
             rows = rows.child(div().flex().gap(px(5.)).children(swatches.by_ref().take(7)));
         }
         editor = editor.child(rows);
-        let preview = parse_hex(&self.shown);
+        let preview = theme::parse_hex_code(&self.shown);
         editor.child(
             div()
                 .relative()
@@ -541,7 +533,7 @@ impl Render for ColorEditor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hsv, hex_to_hsv, hsv_to_hex, parse_hex};
+    use super::{Hsv, hex_to_hsv, hsv_to_hex};
 
     #[test]
     fn hex_and_hsv_round_trip() {
@@ -559,7 +551,5 @@ mod tests {
         );
         // Anything else is mid grey.
         assert_eq!(hsv_to_hex(hex_to_hsv("nope")), "#808080");
-        assert_eq!(parse_hex("#12345g"), None);
-        assert_eq!(parse_hex("#0000FF"), Some(0xff));
     }
 }

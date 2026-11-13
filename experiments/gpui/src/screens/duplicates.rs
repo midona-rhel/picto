@@ -537,12 +537,12 @@ impl DuplicatesScreen {
                         match choice {
                             Some(choice) => {
                                 library
-                                    .resolve_duplicate(a, b, choice, now_ms())
+                                    .resolve_duplicate(a, b, choice, crate::now_ms())
                                     .map_err(error)?;
                             }
                             None => {
                                 let resolved = library
-                                    .resolve_duplicate_automatically(a, b, now_ms())
+                                    .resolve_duplicate_automatically(a, b, crate::now_ms())
                                     .map_err(error)?;
                                 if resolved.is_none() {
                                     fetched.ambiguous = true;
@@ -966,13 +966,6 @@ fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
         .spawn(async move { load.await.ok() })
 }
 
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
 /// The rating as the Electron screen prints it: the stored name.
 /// `smartMergeWinner`: the side the library judges better, if it can tell.
 fn survivor(decision: DuplicateQualityDecision) -> Option<usize> {
@@ -1290,7 +1283,7 @@ impl DuplicatesScreen {
                 "Resolution",
                 compare::dimensions(side.file.pixel_width, side.file.pixel_height),
             ),
-            row("Size", compare::format_bytes(side.file.size_bytes)),
+            row("Size", crate::text::size_to_megabytes(side.file.size_bytes)),
             row("Format", side.file.mime_type.clone()),
             row(
                 "Rating",

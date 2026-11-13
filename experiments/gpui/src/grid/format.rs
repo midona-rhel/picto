@@ -71,10 +71,14 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-/// Thousands separators, as the sidebar counts show them.
-pub fn grouped(count: u64) -> String {
-    let digits = count.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+/// `toLocaleString()` for a count: digits grouped by thousands with commas.
+pub fn grouped(count: impl Into<i128>) -> String {
+    let count = count.into();
+    let digits = count.unsigned_abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if count < 0 {
+        out.push('-');
+    }
     for (index, digit) in digits.chars().enumerate() {
         if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
@@ -131,9 +135,11 @@ mod tests {
         assert_eq!(format_duration(65_000), "1:05");
         assert_eq!(format_duration(3_725_000), "1:02:05");
         assert_eq!(format_duration(900), "0:00");
-        assert_eq!(grouped(2673), "2,673");
-        assert_eq!(grouped(999), "999");
-        assert_eq!(grouped(1_000_000), "1,000,000");
+        assert_eq!(grouped(2673u64), "2,673");
+        assert_eq!(grouped(999u64), "999");
+        assert_eq!(grouped(1_000_000u64), "1,000,000");
+        assert_eq!(grouped(-1234567i64), "-1,234,567");
+        assert_eq!(grouped(0i64), "0");
     }
 
     #[test]

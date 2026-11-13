@@ -9,7 +9,7 @@ use crate::session::Session;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::field::Look;
-use crate::ui::tag_token_input::{self, Found, TagTokenInput};
+use crate::ui::tag_token_input::{self, TagTokenInput};
 use crate::ui::text_input::{Submitted, TextInput};
 use crate::ui::{self, action_button::Look as ButtonLook, modal::Presence, modal::Size};
 use gpui::{prelude::FluentBuilder as _, *};
@@ -149,7 +149,7 @@ impl SmartFolderEditor {
             let _ = this.update_in(cx, move |this, window, cx| {
                 let names = tags
                     .iter()
-                    .map(|tag| (tag.tag_id, found(tag).name()))
+                    .map(|tag| (tag.tag_id, crate::tags::record_name(tag)))
                     .collect::<Vec<_>>();
                 this.tags = Rc::new(tags);
                 let groups = rules::from_filter(&view.filter, &|id: TagId| {
@@ -250,15 +250,7 @@ impl SmartFolderEditor {
             "#808080",
             cx,
         );
-        let session = self.session.clone();
-        let search: tag_token_input::Search = Rc::new(move |query, cx| {
-            session.read(cx).run(move |library| {
-                library
-                    .tag_page(None, Some(&query), 0, 12)
-                    .map(|(tags, _, _)| tags.iter().map(found).collect())
-                    .unwrap_or_default()
-            })
-        });
+        let search = crate::tags::token_search(self.session.clone());
         let values = if rule.field == "tags" {
             rule.values.clone()
         } else {
@@ -334,10 +326,8 @@ impl SmartFolderEditor {
     fn input(&self, cx: &App) -> Result<SmartFolderInput, String> {
         let tags = self.tags.clone();
         let resolve = move |name: &str| {
-            let (namespace, subname) = match name.split_once(':') {
-                Some((namespace, subname)) => (namespace, subname),
-                None => ("", name),
-            };
+            let (namespace, subname) = crate::tags::split(name);
+            let namespace = namespace.unwrap_or_default();
             tags.iter()
                 .find(|tag| {
                     tag.subname == subname
@@ -650,13 +640,6 @@ enum Slot {
     Unit,
 }
 
-fn found(tag: &TagRecord) -> Found {
-    Found {
-        namespace: tag.namespace.clone(),
-        subname: tag.subname.clone(),
-    }
-}
-
 fn choices(options: &'static [(&'static str, &'static str)]) -> Vec<ui::select::Choice> {
     options
         .iter()
@@ -666,11 +649,7 @@ fn choices(options: &'static [(&'static str, &'static str)]) -> Vec<ui::select::
 
 /// `modalStyles.inlineLabel`.
 fn inline_label(text: &'static str, cx: &App) -> Div {
-    div()
-        .flex_none()
-        .text(theme::TEXT_SM)
-        .text_color(theme::theme(cx).text_secondary())
-        .child(text)
+    ui::modal::help_text(theme::theme(cx), text).flex_none()
 }
 
 /// `.label`.
@@ -818,7 +797,9 @@ impl SmartFolderEditor {
                             .rounded(px(4.))
                             .border_1()
                             .border_color(rgba(0xffffff38))
-                            .bg(ui::color_picker::parse(&hex).unwrap_or(theme.text_tertiary())),
+                            .bg(theme::parse_hex(&hex)
+                                .map(rgb)
+                                .unwrap_or(theme.text_tertiary())),
                     )
                     .child(text_field(&row.color, "color"))
                     .into_any_element()
@@ -1192,19 +1173,7 @@ impl Render for SmartFolderEditor {
             .text_color(theme.text_secondary())
             .text(theme::TEXT_MD);
         if let Some(error) = &self.error {
-            form = form.child(
-                div()
-                    .mb(px(12.))
-                    .px(px(12.))
-                    .py(px(9.))
-                    .rounded(px(theme::RADIUS_SM))
-                    .border_1()
-                    .border_color(theme.negative_at(35.))
-                    .bg(theme.negative_at(8.))
-                    .text_color(rgb(theme::ERROR_TEXT))
-                    .text(theme::TEXT_SM)
-                    .child(error.clone()),
-            );
+            form = form.child(ui::modal::error_banner(theme, error.clone()).mb(px(12.)));
         }
         if self.shows_details() {
             let editor = cx.entity().downgrade();

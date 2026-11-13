@@ -106,11 +106,7 @@ fn input_with(
 }
 
 pub fn editor(tag: TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
-    let name = input_with(
-        "namespace:tag",
-        Some(model::tag_name(&tag.namespace, &tag.subname)),
-        cx,
-    );
+    let name = input_with("namespace:tag", Some(crate::tags::record_name(&tag)), cx);
     let submitted = cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_editor(cx));
     // The rename button follows what is typed.
     let typed = cx.observe(&name, |_, _, cx| cx.notify());
@@ -174,17 +170,14 @@ fn group_name(input: &Entity<TextInput>, current: Option<&str>, cx: &App) -> Opt
 /// `TagChip`'s namespace prefix, shown only with `showTagPrefixes` on.
 fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
     let show = crate::settings::current(cx).show_tag_prefixes;
-    model::group_of(namespace)
+    crate::tags::group_of(namespace)
         .filter(|_| show)
         .map(SharedString::from)
 }
 
 /// `.pickerHint` and the dialogs' help text.
 fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .text_color(theme::theme(cx).text_secondary())
-        .text(theme::TEXT_SM)
-        .child(text.into())
+    ui::modal::help_text(theme::theme(cx), text)
 }
 
 impl TagsScreen {
@@ -221,7 +214,7 @@ impl TagsScreen {
             return;
         };
         let value = value.trim().to_owned();
-        if !value.is_empty() && value != model::tag_name(&tag.namespace, &tag.subname) {
+        if !value.is_empty() && value != crate::tags::record_name(&tag) {
             self.rename_tag(&tag, value, true, cx);
         }
     }
@@ -419,7 +412,7 @@ impl TagsScreen {
                                                 ui::chip(
                                                     ("editor-chip", tag.tag_id.0 as usize),
                                                     tag.subname.clone(),
-                                                    model::chip_color(&tag.namespace),
+                                                    crate::tags::chip_color(&tag.namespace),
                                                 )
                                                 .namespace(prefix(&tag.namespace, cx)),
                                             ),
@@ -540,7 +533,7 @@ impl TagsScreen {
                                 ui::chip(
                                     ("merge-chip", position),
                                     target.subname.clone(),
-                                    model::chip_color(&target.namespace),
+                                    crate::tags::chip_color(&target.namespace),
                                 )
                                 .namespace(prefix(&target.namespace, cx)),
                             )
@@ -594,7 +587,7 @@ impl TagsScreen {
                     "Delete tag",
                     format!(
                         "Delete {}? Existing media will remain untouched.",
-                        model::tag_name(&tag.namespace, &tag.subname)
+                        crate::tags::record_name(&tag)
                     ),
                     "Delete tag",
                     true,
@@ -665,20 +658,10 @@ impl TagsScreen {
     }
 }
 
-/// `.error`: an edit or search that failed.
+/// `.error`: an edit or search that failed, inset from the screen's edges.
 pub fn error_banner(message: String, cx: &App) -> Div {
-    let theme = theme::theme(cx);
-    div()
+    ui::modal::error_banner(theme::theme(cx), message)
         .mt(px(12.))
         .mx(px(24.))
         .flex_none()
-        .px(px(12.))
-        .py(px(9.))
-        .rounded(px(theme::RADIUS_SM))
-        .border_1()
-        .border_color(theme.negative_at(35.))
-        .bg(theme.negative_at(8.))
-        .text_color(rgb(theme::ERROR_TEXT))
-        .text(theme::TEXT_SM)
-        .child(message)
 }

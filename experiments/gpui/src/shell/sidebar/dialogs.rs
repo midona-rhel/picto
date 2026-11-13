@@ -3,11 +3,10 @@
 use super::{Sidebar, folder_id, tree};
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::tag_token_input::{self, Found, TagTokenInput};
+use crate::ui::tag_token_input::{self, TagTokenInput};
 use crate::ui::{self, action_button::Look as ButtonLook, modal::Presence, modal::Size};
 use gpui::*;
 use picto_library::{FolderId, Lifecycle};
-use std::rc::Rc;
 
 /// What a confirmation does when confirmed.
 #[derive(Clone)]
@@ -193,22 +192,7 @@ impl Sidebar {
                 },
             );
             let _ = this.update_in(cx, move |this, window, cx| {
-                let session = this.session.clone();
-                let search: tag_token_input::Search = Rc::new(move |query, cx| {
-                    session.read(cx).run(move |library| {
-                        library
-                            .tag_page(None, Some(&query), 0, 12)
-                            .map(|(tags, _, _)| {
-                                tags.into_iter()
-                                    .map(|tag| Found {
-                                        namespace: tag.namespace,
-                                        subname: tag.subname,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    })
-                });
+                let search = crate::tags::token_search(this.session.clone());
                 let tags = cx.new(|cx| TagTokenInput::new(common, search, cx));
                 let folders = unique.clone();
                 let changed = cx.subscribe_in(
@@ -249,10 +233,7 @@ impl Sidebar {
                 } else {
                     library.ensure_tag_definitions(&names)?.0
                 };
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|since| since.as_millis() as i64)
-                    .unwrap_or(0);
+                let now = crate::now_ms();
                 for folder in folders {
                     library.set_folder_auto_tags(folder, ids.clone(), now)?;
                 }
