@@ -8,7 +8,7 @@ use crate::theme::Text as _;
 use crate::ui::status_badge::Tone;
 use crate::ui::{self, action_button::Look};
 use crate::{motion, theme};
-use gpui::*;
+use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::query::ItemScope;
 
 /// `.subscriptionRail`
@@ -50,13 +50,26 @@ fn table_row(cells: Vec<(f32, AnyElement)>) -> Div {
     row
 }
 
-/// A header cell's text (`.subscriptionTableHeader`).
-fn heading(label: &'static str, right: bool) -> AnyElement {
-    let cell = div()
+/// A header cell's text (`.subscriptionTableHeader`): bold caption
+/// capitals with `letter-spacing: 0.05em`.
+fn heading(label: &'static str, right: bool, cx: &App) -> AnyElement {
+    let text = ui::tracked(
+        label.to_uppercase(),
+        Font {
+            weight: FontWeight::SEMIBOLD,
+            ..font(theme::FONT_UI)
+        },
+        theme::TEXT_CAPTION,
+        theme::TEXT_CAPTION,
+        theme::theme(cx).text_tertiary(),
+        theme::TEXT_CAPTION * 0.05,
+    );
+    div()
         .w_full()
-        .whitespace_nowrap()
-        .child(label.to_uppercase());
-    if right { cell.text_right() } else { cell }.into_any_element()
+        .flex()
+        .when(right, |cell| cell.justify_end())
+        .child(text)
+        .into_any_element()
 }
 
 /// A number cell (`.qCellNum`): right-aligned tabular figures.
@@ -328,10 +341,12 @@ impl SubscriptionsScreen {
                     .child(primary.padding(10.).full_width()),
             )
             .child(
+                // In production this button sits in its tooltip's span, so
+                // `.subscriptionActions > button` and its 10px padding do
+                // not reach it: it keeps the button's own 20px.
                 ui::action_button("subscription-hold", Look::Standard)
                     .label(hold_label)
                     .icon(hold_icon, 14.)
-                    .padding(10.)
                     .tip(ui::tip(hold_tip))
                     .disabled(acting)
                     .on_click(cx.listener(move |this, _, _, cx| this.hold_control(id, cx))),
@@ -431,8 +446,11 @@ impl SubscriptionsScreen {
 
     /// The run's counts, the last check, and the schedule and run limit
     /// (`.subscriptionProperties`).
-    fn properties(subscription: &data::Subscription, cx: &App) -> Div {
+    fn properties(subscription: &data::Subscription, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
+        let id = subscription.id;
+        let view = cx.entity().downgrade();
+        let posts_view = view.clone();
         let has_run = subscription.run_status.is_some();
         let progress = subscription.progress;
         let stored_posts: i64 = subscription.queries.iter().map(|query| query.posts).sum();
@@ -492,7 +510,7 @@ impl SubscriptionsScreen {
                     chrono::Local::now(),
                 )),
             ))
-            // TODO: save the chosen schedule (`setSchedule`).
+            // `setSchedule`
             .child(row(
                 "Schedule",
                 ui::select(
@@ -506,9 +524,14 @@ impl SubscriptionsScreen {
                     ],
                 )
                 .width(100.)
+                .on_change(move |schedule, _, cx| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.perform(vec![id], |_| super::Command::Schedule(schedule), cx)
+                    });
+                })
                 .into_any_element(),
             ))
-            // TODO: save the limit (`setPostsPerRun`).
+            // `setPostsPerRun`
             .child(row(
                 "Posts per run",
                 ui::number_input(
@@ -518,6 +541,11 @@ impl SubscriptionsScreen {
                     10_000,
                 )
                 .disabled(format::running(subscription))
+                .on_commit(move |posts, cx| {
+                    let _ = posts_view.update(cx, |this, cx| {
+                        this.perform(vec![id], |_| super::Command::PostsPerRun(posts), cx)
+                    });
+                })
                 .into_any_element(),
             ))
     }
@@ -593,7 +621,8 @@ impl SubscriptionsScreen {
             .gap(px(10.))
             .child(
                 div()
-                    .text(theme::TEXT_SM)
+                    .text_size(px(theme::TEXT_SM))
+                    .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("New files"),
             )
@@ -602,7 +631,8 @@ impl SubscriptionsScreen {
                     .flex()
                     .flex_col()
                     .gap(px(5.))
-                    .text(theme::TEXT_SM)
+                    .text_size(px(theme::TEXT_SM))
+                    .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                     .text_color(theme.text_tertiary())
                     .child("Automatically add to folders")
                     .child(folders),
@@ -717,14 +747,15 @@ impl SubscriptionsScreen {
             .into_any_element()
     }
 
-    /// The width a table row's cells share: the plane's inside less the
-    /// viewport's padding and gutter and the row's own padding.
+    /// The width a table row's cells share: the plane's inside (which the
+    /// measure, laid out inside the border, already is) less the viewport's
+    /// padding and gutter and the row's own padding.
     fn row_width(&self) -> f32 {
-        (self.plane_width.get() - 2. - 32. - ui::scrollbar::GUTTER - 24.).max(0.)
+        (self.plane_width.get() - 32. - ui::scrollbar::GUTTER - 24.).max(0.)
     }
 
     fn narrow(&self) -> bool {
-        self.plane_width.get() - 2. <= NARROW_PLANE
+        self.plane_width.get() <= NARROW_PLANE
     }
 
     /// A scrolling table (`.subscriptionTableViewport`) whose header stays at
@@ -827,10 +858,10 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Source", false),
-            heading("Query", false),
-            heading("Posts", true),
-            heading("Media", true),
+            heading("Source", false, cx),
+            heading("Query", false, cx),
+            heading("Posts", true, cx),
+            heading("Media", true, cx),
             div().into_any_element(),
         ]));
         let active = subscription.active_run_id.is_some();
@@ -991,11 +1022,11 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Started", false),
-            heading("Status", false),
-            heading("Fetched", true),
-            heading("Reused", true),
-            heading("Notes", false),
+            heading("Started", false, cx),
+            heading("Status", false, cx),
+            heading("Fetched", true, cx),
+            heading("Reused", true, cx),
+            heading("Notes", false, cx),
         ]));
         let rows = detail
             .runs
@@ -1049,10 +1080,10 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Status", false),
-            heading("Post", false),
-            heading("Why it failed", false),
-            heading("Last seen", false),
+            heading("Status", false, cx),
+            heading("Post", false, cx),
+            heading("Why it failed", false, cx),
+            heading("Last seen", false, cx),
             div().into_any_element(),
         ]));
         let now = chrono::Local::now();
@@ -1131,7 +1162,6 @@ impl SubscriptionsScreen {
                 .child(
                     ui::action_button("issues-more", Look::Standard)
                         .label("Load more")
-                        .compact()
                         .disabled(self.loading_more)
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_issues(cx))),
                 )
@@ -1177,7 +1207,6 @@ impl SubscriptionsScreen {
             .child(
                 ui::action_button("add-query", Look::Standard)
                     .label("Add")
-                    .compact()
                     .disabled(true),
             )
     }

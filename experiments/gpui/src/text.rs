@@ -17,6 +17,20 @@ fn class(character: char) -> u8 {
     }
 }
 
+/// The ASCII punctuation and symbols in the order of the Unicode root
+/// collation, which Chromium's `localeCompare` follows; any other
+/// punctuation sorts after them by code point.
+const PUNCTUATION_ORDER: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
+
+/// Where a character sorts within its class: punctuation by the root
+/// collation's order, everything else by its case-folded value.
+fn within_class(character: char) -> (usize, String) {
+    let rank = PUNCTUATION_ORDER
+        .find(character)
+        .unwrap_or(PUNCTUATION_ORDER.len());
+    (rank, character.to_lowercase().collect())
+}
+
 /// `localeCompare(…, { sensitivity: 'base', numeric: true })`: case is
 /// ignored and runs of digits compare by their value.
 pub fn natural_order(left: &str, right: &str) -> Ordering {
@@ -42,8 +56,9 @@ pub fn natural_order(left: &str, right: &str) -> Ordering {
                 }
             }
             (Some(a), Some(b)) => {
-                let fold = |character: char| character.to_lowercase().collect::<String>();
-                let order = class(a).cmp(&class(b)).then_with(|| fold(a).cmp(&fold(b)));
+                let order = class(a)
+                    .cmp(&class(b))
+                    .then_with(|| within_class(a).cmp(&within_class(b)));
                 if order != Ordering::Equal {
                     return order;
                 }
@@ -248,6 +263,18 @@ mod tests {
         // Punctuation sorts before digits, as the collator puts it.
         assert_eq!(natural_order("a-b", "a1"), Ordering::Less);
         assert_eq!(natural_order("a_", "a1"), Ordering::Less);
+        // Punctuation among itself follows the root collation, as the
+        // Tags screen's `#` section shows it.
+        let mut symbols = vec![
+            "!", "!!", ">_(", "...", "?", "^_^", "_/", "_>", "_3", "_d", "_o",
+        ];
+        symbols.sort_by(|left, right| natural_order(left, right));
+        assert_eq!(
+            symbols,
+            [
+                "_/", "_>", "_3", "_d", "_o", "!", "!!", "?", "...", "^_^", ">_("
+            ]
+        );
     }
 
     #[test]

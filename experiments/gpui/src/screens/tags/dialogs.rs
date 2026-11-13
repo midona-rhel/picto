@@ -61,12 +61,12 @@ impl Dialog {
         )
     }
 
-    /// The field that takes the keyboard when the dialog opens.
+    /// The field that takes the keyboard when the dialog opens. The
+    /// editor's field waits for a click: `TagEditorModal`'s does not take
+    /// focus, which stays on the tag that was clicked.
     fn input(&self) -> Option<&Entity<TextInput>> {
         match self {
-            Dialog::Editor { name, .. }
-            | Dialog::RenameGroup { name, .. }
-            | Dialog::CreateGroup { name, .. } => Some(name),
+            Dialog::RenameGroup { name, .. } | Dialog::CreateGroup { name, .. } => Some(name),
             Dialog::Merge { search, .. } => Some(search),
             _ => None,
         }
@@ -100,6 +100,7 @@ fn input_with(
         let mut input = TextInput::dialog(placeholder, cx);
         if let Some(text) = text {
             input.set_text(text, cx);
+            input.caret_to_end(cx);
         }
         input
     })
@@ -422,6 +423,8 @@ impl TagsScreen {
                                                 .mt(px(7.))
                                                 .text_color(theme.text_secondary())
                                                 .text(theme::TEXT_SM)
+                                                // The modal body's 20px line.
+                                                .line_height(px(20.))
                                                 .child(format!(
                                                     "{} media items",
                                                     tag.assignment_count
@@ -454,7 +457,6 @@ impl TagsScreen {
                                                 ButtonLook::Standard,
                                             )
                                             .label("Rename")
-                                            .compact()
                                             .icon("tags-edit", 14.)
                                             .disabled(busy || typed.trim().is_empty())
                                             .on_click(
@@ -482,7 +484,6 @@ impl TagsScreen {
                                 .child(
                                     ui::action_button("editor-merge", ButtonLook::Standard)
                                         .label("Merge into...")
-                                        .compact()
                                         .icon("tags-git-merge", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -493,7 +494,6 @@ impl TagsScreen {
                                 .child(
                                     ui::action_button("editor-delete", ButtonLook::Danger)
                                         .label("Delete")
-                                        .compact()
                                         .icon("tags-trash", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {

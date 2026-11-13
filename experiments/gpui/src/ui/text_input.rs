@@ -1286,6 +1286,13 @@ impl TextInput {
         self.selection_reversed = false;
         cx.notify();
     }
+    /// The caret after the last character, where a browser leaves it in a
+    /// field given its value before it takes focus.
+    pub fn caret_to_end(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        cx.notify();
+    }
     pub fn is_empty(&self) -> bool {
         self.content.is_empty()
     }

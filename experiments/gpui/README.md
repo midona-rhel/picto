@@ -596,7 +596,14 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   rail (cover, name, status with the failure as its tooltip, actions, run
   progress, run counts, last check, schedule, posts per run, destination
   folders and tags) and the Sources, History and Problems tables, with the
-  sticky header, hover rows and row buttons. Names rename in place, from the
+  sticky header, hover rows and row buttons. Opening a subscription
+  acknowledges its open issues (`subscriptions.issues.acknowledge`), so its
+  badge stops warning, as `refreshDetail` does. The schedule (the rail's
+  select and the menus' Schedule submenu, for one or several) and the
+  posts-per-run field save through `subscriptions.schedule` and
+  `subscriptions.posts_per_run`. Badges and table headings keep their
+  letter spacing (`ui::tracked`, which draws a shaped line glyph by glyph
+  with the spacing CSS adds). Names rename in place, from the
   card's menu or a double-click on the rail's name, through the library's
   published write. The reads are the application catalog's own, run through
   the library's consistent auxiliary read; the list and the query rows use
@@ -850,14 +857,15 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Subscriptions: no run has been started from this app yet; failures and completions are not announced (no toasts or
   system notifications). Creating subscriptions, galleries and sources, and
   the per-source Run, Hold, Group, Edit and Delete, are drawn but not
-  performed. Also not built: the schedule submenu, saving the schedule select's choice and the posts-per-run field, the cover
-  dialog, reset and delete confirmations, adding or removing destination
-  folders and tags, the source details and edit windows, the accounts
-  window and login warnings, the gallery progress total, and acknowledging
-  issues when a subscription is opened. Site names and example queries are
-  copied from the source catalog in `core`. Letter spacing on badges and
-  table headers, and the native `title` tooltips of truncated cells, are
-  not drawn.
+  performed. Also not built: the cover dialog, reset and delete
+  confirmations (their menu rows are drawn and do nothing yet), adding or
+  removing destination folders and tags, the source details and edit
+  windows, the accounts window and login warnings, and the gallery progress
+  total. Site names and example queries are copied from the source catalog
+  in `core`. The native `title` tooltips of truncated cells are not drawn.
+  A cover saved as a rendered crop shows here; production's media protocol
+  serves a thumbnail only for a hash that has an original, so it falls back
+  to the download glyph for those covers.
 - Drawn with their hover states and tooltips but not wired: the
   inspector's Export (for an item, a selection and a destination), and in
   the library switcher's popover
@@ -972,9 +980,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
   the menu as a full-window layer; the menu itself chooses between its
-  pop-up windows and the in-window panel. Subscriptions' Schedule row stays
-  disabled rather than a submenu; `subscriptions.schedule`, which also sets
-  the next run time, is now reachable and is its `TODO`. The grid menus'
+  pop-up windows and the in-window panel. The grid menus'
   view options are rows that check inside "Layout", "Sort by" and "Display"
   submenus, kept open while they change, where the titlebar's View options
   shows production's panel. "Open With Other" is
