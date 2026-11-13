@@ -286,7 +286,7 @@ impl Render for QuickLook {
                 ),
         )
         .child(
-            strip::strip()
+            strip::strip(false, cx)
                 .child(step(
                     "quick-look-previous",
                     "toolbar-chevron-left",

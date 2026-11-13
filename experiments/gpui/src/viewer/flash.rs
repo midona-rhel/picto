@@ -97,7 +97,7 @@ mod tests {
         let fixtures = crate::demo::fixtures().unwrap();
         let mut flash = Flash::open(fixtures.path().join("interactive.swf"));
         let deadline = Instant::now() + Duration::from_secs(20);
-        let mut next_frame = || loop {
+        let next_frame = || loop {
             if let Some(result) = flash.frame.lock().unwrap().take() {
                 return result.unwrap();
             }

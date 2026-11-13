@@ -446,6 +446,9 @@ impl Render for Viewer {
             };
             (members, session.member)
         };
+        // A document's footer or a player's controls keep the bottom edge;
+        // the member strip then takes a row below the surface.
+        let row = members > 1 && self.surface.read(cx).has_bottom_bar();
         // "Media" while the player shows, for its keys.
         let media = self.surface.read(cx).player().is_some();
         let pane = div()
@@ -488,7 +491,7 @@ impl Render for Viewer {
                     });
                 }),
             )
-            .child(self.surface.clone());
+            .child(strip::surface_frame(row).child(self.surface.clone()));
         let surface = self.surface.downgrade();
         let mut pane = video::on_actions(pane, move |cx| {
             surface
@@ -512,7 +515,7 @@ impl Render for Viewer {
                     }))
             };
             pane = pane.child(
-                strip::strip()
+                strip::strip(row, cx)
                     .child(member_step(
                         "member-previous",
                         "toolbar-chevron-left",

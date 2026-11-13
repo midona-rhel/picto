@@ -142,6 +142,20 @@ impl MediaSurface {
         self.player.clone()
     }
 
+    /// Whether the shown item draws a bar of its own along the pane's bottom
+    /// edge: a document's page footer, or a player's controls. A host that
+    /// has a strip to show there gives it a row of its own instead.
+    pub fn has_bottom_bar(&self) -> bool {
+        match self.mode {
+            Mode::Document => matches!(
+                &self.document,
+                Some(Document::Paged(_) | Document::Reader(_))
+            ),
+            Mode::Media | Mode::Flash => true,
+            _ => false,
+        }
+    }
+
     /// Whether the shown item has zoom controls: images and PDF pages do,
     /// Flash and the other documents do not.
     pub fn zoomable(&self) -> bool {
@@ -582,11 +596,14 @@ impl MediaSurface {
             Mode::Media => {
                 let kind = media.unwrap_or(super::video::model::Kind::Video);
                 let settings = crate::settings::current(cx);
-                let options = super::video::model::Options::for_item(
+                let mut options = super::video::model::Options::for_item(
                     kind,
                     settings.video_auto_play,
                     settings.video_loop,
                 );
+                // `PICTO_GPUI_SILENT=1`: nothing plays aloud, for checks run
+                // while nobody is at the machine.
+                options.muted |= std::env::var_os("PICTO_GPUI_SILENT").is_some();
                 let mime = mime.to_owned();
                 self.player = Some(cx.new(|cx| {
                     super::video::VideoPlayer::new(kind, path, &mime, options, Some(thumbnail), cx)

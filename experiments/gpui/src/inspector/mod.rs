@@ -192,6 +192,8 @@ struct Confirm {
 pub struct Inspector {
     session: Entity<Session>,
     thumbnails: Entity<Thumbnails>,
+    /// The torn page drawn for a cover that has no thumbnail.
+    art: Option<crate::grid::art::Art>,
     name: Entity<TextInput>,
     notes: Entity<TextInput>,
     collapsed: HashSet<&'static str>,
@@ -361,6 +363,7 @@ impl Inspector {
         Self {
             session,
             thumbnails,
+            art: None,
             name,
             notes,
             collapsed: HashSet::new(),
@@ -729,13 +732,50 @@ impl Inspector {
     /// The cover in its fitted frame, with the format badge
     /// (`InspectorPreview`).
     fn preview(
-        &self,
+        &mut self,
         thumbnail: std::path::PathBuf,
         dimensions: Option<(u32, u32)>,
         label: AnyElement,
         cx: &mut Context<Self>,
     ) -> Div {
         let (width, height) = fitted(dimensions);
+        // `ThumbnailImage`: a thumbnail that cannot be loaded gives way to
+        // the torn page, fitted inside the same frame.
+        let failed = self
+            .thumbnails
+            .read(cx)
+            .is_failed(&Resource::Path(thumbnail.clone().into()));
+        let picture = if failed {
+            use crate::grid::art;
+            let surface = theme::theme(cx).surface_2();
+            let broken = art::Art::for_color(&mut self.art, surface).broken.clone();
+            let (art_width, art_height) = art::BROKEN_SIZE;
+            let scale = (width / art_width).min(height / art_height);
+            let (drawn_width, drawn_height) = (
+                (art_width + 2. * art::MARGIN) * scale,
+                (art_height + 2. * art::MARGIN) * scale,
+            );
+            div()
+                .size_full()
+                .rounded(px(theme::RADIUS_MD))
+                .bg(surface)
+                .child(
+                    img(broken)
+                        .absolute()
+                        .left(px((width.round() - drawn_width) / 2.))
+                        .top(px((height.round() - drawn_height) / 2.))
+                        .w(px(drawn_width))
+                        .h(px(drawn_height)),
+                )
+                .into_any_element()
+        } else {
+            img(thumbnail)
+                .image_cache(&self.thumbnails)
+                .size_full()
+                .rounded(px(theme::RADIUS_MD))
+                .object_fit(ObjectFit::Cover)
+                .into_any_element()
+        };
         div()
             .on_mouse_down(
                 MouseButton::Right,
@@ -758,13 +798,7 @@ impl Inspector {
                     .shadow(vec![
                         BoxShadow::new(px(0.), px(0.), rgba(0x0000001a).into()).blur_radius(px(5.)),
                     ])
-                    .child(
-                        img(thumbnail)
-                            .image_cache(&self.thumbnails)
-                            .size_full()
-                            .rounded(px(theme::RADIUS_MD))
-                            .object_fit(ObjectFit::Cover),
-                    )
+                    .child(picture)
                     // The glass edge: a 1px ring over the image.
                     .child(
                         div()

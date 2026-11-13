@@ -522,6 +522,9 @@ impl Render for DetailWindow {
             .as_ref()
             .filter(|_| self.group)
             .map_or(1, |details| details.media.len());
+        // A document's footer or a player's controls keep the bottom edge;
+        // the member strip then takes a row below the surface.
+        let row = members > 1 && self.surface.read(cx).has_bottom_bar();
         let mut pane = div()
             .id("detail-window")
             .track_focus(&self.focus)
@@ -549,7 +552,7 @@ impl Render for DetailWindow {
             // TODO: the viewer's context menu (`useViewerEntityContextMenu`)
             // on a right-click, Copy (the file to the clipboard) and the
             // per-image zoom memory (`zoomCache`).
-            .child(self.surface.clone())
+            .child(strip::surface_frame(row).child(self.surface.clone()))
             .child(self.boundary.notice(End::First, cx))
             .child(self.boundary.notice(End::Last, cx));
         if members > 1 {
@@ -564,7 +567,7 @@ impl Render for DetailWindow {
                     .on_click(cx.listener(move |this, _, _, cx| this.step_member(delta, cx)))
             };
             pane = pane.child(
-                strip::strip()
+                strip::strip(row, cx)
                     .child(member_step(
                         "detail-member-previous",
                         "toolbar-chevron-left",
