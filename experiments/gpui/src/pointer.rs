@@ -23,13 +23,29 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 /// One line of playback.
-enum Line {
+pub enum Line {
     Input(PlatformInput),
     /// Pressed as though typed: bindings first, then the focused text field.
     Keys(Vec<Keystroke>),
 }
 
-fn parse(line: &str) -> Option<Line> {
+impl Line {
+    /// Gives the line to the window as though it came from the system.
+    pub fn deliver(self, window: &mut Window, cx: &mut App) {
+        match self {
+            Line::Input(event) => {
+                window.dispatch_event(event, cx);
+            }
+            Line::Keys(keys) => {
+                for key in keys {
+                    window.dispatch_keystroke(key, cx);
+                }
+            }
+        }
+    }
+}
+
+pub fn parse(line: &str) -> Option<Line> {
     let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
     // GPUI parses static text; a playback line lives for the whole run.
     let keystroke = |text: String| Keystroke::parse(String::leak(text)).ok();
@@ -135,16 +151,7 @@ pub fn start(window: AnyWindowHandle, cx: &mut App) {
                 .timer(Duration::from_millis(8))
                 .await;
             while let Ok(event) = receiver.try_recv() {
-                let delivered = window.update(cx, |_, window, cx| match event {
-                    Line::Input(event) => {
-                        window.dispatch_event(event, cx);
-                    }
-                    Line::Keys(keys) => {
-                        for key in keys {
-                            window.dispatch_keystroke(key, cx);
-                        }
-                    }
-                });
+                let delivered = window.update(cx, |_, window, cx| event.deliver(window, cx));
                 if delivered.is_err() {
                     return;
                 }

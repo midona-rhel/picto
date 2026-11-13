@@ -8,6 +8,8 @@ mod grid;
 mod inspector;
 mod keymap;
 mod motion;
+#[cfg(test)]
+mod offscreen;
 mod pointer;
 mod screens;
 mod session;
@@ -69,6 +71,40 @@ fn match_chromium_text_weight() {
     }
 }
 
+/// What the app needs before its window opens: the bundled fonts, the
+/// theme, and every component's key bindings.
+fn prepare(cx: &mut App) {
+    cx.text_system()
+        .add_fonts(vec![
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto.ttf")),
+            // Static weights cut from the same variable font, which
+            // loads from memory at its default weight only.
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-Medium.ttf")),
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-SemiBold.ttf")),
+            std::borrow::Cow::Borrowed(include_bytes!("../assets/FiraMono.ttf")),
+        ])
+        .expect("load bundled inspector font");
+    cx.set_global(theme::DARK);
+    stats::start_reporting(cx);
+    ui::text_input::bind(cx);
+    ui::menu::bind(cx);
+    ui::modal::bind(cx);
+    ui::tag_token_input::bind(cx);
+    shell::sidebar::bind(cx);
+    ui::overlay_shell::bind(cx);
+    screens::subscriptions::bind(cx);
+    ui::popover::bind(cx);
+    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    viewer::document::bind(cx);
+    // The registry's shortcuts, at their defaults until the
+    // settings are read and applied.
+    keymap::install(
+        settings::registry::KeyboardPreset::Us,
+        &settings::registry::Overrides::new(),
+        cx,
+    );
+}
+
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
@@ -92,35 +128,7 @@ fn main() {
     gpui_platform::application()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            cx.text_system()
-                .add_fonts(vec![
-                    std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto.ttf")),
-                    // Static weights cut from the same variable font, which
-                    // loads from memory at its default weight only.
-                    std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-Medium.ttf")),
-                    std::borrow::Cow::Borrowed(include_bytes!("../assets/Roboto-SemiBold.ttf")),
-                    std::borrow::Cow::Borrowed(include_bytes!("../assets/FiraMono.ttf")),
-                ])
-                .expect("load bundled inspector font");
-            cx.set_global(theme::DARK);
-            stats::start_reporting(cx);
-            ui::text_input::bind(cx);
-            ui::menu::bind(cx);
-            ui::modal::bind(cx);
-            ui::tag_token_input::bind(cx);
-            shell::sidebar::bind(cx);
-            ui::overlay_shell::bind(cx);
-            screens::subscriptions::bind(cx);
-            ui::popover::bind(cx);
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-            viewer::document::bind(cx);
-            // The registry's shortcuts, at their defaults until the
-            // settings are read and applied.
-            keymap::install(
-                settings::registry::KeyboardPreset::Us,
-                &settings::registry::Overrides::new(),
-                cx,
-            );
+            prepare(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             // Stop the workers and checkpoint the copy before the process
             // ends, as the Electron app closes its library before quitting.
