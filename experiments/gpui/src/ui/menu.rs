@@ -234,7 +234,6 @@ impl From<Item> for Entry {
 
 pub struct Submenu {
     label: SharedString,
-    keywords: Vec<SharedString>,
     icon: Option<&'static str>,
     children: Vec<Entry>,
 }
@@ -242,7 +241,6 @@ pub struct Submenu {
 pub fn submenu(label: impl Into<SharedString>, children: Vec<Entry>) -> Submenu {
     Submenu {
         label: label.into(),
-        keywords: Vec::new(),
         icon: None,
         children,
     }
@@ -251,12 +249,6 @@ pub fn submenu(label: impl Into<SharedString>, children: Vec<Entry>) -> Submenu 
 impl Submenu {
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
-        self
-    }
-    // Part of the shared API; the grid's menu does not use it.
-    #[allow(dead_code)]
-    pub fn keywords<S: Into<SharedString>>(mut self, words: impl IntoIterator<Item = S>) -> Self {
-        self.keywords = words.into_iter().map(Into::into).collect();
         self
     }
 }
@@ -514,7 +506,7 @@ fn search(entries: &[Entry], raw: &str) -> Vec<Path> {
             Entry::Separator | Entry::Swatches(_) | Entry::View(_) => return,
             Entry::Item(item) if item.disabled => None,
             Entry::Item(item) => matching(&item.label, &item.keywords),
-            Entry::Submenu(submenu) => matching(&submenu.label, &submenu.keywords),
+            Entry::Submenu(submenu) => matching(&submenu.label, &[]),
         };
         if let Some(score) = found {
             matches.push((score, order, path));
@@ -2159,39 +2151,16 @@ impl Render for Menu {
 /// is turned off. GPUI has no option for this, so it asks AppKit directly.
 #[cfg(target_os = "macos")]
 fn without_system_shadow(window: &Window) {
-    use std::ffi::{c_char, c_void};
-    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-    #[link(name = "objc", kind = "dylib")]
-    unsafe extern "C" {
-        fn sel_registerName(name: *const c_char) -> *const c_void;
-        fn objc_msgSend();
-    }
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return;
-    };
-    // SAFETY: `ns_view` is the live content view of this window; `window`
-    // and `setHasShadow:` are AppKit methods with these signatures, called
-    // on the main thread.
-    unsafe {
-        let send_id: extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let send_bool: extern "C" fn(*mut c_void, *const c_void, bool) =
-            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-        let ns_window = send_id(
-            appkit.ns_view.as_ptr(),
-            sel_registerName(c"window".as_ptr()),
-        );
-        if !ns_window.is_null() {
-            send_bool(
-                ns_window,
-                sel_registerName(c"setHasShadow:".as_ptr()),
-                false,
-            );
+    use super::window_chrome::appkit;
+    appkit::with_ns_window(window, |ns_window| {
+        // SAFETY: `setHasShadow:` is an NSWindow method taking a BOOL,
+        // called on the main thread.
+        unsafe {
+            let send_bool: extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, bool) =
+                std::mem::transmute(appkit::send());
+            send_bool(ns_window, appkit::selector(c"setHasShadow:"), false);
         }
-    }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]

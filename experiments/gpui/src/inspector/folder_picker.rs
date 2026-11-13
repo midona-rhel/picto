@@ -795,17 +795,6 @@ fn guides(depth: usize, continues: Vec<bool>, last: bool, color: Rgba) -> impl I
     .inset_0()
 }
 
-/// The first case-insensitive match of `query` in `text`.
-fn highlight(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
-    let query = query.trim();
-    let lower = text.to_lowercase();
-    if query.is_empty() || lower.len() != text.len() {
-        return None;
-    }
-    let start = lower.find(&query.to_lowercase())?;
-    Some(start..start + query.len())
-}
-
 impl FolderPicker {
     fn row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
@@ -840,23 +829,7 @@ impl FolderPicker {
             highlight_box = highlight_box
                 .group_hover(group.clone(), move |style| style.bg(theme.surface_hover()));
         }
-        let name = StyledText::new(folder.name.clone()).with_highlights(
-            highlight(&folder.name, &self.query).map(|range| {
-                (
-                    range,
-                    HighlightStyle {
-                        font_weight: Some(FontWeight::BOLD),
-                        color: Some(theme.text().into()),
-                        underline: Some(UnderlineStyle {
-                            color: Some(theme.contrast(20.).into()),
-                            thickness: px(1.),
-                            wavy: false,
-                        }),
-                        ..Default::default()
-                    },
-                )
-            }),
-        );
+        let name = overlay_shell::search_match(folder.name.clone(), &self.query, cx);
         let id = folder.id;
         let mut right = div()
             .flex_1()

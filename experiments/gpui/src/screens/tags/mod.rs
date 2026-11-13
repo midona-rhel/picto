@@ -7,6 +7,7 @@ pub mod model;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
+use crate::tags::Preferences;
 use crate::theme::Text as _;
 use crate::ui::{
     self,
@@ -18,7 +19,7 @@ use crate::ui::{
 use crate::{motion, theme};
 use dialogs::{Dialog, Layer};
 use gpui::{prelude::FluentBuilder as _, *};
-use model::{Preferences, Row, Rows};
+use model::{Row, Rows};
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
 use std::time::{Duration, Instant};
 
@@ -308,12 +309,12 @@ impl TagsScreen {
                         .iter()
                         .filter_map(|name| {
                             tags.iter()
-                                .find(|tag| model::tag_name(&tag.namespace, &tag.subname) == *name)
+                                .find(|tag| crate::tags::record_name(tag) == *name)
                                 .cloned()
                         })
                         .collect::<Vec<_>>();
                     Ok((
-                        model::rank_matches(found, &query, |tag| tag.subname.as_str()),
+                        crate::text::rank_matches(found, &query, |tag| tag.subname.as_str()),
                         None,
                     ))
                 })
@@ -531,18 +532,14 @@ impl TagsScreen {
     }
 
     fn set_starred(&mut self, name: String, starred: bool, cx: &mut Context<Self>) {
-        let mut next = self.preferences.clone();
-        next.starred = self.preferences.with_star(&name, starred);
-        self.save_preferences(next, cx);
+        crate::tags::set_starred(&name, starred, cx);
+        self.follow_settings(cx);
     }
 
     /// Moves a starred tag's star to its new name after a rename.
     fn rename_star(&mut self, previous: &str, next_name: &str, cx: &mut Context<Self>) {
-        if let Some(starred) = self.preferences.renamed_star(previous, next_name) {
-            let mut next = self.preferences.clone();
-            next.starred = starred;
-            self.save_preferences(next, cx);
-        }
+        crate::tags::rename_star(previous, next_name, cx);
+        self.follow_settings(cx);
     }
 
     fn set_group_color(&mut self, group: &str, color: Option<&str>, cx: &mut Context<Self>) {
@@ -554,7 +551,7 @@ impl TagsScreen {
     /// Renames a tag, or merges it into the tag that already has the name,
     /// as the application's `tags.rename_or_merge` does.
     fn rename_tag(&mut self, tag: &TagRecord, name: String, close: bool, cx: &mut Context<Self>) {
-        let previous = model::tag_name(&tag.namespace, &tag.subname);
+        let previous = crate::tags::record_name(tag);
         let id = tag.tag_id;
         let next_name = name.trim().to_owned();
         let star_name = next_name.clone();
@@ -571,7 +568,7 @@ impl TagsScreen {
         self.mutate(
             move |library| {
                 library
-                    .merge_tags(source, destination, now_ms())
+                    .merge_tags(source, destination, crate::now_ms())
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             },
@@ -585,7 +582,7 @@ impl TagsScreen {
         self.mutate(
             move |library| {
                 library
-                    .delete_tag(tag_id, now_ms())
+                    .delete_tag(tag_id, crate::now_ms())
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             },
@@ -682,7 +679,7 @@ impl TagsScreen {
         let answer = self.session.read(cx).run(|library| {
             library.tags().map(|tags| {
                 tags.iter()
-                    .map(|tag| model::tag_name(&tag.namespace, &tag.subname))
+                    .map(crate::tags::record_name)
                     .collect::<std::collections::HashSet<_>>()
             })
         });
@@ -713,7 +710,7 @@ impl TagsScreen {
             let name = session
                 .tags
                 .get(&tag_id.0)
-                .map(|tag| model::tag_name(&tag.namespace, &tag.subname))
+                .map(crate::tags::record_name)
                 .unwrap_or_default();
             let filters = crate::grid::filters::Filters {
                 include_tags: vec![crate::grid::filters::TagChoice {
@@ -760,60 +757,8 @@ impl TagsScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let name = model::tag_name(&tag.namespace, &tag.subname);
-        let current = model::group_of(&tag.namespace);
-        let starred = self.preferences.is_starred(&name);
-        let mut targets = self
-            .namespaces
-            .iter()
-            .filter_map(|ns| model::group_of(&ns.name))
-            .filter(|group| Some(group) != current.as_ref())
-            .collect::<Vec<_>>();
-        targets.sort_by(|left, right| model::compare_names(left, right));
-        targets.dedup();
-        let mut entries: Vec<menu::Entry> = vec![
-            menu::item("filter", "Filter Items with This Tag")
-                .icon("menu-filter")
-                .into(),
-            if starred {
-                menu::item("unstar", "Remove from Starred").icon("menu-star-off")
-            } else {
-                menu::item("star", "Add to Starred").icon("menu-star")
-            }
-            .into(),
-        ];
-        if !targets.is_empty() {
-            entries.push(
-                menu::submenu(
-                    if current.is_some() {
-                        "Move to Group…"
-                    } else {
-                        "Add to Group…"
-                    },
-                    targets
-                        .into_iter()
-                        .map(|group| {
-                            menu::item("move-to-group", group.clone())
-                                .icon("menu-bookmark")
-                                .value(group)
-                                .into()
-                        })
-                        .collect(),
-                )
-                .icon("menu-bookmarks")
-                .into(),
-            );
-        }
-        if current.is_some() {
-            entries.push(
-                menu::item("remove-from-group", "Remove from this Group")
-                    .icon("menu-bookmark")
-                    .into(),
-            );
-        }
+        let mut entries = crate::tags::common_menu(&tag, &self.namespaces, true, cx);
         entries.extend([
-            menu::Entry::Separator,
-            menu::item("copy", "Copy Tag").icon("menu-copy").into(),
             menu::Entry::Separator,
             menu::item("edit", "Edit Tag").icon("menu-edit").into(),
             menu::item("merge", "Merge Into…")
@@ -837,17 +782,6 @@ impl TagsScreen {
         cx: &mut Context<Self>,
     ) {
         let chosen = self.preferences.colors.get(&group.name).cloned();
-        let selected = model::GROUP_COLORS
-            .iter()
-            .position(|(_, color)| color.map(str::to_owned) == chosen);
-        let swatches = model::GROUP_COLORS
-            .iter()
-            .map(|(label, color)| menu::Swatch {
-                label: (*label).into(),
-                color: color.and_then(model::parse_color).map(rgb),
-                value: color.unwrap_or_default().into(),
-            })
-            .collect();
         let entries = vec![
             menu::item("show-group", "Show Tags in Group")
                 .icon("menu-bookmark")
@@ -856,7 +790,7 @@ impl TagsScreen {
             menu::item("rename-group", "Rename Group…")
                 .icon("menu-edit")
                 .into(),
-            menu::swatches("group-color", swatches, selected).into(),
+            ui::color_picker::menu_row("group-color", chosen.as_deref()).into(),
             menu::item("delete-group", "Delete Group")
                 .icon("menu-trash")
                 .into(),
@@ -874,19 +808,19 @@ impl TagsScreen {
         match self.menu_target.as_ref() {
             Some(MenuTarget::Tag(tag)) => {
                 let tag = tag.clone();
-                let name = model::tag_name(&tag.namespace, &tag.subname);
+                let name = crate::tags::record_name(&tag);
                 match action {
                     "filter" => self.show_items(tag.tag_id, cx),
                     "star" => self.set_starred(name, true, cx),
                     "unstar" => self.set_starred(name, false, cx),
                     "move-to-group" => {
                         if let Some(group) = value {
-                            let next = model::name_in_group(&tag.subname, Some(&group));
+                            let next = crate::tags::name_in_group(&tag.subname, Some(&group));
                             self.rename_tag(&tag, next, false, cx);
                         }
                     }
                     "remove-from-group" => {
-                        let next = model::name_in_group(&tag.subname, None);
+                        let next = crate::tags::name_in_group(&tag.subname, None);
                         self.rename_tag(&tag, next, false, cx);
                     }
                     "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name)),
@@ -1043,7 +977,7 @@ impl TagsScreen {
             .cloned()
             .collect::<Vec<_>>();
         // A stable sort: groups of one order keep the library's name order.
-        groups.sort_by_key(|ns| model::group_order(&ns.name));
+        groups.sort_by_key(|ns| crate::tags::group_order(&ns.name));
 
         let mut column = div()
             .pt(px(8.))
@@ -1114,7 +1048,7 @@ impl TagsScreen {
                     ),
             );
         for group in groups {
-            let color = rgb(model::group_color(&group.name, &self.preferences));
+            let color = rgb(crate::tags::group_color(&group.name, &self.preferences));
             let active = showing(Browse::Group(group.name.clone()));
             let label = if group.name.is_empty() {
                 "general".to_owned()
@@ -1217,9 +1151,9 @@ impl TagsScreen {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = theme::theme(cx);
-        let name = model::tag_name(&tag.namespace, &tag.subname);
+        let name = crate::tags::record_name(tag);
         let starred = self.preferences.is_starred(&name);
-        let color = rgb(model::group_color(&tag.namespace, &self.preferences));
+        let color = rgb(crate::tags::group_color(&tag.namespace, &self.preferences));
         let count = format!("({})", tag.assignment_count);
         // The name keeps its own width beside the count unless it is too
         // long, when it takes what is left and ends in an ellipsis.
@@ -1567,15 +1501,11 @@ fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), Strin
         .get(name.trim())
         .copied();
     match target {
-        Some(target) if target != id => library.merge_tags(id, target, now_ms()),
+        Some(target) if target != id => library.merge_tags(id, target, crate::now_ms()),
         _ => library.rename_tag(id, name),
     }
     .map(|_| ())
     .map_err(|error| error.to_string())
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }
 
 impl Render for TagsScreen {
@@ -1655,7 +1585,7 @@ impl Render for TagsScreen {
 
 #[cfg(test)]
 mod tests {
-    use super::{model, page, rename_or_merge};
+    use super::{page, rename_or_merge};
     use picto_library::Library;
     use std::path::PathBuf;
 
@@ -1694,7 +1624,7 @@ mod tests {
         );
 
         // A rename goes through and back.
-        let name = model::tag_name(&probe.namespace, &probe.subname);
+        let name = crate::tags::record_name(&probe);
         let renamed = format!("{name}_gpui_check");
         rename_or_merge(&library, probe.tag_id, &renamed).unwrap();
         assert!(
@@ -1702,8 +1632,7 @@ mod tests {
                 .tags()
                 .unwrap()
                 .iter()
-                .any(|tag| tag.tag_id == probe.tag_id
-                    && model::tag_name(&tag.namespace, &tag.subname) == renamed)
+                .any(|tag| tag.tag_id == probe.tag_id && crate::tags::record_name(&tag) == renamed)
         );
         rename_or_merge(&library, probe.tag_id, &name).unwrap();
 

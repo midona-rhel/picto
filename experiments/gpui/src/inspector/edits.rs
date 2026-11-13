@@ -3,9 +3,10 @@
 //! source addresses, and the confirmation before overwriting what some
 //! selected items already have.
 use super::membership::{self, Touches};
-use super::tag_picker::{self, name};
+use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
+use crate::tags::record_name as name;
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -22,10 +23,6 @@ pub(super) struct Target {
     pub ids: Vec<RootId>,
     pub tags: Vec<TagRecord>,
     pub folders: Vec<FolderId>,
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }
 
 impl Inspector {
@@ -250,13 +247,7 @@ impl Inspector {
                 .iter()
                 .any(|choice| choice.tag_id == tag.0)
             {
-                let name = session
-                    .tags
-                    .get(&tag.0)
-                    .map(|record| {
-                        crate::screens::tags::model::tag_name(&record.namespace, &record.subname)
-                    })
-                    .unwrap_or_default();
+                let name = session.tags.get(&tag.0).map(name).unwrap_or_default();
                 filters.include_tags.push(crate::grid::filters::TagChoice {
                     tag_id: tag.0,
                     name,
@@ -396,7 +387,7 @@ impl Inspector {
         if sort {
             tags.sort_by_key(|tag| {
                 (
-                    super::tag_style(&tag.namespace).1,
+                    crate::tags::inspector_order(&tag.namespace),
                     tag.subname.to_lowercase(),
                 )
             });
@@ -404,7 +395,7 @@ impl Inspector {
         let mut chips = div().flex().flex_wrap().gap(px(4.));
         let empty = tags.is_empty();
         for tag in tags {
-            let raw = super::tag_raw(&tag);
+            let raw = name(&tag);
             let menu_tag = tag.clone();
             chips = chips.child(
                 super::tag_chip(&tag, cx)
@@ -436,7 +427,11 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) {
         let entries = match &target {
-            ChipMenu::Tag(tag) => tag_picker::tag_menu(tag, &[], false, true, cx),
+            ChipMenu::Tag(tag) => {
+                let mut entries = crate::tags::common_menu(tag, &[], false, cx);
+                entries.push(menu::item("remove", "Remove Tag").icon("menu-x").into());
+                entries
+            }
             ChipMenu::Folder(_) => vec![
                 menu::item("open-folder", "Open Folder").into(),
                 menu::item("remove", "Remove").into(),
@@ -460,10 +455,10 @@ impl Inspector {
         match self.menu_target.clone() {
             Some(ChipMenu::Tag(tag)) => match action {
                 "filter" => self.show_tag_items(tag.tag_id, cx),
-                "star" => tag_picker::set_starred(&name(&tag), true, cx),
-                "unstar" => tag_picker::set_starred(&name(&tag), false, cx),
+                "star" => crate::tags::set_starred(&name(&tag), true, cx),
+                "unstar" => crate::tags::set_starred(&name(&tag), false, cx),
                 "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name(&tag))),
-                "remove" => self.set_tag(super::tag_raw(&tag), false, false, cx),
+                "remove" => self.set_tag(name(&tag), false, false, cx),
                 _ => {}
             },
             Some(ChipMenu::Folder(folder)) => match action {
@@ -490,7 +485,7 @@ impl Inspector {
         match self.shown {
             Mode::Item => self.edit(
                 Touches::Text,
-                move |library, target| library.set_source_urls(target, urls, now_ms()),
+                move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
                 |_, _| {},
                 cx,
             ),
@@ -533,13 +528,13 @@ impl Inspector {
         match overwrite {
             Overwrite::Notes(notes) => self.edit(
                 Touches::Text,
-                move |library, target| library.set_notes(target, Some(notes), now_ms()),
+                move |library, target| library.set_notes(target, Some(notes), crate::now_ms()),
                 |_, _| {},
                 cx,
             ),
             Overwrite::Sources(urls) => self.edit(
                 Touches::Text,
-                move |library, target| library.set_source_urls(target, urls, now_ms()),
+                move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
                 |_, _| {},
                 cx,
             ),

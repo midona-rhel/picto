@@ -2,8 +2,7 @@ use super::tooltip::{self, Tip};
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A status badge's colour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,20 +17,7 @@ pub enum Tone {
 /// `subscriptionStatusPulse`: a syncing badge breathes between 58% and full
 /// strength and back, each half on `ease-in-out`.
 pub fn pulse(elapsed: Duration) -> f32 {
-    let period = motion::STATUS_PULSE.as_secs_f32();
-    let phase = (elapsed.as_secs_f32() % period) / (period / 2.);
-    let (from, to, along) = if phase < 1. {
-        (0.58, 1., phase)
-    } else {
-        (1., 0.58, phase - 1.)
-    };
-    from + (to - from) * motion::EASE_IN_OUT.ease(along)
-}
-
-/// One clock for every badge, so all syncing badges breathe together.
-fn clock() -> Instant {
-    static START: OnceLock<Instant> = OnceLock::new();
-    *START.get_or_init(Instant::now)
+    0.58 + (1. - 0.58) * motion::pulse(elapsed)
 }
 
 /// The small uppercase status label of the subscription screens
@@ -82,7 +68,7 @@ impl RenderOnce for StatusBadge {
         };
         let opacity = if self.tone == Tone::Running {
             window.request_animation_frame();
-            pulse(clock().elapsed())
+            pulse(motion::loop_clock())
         } else {
             1.
         };

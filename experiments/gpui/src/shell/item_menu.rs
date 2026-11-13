@@ -5,6 +5,7 @@
 //! the chosen row through the session and the library.
 use super::Shell;
 use crate::backend;
+use crate::grid::format::grouped;
 use crate::grid::layout::ViewMode;
 use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
@@ -113,16 +114,6 @@ fn media_link(hash: &str, mime: &str) -> String {
     format!("media://localhost/file/{hash}.{extension}")
 }
 
-/// `tagName`: general tags go without their namespace.
-fn tag_name(tag: &picto_library::TagRecord) -> String {
-    let namespace = tag.namespace.trim().to_lowercase();
-    if namespace.is_empty() || namespace == "general" {
-        tag.subname.clone()
-    } else {
-        format!("{namespace}:{}", tag.subname)
-    }
-}
-
 /// `permanentDeleteMessage`.
 fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
     let limit = grouped(undo_limit.max(0) as u64);
@@ -138,17 +129,6 @@ fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
             "This exceeds the undo limit of {limit} media items, including collection members, so it cannot be undone."
         ),
     }
-}
-
-fn grouped(count: u64) -> String {
-    crate::grid::format::grouped(count)
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
 
 impl Shell {
@@ -285,8 +265,10 @@ impl Shell {
             status,
             grayscale: false,
             clipboard_tags: !self.items.tag_clipboard.is_empty(),
-            // Production lists the associated applications on macOS; this
-            // offers the system chooser's one row until they can be listed.
+            // TODO: on macOS, look up the applications that open this type
+            // (`OpenWith::Pending` while that runs) and list them, as
+            // production does; until then this offers the system chooser's
+            // one row.
             open_with: if media {
                 OpenWith::Chooser
             } else {
@@ -1078,7 +1060,7 @@ impl Shell {
                 Ok(library
                     .tags_by_id(&tag_ids)?
                     .iter()
-                    .map(tag_name)
+                    .map(crate::tags::record_name)
                     .collect::<Vec<_>>())
             }),
             |this, tags, _, cx| {
@@ -1109,7 +1091,7 @@ impl Shell {
                         winning_collection_id: Some(group.collection_id),
                         name: None,
                         notes: None,
-                        modified_at_ms: now_ms(),
+                        modified_at_ms: crate::now_ms(),
                     })?;
                     Ok(true)
                 } else {
@@ -1156,7 +1138,7 @@ impl Shell {
                 this.session
                     .update(cx, |session, cx| session.clear_selection(cx));
                 this.edit(
-                    Box::new(move |library| library.ungroup_selection(&selection, now_ms())),
+                    Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
                     Reread::Results,
                     window,
                     cx,
@@ -1270,9 +1252,14 @@ impl Shell {
             .update(cx, |session, cx| session.close_viewer(cx));
         let answer = self.session.read(cx).run(move |library| {
             let deleted = if reject {
-                library.delete_rejected(&selection, now_ms(), undo_limit, require_undoable)
+                library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
             } else {
-                library.permanently_delete(&selection, now_ms(), undo_limit, require_undoable)
+                library.permanently_delete(
+                    &selection,
+                    crate::now_ms(),
+                    undo_limit,
+                    require_undoable,
+                )
             };
             // The files a delete that cannot be undone frees are removed from
             // the copy's blobs by the application's media worker

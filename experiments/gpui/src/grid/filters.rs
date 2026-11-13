@@ -424,11 +424,11 @@ impl Filters {
                 let labels = self
                     .include_mimes
                     .iter()
-                    .map(|mime| mime_label(mime))
+                    .map(|mime| crate::text::filter_type(mime))
                     .chain(
                         self.exclude_mimes
                             .iter()
-                            .map(|mime| format!("-{}", mime_label(mime))),
+                            .map(|mime| format!("-{}", crate::text::filter_type(mime))),
                     )
                     .collect::<Vec<_>>();
                 if labels.is_empty() {
@@ -539,33 +539,6 @@ pub fn hex_to_lab(value: &str) -> LabColor {
     }
 }
 
-/// `mimeLabel`: a family's name, a few common types by their usual names,
-/// and otherwise the subtype in capitals without its `x-`.
-pub fn mime_label(mime: &str) -> String {
-    let alias = match mime {
-        "image/*" => Some("Images"),
-        "video/*" => Some("Videos"),
-        "audio/*" => Some("Audio"),
-        "application/*" => Some("Documents & Files"),
-        "text/*" => Some("Text"),
-        "model/*" => Some("3D Models"),
-        "font/*" => Some("Fonts"),
-        "multipart/*" => Some("Web Archives"),
-        "image/jpeg" => Some("JPG"),
-        "image/svg+xml" => Some("SVG"),
-        "video/quicktime" => Some("MOV"),
-        "video/x-matroska" => Some("MKV"),
-        "audio/mpeg" => Some("MP3"),
-        "application/pdf" => Some("PDF"),
-        _ => None,
-    };
-    if let Some(alias) = alias {
-        return alias.to_owned();
-    }
-    let subtype = mime.rsplit('/').next().unwrap_or(mime);
-    subtype.strip_prefix("x-").unwrap_or(subtype).to_uppercase()
-}
-
 /// The type menu's rows: families first, then exact types, each sorted by
 /// label; the types offered are the facet's and any already chosen.
 pub fn type_rows(facets: &[String], filters: &Filters) -> (Vec<String>, Vec<String>) {
@@ -584,7 +557,7 @@ pub fn type_rows(facets: &[String], filters: &Filters) -> (Vec<String>, Vec<Stri
     for list in [&mut types, &mut families] {
         let mut seen = std::collections::HashSet::new();
         list.retain(|mime| seen.insert(mime.clone()));
-        list.sort_by_key(|mime| mime_label(mime));
+        list.sort_by_key(|mime| crate::text::filter_type(mime));
     }
     (families, types)
 }
@@ -620,13 +593,13 @@ pub fn range_label(
 /// A UTC day as `YYYY-MM-DD`.
 pub fn day_key(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
-        .map(|date| date.format("%Y-%m-%d").to_string())
+        .map(|date| date.format(crate::text::date_format::DAY).to_string())
         .unwrap_or_default()
 }
 
 /// Midnight UTC of a `YYYY-MM-DD` day.
 pub fn day_start(key: &str) -> Option<i64> {
-    let date = chrono::NaiveDate::parse_from_str(key, "%Y-%m-%d").ok()?;
+    let date = chrono::NaiveDate::parse_from_str(key, crate::text::date_format::DAY).ok()?;
     Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis())
 }
 
@@ -896,14 +869,6 @@ mod tests {
         assert_eq!(filters.label(Field::Color, names), "#FF8800");
         assert_eq!(filters.label(Field::Imported, names), "Date Imported");
         assert_eq!(Filters::default().label(Field::Tags, names), "Tags");
-    }
-
-    #[test]
-    fn mime_labels() {
-        assert_eq!(mime_label("application/*"), "Documents & Files");
-        assert_eq!(mime_label("image/webp"), "WEBP");
-        assert_eq!(mime_label("video/x-msvideo"), "MSVIDEO");
-        assert_eq!(mime_label("image/svg+xml"), "SVG");
     }
 
     #[test]

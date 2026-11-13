@@ -113,11 +113,6 @@ impl Toolbar {
     }
 }
 
-/// A colour with no opacity, for a gradient that fades to it.
-fn clear(color: Rgba) -> Rgba {
-    Rgba { a: 0., ..color }
-}
-
 impl Toolbar {
     /// The scope title (`.scopeTitle`): the destination's ancestors as links,
     /// then its own name. It runs from 72px in to the toolbar's middle and
@@ -187,7 +182,7 @@ impl Toolbar {
                     .w(px(40.))
                     .bg(linear_gradient(
                         90.,
-                        linear_color_stop(clear(background), 0.),
+                        linear_color_stop(theme::clear(background), 0.),
                         linear_color_stop(background, 1.),
                     )),
             )

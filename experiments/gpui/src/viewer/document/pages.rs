@@ -207,48 +207,8 @@ pub fn comic_pages<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect();
-    pages.sort_by(|left, right| natural_compare(left, right));
+    pages.sort_by(|left, right| crate::text::natural_order(left, right));
     pages
-}
-
-/// Compares runs of digits by value and everything else without case.
-pub fn natural_compare(left: &str, right: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    let (mut left, mut right) = (left.chars().peekable(), right.chars().peekable());
-    loop {
-        match (left.peek().copied(), right.peek().copied()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(a), Some(b)) if a.is_ascii_digit() && b.is_ascii_digit() => {
-                let number = |chars: &mut std::iter::Peekable<std::str::Chars>| {
-                    let mut digits = String::new();
-                    while let Some(digit) = chars.peek().copied().filter(char::is_ascii_digit) {
-                        digits.push(digit);
-                        chars.next();
-                    }
-                    digits
-                };
-                let (a, b) = (number(&mut left), number(&mut right));
-                let (a_trimmed, b_trimmed) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
-                let order = a_trimmed
-                    .len()
-                    .cmp(&b_trimmed.len())
-                    .then_with(|| a_trimmed.cmp(b_trimmed));
-                if order != Ordering::Equal {
-                    return order;
-                }
-            }
-            (Some(a), Some(b)) => {
-                let order = a.to_lowercase().cmp(b.to_lowercase());
-                if order != Ordering::Equal {
-                    return order;
-                }
-                left.next();
-                right.next();
-            }
-        }
-    }
 }
 
 /// Decodes a page picture: raster formats through `image`, SVG through
@@ -425,7 +385,7 @@ pub fn bound_render_size(width: u32, height: u32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{bound_render_size, comic_pages, natural_compare};
+    use super::{bound_render_size, comic_pages};
     use std::cmp::Ordering;
 
     #[test]
@@ -445,8 +405,8 @@ mod tests {
             pages,
             ["cover.svg", "Page 1.webp", "page 2.JPG", "Page 10.png"]
         );
-        assert_eq!(natural_compare("a02", "a2"), Ordering::Equal);
-        assert_eq!(natural_compare("a9", "a10"), Ordering::Less);
+        assert_eq!(crate::text::natural_order("a02", "a2"), Ordering::Equal);
+        assert_eq!(crate::text::natural_order("a9", "a10"), Ordering::Less);
     }
 
     #[test]

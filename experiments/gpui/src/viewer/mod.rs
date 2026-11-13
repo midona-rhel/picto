@@ -183,7 +183,7 @@ fn session_media(session: &Session) -> Option<Media> {
             key: name.to_owned(),
             thumbnail: PathBuf::new(),
             natural: None,
-            path: session.fixtures.path().join(name),
+            path: session.scratch.path().join(name),
             mime: mime.to_owned(),
         });
     }
@@ -227,9 +227,7 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
 
 /// `useRecordMediaView`: opening an item records it for Recently Viewed.
 pub fn record_view(session: &Session, root: RootId) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis() as i64);
+    let now = crate::now_ms();
     // Nothing waits for the answer; a failed record changes nothing shown.
     drop(session.run(move |library| library.record_recent_view(root, now)));
 }
