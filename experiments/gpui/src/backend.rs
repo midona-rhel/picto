@@ -32,7 +32,7 @@ pub enum Request {
 }
 pub enum Reply {
     Ready(Vec<Navigation>, Vec<TagRecord>),
-    Page(u64, bool, RootPage, crate::prefs::ViewPrefs),
+    Page(u64, bool, RootPage, crate::grid::prefs::ViewPrefs),
     Details(RootId, RootDetails),
     Error(String),
 }
@@ -191,11 +191,11 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                         };
                         saved("grid:defaults")
                             .and_then(|defaults| {
-                                saved(&crate::prefs::scope_key(&scope))
+                                saved(&crate::grid::prefs::scope_key(&scope))
                                     .map(|overrides| (defaults, overrides))
                             })
                             .and_then(|(defaults, overrides)| {
-                                let mut prefs = crate::prefs::ViewPrefs::resolve(
+                                let mut prefs = crate::grid::prefs::ViewPrefs::resolve(
                                     &scope, &defaults, &overrides, &seed,
                                 );
                                 if shuffle {

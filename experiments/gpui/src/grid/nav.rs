@@ -1,7 +1,7 @@
 //! Keyboard movement through the grid. A port of `useGridArrowNav.ts`: the
 //! same steps, the same column and page arithmetic, the same rule for
 //! scrolling the target into view.
-use crate::layout::Tile;
+use super::layout::Tile;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Move {

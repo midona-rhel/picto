@@ -74,6 +74,51 @@ struct HoverFade {
     duration: Duration,
 }
 
+/// One two-state value that moves as a CSS transition does. Components keep
+/// one per element for their hover highlight.
+pub struct Fade {
+    on: bool,
+    since: std::time::Instant,
+    from: f32,
+    duration: Duration,
+}
+
+impl Default for Fade {
+    fn default() -> Self {
+        Self {
+            on: false,
+            since: std::time::Instant::now(),
+            from: 0.,
+            duration: Duration::ZERO,
+        }
+    }
+}
+
+impl Fade {
+    pub fn set(&mut self, on: bool, duration: Duration) {
+        self.from = self.value();
+        self.on = on;
+        self.since = std::time::Instant::now();
+        self.duration = duration;
+    }
+
+    /// 0 at rest, 1 fully on.
+    pub fn value(&self) -> f32 {
+        if self.duration.is_zero() {
+            return if self.on { 1. } else { 0. };
+        }
+        fade_value(self.from, self.on, self.since.elapsed(), self.duration)
+    }
+
+    pub fn on(&self) -> bool {
+        self.on
+    }
+
+    pub fn animating(&self) -> bool {
+        self.since.elapsed() < self.duration
+    }
+}
+
 /// Two-state values that move as CSS transitions do: toward the new state on
 /// the default curve, starting from wherever the previous move had reached.
 /// Used for hover highlights and for sliding the rails in and out.
@@ -103,10 +148,6 @@ impl Fades {
         self.fades.get(&key).map_or(0., |fade| {
             fade_value(fade.from, fade.hovered, fade.since.elapsed(), fade.duration)
         })
-    }
-
-    pub fn hovered(&self, key: (&'static str, usize)) -> bool {
-        self.fades.get(&key).is_some_and(|fade| fade.hovered)
     }
 
     pub fn animating(&self) -> bool {

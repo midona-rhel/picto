@@ -1,11 +1,23 @@
+use crate::{theme, ui};
 use gpui::*;
+
+/// The user moved the zoom to this tile size.
 pub struct Changed(pub f32);
+
+const MINIMUM: f32 = 100.;
+const MAXIMUM: f32 = 450.;
+const TRACK: f32 = 80.;
+const KNOB: f32 = 12.;
+
+/// The toolbar's zoom control: a slider between two step buttons.
 pub struct Zoom {
     value: f32,
     bounds: Bounds<Pixels>,
     dragging: bool,
 }
+
 impl EventEmitter<Changed> for Zoom {}
+
 impl Zoom {
     pub fn new() -> Self {
         Self {
@@ -14,32 +26,35 @@ impl Zoom {
             dragging: false,
         }
     }
+
     /// Moves the control to a value that came from elsewhere, without
     /// reporting it back as a user change.
     pub fn show(&mut self, value: f32, cx: &mut Context<Self>) {
-        self.value = value.clamp(100., 450.);
+        self.value = value.clamp(MINIMUM, MAXIMUM);
         cx.notify();
     }
+
     fn set(&mut self, value: f32, cx: &mut Context<Self>) {
-        self.value = value.clamp(100., 450.);
+        self.value = value.clamp(MINIMUM, MAXIMUM);
         cx.emit(Changed(self.value));
         cx.notify();
     }
+
     fn at(&mut self, x: Pixels, cx: &mut Context<Self>) {
-        self.set(
-            100. + 350. * (f32::from(x - self.bounds.origin.x) / 80.).clamp(0., 1.),
-            cx,
-        );
+        let along = (f32::from(x - self.bounds.origin.x) / TRACK).clamp(0., 1.);
+        self.set(MINIMUM + (MAXIMUM - MINIMUM) * along, cx);
     }
 }
+
 impl Render for Zoom {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme::theme(cx);
         let entity = cx.entity().downgrade();
         let slider = div()
             .id("zoom-slider")
             .relative()
-            .w(px(80.))
-            .h(px(24.))
+            .w(px(TRACK))
+            .h(px(theme::ICON_BUTTON))
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -75,63 +90,33 @@ impl Render for Zoom {
                     .absolute()
                     .left_0()
                     .right_0()
-                    .top(px(10.))
+                    .top(px((theme::ICON_BUTTON - 3.) / 2.))
                     .h(px(3.))
                     .rounded_full()
-                    .bg(rgb(0x343538)),
+                    .bg(theme.contrast(12.)),
             )
             .child(
                 div()
                     .absolute()
-                    .top(px(5.))
-                    .left(px((self.value - 100.) / 350. * 68.))
-                    .size(px(12.))
+                    .top(px((theme::ICON_BUTTON - KNOB) / 2.))
+                    .left(px(
+                        (self.value - MINIMUM) / (MAXIMUM - MINIMUM) * (TRACK - KNOB)
+                    ))
+                    .size(px(KNOB))
                     .rounded_full()
-                    .bg(rgb(0xf8f9fb)),
+                    .bg(theme.text()),
             );
         div()
             .flex()
             .items_center()
             .gap(px(6.))
             .child(
-                div()
-                    .id("zoom-out")
-                    .w(px(24.))
-                    .h(px(24.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_center()
-                    .text_size(px(18.))
-                    .rounded_md()
-                    .hover(|s| s.bg(rgb(0x303134)))
-                    .child(
-                        svg()
-                            .path("toolbar-minus")
-                            .size(px(16.))
-                            .text_color(rgba(crate::theme::TEXT_SECONDARY)),
-                    )
+                ui::icon_button("zoom-out", "toolbar-minus")
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value - 50., cx))),
             )
             .child(slider)
             .child(
-                div()
-                    .id("zoom-in")
-                    .w(px(24.))
-                    .h(px(24.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_center()
-                    .text_size(px(18.))
-                    .rounded_md()
-                    .hover(|s| s.bg(rgb(0x303134)))
-                    .child(
-                        svg()
-                            .path("toolbar-plus")
-                            .size(px(16.))
-                            .text_color(rgba(crate::theme::TEXT_SECONDARY)),
-                    )
+                ui::icon_button("zoom-in", "toolbar-plus")
                     .on_click(cx.listener(|this, _, _, cx| this.set(this.value + 50., cx))),
             )
     }

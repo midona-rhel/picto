@@ -102,6 +102,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
+- The grid is still one element tree per tile, the thumbnail cache has no
+  cancellation or priority, and the text input and media surface still carry
+  colours of their own.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
 - Windows and Linux are not built or tested. The Ruffle frame path reads back
@@ -128,15 +131,26 @@ to conceal layout errors.
 
 ## Structure
 
-`backend.rs` is the small adapter to the existing Rust owners; it does not
-implement SQL or duplicate ingestion rules. `layout.rs` is the grid geometry,
-`prefs.rs` the saved view, `format.rs` the grid labels, `reveal.rs` and
-`motion.rs` the thumbnail reveal and easing, `shell.rs` the sidebar, toolbar
-and scope transition, `inspector.rs` the inspector, `surface.rs` image and Flash
-presentation, `input.rs` native text input, `theme.rs` design tokens and icons,
-and `main.rs` the window and grid. Production integration should reuse the
-application service layer for jobs and events rather than growing a second
-application backend.
+One model, separate views, shared components:
+
+- `session.rs` is the model: the destination, its results, the selection and
+  the viewer. It talks to `backend.rs`, the small adapter to the existing Rust
+  owners, and says what kind of thing changed.
+- Each part of the window is its own cached view that repaints only for the
+  changes it shows: `shell/` (the root, the sidebar, the toolbar), `grid/`
+  (the grid view with its layout, saved view, labels, reveal, keyboard
+  movement and thumbnail cache), `inspector.rs` and `viewer/` (image and Flash
+  presentation).
+- `ui/` holds the shared components, one implementation each: icon button,
+  sidebar row, section header, badge, button, text input, zoom control and the
+  titlebar drag region. Views compose these.
+- `theme.rs` holds the design tokens, derived from one background, one
+  contrast colour and one text colour as `tokens.css` derives them.
+  `motion.rs` holds durations and easing. Views take colours, sizes and
+  timings from these and write none of their own.
+
+Production integration should reuse the application service layer for jobs
+and events rather than growing a second application backend.
 
 ## Attribution
 

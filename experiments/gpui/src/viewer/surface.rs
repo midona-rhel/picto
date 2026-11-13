@@ -11,14 +11,12 @@ pub struct MediaSurface {
     full_key: String,
     thumbnail_task: Option<Task<()>>,
     full_task: Option<Task<()>>,
-    flash: Option<crate::flash::Flash>,
+    flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
     opened: String,
     error: Option<String>,
     bounds: Bounds<Pixels>,
     focus: Option<FocusHandle>,
-    /// Window width taken by the rails and padding around the preview.
-    pub chrome_width: f32,
 }
 impl MediaSurface {
     pub fn stop(&mut self) {
@@ -42,7 +40,7 @@ impl MediaSurface {
         self.error = None;
         self.stop();
         if mime == "application/x-shockwave-flash" {
-            self.flash = Some(crate::flash::Flash::open(path));
+            self.flash = Some(super::flash::Flash::open(path));
             self.flash_task = Some(cx.spawn(async move |entity, cx| {
                 loop {
                     cx.background_executor()
@@ -133,18 +131,15 @@ impl MediaSurface {
     }
 }
 impl Render for MediaSurface {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-        let width = (f32::from(window.viewport_size().width) - self.chrome_width).max(1.);
-        let height = (f32::from(window.viewport_size().height) - 210.).max(1.);
         let entity = cx.entity().downgrade();
         let mut surface = div()
             .id("media-surface")
             .track_focus(&focus)
             .key_context("Flash")
             .relative()
-            .w(px(width))
-            .h(px(height))
+            .size_full()
             .overflow_hidden()
             .child(
                 canvas(
@@ -204,7 +199,7 @@ impl Render for MediaSurface {
                 }
                 if let Some(flash) = &this.flash {
                     cx.stop_propagation();
-                    let key = crate::flash::key_descriptor(&event.keystroke.key);
+                    let key = super::flash::key_descriptor(&event.keystroke.key);
                     let logical = key.logical_key;
                     let _ = flash
                         .input
@@ -220,15 +215,14 @@ impl Render for MediaSurface {
                 if let Some(flash) = &this.flash {
                     cx.stop_propagation();
                     let _ = flash.input.send(ruffle_core::events::PlayerEvent::KeyUp {
-                        key: crate::flash::key_descriptor(&event.keystroke.key),
+                        key: super::flash::key_descriptor(&event.keystroke.key),
                     });
                 }
             }));
         if let Some(thumbnail) = &self.thumbnail {
             surface = surface.child(
                 img(thumbnail.clone())
-                    .w(px(width))
-                    .h(px(height))
+                    .size_full()
                     .object_fit(ObjectFit::Contain),
             );
         }
@@ -237,8 +231,7 @@ impl Render for MediaSurface {
                 img(full.clone())
                     .absolute()
                     .inset_0()
-                    .w(px(width))
-                    .h(px(height))
+                    .size_full()
                     .object_fit(ObjectFit::Contain),
             );
         }

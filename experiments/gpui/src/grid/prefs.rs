@@ -1,7 +1,7 @@
 //! View preferences for a scope, read from the library's `view_pref` rows with
 //! the same fallbacks as `gridController.ts`: the scope's own row, then
 //! `grid:defaults`, then the built-in defaults.
-use crate::layout::ViewMode;
+use super::layout::ViewMode;
 use picto_library::predicate::{ItemSort, SortDirection, SortField};
 use picto_library::query::ItemScope;
 use serde_json::Value;
@@ -97,7 +97,7 @@ impl ViewPrefs {
 
     pub fn text_height(&self) -> f32 {
         let rows = self.show_name as u8 + self.show_resolution as u8;
-        rows as f32 * crate::layout::TEXT_ROW_HEIGHT
+        rows as f32 * super::layout::TEXT_ROW_HEIGHT
     }
 }
 

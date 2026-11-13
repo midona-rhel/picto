@@ -1,73 +1,18 @@
-//! Layout follows InspectorSkeleton, InspectorField, TagChip and PropertyRow CSS.
-use super::*;
+//! The inspector rail's scrolling body. Layout follows InspectorSkeleton,
+//! InspectorField, TagChip and PropertyRow.
+use crate::grid::{format, thumbnails::Thumbnails};
+use crate::session::{Change, Session};
+use crate::theme;
+use crate::ui::{
+    self,
+    text_input::{self, TextInput},
+};
+use gpui::*;
+use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode};
+use picto_library::query::ItemScope;
+use std::collections::HashSet;
 
-fn field(input: Entity<input::TextInput>) -> impl IntoElement {
-    div()
-        .h(px(32.))
-        .mb(px(8.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(rgb(0x303236))
-        .overflow_hidden()
-        .child(input)
-}
-fn property(label: &'static str, value: String) -> impl IntoElement {
-    div()
-        .h(px(20.))
-        .flex()
-        .items_center()
-        .gap(px(12.))
-        .text_size(px(11.))
-        .child(div().w(px(88.)).flex_none().child(label))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_right()
-                .text_ellipsis()
-                .overflow_hidden()
-                .font_family("Fira Mono")
-                .text_color(rgba(0xf8f9fbcc))
-                .child(value),
-        )
-}
-fn format_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1048576 {
-        format!("{:.1} KB", bytes as f64 / 1024.)
-    } else {
-        format!("{:.1} MB", bytes as f64 / 1048576.)
-    }
-}
-// Same D65 Lab conversion and namespace presentation as Picto's renderer.
-fn palette_rgb(color: &picto_library::LabColor) -> u32 {
-    let fy = (color.l + 16.) / 116.;
-    let inv = |v: f32| {
-        if v.powi(3) > 0.008856 {
-            v.powi(3)
-        } else {
-            (v - 16. / 116.) / 7.787
-        }
-    };
-    let x = 0.95047 * inv(color.a / 500. + fy);
-    let y = inv(fy);
-    let z = 1.08883 * inv(fy - color.b / 200.);
-    [
-        x * 3.2406 - y * 1.5372 - z * 0.4986,
-        -x * 0.9689 + y * 1.8758 + z * 0.0415,
-        x * 0.0557 - y * 0.204 + z * 1.057,
-    ]
-    .into_iter()
-    .fold(0, |rgb, c| {
-        let c = if c <= 0.0031308 {
-            12.92 * c
-        } else {
-            1.055 * c.powf(1. / 2.4) - 0.055
-        };
-        (rgb << 8) | (c.clamp(0., 1.) * 255.).round() as u32
-    })
-}
+/// Namespace presentation: chip colour, text colour and sort order.
 fn tag_style(namespace: &str) -> (u32, u32, u8) {
     match namespace {
         "creator" => (0xff6667, 0xf8e7e6, 0),
@@ -78,45 +23,157 @@ fn tag_style(namespace: &str) -> (u32, u32, u8) {
         _ => (0xbdbec0, 0xf8f9fb, 10),
     }
 }
-impl Browser {
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1048576 {
+        format!("{:.1} KB", bytes as f64 / 1024.)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1048576.)
+    }
+}
+
+pub struct Inspector {
+    session: Entity<Session>,
+    thumbnails: Entity<Thumbnails>,
+    name: Entity<TextInput>,
+    notes: Entity<TextInput>,
+    collapsed: HashSet<&'static str>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Inspector {
+    pub fn new(
+        session: Entity<Session>,
+        thumbnails: Entity<Thumbnails>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let name = cx.new(|cx| TextInput::field("Name", window, cx));
+        let notes = cx.new(|cx| TextInput::field("Notes", window, cx));
+        let subscriptions = vec![
+            cx.subscribe(&name, |this, _, event: &text_input::Committed, cx| {
+                this.session.read(cx).rename(event.0, event.1.clone());
+            }),
+            cx.subscribe(&notes, |this, _, event: &text_input::Committed, cx| {
+                this.session.read(cx).set_notes(event.0, event.1.clone());
+            }),
+            cx.subscribe(
+                &session,
+                |this, session, change: &Change, cx| match change {
+                    Change::Selection => {
+                        // A pending edit belongs to the item it was typed for.
+                        this.name.update(cx, |field, cx| field.commit(cx));
+                        this.notes.update(cx, |field, cx| field.commit(cx));
+                        cx.notify();
+                    }
+                    Change::Details => {
+                        if let Some(details) = session.read(cx).details.clone() {
+                            let id = details.root.root_id;
+                            this.name.update(cx, |field, cx| {
+                                field.set_field(id, details.root.name.clone(), cx)
+                            });
+                            this.notes.update(cx, |field, cx| {
+                                field.set_field(
+                                    id,
+                                    details.root.notes.clone().unwrap_or_default(),
+                                    cx,
+                                )
+                            });
+                        }
+                        cx.notify();
+                    }
+                    Change::Navigation => cx.notify(),
+                    _ => {}
+                },
+            ),
+        ];
+        Self {
+            session,
+            thumbnails,
+            name,
+            notes,
+            collapsed: HashSet::new(),
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn field(&self, input: &Entity<TextInput>, cx: &App) -> Div {
+        div()
+            .h(px(theme::CONTROL_LG))
+            .mb(px(8.))
+            .rounded(px(theme::RADIUS_MD))
+            .border_1()
+            .border_color(theme::theme(cx).border_secondary())
+            .overflow_hidden()
+            .child(input.clone())
+    }
+
+    fn property(label: &'static str, value: String, cx: &App) -> Div {
+        div()
+            .h(px(20.))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .text_size(px(theme::TEXT_CAPTION))
+            .child(div().w(px(88.)).flex_none().child(label))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_right()
+                    .text_ellipsis()
+                    .overflow_hidden()
+                    .font_family(theme::FONT_INSPECTOR_MONO)
+                    .text_color(theme::theme(cx).contrast(80.))
+                    .child(value),
+            )
+    }
+
     fn section(
         &self,
         title: &'static str,
         content: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let collapsed = self.collapsed_sections.contains(title);
+        let theme = theme::theme(cx);
+        let collapsed = self.collapsed.contains(title);
         let mut section = div()
             .mt(px(10.))
             .pt(px(10.))
             .border_t_1()
-            .border_color(rgb(0x303236))
+            .border_color(theme.border_secondary())
             .child(
                 div()
                     .id(title)
-                    .h(px(26.))
+                    .h(px(theme::CONTROL_SM))
                     .flex()
                     .items_center()
-                    .text_size(px(12.))
+                    .text_size(px(theme::TEXT_SM))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(MUTED))
-                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .text_color(theme.text_tertiary())
+                    .hover(move |style| style.text_color(theme.text()))
                     .child(div().flex_1().child(title))
                     .child(
                         div()
-                            .size(px(24.))
+                            .size(px(theme::ICON_BUTTON))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(theme::icon(if collapsed {
-                                "chevron-right"
-                            } else {
-                                "chevron-down"
-                            })),
+                            .child(ui::icon(
+                                if collapsed {
+                                    "chevron-right"
+                                } else {
+                                    "chevron-down"
+                                },
+                                16.,
+                                theme.text(),
+                            )),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.collapsed_sections.remove(title) {
-                            this.collapsed_sections.insert(title);
+                        if !this.collapsed.remove(title) {
+                            this.collapsed.insert(title);
                         }
                         cx.notify();
                     })),
@@ -127,35 +184,65 @@ impl Browser {
         section.into_any_element()
     }
 
-    pub(super) fn inspector(&self, cx: &mut Context<Self>) -> AnyElement {
-        // The scrolling body. The shell puts it under the inspector's 48px
-        // titlebar strip.
+    fn narrow(&mut self, clause: FilterClause, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, cx| {
+            session.set_filter(Some(FilterExpr::Clause(clause)), cx)
+        });
+    }
+}
+
+impl Render for Inspector {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme::theme(cx);
         let mut panel = div()
             .id("inspector")
-            .w_full()
-            .flex_1()
-            .min_h_0()
+            .size_full()
             .overflow_y_scroll()
             .px(px(16.))
             .pt(px(10.))
             .pb(px(48.))
-            .font_family("Roboto");
-        if let Some((name, mime)) = self.demo {
+            .font_family(theme::FONT_INSPECTOR);
+        let (demo, details, entries, tags, cover_thumbnail) = {
+            let session = self.session.read(cx);
+            let details = session.details.clone();
+            let cover_thumbnail = details.as_ref().and_then(|details| {
+                details
+                    .media
+                    .iter()
+                    .find(|media| media.media_id == details.root.cover_media_id)
+                    .or(details.media.first())
+                    .map(|media| session.thumbnail(&media.facts.content_hash))
+            });
+            let tags = details.as_ref().map_or_else(Vec::new, |details| {
+                details
+                    .tag_ids
+                    .iter()
+                    .filter_map(|id| session.tags.get(&id.0).cloned())
+                    .collect::<Vec<_>>()
+            });
+            (
+                session.demo,
+                details,
+                session.nav.clone(),
+                tags,
+                cover_thumbnail,
+            )
+        };
+        if let Some((name, mime)) = demo {
             return panel
-                .child(property("Example", name.to_owned()))
-                .child(property("Type", mime.to_owned()))
-                .into_any_element();
+                .child(Self::property("Example", name.to_owned(), cx))
+                .child(Self::property("Type", mime.to_owned(), cx));
         }
-        let Some(details) = &self.details else {
-            return panel.into_any_element();
+        let Some(details) = details else {
+            return panel;
         };
         let root = &details.root;
         let cover = details
             .media
             .iter()
-            .find(|m| m.media_id == root.cover_media_id)
+            .find(|media| media.media_id == root.cover_media_id)
             .or(details.media.first());
-        if let Some(media) = cover {
+        if let (Some(media), Some(thumbnail)) = (cover, cover_thumbnail) {
             panel = panel.child(
                 div()
                     .h(px(200.))
@@ -164,58 +251,55 @@ impl Browser {
                     .items_center()
                     .justify_center()
                     .child(
-                        img(self.thumbnail(&media.facts.content_hash))
+                        img(thumbnail)
                             .image_cache(&self.thumbnails)
-                            .w(px(200.))
-                            .h(px(200.))
-                            .rounded(px(6.))
+                            .size(px(200.))
+                            .rounded(px(theme::RADIUS_MD))
                             .object_fit(ObjectFit::Contain),
                     ),
             );
             let mut palette = div()
-                .h(px(28.))
+                .h(px(theme::CONTROL_MD))
                 .mb(px(8.))
                 .flex()
                 .items_center()
                 .justify_center();
             if !media.facts.palette.is_empty() {
                 let mut swatches = div()
-                    .h(px(26.))
+                    .h(px(theme::CONTROL_SM))
                     .px(px(6.))
                     .rounded_full()
                     .border_1()
-                    .border_color(rgb(0x303236))
-                    .bg(rgb(0x141518))
+                    .border_color(theme.border_secondary())
+                    .bg(theme.control_surface())
                     .flex()
                     .items_center()
                     .gap(px(2.));
-                for (i, color) in media.facts.palette.iter().take(12).enumerate() {
+                for (index, color) in media.facts.palette.iter().take(12).enumerate() {
                     let color = color.clone();
                     swatches = swatches.child(
                         div()
-                            .id(("palette", i))
+                            .id(("palette", index))
                             .size(px(16.))
                             .flex()
                             .items_center()
                             .justify_center()
                             .rounded_full()
-                            .hover(|s| s.bg(rgb(0x96999e)))
+                            .hover(move |style| style.bg(theme.text_tertiary()))
                             .child(
                                 div()
                                     .size(px(14.))
                                     .rounded_full()
-                                    .bg(rgb(palette_rgb(&color))),
+                                    .bg(rgb(format::lab_to_rgb(color.l, color.a, color.b))),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.extra_filter =
-                                    Some(picto_library::predicate::FilterExpr::Clause(
-                                        picto_library::predicate::FilterClause::Color {
-                                            color: color.clone(),
-                                            delta_e: 20.,
-                                        },
-                                    ));
-                                this.preview = false;
-                                this.query(false, cx);
+                                this.narrow(
+                                    FilterClause::Color {
+                                        color: color.clone(),
+                                        delta_e: 20.,
+                                    },
+                                    cx,
+                                );
                             })),
                     );
                 }
@@ -224,8 +308,8 @@ impl Browser {
             panel = panel.child(palette);
         }
         panel = panel
-            .child(field(self.name_field.clone()))
-            .child(field(self.notes_field.clone()));
+            .child(self.field(&self.name, cx))
+            .child(self.field(&self.notes, cx));
         let source = root
             .source_urls
             .first()
@@ -234,82 +318,96 @@ impl Browser {
         panel = panel.child(
             div()
                 .id("source-url")
-                .h(px(32.))
+                .h(px(theme::CONTROL_LG))
                 .px(px(10.))
                 .mb(px(8.))
-                .rounded(px(6.))
+                .rounded(px(theme::RADIUS_MD))
                 .border_1()
-                .border_color(rgb(0x303236))
-                .bg(rgb(0x141518))
+                .border_color(theme.border_secondary())
+                .bg(theme.control_surface())
                 .flex()
                 .items_center()
-                .text_size(px(13.))
-                .text_color(rgb(MUTED))
+                .text_size(px(theme::TEXT_MD))
+                .text_color(theme.text_tertiary())
                 .overflow_hidden()
                 .text_ellipsis()
                 .child(source.clone())
-                .on_click(cx.listener(move |_, _, _, cx| {
+                .on_click(move |_, _, cx| {
                     if source.starts_with("https://") {
                         cx.open_url(&source);
                     }
-                })),
+                }),
         );
+
         let mut folders = div().flex().flex_wrap().gap(px(4.));
         for folder in &details.folder_ids {
-            if let Some((index, nav)) = self.nav.iter().enumerate().find(|(_, n)| matches!(n.scope, picto_library::query::ItemScope::FolderTree {folder_id} if folder_id == *folder)) {
-                folders = folders.child(div().id(("inspector-folder", index)).h(px(26.)).px(px(8.)).rounded(px(6.))
-                    .border_1().border_color(rgb(0x48494c)).text_size(px(12.)).flex().items_center().child(nav.label.clone())
-                    .on_click(cx.listener(move |this, _, window, cx| this.navigate(index, window, cx))));
+            let found = entries.iter().enumerate().find(|(_, entry)| {
+                matches!(entry.scope, ItemScope::FolderTree { folder_id } if folder_id == *folder)
+            });
+            if let Some((index, entry)) = found {
+                folders = folders.child(
+                    div()
+                        .id(("inspector-folder", index))
+                        .h(px(theme::CONTROL_SM))
+                        .px(px(8.))
+                        .rounded(px(theme::RADIUS_MD))
+                        .border_1()
+                        .border_color(theme.border())
+                        .text_size(px(theme::TEXT_SM))
+                        .flex()
+                        .items_center()
+                        .child(entry.label.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.session
+                                .update(cx, |session, cx| session.navigate(index, cx));
+                        })),
+                );
             }
         }
         panel = panel.child(self.section("Folders", folders.into_any_element(), cx));
-        let mut tags = div().flex().flex_wrap().gap(px(4.));
-        let mut selected_tags = details
-            .tag_ids
-            .iter()
-            .filter_map(|id| self.tags.get(&id.0))
-            .collect::<Vec<_>>();
-        selected_tags.sort_by_key(|tag| (tag_style(&tag.namespace).2, tag.subname.to_lowercase()));
-        for tag in selected_tags {
+
+        let mut chips = div().flex().flex_wrap().gap(px(4.));
+        let mut tags = tags;
+        tags.sort_by_key(|tag| (tag_style(&tag.namespace).2, tag.subname.to_lowercase()));
+        for tag in tags {
             let (color, text, _) = tag_style(&tag.namespace);
             let tag_id = tag.tag_id;
-            let name = tag.subname.clone();
-            tags = tags.child(
+            chips = chips.child(
                 div()
                     .id(("inspector-tag", tag.tag_id.0 as usize))
-                    .h(px(26.))
+                    .h(px(theme::CONTROL_SM))
                     .px(px(8.))
-                    .rounded(px(6.))
+                    .rounded(px(theme::RADIUS_MD))
                     .border_1()
                     .border_color(rgba((color << 8) | 64))
                     .bg(rgba((color << 8) | 26))
                     .text_color(rgb(text))
-                    .text_size(px(12.))
+                    .text_size(px(theme::TEXT_SM))
                     .flex()
                     .items_center()
                     .max_w(px(248.))
                     .overflow_hidden()
                     .text_ellipsis()
-                    .child(name.clone())
-                    .hover(move |s| s.bg(rgba((color << 8) | 51)))
+                    .child(tag.subname.clone())
+                    .hover(move |style| style.bg(rgba((color << 8) | 51)))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.extra_filter = Some(picto_library::predicate::FilterExpr::Clause(
-                            picto_library::predicate::FilterClause::Tags {
+                        this.narrow(
+                            FilterClause::Tags {
                                 tag_ids: vec![tag_id],
-                                mode: picto_library::predicate::SetMatchMode::All,
+                                mode: SetMatchMode::All,
                             },
-                        ));
-                        this.preview = false;
-                        this.query(false, cx);
+                            cx,
+                        );
                     })),
             );
         }
-        panel = panel.child(self.section("Tags", tags.into_any_element(), cx));
+        panel = panel.child(self.section("Tags", chips.into_any_element(), cx));
+
         let mut rating = div()
             .h(px(20.))
             .flex()
             .items_center()
-            .text_size(px(11.))
+            .text_size(px(theme::TEXT_CAPTION))
             .child(div().flex_1().child("Rating"));
         for value in 1..=5 {
             let active = details.rating.bitmap_key() >= value as u32;
@@ -326,34 +424,38 @@ impl Browser {
                     .text_color(if active {
                         rgba(0xff9f0aff)
                     } else {
-                        rgba(0xf8f9fb40)
+                        theme.contrast(25.)
                     })
                     .child(if active { "★" } else { "☆" })
-                    .on_click(cx.listener(move |this, _, _, _| {
-                        let _ = this
-                            .sender
-                            .send(Request::Rate(id, picto_library::Rating::ALL[value]));
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.session
+                            .read(cx)
+                            .rate(id, picto_library::Rating::ALL[value]);
                     })),
             );
         }
-        let mut properties = div()
-            .child(rating)
-            .child(property("Items", root.media_count.to_string()));
+        let mut properties =
+            div()
+                .child(rating)
+                .child(Self::property("Items", root.media_count.to_string(), cx));
         if let Some(media) = cover {
             properties = properties
-                .child(property(
+                .child(Self::property(
                     "Dimensions",
                     format!(
                         "{} × {}",
                         media.facts.width.unwrap_or(0),
                         media.facts.height.unwrap_or(0)
                     ),
+                    cx,
                 ))
-                .child(property("Size", format_size(root.total_size_bytes)))
-                .child(property("Type", media.facts.mime.clone()));
+                .child(Self::property(
+                    "Size",
+                    format_size(root.total_size_bytes),
+                    cx,
+                ))
+                .child(Self::property("Type", media.facts.mime.clone(), cx));
         }
-        panel
-            .child(self.section("Properties", properties.into_any_element(), cx))
-            .into_any_element()
+        panel.child(self.section("Properties", properties.into_any_element(), cx))
     }
 }
