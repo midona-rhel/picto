@@ -1138,6 +1138,16 @@ PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
 
+`reference.sh /path/to/Name.library [n]` starts the Electron app as an
+isolated reference: a development build from this checkout in its
+automation mode (`PICTO_E2E`), on its own detached copy of the library, with
+its own application data, and a DevTools port (9222 + n).
+`node reference.mjs steps.txt outdir` plays the same script lines into it
+(`size 1213 865` first sets the viewport), so one script photographs a view
+in both apps and `pixel_diff.py` compares the pairs. Both apps then open the
+inspector at its default width; the reference has no traffic lights and
+shows the default library avatar.
+
 Seen this way on 13 November 2026: the grid and its item menu, Quick Look,
 the View options panel, the filter bar with the tag picker and the colour
 editor, the Tags, Subscriptions and Duplicates screens, the smart-folder
