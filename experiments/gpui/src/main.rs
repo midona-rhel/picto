@@ -93,6 +93,7 @@ fn main() {
             ui::menu::bind(cx);
             ui::modal::bind(cx);
             ui::tag_token_input::bind(cx);
+            shell::sidebar::bind(cx);
             screens::subscriptions::bind(cx);
             ui::popover::bind(cx);
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);

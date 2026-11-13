@@ -48,6 +48,8 @@ actions!(
         RejectInbox,
         NewFolder,
         NewSubfolder,
+        NewSmartFolder,
+        FolderAutoTags,
         AddTags,
         AddToFolders,
         AddToFolder
@@ -142,6 +144,8 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.restore" => vec![to!(Grid, RestoreItems)],
         "file.newFolder" => vec![to!(App, NewFolder)],
         "file.newSubfolder" => vec![to!(App, NewSubfolder)],
+        "file.newSmartFolder" => vec![to!(App, NewSmartFolder)],
+        "folder.autoTags" => vec![to!(App, FolderAutoTags)],
         "file.addToFolder" => vec![to!(Grid, AddToFolder)],
         "file.openDefaultApp" => vec![to!(Grid, OpenDefaultApp)],
         "file.revealInFolder" => vec![to!(Grid, RevealInFinder)],
@@ -225,8 +229,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("file.import", "no import"),
     ("file.export", "no export"),
     ("file.exportAs", "no export"),
-    ("file.newSmartFolder", "no smart-folder editor"),
-    ("folder.autoTags", "no auto-tags editor"),
     (
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",

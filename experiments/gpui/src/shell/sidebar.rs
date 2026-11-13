@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 mod dialogs;
 mod drag;
+mod keyboard;
 mod rules;
 mod smart_folder;
 mod tree;
@@ -78,6 +79,11 @@ fn folder_id(node: &str) -> Option<FolderId> {
 
 fn smart_folder_id(node: &str) -> Option<SmartFolderId> {
     node.strip_prefix("smart:")?.parse().ok().map(SmartFolderId)
+}
+
+/// The sidebar's key bindings.
+pub fn bind(cx: &mut App) {
+    keyboard::bind(cx);
 }
 
 /// Asks the shell to show a context menu. The sidebar acts on what is chosen.
@@ -239,9 +245,13 @@ pub struct Sidebar {
     /// The row whose context menu is open.
     context: Option<String>,
     renaming: Option<Renaming>,
-    // TODO: move keyboard focus through the rows, as the Electron rows'
-    // `tabIndex` does; the row is drawn focused while this names it.
+    /// The row the keyboard is on while the rows have it.
     keyboard_row: Option<String>,
+    /// The rows' keyboard focus.
+    rows_focus: FocusHandle,
+    /// The rows as last drawn, in order, for the keyboard.
+    shown_rows: Vec<String>,
+    _rows_focus: Option<Subscription>,
     /// Where a dragged folder or smart folder would land.
     drop: Option<(String, DropPosition)>,
     /// The row items dragged from the grid are over.
@@ -323,6 +333,9 @@ impl Sidebar {
             context: None,
             renaming: None,
             keyboard_row: None,
+            rows_focus: cx.focus_handle(),
+            shown_rows: Vec::new(),
+            _rows_focus: None,
             drop: None,
             grid_drop: None,
             grid_dragging: false,
@@ -978,6 +991,36 @@ impl Sidebar {
             }
             _ => false,
         }
+    }
+
+    /// `file.newSmartFolder`: the smart-folder editor for a new top-level
+    /// smart folder.
+    pub fn new_top_smart_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_smart_folder(None, window, cx);
+    }
+
+    /// `folder.autoTags`: the auto-tags editor for the folders chosen in the
+    /// sidebar, or the open folder. Returns false when there is none.
+    pub fn auto_tags_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut targets: Vec<FolderId> = self
+            .selection
+            .iter()
+            .filter_map(|node| folder_id(node))
+            .collect();
+        if targets.is_empty() {
+            let session = self.session.read(cx);
+            targets.extend(
+                session
+                    .nav
+                    .get(session.scope)
+                    .and_then(|entry| folder_id(&entry.id())),
+            );
+        }
+        if targets.is_empty() {
+            return false;
+        }
+        self.edit_auto_tags(targets, window, cx);
+        true
     }
 
     /// `createFolderAndRename`: a folder named "New Folder", revealed and
@@ -2019,6 +2062,14 @@ impl Render for Sidebar {
             ));
         }
         self.bounds.clear();
+        self.shown_rows.clear();
+        // The focus look goes when the rows lose the keyboard.
+        if self._rows_focus.is_none() {
+            self._rows_focus = Some(cx.on_focus_out(&self.rows_focus, window, |this, _, _, cx| {
+                this.keyboard_row = None;
+                cx.notify();
+            }));
+        }
         let dragging = self.grid_dragging || self.node_drag.is_some();
         let theme = theme::theme(cx);
         let filter = self.filter.read(cx).value().trim().to_lowercase();
@@ -2081,6 +2132,20 @@ impl Render for Sidebar {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
+            .track_focus(&self.rows_focus)
+            .key_context("SidebarRows")
+            .on_action(
+                cx.listener(|this, _: &keyboard::FocusNext, _, cx| this.focus_step(true, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &keyboard::FocusPrevious, _, cx| this.focus_step(false, cx)),
+            )
+            .on_action(cx.listener(|this, _: &keyboard::OpenFocused, _, cx| this.open_focused(cx)))
+            .on_action(
+                cx.listener(|this, _: &keyboard::LeaveRows, window, cx| {
+                    this.leave_rows(window, cx)
+                }),
+            )
             .pr(px(ui::scrollbar::GUTTER + theme::SIDEBAR_LIST_PADDING))
             .pb(px(16.));
 
@@ -2110,9 +2175,13 @@ impl Render for Sidebar {
                     this.system_menu(index, event.position, window, cx)
                 },
             ));
-            list = list.child(div().relative().child(row).children(
-                drag::grid_drop(&ids[index]).map(|_| self.bounds.recorder(ids[index].clone())),
-            ));
+            self.shown_rows.push(ids[index].clone());
+            list = list.child(
+                div()
+                    .relative()
+                    .child(row)
+                    .child(self.bounds.recorder(ids[index].clone())),
+            );
         }
 
         // Quick Access, the folders and smart folders pinned to it, in
@@ -2136,7 +2205,14 @@ impl Render for Sidebar {
             if expanded {
                 list = list.child(div().h(px(2.)));
                 for index in quick {
-                    list = list.child(self.quick_row(index, &entries[index], active == index, cx));
+                    let key = format!("quick-{}", ids[index]);
+                    self.shown_rows.push(key.clone());
+                    list = list.child(
+                        div()
+                            .relative()
+                            .child(self.quick_row(index, &entries[index], active == index, cx))
+                            .child(self.bounds.recorder(key)),
+                    );
                 }
             }
         }
@@ -2201,6 +2277,7 @@ impl Render for Sidebar {
                         list = list.child(div().h(px(2.)));
                     }
                     rendered.push(ids[index].clone());
+                    self.shown_rows.push(ids[index].clone());
                     let recorder = self.bounds.recorder(ids[index].clone());
                     list = list.child(
                         div()
@@ -2321,9 +2398,22 @@ impl Render for Sidebar {
                                     .bg(theme.rail()),
                             )
                             .child(
-                                ui::field("sidebar-filter", &self.filter, Look::SidebarFilter)
-                                    .icon("toolbar-filter", 16., 8., theme.text())
-                                    .clearable(),
+                                div()
+                                    .key_context("SidebarFilter")
+                                    .on_action(cx.listener(
+                                        |this, _: &keyboard::EnterRows, window, cx| {
+                                            this.enter_rows(window, cx)
+                                        },
+                                    ))
+                                    .child(
+                                        ui::field(
+                                            "sidebar-filter",
+                                            &self.filter,
+                                            Look::SidebarFilter,
+                                        )
+                                        .icon("toolbar-filter", 16., 8., theme.text())
+                                        .clearable(),
+                                    ),
                             )
                     })),
             )

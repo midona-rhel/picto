@@ -46,6 +46,15 @@ impl RowBounds {
             .inset_0()
     }
 
+    /// Where a row was last drawn, and the list's visible area.
+    pub fn row(&self, id: &str) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        self.rows
+            .borrow()
+            .iter()
+            .find(|(row, _)| row == id)
+            .map(|(_, bounds)| (*bounds, self.list.get()))
+    }
+
     /// The row under the pointer, among those `accepts`, and how far down
     /// the row the pointer is, from 0 to 1. Rows scrolled out of the list's
     /// view take nothing.
