@@ -6,6 +6,7 @@ mod grid;
 mod inspector;
 mod motion;
 mod pointer;
+mod screens;
 mod session;
 mod shell;
 mod stats;

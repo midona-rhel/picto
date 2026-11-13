@@ -474,9 +474,6 @@ impl Render for GridView {
                 Some(error.clone())
             } else {
                 Some(match session.nav.get(session.displayed) {
-                    Some(entry) if entry.screen => {
-                        format!("{} is not part of this prototype yet", entry.label)
-                    }
                     _ if session.loading => "Opening library...".to_owned(),
                     _ => "No items match this filter".to_owned(),
                 })

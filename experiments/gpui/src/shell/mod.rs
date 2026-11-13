@@ -5,13 +5,14 @@
 pub mod sidebar;
 pub mod toolbar;
 
+use crate::backend::Screen;
 use crate::grid::{self, GridView, nav, thumbnails::Thumbnails};
 use crate::inspector::Inspector;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
 use crate::viewer::Viewer;
-use crate::{motion, theme, ui};
+use crate::{motion, screens, theme, ui};
 use gpui::*;
 use sidebar::Sidebar;
 use std::path::PathBuf;
@@ -49,6 +50,9 @@ pub struct Shell {
     grid: Entity<GridView>,
     inspector: Entity<Inspector>,
     viewer: Entity<Viewer>,
+    tags: Entity<screens::tags::TagsScreen>,
+    subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
+    duplicates: Entity<screens::duplicates::DuplicatesScreen>,
     focus: FocusHandle,
     sidebar_collapsed: bool,
     inspector_collapsed: bool,
@@ -79,8 +83,10 @@ impl Shell {
         let grid =
             cx.new(|cx| GridView::new(session.clone(), thumbnails.clone(), focus.clone(), cx));
         let subscriptions = vec![
+            // The shell chooses what fills the centre: the grid, the viewer
+            // or a screen.
             cx.subscribe(&session, |_, _, change: &Change, cx| {
-                if matches!(change, Change::Viewer) {
+                if matches!(change, Change::Viewer | Change::Navigation) {
                     cx.notify();
                 }
             }),
@@ -95,8 +101,27 @@ impl Shell {
         Self {
             sidebar: cx.new(|cx| Sidebar::new(session.clone(), thumbnails.clone(), cx)),
             toolbar: cx.new(|cx| Toolbar::new(session.clone(), cx)),
-            inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails, window, cx)),
+            inspector: cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx)),
             viewer: cx.new(|cx| Viewer::new(session.clone(), cx)),
+            tags: cx.new(|cx| {
+                screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
+            }),
+            subscriptions: cx.new(|cx| {
+                screens::subscriptions::SubscriptionsScreen::new(
+                    session.clone(),
+                    thumbnails.clone(),
+                    window,
+                    cx,
+                )
+            }),
+            duplicates: cx.new(|cx| {
+                screens::duplicates::DuplicatesScreen::new(
+                    session.clone(),
+                    thumbnails.clone(),
+                    window,
+                    cx,
+                )
+            }),
             grid,
             session,
             focus,
@@ -342,7 +367,21 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
-        let viewer_open = self.session.read(cx).viewer;
+        // While a screen shows there is no grid to move the scope change
+        // along, so the shell does.
+        let (viewer_open, screen, fade) = self.session.update(cx, |session, cx| {
+            if session.screen().is_some() {
+                session.advance_transition(cx);
+            }
+            (
+                session.viewer,
+                session.screen(),
+                session.transition.opacity(),
+            )
+        });
+        if screen.is_some() && self.session.read(cx).transition.animating() {
+            window.request_animation_frame();
+        }
         // The rails give up their width at once; only their own slide is animated.
         let left = if self.sidebar_collapsed {
             0.
@@ -365,12 +404,25 @@ impl Render for Shell {
             .bottom_0()
             .left(px(left))
             .right(px(right))
-            .child(if viewer_open {
-                self.viewer.clone().cached(fill()).into_any_element()
-            } else {
+            .child(match screen {
+                _ if viewer_open => self.viewer.clone().cached(fill()).into_any_element(),
+                // A screen fades as the grid does when the destination changes.
+                Some(screen) => div()
+                    .size_full()
+                    .opacity(fade)
+                    .child(match screen {
+                        Screen::Tags => self.tags.clone().cached(fill()).into_any_element(),
+                        Screen::Subscriptions => {
+                            self.subscriptions.clone().cached(fill()).into_any_element()
+                        }
+                        Screen::Duplicates => {
+                            self.duplicates.clone().cached(fill()).into_any_element()
+                        }
+                    })
+                    .into_any_element(),
                 // The grid keeps its scroll position and thumbnails while the
                 // viewer is open; it is only not painted.
-                self.grid.clone().cached(fill()).into_any_element()
+                None => self.grid.clone().cached(fill()).into_any_element(),
             });
         let sidebar = (sidebar_hidden < 1.).then(|| {
             div()

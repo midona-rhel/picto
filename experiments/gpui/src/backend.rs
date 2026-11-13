@@ -13,14 +13,26 @@ pub struct Navigation {
     pub count: Option<u64>,
     pub scope: ItemScope,
     /// A destination that is its own screen, not a grid of this scope.
-    pub screen: bool,
+    pub screen: Option<Screen>,
     /// The All scope in a shuffled order.
     pub random: bool,
     pub icon: Option<&'static str>,
     pub depth: usize,
     pub parent: Option<usize>,
 }
+/// The destinations that are screens of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Tags,
+    Subscriptions,
+    Duplicates,
+}
+
+/// Work for the library's thread: a screen's own reads and edits.
+pub type Job = Box<dyn FnOnce(&Library) + Send>;
+
 pub enum Request {
+    Job(Job),
     /// Generation, scope, filter, cursor, and whether to shuffle.
     Query(u64, ItemScope, FilterExpr, Option<String>, bool),
     Details(RootId),
@@ -79,14 +91,14 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                 label: label.into(),
                 count,
                 scope,
-                screen: false,
+                screen: None,
                 random: false,
                 icon: Some(icon),
                 depth: 0,
                 parent: None,
             };
-            let screen = |label: &str, icon, count| Navigation {
-                screen: true,
+            let screen = |screen, label: &str, icon, count| Navigation {
+                screen: Some(screen),
                 ..system(label, icon, count, ItemScope::All)
             };
             // The order of the Electron sidebar's system rows.
@@ -111,13 +123,18 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                     Some(counts.untagged),
                     ItemScope::Untagged,
                 ),
-                screen("Tags", "bookmark", Some(tags.len() as u64)),
+                screen(Screen::Tags, "Tags", "bookmark", Some(tags.len() as u64)),
                 Navigation {
                     random: true,
                     ..system("Random", "arrows-shuffle", None, ItemScope::All)
                 },
-                screen("Subscriptions", "download", None),
-                screen("Duplicates", "copy", Some(counts.duplicates)),
+                screen(Screen::Subscriptions, "Subscriptions", "download", None),
+                screen(
+                    Screen::Duplicates,
+                    "Duplicates",
+                    "copy",
+                    Some(counts.duplicates),
+                ),
                 system("Trash", "trash", Some(counts.trash), ItemScope::Trash),
             ];
             let folders = library
@@ -133,7 +150,7 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                             scope: ItemScope::FolderTree {
                                 folder_id: f.folder_id,
                             },
-                            screen: false,
+                            screen: None,
                             random: false,
                             icon: None,
                             depth: 0,
@@ -156,7 +173,7 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
                             scope: ItemScope::SmartFolder {
                                 smart_folder_id: f.smart_folder_id,
                             },
-                            screen: false,
+                            screen: None,
                             random: false,
                             icon: None,
                             depth: 0,
@@ -170,7 +187,15 @@ pub fn start(database: PathBuf) -> (Sender<Request>, Receiver<Reply>) {
             // One seed per session keeps a random sort stable while paging.
             let seed = now_ms().to_string();
             for request in requests {
+                let request = match request {
+                    Request::Job(job) => {
+                        job(&library);
+                        continue;
+                    }
+                    other => other,
+                };
                 let result = match request {
+                    Request::Job(_) => unreachable!("jobs are run above"),
                     Request::Name(id, name) => library
                         .rename_root(id, &name, now_ms())
                         .and_then(|_| library.details(id))
@@ -305,7 +330,7 @@ mod acceptance {
             label: name.into(),
             count: Some(0),
             scope: ItemScope::All,
-            screen: false,
+            screen: None,
             random: false,
             icon: None,
             depth: 0,

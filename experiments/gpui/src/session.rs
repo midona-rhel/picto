@@ -229,13 +229,38 @@ impl Session {
             .filter(|details| details.root.root_id == id)
     }
 
+    /// The screen showing instead of the grid, if the destination is one.
+    pub fn screen(&self) -> Option<backend::Screen> {
+        self.nav.get(self.displayed)?.screen
+    }
+
+    /// Runs work on the library's thread and hands back its answer. This is
+    /// how a screen reads and edits what only it needs; the library is never
+    /// touched from the thread that draws.
+    pub fn run<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
+    ) -> futures::channel::oneshot::Receiver<T> {
+        let (answer, receiver) = futures::channel::oneshot::channel();
+        let _ = self.sender.send(Request::Job(Box::new(move |library| {
+            let _ = answer.send(work(library));
+        })));
+        receiver
+    }
+
+    /// Fetches the current destination again, after an edit made elsewhere.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.saved.clear();
+        self.query(false, cx);
+    }
+
     // ── Results ─────────────────────────────────────────────────
 
     fn query(&mut self, append: bool, cx: &mut Context<Self>) {
         let Some(entry) = self.nav.get(self.scope) else {
             return;
         };
-        if entry.screen {
+        if entry.screen.is_some() {
             return;
         }
         self.generation += 1;
@@ -331,11 +356,8 @@ impl Session {
                     self.details = Some(details);
                     cx.emit(Change::Details);
                 }
-                Reply::Changed => {
-                    // What other destinations held may no longer be true.
-                    self.saved.clear();
-                    self.query(false, cx)
-                }
+                // What other destinations held may no longer be true.
+                Reply::Changed => self.reload(cx),
                 Reply::Error(error) => {
                     self.error = Some(error);
                     self.loading = false;
@@ -444,7 +466,7 @@ impl Session {
         if self
             .nav
             .get(self.displayed)
-            .is_none_or(|entry| entry.screen)
+            .is_none_or(|entry| entry.screen.is_some())
             || self.items.is_empty()
         {
             return;
@@ -501,7 +523,10 @@ impl Session {
             self.viewer = false;
             cx.emit(Change::Viewer);
         }
-        let screen = self.nav.get(index).is_some_and(|entry| entry.screen);
+        let screen = self
+            .nav
+            .get(index)
+            .is_some_and(|entry| entry.screen.is_some());
         self.transition = match self.transition {
             // Further clicks while the surface is fading out or already hidden
             // only retarget where it lands.
@@ -554,7 +579,11 @@ impl Session {
         match self.transition {
             Transition::FadingOut(started) if started.elapsed() >= motion::SCOPE_FADE => {
                 self.transition = Transition::Waiting;
-                if self.nav.get(self.scope).is_some_and(|entry| entry.screen) {
+                if self
+                    .nav
+                    .get(self.scope)
+                    .is_some_and(|entry| entry.screen.is_some())
+                {
                     self.commit_screen();
                     cx.emit(Change::Results);
                     cx.emit(Change::Selection);

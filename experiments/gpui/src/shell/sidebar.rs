@@ -226,7 +226,8 @@ impl Render for Sidebar {
             let session = self.session.read(cx);
             (session.nav.clone(), session.scope)
         };
-        let section = |index: usize| section_of(&entries[index].scope, entries[index].screen);
+        let section =
+            |index: usize| section_of(&entries[index].scope, entries[index].screen.is_some());
         let count_of = |wanted| {
             (0..entries.len())
                 .filter(|index| section(*index) == Some(wanted))
