@@ -903,10 +903,6 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Flash: the media keys (K, the arrows and M) do not reach Flash's
   controls; the registry's Video shortcuts drive the media player only. The
   stage is 960×720, not fitted to the movie's own size (`fitFlashStage`).
-  Flash uses the media player's buttons, but its bar and volume control
-  (`viewer/flash_controls.rs`) and the media player's (drawn inline in
-  `video/`) were written in parallel and are two implementations of the same
-  production controls; they should become one.
 - Not seen running in the app window: the document viewers, the font viewer
   and Flash's controls were drawn off-screen (below) but not used with a
   pointer; hover states, tooltips, scrolling, the volume drag and the
