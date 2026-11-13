@@ -58,6 +58,21 @@ impl Rect {
             h: (self.bottom().min(other.bottom()) - y).max(0.),
         }
     }
+    /// A submenu's window: its `panel` with `room` around it for the drawn
+    /// shadow, except on the side of the menu it opened from. A window takes
+    /// the pointer over all of itself, so room laid over the parent would
+    /// leave the parent's edge, where its arrows are, dead to the pointer.
+    pub(super) fn submenu_window(panel: Rect, parent: Rect, room: f32, area: Rect) -> Rect {
+        let mut window = panel.outset(room).intersect(area);
+        if panel.x >= parent.right() {
+            let left = window.x.max(parent.right());
+            window.w = (window.right() - left).max(0.);
+            window.x = left;
+        } else if panel.right() <= parent.x {
+            window.w = (parent.x - window.x).clamp(0., window.w);
+        }
+        window
+    }
     pub(super) fn from_bounds(bounds: Bounds<Pixels>) -> Rect {
         Rect {
             x: f32::from(bounds.origin.x),
@@ -510,6 +525,38 @@ mod tests {
             800. - 200. - MARGIN
         );
         assert_eq!(place_submenu(parent, 5., 150., 200., area).1, MARGIN);
+    }
+
+    #[test]
+    fn a_submenu_window_never_lies_over_the_menu_it_opened_from() {
+        let area = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1000.,
+            h: 800.,
+        };
+        let parent = Rect {
+            x: 100.,
+            y: 100.,
+            w: 270.,
+            h: 400.,
+        };
+        // To the right: the window starts at the parent's edge, and keeps
+        // its room on the other three sides.
+        let panel = Rect {
+            x: 374.,
+            y: 157.,
+            w: 150.,
+            h: 200.,
+        };
+        let window = Rect::submenu_window(panel, parent, 40., area);
+        assert_eq!((window.x, window.y), (370., 117.));
+        assert_eq!((window.right(), window.bottom()), (564., 397.));
+        // To the left: it ends at the parent's edge.
+        let parent = Rect { x: 700., ..parent };
+        let panel = Rect { x: 546., ..panel };
+        let window = Rect::submenu_window(panel, parent, 40., area);
+        assert_eq!((window.x, window.right()), (506., 700.));
     }
 
     #[test]

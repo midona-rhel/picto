@@ -762,7 +762,7 @@ impl Menu {
             current: None,
             rect,
             window: None,
-            bounds: rect.outset(SHADOW_ROOM).intersect(area),
+            bounds: Rect::submenu_window(rect, parent, SHADOW_ROOM, area),
             serial: self.serial,
         });
         if keyboard {
