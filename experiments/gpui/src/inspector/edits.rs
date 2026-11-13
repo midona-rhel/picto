@@ -6,7 +6,7 @@ use super::membership::{self, Touches};
 use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
-use crate::session::Reread;
+use crate::session::{Report, Reread};
 use crate::tags::record_name as name;
 use crate::ui::{
     self,
@@ -172,7 +172,8 @@ impl Inspector {
     pub(super) fn rate_item(&mut self, id: RootId, rating: Rating, cx: &mut Context<Self>) {
         let target = SelectionTarget::Explicit { root_ids: vec![id] };
         self.session.update(cx, |session, cx| {
-            let _ = session.edit(
+            let _ = session.edit_reporting(
+                Report::failure("Could not change rating"),
                 move |library| library.set_rating(&target, rating),
                 Reread::DETAILS,
                 cx,

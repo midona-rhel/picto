@@ -13,6 +13,7 @@ use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::motion;
 use crate::session::{Change, Session};
+use crate::ui;
 use compare::{Extent, LinkedZoom, PairKey, pair_key};
 use gpui::*;
 use picto_library::{
@@ -134,6 +135,16 @@ enum Decision {
     Keep(FileId),
     /// Keep whichever file the library judges better, if it can tell.
     Smart,
+}
+
+/// What "Duplicate scan complete" says after a scan that found `found` new
+/// pairs.
+fn scan_message(found: u64) -> String {
+    if found > 0 {
+        format!("Found {found} new review pairs")
+    } else {
+        "Scan complete - no new review pairs".into()
+    }
 }
 
 /// What a fetch is for.
@@ -466,14 +477,14 @@ impl DuplicatesScreen {
                 futures::future::Either::Right((result, _)) => result,
             };
             let _ = this.update(cx, |this, cx| match result {
-                Ok(Ok(_summary)) => {
-                    // TODO: "Duplicate scan complete" with the number of new
-                    // pairs, as a toast, once the prototype has toasts.
+                Ok(Ok(summary)) => {
+                    let found = summary["candidate_count"].as_u64().unwrap_or(0);
+                    ui::notify::info("Duplicate scan complete", scan_message(found), cx);
                     this.fetch(Fetch::Queue { reset: true }, cx);
                     this.scan_fetch = Some(this.generation);
                 }
                 Ok(Err(error)) => {
-                    // TODO: also as a toast ("Unable to scan for duplicates").
+                    ui::notify::error("Unable to scan for duplicates", error.clone(), cx);
                     this.error = Some(error);
                     this.end_scan();
                     this.changed(cx);
@@ -604,18 +615,24 @@ impl DuplicatesScreen {
         }
         let fetched = match reply {
             Ok(fetched) if fetched.ambiguous => {
-                // TODO: "Smart merge needs a choice: no clear quality winner.
-                // Choose left or right, or keep both." as a warning toast,
-                // once the prototype has toasts. The pair stays.
+                // The pair stays.
+                ui::notify::warning(
+                    "Smart merge needs a choice",
+                    "No clear quality winner. Choose left or right, or keep both.",
+                    cx,
+                );
                 self.settle();
                 self.changed(cx);
                 return;
             }
             Ok(fetched) => fetched,
             Err(error) => {
-                // TODO: report it as a toast, as the Electron screen does,
-                // once the prototype has toasts; for now only the empty
-                // state shows it.
+                let title = match fetch {
+                    Fetch::Resolve(..) => "Unable to resolve duplicate pair",
+                    Fetch::Pair(_) => "Unable to load duplicate media",
+                    Fetch::Queue { .. } => "Unable to load duplicate review",
+                };
+                ui::notify::error(title, error.clone(), cx);
                 self.error = Some(error);
                 self.settle();
                 self.changed(cx);
@@ -873,4 +890,15 @@ fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
 /// the middle, then fit, actual pixels, and previous and next pair.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_message;
+
+    #[test]
+    fn the_scan_says_how_many_pairs_it_found() {
+        assert_eq!(scan_message(3), "Found 3 new review pairs");
+        assert_eq!(scan_message(0), "Scan complete - no new review pairs");
+    }
 }

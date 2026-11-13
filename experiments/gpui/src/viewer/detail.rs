@@ -539,11 +539,11 @@ impl DetailWindow {
             );
         }
         let mut right = div().flex().items_center().gap(px(4.)).flex_none();
-        let (has_image, percent) = {
+        let (zoom, percent) = {
             let surface = self.surface.read(cx);
-            (surface.has_image(), surface.percent())
+            (surface.shows_zoom(), surface.percent())
         };
-        if !self.group && has_image {
+        if !self.group && zoom {
             right = right
                 .child(
                     div()

@@ -230,7 +230,8 @@ impl Sidebar {
             }
             "refresh" => {
                 let node = node.to_owned();
-                self.edit(
+                self.edit_as(
+                    crate::session::Report::failure("Could not refresh smart folder"),
                     |_| Ok(()),
                     move |this, (), _, cx| this.reload_if_showing(Some(&node), cx),
                     window,

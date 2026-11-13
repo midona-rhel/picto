@@ -105,6 +105,8 @@ const KEYS = {
   end: ['End', 'End', 35],
   pageup: ['PageUp', 'PageUp', 33],
   pagedown: ['PageDown', 'PageDown', 34],
+  '-': ['-', 'Minus', 189, '-'],
+  '=': ['=', 'Equal', 187, '='],
 };
 // On a Mac a key reaches a text field as the editing commands of the
 // system's key bindings (AppKit's `StandardKeyBinding.dict`), which
@@ -146,8 +148,10 @@ const macCommands = (parts, name) => {
   return MAC_COMMANDS[[...order.filter((modifier) => parts.includes(modifier)), name].join('-')];
 };
 async function key(stroke) {
-  const parts = stroke.split('-');
-  const name = parts.pop();
+  // The minus key is the one name that holds the separator (`cmd--`).
+  const minus = stroke.endsWith('-');
+  const parts = (minus ? stroke.slice(0, -1) : stroke).split('-');
+  const name = minus ? (parts.pop(), '-') : parts.pop();
   let modifiers = 0;
   for (const part of parts) {
     modifiers |= { alt: 1, ctrl: 2, cmd: 4, shift: 8 }[part] ?? 0;

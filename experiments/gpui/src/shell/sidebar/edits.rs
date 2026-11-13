@@ -2,7 +2,7 @@
 //! deleting, moving and renaming folders and smart folders, their
 //! appearance, sorting and Quick Access.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
-use crate::session::{Change, Reread};
+use crate::session::{Change, Report, Reread};
 use crate::ui::text_input::{Renamed, TextInput};
 use gpui::*;
 use picto_library::model::ContentSortField;
@@ -85,9 +85,46 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = self
-            .session
-            .update(cx, |session, cx| session.edit(work, reread, cx));
+        self.edit_reporting(Report::default(), work, reread, then, window, cx);
+    }
+
+    /// [`Sidebar::edit`], telling the user what `report` says, as the
+    /// production call does.
+    pub(super) fn edit_as<T: Send + 'static>(
+        &self,
+        report: Report,
+        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_reporting(report, work, Reread::NOTHING, then, window, cx);
+    }
+
+    /// [`Sidebar::create`], telling the user what `report` says.
+    fn create_as<T: Send + 'static>(
+        &self,
+        report: Report,
+        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_reporting(report, work, Reread::NAVIGATION, then, window, cx);
+    }
+
+    pub(super) fn edit_reporting<T: Send + 'static>(
+        &self,
+        report: Report,
+        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
+        reread: Reread,
+        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit_reporting(report, work, reread, cx)
+        });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(value)) = answer.await {
                 let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
@@ -166,7 +203,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create(
+        self.create_as(
+            Report::folder_depth(),
             move |library| library.create_folder("New Folder", parent),
             |this, (id, _), window, cx| {
                 this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
@@ -186,7 +224,15 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create(
+        // The grid's "New Folder" reports any failure; "New Folder with
+        // Selection" only a folder nested too deep.
+        let report = if members.is_some() {
+            Report::folder_depth()
+        } else {
+            Report::failure("Could not create folder")
+        };
+        self.create_as(
+            report,
             move |library| {
                 let (id, _) = library.create_folder("New Folder", parent)?;
                 if let Some(members) = &members {
@@ -232,7 +278,8 @@ impl Sidebar {
             .map(|node| self.label_of(node, cx).unwrap_or_default())
             .collect::<Vec<_>>();
         let single = nodes.len() == 1;
-        self.create(
+        self.create_as(
+            Report::folder_depth(),
             move |library| {
                 let mut made = Vec::new();
                 for (node, name) in nodes.iter().zip(&names) {
@@ -275,7 +322,15 @@ impl Sidebar {
             .filter_map(|node| smart_folder_id(node))
             .collect::<Vec<_>>();
         let bulk = nodes.len() > 1;
-        self.edit(
+        // `deleteMany` and `smartFoldersController.delete` each announce
+        // what they deleted; the smart folders are deleted last.
+        let announce = if smart.is_empty() {
+            "folders.delete"
+        } else {
+            "smart_folders.delete"
+        };
+        self.edit_as(
+            Report::announce(announce),
             move |library| {
                 if !folders.is_empty() {
                     library.delete_folders(&folders)?;
@@ -350,7 +405,11 @@ impl Sidebar {
             }
         }
         crate::settings::model(cx).update(cx, |model, cx| {
-            model.apply_now(|app| app.sidebar_quick_access = unique.clone(), cx)
+            model.apply_now_reporting(
+                |app| app.sidebar_quick_access = unique.clone(),
+                Some("Unable to update Quick Access"),
+                cx,
+            )
         });
         cx.notify();
     }

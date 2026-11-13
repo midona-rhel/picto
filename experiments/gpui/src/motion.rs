@@ -446,6 +446,10 @@ pub fn pulse(elapsed: Duration) -> f32 {
 
 /// Progress of an animation that began `elapsed` ago, in `0..=1`.
 pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
+    // A move that takes no time is already over.
+    if duration.is_zero() {
+        return 1.;
+    }
     (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.)
 }
 
@@ -574,3 +578,14 @@ mod tests {
 /// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
 /// before going back once the pointer leaves it.
 pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
+
+/// `notifications.ts`: a notification stays this long unless it says
+/// otherwise.
+pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
+/// `NotificationHost.module.css` `.notification`'s `transition` and
+/// `EXIT_DURATION_MS`: it rises and fades out over 400 ms, on
+/// `cubic-bezier(0, 1.1, 0.79, 1.03)`, which overshoots a little.
+pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
+pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
+/// `.hidden`: how far above its place a leaving notification ends.
+pub const NOTIFICATION_RISE: f32 = 48.;

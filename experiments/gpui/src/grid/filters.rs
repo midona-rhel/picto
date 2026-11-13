@@ -134,6 +134,26 @@ impl Field {
             Field::Size => "File Size",
         }
     }
+
+    /// `PinnedFilter`: the name production stores the field under.
+    pub fn id(self) -> &'static str {
+        match self {
+            Field::Color => "color",
+            Field::Tags => "tags",
+            Field::Folders => "folders",
+            Field::Rating => "rating",
+            Field::Type => "type",
+            Field::Imported => "imported",
+            Field::Modified => "modified",
+            Field::Resolution => "resolution",
+            Field::Duration => "duration",
+            Field::Size => "size",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Field> {
+        Field::ALL.into_iter().find(|field| field.id() == id)
+    }
 }
 
 impl Filters {
@@ -361,6 +381,116 @@ impl Filters {
     }
 
     // ── Labels ──────────────────────────────────────────────────
+
+    /// The filters as a saved filter keeps them (`serializeFilters`), under
+    /// `ItemFilters`' names; dates are milliseconds rather than ISO text.
+    pub fn to_json(&self) -> serde_json::Value {
+        let tags = |tags: &[TagChoice]| {
+            tags.iter()
+                .map(|tag| serde_json::json!({ "tag_id": tag.tag_id, "name": tag.name }))
+                .collect::<Vec<_>>()
+        };
+        serde_json::json!({
+            "include_tags": tags(&self.include_tags),
+            "exclude_tags": tags(&self.exclude_tags),
+            "tag_match_mode": mode_name(self.tag_mode),
+            "include_folder_ids": self.include_folders,
+            "exclude_folder_ids": self.exclude_folders,
+            "folder_match_mode": mode_name(self.folder_mode),
+            "ratings": self.ratings,
+            "include_mime_types": self.include_mimes,
+            "exclude_mime_types": self.exclude_mimes,
+            "color_hex": self.color,
+            "color_delta_e": self.color_delta_e,
+            "imported_after": self.imported_after,
+            "imported_before": self.imported_before,
+            "modified_after": self.modified_after,
+            "modified_before": self.modified_before,
+            "min_duration_ms": self.min_duration_ms,
+            "max_duration_ms": self.max_duration_ms,
+            "min_size_bytes": self.min_size_bytes,
+            "max_size_bytes": self.max_size_bytes,
+            "min_width": self.min_width,
+            "max_width": self.max_width,
+            "min_height": self.min_height,
+            "max_height": self.max_height,
+        })
+    }
+
+    /// `deserializeFilters`: what is missing or unreadable is left empty.
+    pub fn from_json(value: &serde_json::Value) -> Filters {
+        use serde_json::Value;
+        let get = |key: &str| value.get(key);
+        let list = |key: &str| {
+            get(key)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let tags = |key: &str| {
+            list(key)
+                .iter()
+                .filter_map(|tag| {
+                    Some(TagChoice {
+                        tag_id: u32::try_from(tag.get("tag_id")?.as_u64()?).ok()?,
+                        name: tag.get("name")?.as_str()?.to_owned(),
+                    })
+                })
+                .collect()
+        };
+        let ids = |key: &str| {
+            list(key)
+                .iter()
+                .filter_map(|id| u32::try_from(id.as_u64()?).ok())
+                .collect()
+        };
+        let texts = |key: &str| {
+            list(key)
+                .iter()
+                .filter_map(|text| text.as_str().map(str::to_owned))
+                .collect()
+        };
+        let mode = |key: &str| match get(key).and_then(Value::as_str) {
+            Some("all") => SetMatchMode::All,
+            Some("exact") => SetMatchMode::Exact,
+            _ => SetMatchMode::Any,
+        };
+        let ms = |key: &str| get(key).and_then(Value::as_i64);
+        let amount = |key: &str| get(key).and_then(Value::as_u64);
+        Filters {
+            include_tags: tags("include_tags"),
+            exclude_tags: tags("exclude_tags"),
+            tag_mode: mode("tag_match_mode"),
+            include_folders: ids("include_folder_ids"),
+            exclude_folders: ids("exclude_folder_ids"),
+            folder_mode: mode("folder_match_mode"),
+            ratings: list("ratings")
+                .iter()
+                .filter_map(|stars| u8::try_from(stars.as_u64()?).ok())
+                .filter(|stars| *stars <= 5)
+                .collect(),
+            include_mimes: texts("include_mime_types"),
+            exclude_mimes: texts("exclude_mime_types"),
+            color: get("color_hex").and_then(Value::as_str).map(str::to_owned),
+            color_delta_e: get("color_delta_e")
+                .and_then(Value::as_f64)
+                .map_or(DEFAULT_DELTA_E, |delta| {
+                    (delta as f32).clamp(MINIMUM_DELTA_E, MAXIMUM_DELTA_E)
+                }),
+            imported_after: ms("imported_after"),
+            imported_before: ms("imported_before"),
+            modified_after: ms("modified_after"),
+            modified_before: ms("modified_before"),
+            min_duration_ms: amount("min_duration_ms"),
+            max_duration_ms: amount("max_duration_ms"),
+            min_size_bytes: amount("min_size_bytes"),
+            max_size_bytes: amount("max_size_bytes"),
+            min_width: amount("min_width"),
+            max_width: amount("max_width"),
+            min_height: amount("min_height"),
+            max_height: amount("max_height"),
+        }
+    }
 
     /// The control's label for a field: its name while empty, else what it
     /// holds.
@@ -664,6 +794,15 @@ pub fn amount(text: &str, multiplier: u64) -> Option<u64> {
     (value.is_finite() && value >= 0.).then(|| (value * multiplier as f64).round() as u64)
 }
 
+/// `SetMatchMode` as `ItemFilters` writes it.
+fn mode_name(mode: SetMatchMode) -> &'static str {
+    match mode {
+        SetMatchMode::Any => "any",
+        SetMatchMode::All => "all",
+        SetMatchMode::Exact => "exact",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -943,5 +1082,40 @@ mod tests {
         assert!(black.l.abs() < 0.01);
         let blue = hex_to_lab("#2B76E7");
         assert!((blue.l - 50.6).abs() < 0.5);
+    }
+
+    #[test]
+    fn saved_filters_read_back_as_they_were() {
+        let filters = Filters {
+            include_tags: vec![tag(1, "cat")],
+            exclude_tags: vec![tag(3, "bird")],
+            tag_mode: SetMatchMode::All,
+            include_folders: vec![7],
+            folder_mode: SetMatchMode::Exact,
+            ratings: vec![5, 0],
+            include_mimes: vec!["image/*".into()],
+            color: Some("#2B76E7".into()),
+            color_delta_e: 20.,
+            imported_after: Some(1_700_000_000_000),
+            max_size_bytes: Some(5_000_000),
+            min_width: Some(1920),
+            ..Filters::default()
+        };
+        assert_eq!(Filters::from_json(&filters.to_json()), filters);
+        assert_eq!(
+            Filters::from_json(&serde_json::json!({ "ratings": [9, 2], "tag_match_mode": 4 })),
+            Filters {
+                ratings: vec![2],
+                ..Filters::default()
+            }
+        );
+    }
+
+    #[test]
+    fn fields_are_stored_by_production_names() {
+        for field in Field::ALL {
+            assert_eq!(Field::from_id(field.id()), Some(field));
+        }
+        assert_eq!(Field::from_id("notes"), None);
     }
 }

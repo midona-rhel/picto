@@ -155,10 +155,23 @@ impl FilterBar {
                 }
             }),
         ];
+        // The pinned fields and saved filters the user left
+        // (`loadPinnedFilters`, `loadSavedFilters`).
+        let kept = crate::state::get(cx);
+        let pinned = kept
+            .pinned_filters
+            .iter()
+            .filter_map(|id| Field::from_id(id))
+            .collect();
+        let saved = kept
+            .saved_filters
+            .iter()
+            .map(|(name, filters)| (name.clone(), Filters::from_json(filters)))
+            .collect();
         Self {
             session,
-            pinned: Field::DEFAULT_PINNED.to_vec(),
-            saved: Vec::new(),
+            pinned,
+            saved,
             facets: Vec::new(),
             facet_query: None,
             facet_task: None,
@@ -171,6 +184,25 @@ impl FilterBar {
             _menu: Vec::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Keeps the pinned fields and saved filters in the app's state, as
+    /// production keeps them in localStorage.
+    fn keep(&self, cx: &mut App) {
+        let pinned = self
+            .pinned
+            .iter()
+            .map(|field| field.id().to_owned())
+            .collect();
+        let saved = self
+            .saved
+            .iter()
+            .map(|(name, filters)| (name.clone(), filters.to_json()))
+            .collect();
+        crate::state::update(cx, |state| {
+            state.pinned_filters = pinned;
+            state.saved_filters = saved;
+        });
     }
 
     fn filters(&self, cx: &App) -> Filters {
@@ -412,9 +444,8 @@ impl FilterBar {
                     |this, _, SaveRequested(name): &SaveRequested, cx| {
                         let filters = this.filters(cx);
                         if filters.count() > 0 {
-                            // TODO: production keeps saved filters in the
-                            // renderer's localStorage; these last the session.
                             this.saved.push((name.clone(), filters));
+                            this.keep(cx);
                             this.refresh_menu(cx);
                         }
                     },
@@ -604,8 +635,7 @@ impl FilterBar {
                         }
                         None => self.pinned.push(field),
                     }
-                    // TODO: production keeps the pinned fields in the
-                    // renderer's localStorage; these last the session.
+                    self.keep(cx);
                     self.refresh_menu(cx);
                     cx.notify();
                 }
@@ -639,6 +669,7 @@ impl FilterBar {
                     && index < self.saved.len()
                 {
                     self.saved.remove(index);
+                    self.keep(cx);
                     self.refresh_menu(cx);
                 }
             }

@@ -11,6 +11,7 @@ use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::{Change, Session};
+use crate::ui;
 use crate::ui::menu::{self, Menu};
 use crate::ui::text_input::{Committed, TextInput};
 use gpui::*;
@@ -167,7 +168,6 @@ pub struct SubscriptionsScreen {
     /// Every subscription, once the first read has arrived. A newer read
     /// replaces it only when it arrives, so nothing blanks in between.
     list: Option<Vec<data::Subscription>>,
-    error: Option<String>,
     generation: u64,
     /// Selected cards, by subscription.
     selected: HashSet<i64>,
@@ -265,7 +265,6 @@ impl SubscriptionsScreen {
             covers: cx.new(Thumbnails::new),
             focus: focus.clone(),
             list: None,
-            error: None,
             generation: 0,
             selected: HashSet::new(),
             anchor: None,
@@ -318,13 +317,13 @@ impl SubscriptionsScreen {
                 }
                 match result {
                     Ok(list) => {
-                        this.error = None;
                         // A subscription that is gone is no longer selected.
                         this.selected
                             .retain(|id| list.iter().any(|entry| entry.id == *id));
                         this.list = Some(list);
                     }
-                    Err(error) => this.error = Some(error),
+                    // `refreshSubscriptionsWorkspace`.
+                    Err(error) => ui::notify::error("Subscriptions unavailable", error, cx),
                 }
                 this.name_place(cx);
                 this.follow_runs(cx);
@@ -397,10 +396,7 @@ impl SubscriptionsScreen {
                 for (id, result) in settled {
                     this.acting.remove(&id);
                     if let Ok(Err(error)) = result {
-                        // TODO: show it as an error toast, once the
-                        // prototype has toasts.
-                        eprintln!("picto: subscription {id}: {error}");
-                        this.error = Some(error);
+                        ui::notify::error("Subscription action failed", error, cx);
                     }
                 }
                 this.session
@@ -450,8 +446,17 @@ impl SubscriptionsScreen {
             .read(cx)
             .run(move |library| data::detail(library, id).map_err(|error| error.to_string()));
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(detail)) = answer.await else {
-                return;
+            let detail = match answer.await {
+                Ok(Ok(detail)) => detail,
+                Ok(Err(error)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.detail_generation == generation {
+                            ui::notify::error("Subscription details unavailable", error, cx);
+                        }
+                    });
+                    return;
+                }
+                Err(_) => return,
             };
             // `refreshDetail`: looking at a subscription acknowledges its
             // open issues, so its badge stops warning; the Problems tab
@@ -507,10 +512,17 @@ impl SubscriptionsScreen {
                 if this.detail_generation != generation {
                     return;
                 }
-                if let (Ok(Ok(page)), Some(detail)) = (result, this.detail.as_mut()) {
-                    detail.issues.items.extend(page.items);
-                    detail.issues.next = page.next;
-                    detail.issues.total = page.total;
+                match (result, this.detail.as_mut()) {
+                    (Ok(Ok(page)), Some(detail)) => {
+                        detail.issues.items.extend(page.items);
+                        detail.issues.next = page.next;
+                        detail.issues.total = page.total;
+                    }
+                    // `loadMoreHealth` runs through `act`.
+                    (Ok(Err(error)), _) => {
+                        ui::notify::error("Subscription action failed", error, cx)
+                    }
+                    _ => {}
                 }
                 cx.notify();
             });
@@ -622,7 +634,7 @@ impl SubscriptionsScreen {
             let result = answer.await;
             let _ = this.update(cx, |this, cx| {
                 if let Ok(Err(error)) = result {
-                    this.error = Some(error);
+                    ui::notify::error("Subscription action failed", error, cx);
                 }
                 // Read back what the library holds now.
                 this.load(cx);
@@ -934,10 +946,13 @@ impl SubscriptionsScreen {
 fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
     let view = window.current_view();
     canvas(
-        move |bounds, _, cx| {
+        move |bounds, window, cx| {
             let width = f32::from(bounds.size.width);
             if (cell.replace(width) - width).abs() > 0.5 {
                 cx.notify(view);
+                // A notification made while a frame is being drawn does not
+                // by itself bring another frame.
+                window.request_animation_frame();
             }
         },
         |_, _, _, _| {},

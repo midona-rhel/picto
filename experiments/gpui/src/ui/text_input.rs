@@ -1922,14 +1922,19 @@ impl Render for TextInput {
                 cx.propagate();
                 return;
             }
+            // The sidebar filter empties on Escape and keeps the keyboard,
+            // as the Electron input does.
+            if this.kind == Kind::Sidebar {
+                if !this.content.is_empty() {
+                    this.content = "".into();
+                    this.selected_range = 0..0;
+                    cx.notify();
+                }
+                return;
+            }
             this.finish_rename(false, cx);
-            // The sidebar filter empties on Escape; a stored field goes
-            // back to its saved value.
-            this.content = if this.kind == Kind::Sidebar {
-                "".into()
-            } else {
-                this.original.clone()
-            };
+            // A stored field goes back to its saved value.
+            this.content = this.original.clone();
             this.selected_range = 0..0;
             this.selection_reversed = false;
             this.history.clear();

@@ -2985,6 +2985,14 @@ impl Window {
         count
     }
 
+    /// Whether the window has been invalidated since it was last drawn: what
+    /// the platform's frame loop asks before drawing a frame. Tests use it to
+    /// draw only the frames a real window would.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_dirty(&self) -> bool {
+        self.invalidator.is_dirty()
+    }
+
     /// Spawn the future returned by the given closure on the application thread pool.
     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
     /// use within your future.

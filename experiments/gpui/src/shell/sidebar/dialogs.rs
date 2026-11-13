@@ -149,9 +149,13 @@ impl Sidebar {
             let configured = match answer.await {
                 Ok(Ok(configured)) => configured,
                 Ok(Err(error)) => {
-                    // TODO: show as a notification ("Could not load folder
-                    // auto tags").
-                    eprintln!("sidebar: {error}");
+                    let _ = cx.update(|_, cx| {
+                        crate::ui::notify::error(
+                            "Could not load folder auto tags",
+                            error.to_string(),
+                            cx,
+                        )
+                    });
                     return;
                 }
                 Err(_) => return,
@@ -349,7 +353,12 @@ impl Sidebar {
             Ok(())
         };
         let answer = self.session.update(cx, |session, cx| {
-            session.edit(work, crate::session::Reread::NOTHING, cx)
+            session.edit_reporting(
+                crate::session::Report::failure("Could not set folder auto tags"),
+                work,
+                crate::session::Reread::NOTHING,
+                cx,
+            )
         });
         cx.spawn(async move |_, _| {
             let _ = answer.await;
@@ -795,7 +804,8 @@ impl Sidebar {
         if moving.is_empty() {
             return;
         }
-        self.edit(
+        self.edit_as(
+            crate::session::Report::folder_depth(),
             move |library| {
                 for id in moving {
                     library.move_folder(id, parent)?;

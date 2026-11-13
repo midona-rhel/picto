@@ -28,16 +28,19 @@ fn text_color(color: u32, theme: theme::Theme) -> Rgba {
         60. * ((r - g) / delta + 4.)
     };
     let hue = if hue < 0. { hue + 360. } else { hue };
-    rgb(match hue {
-        h if !(15. ..345.).contains(&h) => 0xf8e7e6,
-        h if h < 45. => 0xf8f0e1,
-        h if h < 75. => 0xf8f5e1,
-        h if h < 155. => 0xe4f5e9,
-        h if h < 195. => 0xe5f4f6,
-        h if h < 245. => 0xdff1f9,
-        h if h < 285. => 0xf3eff9,
-        _ => 0xf8eff4,
-    })
+    // `TAG_TEXT_COLORS`: a pale tint on the dark themes, a dark shade on
+    // the light ones.
+    let (dark, light) = match hue {
+        h if !(15. ..345.).contains(&h) => (0xf8e7e6, 0x513636),
+        h if h < 45. => (0xf8f0e1, 0x4c3e31),
+        h if h < 75. => (0xf8f5e1, 0x4a4335),
+        h if h < 155. => (0xe4f5e9, 0x34403c),
+        h if h < 195. => (0xe5f4f6, 0x234449),
+        h if h < 245. => (0xdff1f9, 0x3c4e5a),
+        h if h < 285. => (0xf3eff9, 0x3f3b4a),
+        _ => (0xf8eff4, 0x584753),
+    };
+    rgb(if theme.is_light() { light } else { dark })
 }
 
 /// `.subtag { max-width: 120px }`
@@ -214,7 +217,7 @@ impl RenderOnce for Chip {
 #[cfg(test)]
 mod tests {
     use super::{ellipsized, text_color};
-    use crate::theme::DARK;
+    use crate::theme::{DARK, LIGHT};
     use gpui::rgb;
 
     #[test]
@@ -229,6 +232,10 @@ mod tests {
         // Grey chips (general tags, folders) keep the primary text colour.
         assert_eq!(text_color(0xbdbec0, DARK), DARK.text());
         assert_eq!(text_color(0x868e96, DARK), DARK.text());
+        // The light themes take the dark shade of the same hue.
+        assert_eq!(text_color(0xff6667, LIGHT), rgb(0x513636));
+        assert_eq!(text_color(0x00aaff, LIGHT), rgb(0x3c4e5a));
+        assert_eq!(text_color(0x868e96, LIGHT), LIGHT.text());
     }
 
     #[test]
