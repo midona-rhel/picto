@@ -3,15 +3,19 @@
 //! several. Layout follows InspectorSkeleton, InspectorField, TagChip and
 //! PropertyRow.
 mod edits;
+pub mod folder_dialog;
 pub mod folder_picker;
 mod membership;
 mod scope;
 mod selection;
 mod sources;
 mod stack;
+pub mod tag_dialog;
 pub mod tag_picker;
 
+pub use folder_dialog::FolderDialog;
 pub use folder_picker::FolderPicker;
+pub use tag_dialog::TagDialog;
 pub use tag_picker::TagPicker;
 
 use crate::grid::{format, thumbnails::Thumbnails};
@@ -149,6 +153,9 @@ pub struct Inspector {
     holding: Option<usize>,
     tag_picker: Entity<TagPicker>,
     folder_picker: Entity<FolderPicker>,
+    /// The Add Tags and Folders dialogs the grid's shortcuts and menu open.
+    tag_dialog: Entity<TagDialog>,
+    folder_dialog: Entity<FolderDialog>,
     /// Where the rail and its add buttons, sections and fields were last
     /// drawn, in window coordinates, to open the pickers beside them.
     places: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
@@ -184,6 +191,8 @@ impl Inspector {
         let selection = selection::SelectionState::new(window, cx);
         let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));
         let folder_picker = cx.new(|cx| FolderPicker::new(session.clone(), cx));
+        let tag_dialog = cx.new(|cx| TagDialog::new(session.clone(), cx));
+        let folder_dialog = cx.new(|cx| FolderDialog::new(session.clone(), cx));
         let sources = sources::SourcesState::new(cx);
         let source_input = sources.input.clone();
         let subscriptions = vec![
@@ -198,6 +207,17 @@ impl Inspector {
                     if let folder_picker::Event::Toggle { folder, add } = *event {
                         this.set_membership(folder, add, cx);
                     }
+                },
+            ),
+            cx.subscribe(&tag_dialog, |this, _, event: &tag_dialog::Event, cx| {
+                let tag_dialog::Event::Apply { add, remove } = event;
+                this.apply_tag_dialog(add.clone(), remove.clone(), cx);
+            }),
+            cx.subscribe(
+                &folder_dialog,
+                |this, _, event: &folder_dialog::Event, cx| {
+                    let folder_dialog::Event::Apply { add, remove } = event;
+                    this.apply_folder_dialog(add.clone(), remove.clone(), cx);
                 },
             ),
             // Enter, or leaving the address being edited, saves it.
@@ -316,6 +336,8 @@ impl Inspector {
             holding: None,
             tag_picker,
             folder_picker,
+            tag_dialog,
+            folder_dialog,
             places: Rc::new(RefCell::new(HashMap::new())),
             sources,
             menu: menu::Host::deferred(30, menu::Return::Opener),
@@ -335,6 +357,12 @@ impl Inspector {
     /// The pickers, which the window draws above everything.
     pub fn pickers(&self) -> (Entity<TagPicker>, Entity<FolderPicker>) {
         (self.tag_picker.clone(), self.folder_picker.clone())
+    }
+
+    /// The Add Tags and Folders dialogs, which the window draws above
+    /// everything.
+    pub fn dialogs(&self) -> (Entity<TagDialog>, Entity<FolderDialog>) {
+        (self.tag_dialog.clone(), self.folder_dialog.clone())
     }
 
     /// Pins the rail to what it shows, or lets it follow the selection

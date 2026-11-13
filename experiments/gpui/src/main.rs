@@ -100,6 +100,7 @@ fn prepare(cx: &mut App) {
     ui::tag_token_input::bind(cx);
     shell::sidebar::bind(cx);
     ui::overlay_shell::bind(cx);
+    ui::selection_modal::bind(cx);
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);

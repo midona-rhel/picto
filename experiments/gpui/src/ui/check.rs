@@ -21,6 +21,9 @@ pub enum Mark {
     /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
     /// a white cross.
     Excluded,
+    /// `FolderPickerModal`'s `.checkRemove`: a folder the items will leave;
+    /// the negative colour with a white minus.
+    Removed,
 }
 
 /// Which of the two check boxes.
@@ -89,6 +92,7 @@ impl RenderOnce for CheckBox {
             ),
             Mark::Included => (theme.primary(), clear, Some((tick, theme.on_primary()))),
             Mark::Excluded => (theme.negative(), clear, Some(("x", theme.on_primary()))),
+            Mark::Removed => (theme.negative(), clear, Some(("minus", theme.on_primary()))),
         };
         let base = base.bg(fill).border_color(border);
         match glyph {
