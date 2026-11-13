@@ -3,6 +3,8 @@
 pub mod format;
 pub mod layout;
 pub mod nav;
+#[allow(dead_code)]
+pub mod originals;
 pub mod prefs;
 pub mod reveal;
 pub mod thumbnails;
