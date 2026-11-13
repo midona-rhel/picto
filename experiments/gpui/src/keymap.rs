@@ -81,6 +81,9 @@ pub enum Scope {
     /// The media player while a viewer that shows it has the keyboard
     /// (`VideoPlayer`'s, which wins over the viewer's own).
     Media,
+    /// A focused text field, wherever it is: the Edit menu's Undo and Redo
+    /// go to the field's own history there (`historyRuntime.ts`).
+    TextField,
 }
 
 /// What has the keyboard instead of the window's own shortcuts.
@@ -90,6 +93,7 @@ impl Scope {
     pub fn predicate(self) -> Option<String> {
         let within = match self {
             Scope::Anywhere => return None,
+            Scope::TextField => return Some("TextInput".into()),
             Scope::App => "Browser",
             Scope::Grid => "Grid",
             // Flash keeps its keys for the movie.
@@ -165,8 +169,14 @@ pub fn targets(id: &str) -> Vec<Target> {
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
-        "edit.undo" => vec![to!(App, shell::Undo)],
-        "edit.redo" => vec![to!(App, shell::Redo)],
+        "edit.undo" => vec![
+            to!(App, shell::Undo),
+            to!(TextField, crate::ui::text_input::Undo),
+        ],
+        "edit.redo" => vec![
+            to!(App, shell::Redo),
+            to!(TextField, crate::ui::text_input::Redo),
+        ],
         "edit.selectAll" => vec![to!(Grid, shell::SelectAll)],
         // Escape: the viewer's own binding closes it while it has the
         // keyboard; this one closes it otherwise, or clears the selection.

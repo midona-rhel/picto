@@ -331,6 +331,19 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   with its clear button, and the inspector's name and notes. One-pixel
   blinking caret, text that scrolls to keep the caret in view, and an
   ellipsis when a field is not being edited.
+- Text editing in every field (`ui/text_input.rs`), as production's browser
+  fields edit on a Mac: words (⌥←/→, ⌥⇧, ⌥⌫, ⌥⌦) cut where Chromium cuts them,
+  with the dictionaries for Chinese, Japanese and Thai; rows (⌘←/→, ⌘⌫, and
+  ↑/↓ to the ends of a one-line field); the text's ends (⌘↑/↓); paragraphs
+  (⌥↑/↓, ⌃A/E, ⌃K with its kill buffer and ⌃Y); the Emacs keys
+  (⌃F/B/N/P/D/H/T/O); Undo and Redo of the field's own edits on the
+  registry's keys, typing gathered into runs, passing on to the library's
+  Undo when the field has nothing to take back; double-click a word,
+  triple-click the line, drags by word or line that scroll past the edge;
+  a secondary click selects the word; pasted line breaks become spaces in a
+  one-line field; Chromium's selection on wrapped rows, and the caret at the
+  end of a wrapped row after ⌘→. Windows and Linux take their own keys
+  (Ctrl and Home/End).
 - The Electron shell's layout: a 48px titlebar row whose left block keeps the
   sidebar's width, over a body whose rails slide away (sidebar 50 ms,
   inspector 100 ms) while the grid takes the freed width at once. The panel
@@ -962,6 +975,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
+- Text fields: a line that starts with right-to-left text is laid out
+  right to left (production keeps the field left to right) and its
+  selection is not drawn; there is no spell-check underline; Home and End
+  in the inspector's fields move the caret where production's only scroll.
 - Inbox review: a failed save or a next page that cannot load is reported
   on the console, not in a notification. A review key held down is told
   from its repeats by its release or the next key, since GPUI hands an

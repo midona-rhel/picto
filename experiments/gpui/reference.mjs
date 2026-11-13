@@ -101,6 +101,49 @@ const KEYS = {
   right: ['ArrowRight', 'ArrowRight', 39],
   up: ['ArrowUp', 'ArrowUp', 38],
   down: ['ArrowDown', 'ArrowDown', 40],
+  home: ['Home', 'Home', 36],
+  end: ['End', 'End', 35],
+  pageup: ['PageUp', 'PageUp', 33],
+  pagedown: ['PageDown', 'PageDown', 34],
+};
+// On a Mac a key reaches a text field as the editing commands of the
+// system's key bindings (AppKit's `StandardKeyBinding.dict`), which
+// Chromium performs only when they come with the event: without them
+// Option-, Command- and Control-keys would do what they do on Windows, or
+// nothing. Keyed by the stroke with its modifiers in the order
+// ctrl, alt, shift, cmd.
+const MAC_COMMANDS = {
+  left: ['moveLeft'], right: ['moveRight'], up: ['moveUp'], down: ['moveDown'],
+  'shift-left': ['moveLeftAndModifySelection'], 'shift-right': ['moveRightAndModifySelection'],
+  'shift-up': ['moveUpAndModifySelection'], 'shift-down': ['moveDownAndModifySelection'],
+  'alt-left': ['moveWordLeft'], 'alt-right': ['moveWordRight'],
+  'alt-shift-left': ['moveWordLeftAndModifySelection'], 'alt-shift-right': ['moveWordRightAndModifySelection'],
+  'alt-up': ['moveBackward', 'moveToBeginningOfParagraph'], 'alt-down': ['moveForward', 'moveToEndOfParagraph'],
+  'alt-shift-up': ['moveParagraphBackwardAndModifySelection'], 'alt-shift-down': ['moveParagraphForwardAndModifySelection'],
+  'cmd-left': ['moveToLeftEndOfLine'], 'cmd-right': ['moveToRightEndOfLine'],
+  'shift-cmd-left': ['moveToLeftEndOfLineAndModifySelection'], 'shift-cmd-right': ['moveToRightEndOfLineAndModifySelection'],
+  'cmd-up': ['moveToBeginningOfDocument'], 'cmd-down': ['moveToEndOfDocument'],
+  'shift-cmd-up': ['moveToBeginningOfDocumentAndModifySelection'], 'shift-cmd-down': ['moveToEndOfDocumentAndModifySelection'],
+  'ctrl-left': ['moveToLeftEndOfLine'], 'ctrl-right': ['moveToRightEndOfLine'],
+  'ctrl-shift-left': ['moveToLeftEndOfLineAndModifySelection'], 'ctrl-shift-right': ['moveToRightEndOfLineAndModifySelection'],
+  home: ['scrollToBeginningOfDocument'], end: ['scrollToEndOfDocument'],
+  'shift-home': ['moveToBeginningOfDocumentAndModifySelection'], 'shift-end': ['moveToEndOfDocumentAndModifySelection'],
+  backspace: ['deleteBackward'], 'alt-backspace': ['deleteWordBackward'], 'ctrl-alt-backspace': ['deleteWordBackward'],
+  'cmd-backspace': ['deleteToBeginningOfLine'], 'ctrl-backspace': ['deleteBackwardByDecomposingPreviousCharacter'],
+  delete: ['deleteForward'], 'alt-delete': ['deleteWordForward'],
+  'ctrl-a': ['moveToBeginningOfParagraph'], 'ctrl-e': ['moveToEndOfParagraph'],
+  'ctrl-shift-a': ['moveToBeginningOfParagraphAndModifySelection'], 'ctrl-shift-e': ['moveToEndOfParagraphAndModifySelection'],
+  'ctrl-f': ['moveForward'], 'ctrl-b': ['moveBackward'], 'ctrl-n': ['moveDown'], 'ctrl-p': ['moveUp'],
+  'ctrl-shift-f': ['moveForwardAndModifySelection'], 'ctrl-shift-b': ['moveBackwardAndModifySelection'],
+  'ctrl-shift-n': ['moveDownAndModifySelection'], 'ctrl-shift-p': ['moveUpAndModifySelection'],
+  'ctrl-d': ['deleteForward'], 'ctrl-h': ['deleteBackward'], 'ctrl-k': ['deleteToEndOfParagraph'],
+  'ctrl-t': ['transpose'], 'ctrl-y': ['yank'], 'ctrl-o': ['insertNewlineIgnoringFieldEditor', 'moveBackward'],
+  'cmd-a': ['selectAll'], 'cmd-c': ['copy'], 'cmd-x': ['cut'], 'cmd-v': ['paste'],
+  'cmd-z': ['undo'], 'shift-cmd-z': ['redo'],
+};
+const macCommands = (parts, name) => {
+  const order = ['ctrl', 'alt', 'shift', 'cmd'];
+  return MAC_COMMANDS[[...order.filter((modifier) => parts.includes(modifier)), name].join('-')];
 };
 async function key(stroke) {
   const parts = stroke.split('-');
@@ -119,9 +162,10 @@ async function key(stroke) {
   // No native key code: a Windows one given as the Mac's is another key there
   // (65, the A key's, is one the app treats as Settings).
   const base = { key: keyName, code, windowsVirtualKeyCode: keyCode, modifiers };
+  const commands = process.platform === 'darwin' ? macCommands(parts, name) : undefined;
   // With Command or Control held the key is a shortcut, not text.
   const typed = modifiers & 6 ? undefined : text;
-  await send('Input.dispatchKeyEvent', { type: typed ? 'keyDown' : 'rawKeyDown', ...base, text: typed });
+  await send('Input.dispatchKeyEvent', { type: typed ? 'keyDown' : 'rawKeyDown', ...base, text: typed, commands });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 

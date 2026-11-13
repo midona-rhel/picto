@@ -952,6 +952,14 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
+            // A text field with nothing of its own to undo or redo passes
+            // the key on to the library's history.
+            .on_action(cx.listener(|this, _: &crate::ui::text_input::Undo, _, cx| {
+                this.session.update(cx, |session, cx| session.undo(cx))
+            }))
+            .on_action(cx.listener(|this, _: &crate::ui::text_input::Redo, _, cx| {
+                this.session.update(cx, |session, cx| session.redo(cx))
+            }))
             .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
                 this.session.update(cx, |session, cx| {
                     session.show_demo("vector.svg", "image/svg+xml", cx)

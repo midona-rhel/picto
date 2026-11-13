@@ -358,8 +358,12 @@ impl RenderOnce for Field {
             .bg(theme::blend(frame.fill.0, frame.fill.1, strength))
             .overflow_hidden()
             .cursor(CursorStyle::IBeam)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&handle, cx);
+            .on_mouse_down(MouseButton::Left, {
+                let input = self.input.clone();
+                move |event, window, cx| {
+                    window.focus(&handle, cx);
+                    input.update(cx, |input, cx| input.press_outside(event, window, cx));
+                }
             })
             .child(measure);
         if self.look == Look::Search {
@@ -529,8 +533,12 @@ impl Field {
             ])
             .opacity(shown)
             .cursor(CursorStyle::IBeam)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&handle, cx);
+            .on_mouse_down(MouseButton::Left, {
+                let input = self.input.clone();
+                move |event, window, cx| {
+                    window.focus(&handle, cx);
+                    input.update(cx, |input, cx| input.press_outside(event, window, cx));
+                }
             })
             .child(
                 div()
