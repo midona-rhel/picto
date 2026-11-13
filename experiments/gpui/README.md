@@ -1137,8 +1137,10 @@ element (`shell/rails.rs`).
   row's sticky position and the 60 ms row highlight transitions.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong (language, the grid's wheel action, image rendering
-  and the transparency grid, imports, subscriptions).
+  belong: language and image scaling ("Pixelated" needs nearest-neighbour
+  sampling in the vendored renderers). Zoom Level is saved and not applied,
+  as in production. The grid's
+  mouse wheel (scroll or zoom) and the transparency grid are applied.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
   are downloaded) are drawn but not performed; every model shows as not
@@ -1350,8 +1352,7 @@ element (`shell/rails.rs`).
   dialog, the collection question, the task dialog and bar have been played
   off-screen and compared with the reference.
 - Viewer: the breadcrumb belongs to the collection editor, which does not
-  exist yet. No
-  transparency checkerboard (off by default in Picto), no per-image zoom
+  exist yet. No per-image zoom
   memory and no copy shortcut. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
