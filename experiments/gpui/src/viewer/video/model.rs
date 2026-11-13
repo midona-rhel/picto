@@ -96,7 +96,9 @@ pub fn cycle_rate(current: f32, direction: i8) -> f32 {
 }
 
 /// `snapFps`: a measured frame rate, snapped to the common rate within 10%
-/// of it, else rounded.
+/// of it, else rounded. Only the AVFoundation backend measures its rate;
+/// `ffprobe` reports the other's.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn snap_fps(measured: f64) -> f64 {
     const COMMON: [f64; 10] = [23.976, 24., 25., 29.97, 30., 48., 50., 59.94, 60., 120.];
     let (best, distance) = COMMON

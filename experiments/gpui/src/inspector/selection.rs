@@ -3,7 +3,7 @@
 //! selected, the notes, sources, folders and tags they all share, a rating
 //! that applies to all of them, and their media count and size.
 use super::stack::{self, Stack};
-use super::{Inspector, Mode, PREVIEW, Rate, fitted, format_size};
+use super::{Inspector, Mode, PREVIEW, Rate, fitted};
 use crate::grid::format;
 use crate::theme;
 use crate::theme::Text as _;
@@ -516,7 +516,7 @@ impl Inspector {
                 ))
                 .child(Self::property(
                     "Size",
-                    format_size(summary.total_size_bytes as u64),
+                    crate::text::size_to_gigabytes(summary.total_size_bytes as u64),
                     cx,
                 ));
         }

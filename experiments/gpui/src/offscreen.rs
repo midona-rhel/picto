@@ -5,8 +5,11 @@
 //!     PICTO_GPUI_OUT=/tmp/shots cargo test -- --ignored plays_a_script
 //!
 //! The copy is one `run.sh` made. A script line is a playback line (see
-//! `pointer.rs`), `wait <milliseconds>`, or `shot <name>`, which saves
-//! `<name>.png`. `PICTO_GPUI_WINDOW=1213x865` sets the window's size.
+//! `pointer.rs`), `wait <milliseconds>`, `shot <name>`, which saves
+//! `<name>.png`, or `window <n>`, which sends what follows to the app's nth
+//! window (0 is the main one; Settings and a detail window come after it in
+//! the order they opened). `PICTO_GPUI_WINDOW=1213x865` sets the main
+//! window's size.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -69,11 +72,19 @@ fn plays_a_script() {
             cx.new(|cx| Shell::new(root, application, delivered, window, cx))
         })
         .unwrap();
-    let window: AnyWindowHandle = window.into();
+    let main: AnyWindowHandle = window.into();
+    let mut window = main;
     // The library opens and the first page and its thumbnails arrive.
     settle(&mut cx, window, Duration::from_secs(3));
     for line in script.lines().map(str::trim) {
-        if line.is_empty() || line.starts_with('#') {
+        // `size`, `js` and `reload` are for the Electron reference
+        // (`reference.mjs`), which takes the same scripts.
+        if line.is_empty()
+            || line.starts_with('#')
+            || line == "reload"
+            || line.starts_with("size ")
+            || line.starts_with("js ")
+        {
             continue;
         }
         if let Some(name) = line.strip_prefix("shot ") {
@@ -81,6 +92,15 @@ fn plays_a_script() {
             picture
                 .save(out.join(format!("{}.png", name.trim())))
                 .unwrap();
+        } else if let Some(index) = line.strip_prefix("window ") {
+            let index: usize = index.trim().parse().expect("window <n>");
+            // The main window first, the others in the order they opened.
+            let mut windows = cx.update(|cx| cx.windows());
+            windows.sort_by_key(|handle| (*handle != main, handle.window_id().as_u64()));
+            window = *windows
+                .get(index)
+                .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
+            settle(&mut cx, window, Duration::from_millis(200));
         } else if let Some(time) = line.strip_prefix("wait ") {
             let time = time.trim().parse().expect("wait <milliseconds>");
             settle(&mut cx, window, Duration::from_millis(time));

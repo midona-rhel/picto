@@ -4,8 +4,8 @@
 //! on the items or takes it off at once. A search for a tag that does not
 //! exist offers to create it.
 use super::membership;
-use crate::screens::tags::model::{self, Preferences};
 use crate::session::Session;
+use crate::tags::{Preferences, record_name as name};
 use crate::theme::Text as _;
 use crate::ui::{
     self,
@@ -88,10 +88,8 @@ impl EventEmitter<Event> for TagPicker {}
 /// `tagRecord`: a record for a tag known only by name, in General when the
 /// name has no group.
 pub fn record(name: &str) -> TagRecord {
-    let (namespace, subname) = match name.split_once(':') {
-        Some((namespace, subname)) => (namespace, subname),
-        None => ("general", name),
-    };
+    let (namespace, subname) = crate::tags::split(name);
+    let namespace = namespace.unwrap_or("general");
     TagRecord {
         tag_id: TagId(0),
         namespace_id: TagNamespaceId(0),
@@ -102,21 +100,13 @@ pub fn record(name: &str) -> TagRecord {
     }
 }
 
-/// `tagName`: the name the library adds and removes a tag by.
-pub fn name(tag: &TagRecord) -> String {
-    model::tag_name(&tag.namespace, &tag.subname)
-}
-
 /// `displayTagName`: the name, without its group unless prefixes show.
 fn display_name(tag: &TagRecord, prefixes: bool) -> String {
     let full = name(tag);
     if prefixes {
         return full;
     }
-    match full.split_once(':') {
-        Some((_, subname)) => subname.to_owned(),
-        None => full,
-    }
+    crate::tags::split(&full).1.to_owned()
 }
 
 /// Everything [`display_tags`] chooses from.
@@ -150,7 +140,7 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
                 left.namespace
                     .to_lowercase()
                     .cmp(&right.namespace.to_lowercase())
-                    .then_with(|| model::compare_names(&left.subname, &right.subname))
+                    .then_with(|| crate::text::natural_order(&left.subname, &right.subname))
             });
             records
         }
@@ -160,7 +150,7 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
                 .iter()
                 .map(|name| record(name))
                 .collect::<Vec<_>>();
-            records.sort_by(|left, right| model::compare_names(&name(left), &name(right)));
+            records.sort_by(|left, right| crate::text::natural_order(&name(left), &name(right)));
             records
         }
         View::All | View::Group(_) => {
@@ -215,7 +205,7 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
             (key, tag)
         })
         .collect::<Vec<_>>();
-    let ranked = model::rank_matches(keyed, &query, |(key, _)| key.as_str());
+    let ranked = crate::text::rank_matches(keyed, &query, |(key, _)| key.as_str());
     let mut seen = BTreeSet::new();
     ranked
         .into_iter()
@@ -299,24 +289,8 @@ fn rail_groups(namespaces: &[TagNamespaceRecord]) -> Vec<TagNamespaceRecord> {
         .filter(|group| !matches!(group.name.as_str(), "" | "general"))
         .cloned()
         .collect::<Vec<_>>();
-    groups.sort_by_key(|group| model::group_order(&group.name));
+    groups.sort_by_key(|group| crate::tags::group_order(&group.name));
     groups
-}
-
-/// The first case-insensitive match of `query` in `text`, as a byte range,
-/// for `highlightMatch`.
-fn highlight(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
-    let query = query.trim();
-    if query.is_empty() {
-        return None;
-    }
-    let lower = text.to_lowercase();
-    // Only where lower-casing keeps every byte where it was.
-    if lower.len() != text.len() {
-        return None;
-    }
-    let start = lower.find(&query.to_lowercase())?;
-    Some(start..start + query.len())
 }
 
 pub struct TagPicker {
@@ -351,9 +325,8 @@ pub struct TagPicker {
     focus_index: Option<usize>,
     scroll: ScrollHandle,
     search_timer: Option<Task<()>>,
-    menu: Option<Entity<Menu>>,
+    menu: menu::Host,
     menu_tag: Option<TagRecord>,
-    _menu: Option<Subscription>,
     filter: Option<FilterMode>,
     _subscriptions: Vec<Subscription>,
 }
@@ -361,6 +334,8 @@ pub struct TagPicker {
 impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::menu_search);
+        // The keyboard goes back to the search once a row's menu has gone.
+        let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {
@@ -401,9 +376,8 @@ impl TagPicker {
             focus_index: None,
             scroll: ScrollHandle::new(),
             search_timer: None,
-            menu: None,
+            menu,
             menu_tag: None,
-            _menu: None,
             filter: None,
             _subscriptions: subscriptions,
         }
@@ -518,9 +492,7 @@ impl TagPicker {
             return;
         };
         self.search_timer = None;
-        if let Some(menu) = &self.menu {
-            menu.update(cx, |menu, cx| menu.dismiss(cx));
-        }
+        self.menu.close(cx);
         opening.finish(&self.focus, window, cx);
         cx.notify();
     }
@@ -799,7 +771,7 @@ impl TagPicker {
     }
 
     fn navigate(&mut self, key: Nav, cx: &mut Context<Self>) -> bool {
-        if self.settings_open || self.menu.is_some() {
+        if self.settings_open || self.menu.is_open() {
             return false;
         }
         let starred = crate::settings::current(cx).starred_tags.clone();
@@ -873,21 +845,14 @@ impl TagPicker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let entries = tag_menu(&tag, &self.namespaces, true, false, cx);
+        let entries = crate::tags::common_menu(&tag, &self.namespaces, tag.tag_id.0 > 0, cx);
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu = Some(cx.subscribe_in(
-            &menu,
-            window,
-            |this, menu, event: &menu::Event, window, cx| {
-                let menu::Event::Chosen(action) = event;
+        self.menu
+            .open(menu, window, cx, |this, menu, action, window, cx| {
                 let value = menu.read(cx).chosen_value();
                 this.run_menu(action, value, window, cx);
-            },
-        ));
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+            });
         self.menu_tag = Some(tag);
-        cx.notify();
     }
 
     fn run_menu(
@@ -906,12 +871,12 @@ impl TagPicker {
                 self.close(window, cx);
                 cx.emit(Event::Filter(tag.tag_id));
             }
-            "star" => set_starred(&tag_name, true, cx),
-            "unstar" => set_starred(&tag_name, false, cx),
+            "star" => crate::tags::set_starred(&tag_name, true, cx),
+            "unstar" => crate::tags::set_starred(&tag_name, false, cx),
             "copy" => cx.write_to_clipboard(ClipboardItem::new_string(tag_name)),
             "move-to-group" | "remove-from-group" => {
                 let group = value.filter(|_| action == "move-to-group");
-                let next = model::name_in_group(&tag.subname, group.as_deref());
+                let next = crate::tags::name_in_group(&tag.subname, group.as_deref());
                 let id = tag.tag_id;
                 let target = next.clone();
                 let answer = self
@@ -922,7 +887,7 @@ impl TagPicker {
                     let Ok(result) = answer.await else { return };
                     let _ = this.update(cx, |this, cx| match result {
                         Ok(_) => {
-                            rename_star(&tag_name, &next, cx);
+                            crate::tags::rename_star(&tag_name, &next, cx);
                             this.request(cx);
                             cx.emit(Event::Renamed);
                         }
@@ -938,96 +903,6 @@ impl TagPicker {
         // The keyboard goes back to the search once the menu has gone.
         let handle = self.search.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
-    }
-}
-
-/// `buildCommonTagContextEntries`: Filter, Star, the group moves (in the
-/// picker only), Copy, and Remove where the tag can be taken off.
-pub fn tag_menu(
-    tag: &TagRecord,
-    namespaces: &[TagNamespaceRecord],
-    groups: bool,
-    remove: bool,
-    cx: &App,
-) -> Vec<menu::Entry> {
-    let tag_name = name(tag);
-    let starred = Preferences::from_settings(crate::settings::current(cx)).is_starred(&tag_name);
-    let current = model::group_of(&tag.namespace);
-    let mut entries: Vec<menu::Entry> = vec![
-        menu::item("filter", "Filter Items with This Tag")
-            .icon("menu-search")
-            .disabled(tag.tag_id.0 == 0)
-            .into(),
-        if starred {
-            menu::item("unstar", "Remove from Starred").icon("menu-star-off")
-        } else {
-            menu::item("star", "Add to Starred").icon("menu-star")
-        }
-        .into(),
-    ];
-    if groups && tag.tag_id.0 > 0 {
-        let mut targets = namespaces
-            .iter()
-            .filter_map(|namespace| model::group_of(&namespace.name))
-            .filter(|group| Some(group) != current.as_ref())
-            .collect::<Vec<_>>();
-        targets.sort_by(|left, right| model::compare_names(left, right));
-        targets.dedup();
-        if !targets.is_empty() {
-            entries.push(
-                menu::submenu(
-                    if current.is_some() {
-                        "Move to Group…"
-                    } else {
-                        "Add to Group…"
-                    },
-                    targets
-                        .into_iter()
-                        .map(|group| {
-                            menu::item("move-to-group", group.clone())
-                                .icon("menu-bookmark")
-                                .value(group)
-                                .into()
-                        })
-                        .collect(),
-                )
-                .icon("menu-bookmarks")
-                .into(),
-            );
-        }
-        if current.is_some() {
-            entries.push(
-                menu::item("remove-from-group", "Remove from this Group")
-                    .icon("menu-bookmark")
-                    .into(),
-            );
-        }
-    }
-    entries.push(menu::Entry::Separator);
-    entries.push(menu::item("copy", "Copy Tag").icon("menu-copy").into());
-    if remove {
-        entries.push(menu::item("remove", "Remove Tag").icon("menu-x").into());
-    }
-    entries
-}
-
-/// `setTagStarred`, through the settings model, which writes the library's
-/// application settings.
-pub fn set_starred(tag_name: &str, starred: bool, cx: &mut App) {
-    let preferences = Preferences::from_settings(crate::settings::current(cx));
-    let next = preferences.with_star(tag_name, starred);
-    crate::settings::model(cx).update(cx, |model, cx| {
-        model.apply_now(|app| app.starred_tags = next.clone(), cx)
-    });
-}
-
-/// `replaceStarredTag`: a renamed tag keeps its star.
-fn rename_star(previous: &str, next: &str, cx: &mut App) {
-    let preferences = Preferences::from_settings(crate::settings::current(cx));
-    if let Some(starred) = preferences.renamed_star(previous, next) {
-        crate::settings::model(cx).update(cx, |model, cx| {
-            model.apply_now(|app| app.starred_tags = starred.clone(), cx)
-        });
     }
 }
 
@@ -1143,7 +1018,7 @@ impl TagPicker {
                     .flex_none()
                     .mx(px(6.))
                     .rounded_full()
-                    .bg(rgb(model::group_color(&group.name, &preferences)))
+                    .bg(rgb(crate::tags::group_color(&group.name, &preferences)))
                     .opacity(if self.view == view { 1. } else { 0.85 })
                     .group_hover(hovered, |style| style.opacity(1.))
                     .into_any_element();
@@ -1216,7 +1091,7 @@ impl TagPicker {
         let dim = if excluded { 0.45 } else { 1. };
         let focused = self.focus_index == Some(index);
         let starred = preferences.is_starred(&tag_name);
-        let color = model::group_color(&tag.namespace, preferences);
+        let color = crate::tags::group_color(&tag.namespace, preferences);
         let group = SharedString::from(format!("picker-row-{index}"));
         let fill = if checked {
             theme.primary_at(20.)
@@ -1245,22 +1120,7 @@ impl TagPicker {
             .flex_none()
         };
         let label = display_name(tag, prefixes);
-        let text =
-            StyledText::new(label.clone()).with_highlights(highlight(&label, query).map(|range| {
-                (
-                    range,
-                    HighlightStyle {
-                        font_weight: Some(FontWeight::BOLD),
-                        color: Some(theme.text().into()),
-                        underline: Some(UnderlineStyle {
-                            color: Some(theme.contrast(20.).into()),
-                            thickness: px(1.),
-                            wavy: false,
-                        }),
-                        ..Default::default()
-                    },
-                )
-            }));
+        let text = overlay_shell::search_match(label, query, cx);
         let row_tag = tag.clone();
         let menu_tag = tag.clone();
         let mut row = div()
@@ -1588,15 +1448,7 @@ impl WhenNotActive for Stateful<Div> {}
 
 impl Render for TagPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A dismissed menu goes once its fade is over.
-        if self
-            .menu
-            .as_ref()
-            .is_some_and(|menu| menu.read(cx).finished())
-        {
-            self.menu = None;
-            self._menu = None;
-        }
+        let menu = self.menu.layer(window, cx);
         if !self.is_open() {
             return div().into_any_element();
         }
@@ -1773,27 +1625,13 @@ impl Render for TagPicker {
                 .child("Close ")
                 .child(overlay_shell::kbd("Esc", cx)),
         );
-        let mut root = div().child(shell);
-        if let Some(menu) = self.menu.clone() {
-            let view = window.viewport_size();
-            root = root.child(
-                deferred(
-                    anchored()
-                        .position(point(px(0.), px(0.)))
-                        .child(div().w(view.width).h(view.height).child(menu)),
-                )
-                .with_priority(30),
-            );
-        }
-        root.into_any_element()
+        div().child(shell).children(menu).into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Sources, View, create_candidate, display_tags, highlight, name, next_view, record, step,
-    };
+    use super::{Sources, View, create_candidate, display_tags, name, next_view, record, step};
     use crate::ui::overlay_shell::Nav;
     use picto_library::{TagId, TagNamespaceId, TagRecord};
 
@@ -1967,12 +1805,5 @@ mod tests {
         assert_eq!(step(Some(4), Nav::Right, 2, 5), Some(4));
         assert_eq!(step(Some(0), Nav::Left, 2, 5), Some(0));
         assert_eq!(step(Some(2), Nav::Down, 1, 0), Some(2));
-    }
-
-    #[test]
-    fn a_match_is_highlighted_where_it_is_found() {
-        assert_eq!(highlight("Black Cat", "cat"), Some(6..9));
-        assert_eq!(highlight("dog", "cat"), None);
-        assert_eq!(highlight("dog", " "), None);
     }
 }

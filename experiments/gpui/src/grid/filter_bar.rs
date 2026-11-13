@@ -477,7 +477,7 @@ impl FilterBar {
             MenuKind::Type => {
                 let (families, types) = filters::type_rows(&self.facets, filters);
                 let row = |mime: &String| -> menu::Entry {
-                    menu::item("type", filters::mime_label(mime))
+                    menu::item("type", crate::text::filter_type(mime))
                         .value(mime.clone())
                         .keywords([mime.clone()])
                         .checked(filters.include_mimes.contains(mime))
@@ -616,7 +616,7 @@ impl FilterBar {
                     .ok()
                     .and_then(|index| filters::DATE_PRESETS.get(index))
                 {
-                    let now = chrono::Utc::now().timestamp_millis();
+                    let now = crate::now_ms();
                     let (after, before) = filters::date_preset(now, *days, *end);
                     self.update(cx, |filters| {
                         set_dates(kind, filters, Some(after), Some(before))
@@ -720,7 +720,7 @@ impl FilterBar {
         let label = filters.label(field, names);
         let active = filters.is_set(field);
         let glyph = match (&filters.color, field) {
-            (Some(color), Field::Color) => Glyph::Color(rgb(color_editor::parse_hex(
+            (Some(color), Field::Color) => Glyph::Color(rgb(theme::parse_hex_code(
                 &color.to_uppercase(),
             )
             .unwrap_or(0x808080))),
@@ -807,11 +807,6 @@ fn set_dates(kind: MenuKind, filters: &mut Filters, after: Option<i64>, before: 
     }
 }
 
-/// A colour with no opacity, for a gradient that fades to it.
-fn clear(color: Rgba) -> Rgba {
-    Rgba { a: 0., ..color }
-}
-
 impl Render for FilterBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
@@ -865,14 +860,14 @@ impl Render for FilterBar {
                         .bg(linear_gradient(
                             90.,
                             linear_color_stop(background, 0.),
-                            linear_color_stop(clear(background), 1.),
+                            linear_color_stop(theme::clear(background), 1.),
                         )),
                 )
                 .child(div().absolute().right_0().top_0().w(px(18.)).h(px(24.)).bg(
                     linear_gradient(
                         270.,
                         linear_color_stop(background, 0.),
-                        linear_color_stop(clear(background), 1.),
+                        linear_color_stop(theme::clear(background), 1.),
                     ),
                 ));
         let (saved, lock, reset) = (

@@ -16,6 +16,8 @@ pub struct Confirm {
     message: SharedString,
     confirm_label: SharedString,
     danger: bool,
+    busy: bool,
+    priority: Option<usize>,
     presence: Presence,
     focus: Option<FocusHandle>,
     on_confirm: Option<Handler>,
@@ -38,6 +40,8 @@ pub fn confirm(
         message: message.into(),
         confirm_label: confirm_label.into(),
         danger: false,
+        busy: false,
+        priority: None,
         presence,
         focus: None,
         on_confirm: None,
@@ -50,6 +54,16 @@ impl Confirm {
     /// The confirming button in the negative colour (`danger`).
     pub fn danger(mut self, danger: bool) -> Self {
         self.danger = danger;
+        self
+    }
+    /// Both buttons disabled while the confirmed work is running.
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+    /// Drawn above another dialog ([`super::modal::Modal::layer`]).
+    pub fn layer(mut self, priority: usize) -> Self {
+        self.priority = Some(priority);
         self
     }
     /// The focus the dialog holds, so Escape reaches it.
@@ -81,6 +95,9 @@ impl RenderOnce for Confirm {
         if let Some(focus) = &self.focus {
             dialog = dialog.focus(focus);
         }
+        if let Some(priority) = self.priority {
+            dialog = dialog.layer(priority);
+        }
         if let Some(close) = self.on_close {
             dialog = dialog.on_close(move |window, cx| close(window, cx));
         }
@@ -98,6 +115,7 @@ impl RenderOnce for Confirm {
             .footer(
                 action_button("confirm-cancel", Look::Standard)
                     .label("Cancel")
+                    .disabled(self.busy)
                     .on_click(move |_, window, cx| {
                         if let Some(cancel) = &cancel {
                             cancel(window, cx);
@@ -114,6 +132,7 @@ impl RenderOnce for Confirm {
                     },
                 )
                 .label(self.confirm_label)
+                .disabled(self.busy)
                 .on_click(move |_, window, cx| {
                     if let Some(confirm) = &confirm {
                         confirm(window, cx);

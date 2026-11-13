@@ -211,7 +211,9 @@ pub struct Session {
     /// The disposable copy the application opened.
     root: PathBuf,
     pub library_cover: Option<PathBuf>,
-    pub fixtures: tempfile::TempDir,
+    /// A disposable folder that holds the demo media and is the scratch
+    /// space the library cover's crops are written to.
+    pub scratch: tempfile::TempDir,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
     /// Folders items were added to, newest first, for the folder picker's
@@ -248,10 +250,10 @@ impl Session {
             }
         })
         .detach();
-        let fixtures = crate::demo::fixtures().expect("create disposable media fixtures");
+        let scratch = crate::demo::fixtures().expect("create disposable media fixtures");
         let library_cover = blobs
             .parent()
-            .and_then(|library| crate::cover::prepare(library, fixtures.path()));
+            .and_then(|library| crate::cover::prepare(library, scratch.path()));
         Self {
             sender,
             receiver,
@@ -304,7 +306,7 @@ impl Session {
             blobs,
             root,
             library_cover,
-            fixtures,
+            scratch,
             place_label: None,
             reselect: None,
             recent_folders: Vec::new(),

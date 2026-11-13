@@ -22,15 +22,6 @@ pub const FOLDER_COLORS: [(&str, Option<&str>); 10] = [
 
 const SWATCH: f32 = 18.;
 
-/// `#RRGGBB` as a colour.
-pub fn parse(hex: &str) -> Option<Rgba> {
-    let digits = hex.strip_prefix('#').unwrap_or(hex);
-    (digits.len() == 6)
-        .then(|| u32::from_str_radix(digits, 16).ok())
-        .flatten()
-        .map(rgb)
-}
-
 /// Which swatch shows `value` chosen. A colour the row does not have
 /// rings nothing, as `local === c.hex` finds no swatch.
 pub fn selected(value: Option<&str>) -> Option<usize> {
@@ -52,7 +43,7 @@ pub fn menu_row(action: &'static str, value: Option<&str>) -> menu::Swatches {
             .iter()
             .map(|(label, hex)| menu::Swatch {
                 label: (*label).into(),
-                color: hex.and_then(parse),
+                color: hex.and_then(theme::parse_hex).map(rgb),
                 value: hex.unwrap_or_default().into(),
             })
             .collect(),
@@ -99,7 +90,10 @@ impl RenderOnce for ColorPicker {
             .justify_between()
             .py(px(4.));
         for (position, (label, hex)) in FOLDER_COLORS.iter().enumerate() {
-            let color = hex.and_then(parse).unwrap_or(theme.text());
+            let color = hex
+                .and_then(theme::parse_hex)
+                .map(rgb)
+                .unwrap_or(theme.text());
             let check = if hex.is_some() {
                 theme.on_primary()
             } else {

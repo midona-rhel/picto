@@ -49,8 +49,9 @@ pub enum OpenWith {
     #[default]
     None,
     /// The applications are being looked up: a submenu with one disabled row.
-    /// Production's state on macOS until it has listed them; this app cannot
-    /// list them, so it offers the chooser's row instead.
+    /// Production's state on macOS until it has listed them. Nothing looks
+    /// them up yet (see the TODO where the item menu is described), so only
+    /// the tests show it.
     #[allow(dead_code)]
     Pending,
     /// The system's own chooser: one row.

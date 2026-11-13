@@ -3,13 +3,13 @@
 //! source addresses, and the confirmation before overwriting what some
 //! selected items already have.
 use super::membership::{self, Touches};
-use super::tag_picker::{self, name};
+use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
+use crate::tags::record_name as name;
 use crate::ui::{
     self,
     menu::{self, Menu},
-    modal::Presence,
 };
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -22,10 +22,6 @@ pub(super) struct Target {
     pub ids: Vec<RootId>,
     pub tags: Vec<TagRecord>,
     pub folders: Vec<FolderId>,
-}
-
-fn now_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
 }
 
 impl Inspector {
@@ -250,13 +246,7 @@ impl Inspector {
                 .iter()
                 .any(|choice| choice.tag_id == tag.0)
             {
-                let name = session
-                    .tags
-                    .get(&tag.0)
-                    .map(|record| {
-                        crate::screens::tags::model::tag_name(&record.namespace, &record.subname)
-                    })
-                    .unwrap_or_default();
+                let name = session.tags.get(&tag.0).map(name).unwrap_or_default();
                 filters.include_tags.push(crate::grid::filters::TagChoice {
                     tag_id: tag.0,
                     name,
@@ -396,7 +386,7 @@ impl Inspector {
         if sort {
             tags.sort_by_key(|tag| {
                 (
-                    super::tag_style(&tag.namespace).1,
+                    crate::tags::inspector_order(&tag.namespace),
                     tag.subname.to_lowercase(),
                 )
             });
@@ -404,7 +394,7 @@ impl Inspector {
         let mut chips = div().flex().flex_wrap().gap(px(4.));
         let empty = tags.is_empty();
         for tag in tags {
-            let raw = super::tag_raw(&tag);
+            let raw = name(&tag);
             let menu_tag = tag.clone();
             chips = chips.child(
                 super::tag_chip(&tag, cx)
@@ -436,34 +426,32 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) {
         let entries = match &target {
-            ChipMenu::Tag(tag) => tag_picker::tag_menu(tag, &[], false, true, cx),
+            ChipMenu::Tag(tag) => {
+                let mut entries = crate::tags::common_menu(tag, &[], false, cx);
+                entries.push(menu::item("remove", "Remove Tag").icon("menu-x").into());
+                entries
+            }
             ChipMenu::Folder(_) => vec![
                 menu::item("open-folder", "Open Folder").into(),
                 menu::item("remove", "Remove").into(),
             ],
         };
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    this.run_chip_menu(action, window, cx);
-                }),
-            );
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
+        self.menu
+            .open(menu, window, cx, |this, _, action, window, cx| {
+                this.run_chip_menu(action, window, cx)
+            });
         self.menu_target = Some(target);
-        cx.notify();
     }
 
     fn run_chip_menu(&mut self, action: &str, _: &mut Window, cx: &mut Context<Self>) {
         match self.menu_target.clone() {
             Some(ChipMenu::Tag(tag)) => match action {
                 "filter" => self.show_tag_items(tag.tag_id, cx),
-                "star" => tag_picker::set_starred(&name(&tag), true, cx),
-                "unstar" => tag_picker::set_starred(&name(&tag), false, cx),
+                "star" => crate::tags::set_starred(&name(&tag), true, cx),
+                "unstar" => crate::tags::set_starred(&name(&tag), false, cx),
                 "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name(&tag))),
-                "remove" => self.set_tag(super::tag_raw(&tag), false, false, cx),
+                "remove" => self.set_tag(name(&tag), false, false, cx),
                 _ => {}
             },
             Some(ChipMenu::Folder(folder)) => match action {
@@ -490,7 +478,7 @@ impl Inspector {
         match self.shown {
             Mode::Item => self.edit(
                 Touches::Text,
-                move |library, target| library.set_source_urls(target, urls, now_ms()),
+                move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
                 |_, _| {},
                 cx,
             ),
@@ -519,13 +507,9 @@ impl Inspector {
 
     /// Asks before replacing what some of the selected items have.
     pub(super) fn ask(&mut self, overwrite: Overwrite, count: u64, cx: &mut Context<Self>) {
-        self.confirm = Some(Confirm {
-            overwrite,
-            count,
-            presence: Presence::new(),
-            focus: cx.focus_handle(),
-        });
-        cx.notify();
+        // The keyboard is left where the dialog leaves it.
+        self.confirm
+            .open(Confirm { overwrite, count }, menu::Return::Stay, cx);
     }
 
     /// Writes the notes or addresses to every selected item.
@@ -533,13 +517,13 @@ impl Inspector {
         match overwrite {
             Overwrite::Notes(notes) => self.edit(
                 Touches::Text,
-                move |library, target| library.set_notes(target, Some(notes), now_ms()),
+                move |library, target| library.set_notes(target, Some(notes), crate::now_ms()),
                 |_, _| {},
                 cx,
             ),
             Overwrite::Sources(urls) => self.edit(
                 Touches::Text,
-                move |library, target| library.set_source_urls(target, urls, now_ms()),
+                move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
                 |_, _| {},
                 cx,
             ),
@@ -552,24 +536,18 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self
-            .confirm
-            .as_ref()
-            .is_some_and(|confirm| confirm.presence.finished())
-        {
-            self.confirm = None;
-        }
-        let confirm = self.confirm.as_ref()?;
+        let confirm = self.confirm.layer(window, cx)?;
+        // It keeps the keyboard while it is open.
         if !confirm.focus.contains_focused(window, cx) && !confirm.presence.closing() {
             window.focus(&confirm.focus, cx);
         }
-        let (title, label, what) = match confirm.overwrite {
+        let (title, label, what) = match confirm.content.overwrite {
             Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),
             Overwrite::Sources(_) => ("Overwrite sources?", "Overwrite Sources", "source URLs"),
         };
         let message = format!(
             "This will replace existing {what} on all {} selected items. Are you sure?",
-            crate::grid::format::grouped(confirm.count)
+            crate::grid::format::grouped(confirm.content.count)
         );
         let this = cx.entity().downgrade();
         let (dismiss, accept) = (this.clone(), this);
@@ -578,24 +556,18 @@ impl Inspector {
                 .danger(true)
                 .focus(&confirm.focus)
                 .on_close(move |_, cx| {
-                    let _ = dismiss.update(cx, |this, cx| {
-                        if let Some(confirm) = &mut this.confirm {
-                            confirm.presence.close();
-                            cx.notify();
-                        }
-                    });
+                    let _ = dismiss.update(cx, |this, cx| this.confirm.dismiss(cx));
                 })
                 .on_confirm(move |_, cx| {
                     let _ = accept.update(cx, |this, cx| {
-                        if let Some(confirm) = this.confirm.as_mut() {
-                            confirm.presence.close();
+                        this.confirm.dismiss(cx);
+                        if let Some(confirm) = this.confirm.get_mut() {
                             let overwrite = std::mem::replace(
-                                &mut confirm.overwrite,
+                                &mut confirm.content.overwrite,
                                 Overwrite::Notes(String::new()),
                             );
                             this.overwrite(overwrite, cx);
                         }
-                        cx.notify();
                     });
                 })
                 .into_any_element(),

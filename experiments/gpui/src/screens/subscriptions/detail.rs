@@ -66,7 +66,7 @@ fn number(value: i64, cx: &App) -> AnyElement {
         .text_right()
         .font_features(theme::tabular_figures())
         .text_color(theme::theme(cx).text_secondary())
-        .child(format::count(value))
+        .child(crate::grid::format::grouped(value))
         .into_any_element()
 }
 
@@ -405,10 +405,13 @@ impl SubscriptionsScreen {
                     .whitespace_nowrap()
                     .child(format!(
                         "{} / {} posts processed",
-                        format::count(settled),
-                        format::count(target)
+                        crate::grid::format::grouped(settled),
+                        crate::grid::format::grouped(target)
                     ))
-                    .child(format!("{} files downloaded", format::count(downloaded))),
+                    .child(format!(
+                        "{} files downloaded",
+                        crate::grid::format::grouped(downloaded)
+                    )),
             )
             .child(
                 div()
@@ -433,7 +436,7 @@ impl SubscriptionsScreen {
         let has_run = subscription.run_status.is_some();
         let progress = subscription.progress;
         let stored_posts: i64 = subscription.queries.iter().map(|query| query.posts).sum();
-        let of_run = |value: i64| format::count(if has_run { value } else { 0 });
+        let of_run = |value: i64| crate::grid::format::grouped(if has_run { value } else { 0 });
         let row = |label: &'static str, value: AnyElement| {
             div()
                 .h(px(26.))
@@ -470,7 +473,7 @@ impl SubscriptionsScreen {
             ))
             .child(row(
                 "Posts added",
-                value(format::count(if has_run {
+                value(crate::grid::format::grouped(if has_run {
                     progress.posts_added
                 } else {
                     stored_posts
@@ -562,12 +565,11 @@ impl SubscriptionsScreen {
             .items_center()
             .gap(px(4.));
         for (index, tag) in subscription.automatic_tags.iter().enumerate() {
-            let (namespace, subtag) = tag.split_once(':').unwrap_or(("", tag));
-            let (color, _) = crate::inspector::tag_style(namespace);
+            let (namespace, subtag) = crate::tags::split(tag);
             tags = tags.child(ui::chip(
                 ("subscription-tag", index),
                 subtag.to_owned(),
-                color,
+                crate::tags::chip_color(namespace.unwrap_or_default()),
             ));
         }
         tags = if subscription.automatic_tags.is_empty() {

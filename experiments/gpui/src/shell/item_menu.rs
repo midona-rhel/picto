@@ -5,12 +5,13 @@
 //! the chosen row through the session and the library.
 use super::Shell;
 use crate::backend;
+use crate::grid::format::grouped;
 use crate::grid::layout::ViewMode;
 use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
     Surface, Toggle, ViewState,
 };
-use crate::ui::{self, menu::Menu, modal::Presence};
+use crate::ui::{self, menu::Menu};
 use gpui::*;
 use picto_library::predicate::{SortDirection, SortField};
 use picto_library::query::{ItemScope, RootSummary};
@@ -29,7 +30,7 @@ pub(super) struct ItemMenus {
     /// The tags "Copy Tags" took, for "Paste Tags" (production keeps them on
     /// the window, beside the JSON it writes to the clipboard).
     tag_clipboard: Vec<String>,
-    confirm: Option<Confirmation>,
+    confirm: ui::modal::Host<Confirmation>,
 }
 
 /// The items a menu acts on.
@@ -81,8 +82,6 @@ struct Confirmation {
     message: SharedString,
     label: SharedString,
     danger: bool,
-    presence: Presence,
-    focus: FocusHandle,
     run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
 }
 
@@ -113,16 +112,6 @@ fn media_link(hash: &str, mime: &str) -> String {
     format!("media://localhost/file/{hash}.{extension}")
 }
 
-/// `tagName`: general tags go without their namespace.
-fn tag_name(tag: &picto_library::TagRecord) -> String {
-    let namespace = tag.namespace.trim().to_lowercase();
-    if namespace.is_empty() || namespace == "general" {
-        tag.subname.clone()
-    } else {
-        format!("{namespace}:{}", tag.subname)
-    }
-}
-
 /// `permanentDeleteMessage`.
 fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
     let limit = grouped(undo_limit.max(0) as u64);
@@ -138,17 +127,6 @@ fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
             "This exceeds the undo limit of {limit} media items, including collection members, so it cannot be undone."
         ),
     }
-}
-
-fn grouped(count: u64) -> String {
-    crate::grid::format::grouped(count)
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
 
 impl Shell {
@@ -285,8 +263,10 @@ impl Shell {
             status,
             grayscale: false,
             clipboard_tags: !self.items.tag_clipboard.is_empty(),
-            // Production lists the associated applications on macOS; this
-            // offers the system chooser's one row until they can be listed.
+            // TODO: on macOS, look up the applications that open this type
+            // (`OpenWith::Pending` while that runs) and list them, as
+            // production does; until then this offers the system chooser's
+            // one row.
             open_with: if media {
                 OpenWith::Chooser
             } else {
@@ -546,23 +526,18 @@ impl Shell {
         self.items.target = Some(target);
         let entries = rows::entries(built);
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(search));
-        self._menu = Some(cx.subscribe_in(
-            &menu,
-            window,
-            |this, menu, event: &ui::menu::Event, window, cx| {
-                let ui::menu::Event::Chosen(key) = event;
+        self.menu
+            .open(menu, window, cx, |this, menu, key, window, cx| {
                 let action = this
                     .items
                     .actions
                     .iter()
                     .copied()
-                    .find(|action| action.key() == *key);
+                    .find(|action| action.key() == key);
                 if let Some(action) = action {
                     this.run_item_action(action, Some(menu), window, cx);
                 }
-            },
-        ));
-        self.show_menu(menu, window, cx);
+            });
     }
 
     fn last_folder_name(&self, cx: &App) -> Option<String> {
@@ -776,7 +751,7 @@ impl Shell {
             }
             // ── Groups ──
             Action::Group => self.group(target, window, cx),
-            Action::Ungroup => self.confirm_ungroup(target, window, cx),
+            Action::Ungroup => self.confirm_ungroup(target, cx),
             Action::EditGroup => {
                 // TODO: open the collection editor on this group.
             }
@@ -1078,7 +1053,7 @@ impl Shell {
                 Ok(library
                     .tags_by_id(&tag_ids)?
                     .iter()
-                    .map(tag_name)
+                    .map(crate::tags::record_name)
                     .collect::<Vec<_>>())
             }),
             |this, tags, _, cx| {
@@ -1109,7 +1084,7 @@ impl Shell {
                         winning_collection_id: Some(group.collection_id),
                         name: None,
                         notes: None,
-                        modified_at_ms: now_ms(),
+                        modified_at_ms: crate::now_ms(),
                     })?;
                     Ok(true)
                 } else {
@@ -1129,7 +1104,7 @@ impl Shell {
         );
     }
 
-    fn confirm_ungroup(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_ungroup(&mut self, target: Target, cx: &mut Context<Self>) {
         let collections = target
             .items
             .iter()
@@ -1156,13 +1131,12 @@ impl Shell {
                 this.session
                     .update(cx, |session, cx| session.clear_selection(cx));
                 this.edit(
-                    Box::new(move |library| library.ungroup_selection(&selection, now_ms())),
+                    Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
                     Reread::Results,
                     window,
                     cx,
                 );
             }),
-            window,
             cx,
         );
     }
@@ -1244,7 +1218,6 @@ impl Shell {
                     Rc::new(move |this, window, cx| {
                         this.delete_permanently(delete.clone(), undoable, window, cx)
                     }),
-                    window,
                     cx,
                 );
             },
@@ -1270,9 +1243,14 @@ impl Shell {
             .update(cx, |session, cx| session.close_viewer(cx));
         let answer = self.session.read(cx).run(move |library| {
             let deleted = if reject {
-                library.delete_rejected(&selection, now_ms(), undo_limit, require_undoable)
+                library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
             } else {
-                library.permanently_delete(&selection, now_ms(), undo_limit, require_undoable)
+                library.permanently_delete(
+                    &selection,
+                    crate::now_ms(),
+                    undo_limit,
+                    require_undoable,
+                )
             };
             // The files a delete that cannot be undone frees are removed from
             // the copy's blobs by the application's media worker
@@ -1296,7 +1274,6 @@ impl Shell {
                         Rc::new(move |this, window, cx| {
                             this.delete_permanently(delete.clone(), false, window, cx)
                         }),
-                        window,
                         cx,
                     );
                 }
@@ -1363,50 +1340,36 @@ impl Shell {
         label: impl Into<SharedString>,
         danger: bool,
         run: Rc<dyn Fn(&mut Shell, &mut Window, &mut Context<Shell>)>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
-        self.items.confirm = Some(Confirmation {
+        let confirmation = Confirmation {
             title: title.into(),
             message: message.into(),
             label: label.into(),
             danger,
-            presence: Presence::new(),
-            focus,
             run,
-        });
-        cx.notify();
+        };
+        let back = ui::menu::Return::To(self.focus.clone());
+        self.items.confirm.open(confirmation, back, cx);
     }
 
-    /// The open confirmation, drawn over everything. Once it has faded out
-    /// the keyboard goes back to the grid.
+    /// The open confirmation, drawn over everything. The keyboard goes back
+    /// to the grid as it leaves.
     pub(super) fn confirmation(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self
-            .items
-            .confirm
-            .as_ref()
-            .is_some_and(|confirm| confirm.presence.finished())
-        {
-            self.items.confirm = None;
-            window.focus(&self.focus, cx);
-        }
-        let confirm = self.items.confirm.as_ref()?;
+        let dialog = self.items.confirm.layer(window, cx)?;
+        let confirm = &dialog.content;
         let run = confirm.run.clone();
-        let close = cx.listener(|this, _: &(), _, cx| this.close_confirmation(cx));
-        let cancel = cx.listener(|this, _: &(), window, cx| {
+        let close = cx.listener(|this, _: &(), _, cx| this.items.confirm.dismiss(cx));
+        let cancel = cx.listener(|this, _: &(), _, cx| {
             // Cancel takes the dialog away at once.
-            this.items.confirm = None;
-            window.focus(&this.focus, cx);
-            cx.notify();
+            this.items.confirm.close(cx);
         });
         let accept = cx.listener(move |this, _: &(), window, cx| {
-            this.close_confirmation(cx);
+            this.items.confirm.dismiss(cx);
             window.focus(&this.focus, cx);
             run(this, window, cx);
         });
@@ -1416,22 +1379,15 @@ impl Shell {
                 confirm.title.clone(),
                 confirm.message.clone(),
                 confirm.label.clone(),
-                confirm.presence,
+                dialog.presence,
             )
             .danger(confirm.danger)
-            .focus(&confirm.focus)
+            .focus(&dialog.focus)
             .on_close(move |window, cx| close(&(), window, cx))
             .on_cancel(move |window, cx| cancel(&(), window, cx))
             .on_confirm(move |window, cx| accept(&(), window, cx))
             .into_any_element(),
         )
-    }
-
-    fn close_confirmation(&mut self, cx: &mut Context<Self>) {
-        if let Some(confirm) = &mut self.items.confirm {
-            confirm.presence.close();
-            cx.notify();
-        }
     }
 }
 

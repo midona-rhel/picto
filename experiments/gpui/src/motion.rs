@@ -401,6 +401,23 @@ pub fn modal_pop(shown: f32) -> (f32, f32) {
     (scale, scale * MODAL_DROP * (1. - shown))
 }
 
+/// How long the app's loop clock has run. Every looping animation (a
+/// progress sweep, a status pulse) reads this one clock, so loops of the
+/// same kind keep in step and none restarts when its view repaints.
+pub fn loop_clock() -> Duration {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// The subscription pulses' timing (`subscriptionStatusPulse`,
+/// `subscriptionActivityPulse`): from 0 to 1 and back over
+/// [`STATUS_PULSE`], each half on `ease-in-out`.
+pub fn pulse(elapsed: Duration) -> f32 {
+    let period = STATUS_PULSE.as_secs_f32();
+    let phase = (elapsed.as_secs_f32() % period) / (period / 2.);
+    EASE_IN_OUT.ease(if phase < 1. { phase } else { 2. - phase })
+}
+
 /// Progress of an animation that began `elapsed` ago, in `0..=1`.
 pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
     (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.)

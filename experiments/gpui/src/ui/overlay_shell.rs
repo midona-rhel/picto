@@ -486,6 +486,29 @@ pub fn view_tabs(
         .on_select(on_select)
 }
 
+/// `highlightMatch`: a row's label with the search's first match in bold,
+/// in the text colour and underlined.
+pub fn search_match(label: impl Into<SharedString>, query: &str, cx: &App) -> StyledText {
+    let theme = theme::theme(cx);
+    let label = label.into();
+    let range = crate::text::match_range(&label, query);
+    StyledText::new(label).with_highlights(range.map(|range| {
+        (
+            range,
+            HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                color: Some(theme.text().into()),
+                underline: Some(UnderlineStyle {
+                    color: Some(theme.contrast(20.).into()),
+                    thickness: px(1.),
+                    wavy: false,
+                }),
+                ..Default::default()
+            },
+        )
+    }))
+}
+
 /// `.kbd`: one key, in the monospace caption on the subtle overlay.
 pub fn kbd(key: impl Into<SharedString>, cx: &App) -> Div {
     let theme = theme::theme(cx);

@@ -85,8 +85,10 @@ pub fn set_always_on_top(window: &Window, on_top: bool) {
     let _ = (window, on_top);
 }
 
+/// The few Objective-C runtime calls the app makes to AppKit for what GPUI
+/// has no option for.
 #[cfg(target_os = "macos")]
-mod appkit {
+pub(crate) mod appkit {
     use gpui::Window;
     use std::ffi::{CStr, c_char, c_void};
     use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
@@ -94,6 +96,13 @@ mod appkit {
     #[link(name = "objc", kind = "dylib")]
     unsafe extern "C" {
         fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn object_getClass(object: *mut c_void) -> *mut c_void;
+        fn class_replaceMethod(
+            class: *mut c_void,
+            selector: *const c_void,
+            implementation: *const c_void,
+            types: *const c_char,
+        ) -> *const c_void;
         fn objc_msgSend();
     }
 
@@ -105,6 +114,29 @@ mod appkit {
     /// `objc_msgSend`, to be cast to the signature of the method sent.
     pub fn send() -> unsafe extern "C" fn() {
         objc_msgSend
+    }
+
+    /// Gives every object of `object`'s class `implementation` for
+    /// `selector`, with the Objective-C type encoding `types`.
+    ///
+    /// # Safety
+    /// `object` is a live Objective-C object, and `implementation` is an
+    /// `extern "C"` function matching `types` and the method's signature.
+    pub unsafe fn replace_method(
+        object: *mut c_void,
+        selector: *const c_void,
+        implementation: *const c_void,
+        types: &CStr,
+    ) {
+        // SAFETY: as the caller promises.
+        unsafe {
+            class_replaceMethod(
+                object_getClass(object),
+                selector,
+                implementation,
+                types.as_ptr(),
+            );
+        }
     }
 
     /// Runs `work` with the window's NSWindow, if it has one.

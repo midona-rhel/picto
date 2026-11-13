@@ -282,28 +282,11 @@ pub fn latest_failure(subscription: &Subscription) -> Option<&Query> {
         .max_by(|left, right| left.last_failure_at.cmp(&right.last_failure_at))
 }
 
-/// `toLocaleString()` for a count: digits grouped by thousands.
-pub fn count(value: i64) -> String {
-    let digits = value.unsigned_abs().to_string();
-    let mut grouped = String::new();
-    for (position, digit) in digits.chars().enumerate() {
-        if position > 0 && (digits.len() - position) % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    if value < 0 {
-        format!("-{grouped}")
-    } else {
-        grouped
-    }
-}
-
 /// `n thing` or `n things`, with the count grouped.
 pub fn counted(value: i64, singular: &str) -> String {
     format!(
         "{} {singular}{}",
-        count(value),
+        crate::grid::format::grouped(value),
         if value == 1 { "" } else { "s" }
     )
 }
@@ -390,44 +373,17 @@ pub fn date_time(value: Option<&str>) -> String {
     };
     parse_time(value).map_or_else(
         || value.to_owned(),
-        |time| time.format("%b %-d, %Y, %-I:%M %p").to_string(),
+        |time| {
+            time.format(crate::text::date_format::MEDIUM_DATE_TIME)
+                .to_string()
+        },
     )
-}
-
-/// `localeCompare(…, { sensitivity: 'base', numeric: true })`, closely
-/// enough for names: letters compare without case, and runs of digits by
-/// their value.
-pub fn name_order(left: &str, right: &str) -> std::cmp::Ordering {
-    fn chunks(text: &str) -> Vec<(bool, String)> {
-        let mut chunks: Vec<(bool, String)> = Vec::new();
-        for character in text.chars() {
-            let digit = character.is_ascii_digit();
-            match chunks.last_mut() {
-                Some((was_digit, chunk)) if *was_digit == digit => chunk.push(character),
-                _ => chunks.push((digit, character.to_string())),
-            }
-        }
-        chunks
-    }
-    let (left, right) = (chunks(left), chunks(right));
-    for ((left_digit, left), (right_digit, right)) in left.iter().zip(&right) {
-        let order = if *left_digit && *right_digit {
-            let (a, b) = (left.trim_start_matches('0'), right.trim_start_matches('0'));
-            a.len().cmp(&b.len()).then_with(|| a.cmp(b))
-        } else {
-            left.to_lowercase().cmp(&right.to_lowercase())
-        };
-        if order.is_ne() {
-            return order;
-        }
-    }
-    left.len().cmp(&right.len())
 }
 
 /// The grid's order: by name, then by the card's key.
 pub fn card_order(subscriptions: &mut [&Subscription]) {
     subscriptions.sort_by(|left, right| {
-        name_order(&left.name, &right.name)
+        crate::text::natural_order(&left.name, &right.name)
             .then_with(|| format!("sub:{}", left.id).cmp(&format!("sub:{}", right.id)))
     });
 }
@@ -521,12 +477,10 @@ pub fn tracks(width: f32, gap: f32, tracks: &[Track]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Query, Run, Subscription, Tone, Track, card_meta, card_status, count, date_time,
-        describe_failure, detail_status, first_query_site, name_order, relative_time, run_status,
-        run_target, site_label, tracks,
+        Query, Run, Subscription, Tone, Track, card_meta, card_status, date_time, describe_failure,
+        detail_status, first_query_site, relative_time, run_status, run_target, site_label, tracks,
     };
     use chrono::{Duration, Local, TimeZone};
-    use std::cmp::Ordering;
 
     fn query(completed: bool) -> Query {
         Query {
@@ -612,10 +566,6 @@ mod tests {
 
     #[test]
     fn counts_are_grouped_and_counted() {
-        assert_eq!(count(0), "0");
-        assert_eq!(count(999), "999");
-        assert_eq!(count(1000), "1,000");
-        assert_eq!(count(1234567), "1,234,567");
         assert_eq!(card_meta(1, 0), "1 item");
         assert_eq!(card_meta(2400, 1), "2,400 items · 1 source");
         assert_eq!(card_meta(0, 3), "0 items · 3 sources");
@@ -704,13 +654,5 @@ mod tests {
             &[Track::Flex(100., 1.), Track::Between(82., 110.)],
         );
         assert_eq!(bounded, vec![680., 110.]);
-    }
-
-    #[test]
-    fn names_sort_without_case_and_by_number() {
-        assert_eq!(name_order("apple", "Banana"), Ordering::Less);
-        assert_eq!(name_order("Artist 9", "artist 10"), Ordering::Less);
-        assert_eq!(name_order("artist 010", "Artist 10"), Ordering::Equal);
-        assert_eq!(name_order("art", "artist"), Ordering::Less);
     }
 }

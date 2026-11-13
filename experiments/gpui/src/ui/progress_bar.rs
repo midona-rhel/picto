@@ -3,8 +3,7 @@
 //! form (a share of done over total) is not ported yet.
 use crate::{motion, theme};
 use gpui::*;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// `.indeterminate { width: 35% }`.
 const SEGMENT: f32 = 0.35;
@@ -17,12 +16,6 @@ pub fn sweep_offset(elapsed: Duration) -> f32 {
         / motion::PROGRESS_SWEEP.as_secs_f32();
     let moved = -1.1 + 4.2 * motion::EASE_IN_OUT.ease(along);
     SEGMENT * moved
-}
-
-/// One clock for every bar, so they sweep together.
-fn clock() -> Instant {
-    static START: OnceLock<Instant> = OnceLock::new();
-    *START.get_or_init(Instant::now)
 }
 
 #[derive(IntoElement)]
@@ -51,7 +44,7 @@ impl RenderOnce for ProgressBar {
             .absolute()
             .top_0()
             .h_full()
-            .left(relative(sweep_offset(clock().elapsed())))
+            .left(relative(sweep_offset(motion::loop_clock())))
             .w(relative(SEGMENT))
             .rounded(px(2.))
             .bg(theme.primary());

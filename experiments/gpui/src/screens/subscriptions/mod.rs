@@ -128,8 +128,7 @@ pub struct SubscriptionsScreen {
     /// The subscription whose name is being edited.
     renaming: Option<i64>,
     /// The open context menu, which stays while it fades out.
-    menu: Option<Entity<Menu>>,
-    _menu: Option<Subscription>,
+    menu: menu::Host,
     /// The subscriptions the open menu acts on.
     menu_targets: Vec<i64>,
     /// Whether the screen showed at the last navigation, to read the list
@@ -204,10 +203,11 @@ impl SubscriptionsScreen {
                 }
             }),
         ];
+        let focus = cx.focus_handle();
         let mut screen = Self {
             session,
             covers: cx.new(Thumbnails::new),
-            focus: cx.focus_handle(),
+            focus: focus.clone(),
             list: None,
             error: None,
             generation: 0,
@@ -219,8 +219,9 @@ impl SubscriptionsScreen {
             tab: SOURCES,
             rename,
             renaming: None,
-            menu: None,
-            _menu: None,
+            // Over the window as the shell lays the grid's. The keyboard goes
+            // back to the screen unless the action moved it, as Rename does.
+            menu: menu::Host::deferred(2, menu::Return::To(focus)),
             menu_targets: Vec::new(),
             shown: false,
             place_seen: None,
@@ -698,38 +699,32 @@ impl SubscriptionsScreen {
             }
         };
         let menu = cx.new(|cx| Menu::new(entries, position, cx));
-        self._menu =
-            Some(
-                cx.subscribe_in(&menu, window, |this, _, event: &menu::Event, window, cx| {
-                    let menu::Event::Chosen(action) = event;
-                    let targets = this.menu_targets.clone();
-                    match (*action, targets.as_slice()) {
-                        ("run", [id]) => this.run_control(*id, cx),
-                        ("hold", [id]) => this.hold_control(*id, cx),
-                        // `handleBulk*`: each subscription on its own.
-                        ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
-                        ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
-                        ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
-                        _ => {}
-                    }
-                    if *action == "rename"
-                        && let [id] = this.menu_targets.as_slice()
-                    {
-                        let id = *id;
-                        // The rail shows the name larger than a card does.
-                        let size = if this.place_seen.is_some() {
-                            crate::theme::TEXT_XL
-                        } else {
-                            crate::theme::TEXT_MD
-                        };
-                        this.start_rename(id, size, window, cx);
-                    }
-                }),
-            );
         self.menu_targets = targets;
-        window.focus(&menu.focus_handle(cx), cx);
-        self.menu = Some(menu);
-        cx.notify();
+        self.menu
+            .open(menu, window, cx, |this, _, action, window, cx| {
+                let targets = this.menu_targets.clone();
+                match (action, targets.as_slice()) {
+                    ("run", [id]) => this.run_control(*id, cx),
+                    ("hold", [id]) => this.hold_control(*id, cx),
+                    // `handleBulk*`: each subscription on its own.
+                    ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
+                    ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
+                    ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
+                    _ => {}
+                }
+                if action == "rename"
+                    && let [id] = this.menu_targets.as_slice()
+                {
+                    let id = *id;
+                    // The rail shows the name larger than a card does.
+                    let size = if this.place_seen.is_some() {
+                        crate::theme::TEXT_XL
+                    } else {
+                        crate::theme::TEXT_MD
+                    };
+                    this.start_rename(id, size, window, cx);
+                }
+            });
     }
 
     /// The menu for a right-clicked card: the whole selection when the card
@@ -758,35 +753,7 @@ impl SubscriptionsScreen {
     }
 
     fn close_menu(&mut self, cx: &mut Context<Self>) {
-        if let Some(menu) = &self.menu {
-            menu.update(cx, |menu, cx| menu.dismiss(cx));
-        }
-    }
-
-    /// The open menu, laid over the whole window as the shell lays the
-    /// grid's, until its fade-out is over.
-    fn menu_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some(menu) = self.menu.take_if(|menu| menu.read(cx).finished()) {
-            self._menu = None;
-            // Unless its action moved the keyboard, as Rename does. A menu
-            // shown in pop-up windows can outlive this by a moment, still
-            // holding the keyboard.
-            if window.focused(cx).is_none() || menu.focus_handle(cx).is_focused(window) {
-                window.focus(&self.focus, cx);
-            }
-        }
-        let menu = self.menu.clone()?;
-        let viewport = window.viewport_size();
-        Some(
-            deferred(
-                anchored()
-                    .position(point(px(0.), px(0.)))
-                    .position_mode(AnchoredPositionMode::Window)
-                    .child(div().w(viewport.width).h(viewport.height).child(menu)),
-            )
-            .with_priority(2)
-            .into_any_element(),
-        )
+        self.menu.close(cx);
     }
 }
 
@@ -803,7 +770,7 @@ impl Render for SubscriptionsScreen {
                 None => home::empty_state(cx).into_any_element(),
             },
         };
-        let menu = self.menu_layer(window, cx);
+        let menu = self.menu.layer(window, cx);
         div()
             .id("subscriptions")
             .size_full()
