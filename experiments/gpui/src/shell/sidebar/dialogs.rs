@@ -674,8 +674,15 @@ mod tests {
     }
 }
 
-// PENDING-STUBS
 impl Sidebar {
+    /// "Move to..." for folders: production opens the folder picker in its
+    /// move mode (`FolderPickerPanel` with `onApplyFolderParent`), offering
+    /// Library and every folder that is neither moving nor under a moving
+    /// one (`tree::move_targets`), with the folders' shared parent chosen,
+    /// and its Move button moves the topmost of them there
+    /// (`foldersController.moveMany`, as `drag::move_folders` does).
+    // TODO: open that picker once the shared folder picker is in this
+    // branch; the row does nothing until then.
     pub(super) fn pick_folder_parent(
         &mut self,
         _: Vec<String>,

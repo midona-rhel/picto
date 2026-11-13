@@ -74,21 +74,6 @@ pub fn move_targets(nodes: &[Node], moving: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The parent the moving nodes share, when they all share one.
-pub fn shared_parent(nodes: &[Node], moving: &[String]) -> Option<Option<String>> {
-    let parent_of = |id: &String| {
-        nodes
-            .iter()
-            .find(|node| node.id == *id)
-            .map(|node| node.parent.clone())
-    };
-    let first = parent_of(moving.first()?)?;
-    moving
-        .iter()
-        .all(|id| parent_of(id).as_ref() == Some(&first))
-        .then_some(first)
-}
-
 /// `resolveSidebarTreeDrop`: where on a row the pointer is, by the share of
 /// the row's height above it: the top 30% drops before, the bottom 30%
 /// after, the middle inside.
@@ -181,9 +166,7 @@ pub fn plan_drop(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Node, Plan, can_take, move_targets, plan_drop, position_at, shared_parent, top_level,
-    };
+    use super::{Node, Plan, can_take, move_targets, plan_drop, position_at, top_level};
     use crate::ui::sidebar_row::DropPosition;
 
     /// 1 ─ 2 ─ 3, then 4 and 5 at the top level.
@@ -231,11 +214,6 @@ mod tests {
             top_level(&tree, &ids(&["folder:3", "folder:1", "folder:5"])),
             ids(&["folder:1", "folder:5"])
         );
-        assert_eq!(
-            shared_parent(&tree, &ids(&["folder:4", "folder:5"])),
-            Some(None)
-        );
-        assert_eq!(shared_parent(&tree, &ids(&["folder:2", "folder:5"])), None);
     }
 
     #[test]

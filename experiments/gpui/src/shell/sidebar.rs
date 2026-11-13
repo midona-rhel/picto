@@ -1211,39 +1211,27 @@ impl Sidebar {
     }
 
     /// Gives folders and smart folders an icon (`None` for the default).
-    fn apply_icon(
-        &mut self,
-        nodes: Vec<String>,
-        icon: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_appearance(nodes, Some(icon), None, window, cx);
+    fn apply_icon(&mut self, nodes: Vec<String>, icon: Option<String>, cx: &mut Context<Self>) {
+        self.edit_appearance(nodes, Some(icon), None, cx);
     }
 
     /// Gives folders and smart folders a colour (`None` for the default).
-    fn apply_color(
-        &mut self,
-        nodes: Vec<String>,
-        color: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_appearance(nodes, None, Some(color), window, cx);
+    fn apply_color(&mut self, nodes: Vec<String>, color: Option<String>, cx: &mut Context<Self>) {
+        self.edit_appearance(nodes, None, Some(color), cx);
     }
 
     /// Writes an icon, a colour or both, keeping what else the definition
-    /// holds.
+    /// holds. The icon picker may be in a menu's pop-up window, so this
+    /// waits for the library without holding any window.
     fn edit_appearance(
         &mut self,
         nodes: Vec<String>,
         icon: Option<Option<String>>,
         color: Option<Option<String>>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
-            move |library| {
+        let answer = self.session.read(cx).run(move |library| {
+            let result = (|| -> picto_library::Result<()> {
                 let folders = library.folders()?;
                 for node in &nodes {
                     if let Some(id) = folder_id(node) {
@@ -1271,11 +1259,26 @@ impl Sidebar {
                     }
                 }
                 Ok(())
-            },
-            |_, (), _, _| {},
-            window,
-            cx,
-        );
+            })();
+            (result, backend::navigation(library))
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok((result, navigation)) = answer.await else {
+                return;
+            };
+            if let Err(error) = result {
+                // TODO: show this as a notification, as the Electron sidebar
+                // does.
+                eprintln!("sidebar: {error}");
+            }
+            let _ = this.update(cx, |this, cx| {
+                if let Ok((nav, tags)) = navigation {
+                    this.session
+                        .update(cx, |session, cx| session.replace_navigation(nav, tags, cx));
+                }
+            });
+        })
+        .detach();
     }
 
     /// `foldersController.sortContents`: orders each folder's items by a
@@ -1638,9 +1641,9 @@ impl Sidebar {
     ) -> AnyView {
         let sidebar = cx.entity().downgrade();
         cx.new(move |_| {
-            ui::icon_picker::IconPicker::new(current, move |icon, window, cx| {
+            ui::icon_picker::IconPicker::new(current, move |icon, _, cx| {
                 let nodes = nodes.clone();
-                let _ = sidebar.update(cx, |this, cx| this.apply_icon(nodes, icon, window, cx));
+                let _ = sidebar.update(cx, |this, cx| this.apply_icon(nodes, icon, cx));
             })
         })
         .into()
@@ -1911,12 +1914,7 @@ impl Sidebar {
                     self.sort_contents(folders, field, window, cx);
                 }
             }
-            "color" => self.apply_color(
-                nodes.to_vec(),
-                value.filter(|hex| !hex.is_empty()),
-                window,
-                cx,
-            ),
+            "color" => self.apply_color(nodes.to_vec(), value.filter(|hex| !hex.is_empty()), cx),
             "move-under" => self.move_smart(nodes.to_vec(), value, window, cx),
             "move-to" => self.pick_folder_parent(nodes.to_vec(), window, cx),
             "auto-tags" => self.edit_auto_tags(folders, window, cx),
@@ -2023,7 +2021,6 @@ impl Sidebar {
             "color" => self.apply_color(
                 vec![node.to_owned()],
                 value.filter(|hex| !hex.is_empty()),
-                window,
                 cx,
             ),
             "move-under" => self.move_smart(vec![node.to_owned()], value, window, cx),

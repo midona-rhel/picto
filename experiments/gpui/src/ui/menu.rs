@@ -1634,7 +1634,7 @@ impl Menu {
                     continue;
                 }
                 Row::View(path, height) => {
-                    list = list.child(self.view_row(path, height, cx));
+                    list = list.child(self.view_row(path, height));
                     continue;
                 }
                 Row::Separator => {
@@ -1757,7 +1757,7 @@ impl Menu {
                     continue;
                 }
                 Row::View(path, height) => {
-                    list = list.child(self.view_row(path, height, cx));
+                    list = list.child(self.view_row(path, height));
                     continue;
                 }
                 Row::Separator => {
@@ -1998,8 +1998,7 @@ impl Menu {
 
 impl Menu {
     /// A view entry, at its own size.
-    fn view_row(&self, path: Path, height: u32, cx: &mut Context<Self>) -> Stateful<Div> {
-        let _ = cx;
+    fn view_row(&self, path: Path, height: u32) -> Stateful<Div> {
         let Entry::View(entry) = self.entry(path) else {
             return div().id("menu-view");
         };
