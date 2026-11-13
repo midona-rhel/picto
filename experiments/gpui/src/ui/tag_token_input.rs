@@ -108,11 +108,6 @@ impl TagTokenInput {
         &self.values
     }
 
-    /// The search field's focus, to type in it at once.
-    pub fn input_focus(&self, cx: &App) -> FocusHandle {
-        self.input.focus_handle(cx)
-    }
-
     fn search_for(&mut self, query: String, cx: &mut Context<Self>) {
         if query.trim().is_empty() {
             self.pending = None;
@@ -181,6 +176,14 @@ impl Render for TagTokenInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let focused = self.input.focus_handle(cx).contains_focused(window, cx);
+        // The search offers its placeholder only while no tag is chosen.
+        let placeholder = if self.values.is_empty() {
+            "Search tags..."
+        } else {
+            ""
+        };
+        self.input
+            .update(cx, |input, _| input.set_placeholder(placeholder));
         let mut surface = div()
             .id("tag-token-surface")
             .relative()

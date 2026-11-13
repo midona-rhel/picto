@@ -3,6 +3,7 @@
 //! menu's swatch row ([`menu_row`]); elsewhere it is [`color_picker`].
 use super::menu;
 use crate::theme;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::rc::Rc;
 
@@ -51,6 +52,42 @@ pub fn menu_row(action: &'static str, value: Option<&str>) -> menu::Swatches {
     )
 }
 
+/// One 18px swatch (`.swatch`). The chosen one carries a check and
+/// `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`, drawn
+/// as two circles behind it that take no room, since a spread shadow keeps
+/// the element's corner radius and would come out as a rounded square.
+pub fn swatch(color: Rgba, default: bool, chosen: bool, cx: &App) -> Div {
+    let theme = theme::theme(cx);
+    let circle = |inset: f32, fill: Rgba| {
+        div()
+            .absolute()
+            .top(px(-inset))
+            .left(px(-inset))
+            .size(px(SWATCH + 2. * inset))
+            .rounded_full()
+            .bg(fill)
+    };
+    let check = if default {
+        theme.background()
+    } else {
+        theme.on_primary()
+    };
+    div()
+        .relative()
+        .size(px(SWATCH))
+        .when(chosen, |ring| {
+            ring.child(circle(3., color))
+                .child(circle(1.5, theme.background()))
+        })
+        .child(
+            circle(0., color)
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(chosen.then(|| super::icon("swatch-check", 10., check))),
+        )
+}
+
 type Handler = Rc<dyn Fn(Option<&'static str>, &mut Window, &mut App) + 'static>;
 
 /// The swatch row on its own, spread across the width it is given.
@@ -94,27 +131,7 @@ impl RenderOnce for ColorPicker {
                 .and_then(theme::parse_hex)
                 .map(rgb)
                 .unwrap_or(theme.text());
-            let check = if hex.is_some() {
-                theme.on_primary()
-            } else {
-                theme.background()
-            };
-            let mut ring = div()
-                .size(px(SWATCH))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(color);
-            if chosen == Some(position) {
-                ring = ring
-                    .child(super::icon("swatch-check", 10., check))
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), theme.background().into())
-                            .spread_radius(px(1.5)),
-                        BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
-                    ]);
-            }
+            let ring = swatch(color, hex.is_none(), chosen == Some(position), cx);
             let handler = self.on_pick.clone();
             let hex = *hex;
             let target = div()

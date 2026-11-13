@@ -98,6 +98,11 @@ pub struct SidebarRow {
     on_press: Option<PressHandler>,
 }
 
+/// The width of the rename field when the row shows no count: an
+/// `<input>`'s default 20-character width in the 13px sidebar font, as the
+/// Electron row measures it (137.5px with its border).
+const RENAME_WIDTH: f32 = 137.5;
+
 pub fn sidebar_row(
     id: impl Into<ElementId>,
     icon: impl Into<SharedString>,
@@ -479,11 +484,21 @@ impl RenderOnce for SidebarRow {
             // label did.
             Some(input) => {
                 let commit = input.clone();
+                // With a count the row's content spans the row and the field
+                // fills it up to the count; without one the content is only
+                // as wide as the field's own width.
+                let fills = self.count.is_some() || self.activity.is_some();
                 row.child(
                     div()
                         .id("rename")
                         .relative()
-                        .flex_1()
+                        .map(|field| {
+                            if fills {
+                                field.flex_1()
+                            } else {
+                                field.flex_shrink(1.).w(px(RENAME_WIDTH))
+                            }
+                        })
                         .min_w_0()
                         .h(px(theme::SIDEBAR_RENAME_HEIGHT))
                         .ml(px(-1.))

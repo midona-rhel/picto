@@ -436,7 +436,8 @@ fn clean(entries: &[Entry], parent: Option<usize>) -> Vec<Row> {
         };
         match entry {
             Entry::Separator => {
-                if matches!(rows.last(), Some(Row::Entry(_))) {
+                // After any row, a swatch row or a view included.
+                if rows.last().is_some_and(|row| *row != Row::Separator) {
                     rows.push(Row::Separator);
                 }
             }
@@ -2016,28 +2017,12 @@ impl Menu {
             }));
         for (position, swatch) in row.swatches.iter().enumerate() {
             let color = swatch.color.unwrap_or(theme.text());
-            let selected = row.selected == Some(position);
-            let check = if swatch.color.is_some() {
-                theme.on_primary()
-            } else {
-                theme.background()
-            };
-            let mut ring = div()
-                .size(px(SWATCH))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .bg(color)
-                .children(selected.then(|| super::icon("swatch-check", 10., check)));
-            if selected {
-                // `box-shadow: 0 0 0 1.5px var(--color-bg-app), 0 0 0 3px <colour>`
-                ring = ring.shadow(vec![
-                    BoxShadow::new(px(0.), px(0.), theme.background().into())
-                        .spread_radius(px(1.5)),
-                    BoxShadow::new(px(0.), px(0.), color.into()).spread_radius(px(3.)),
-                ]);
-            }
+            let ring = super::color_picker::swatch(
+                color,
+                swatch.color.is_none(),
+                row.selected == Some(position),
+                cx,
+            );
             let target = div()
                 .id(("menu-swatch", position))
                 .cursor_pointer()
@@ -2161,7 +2146,7 @@ fn without_system_shadow(_: &Window) {}
 mod tests {
     use super::{
         Entry, MARGIN, PADDING, Path, Rect, Row, SEPARATOR, clean, item, items_height, origin,
-        place, place_submenu, row_offset, score, search, step, submenu,
+        place, place_submenu, row_offset, score, search, step, submenu, swatches,
     };
 
     fn top(index: usize) -> Path {
@@ -2247,6 +2232,25 @@ mod tests {
         assert_eq!(
             clean(&entries, None),
             vec![Row::Entry(top(1)), Row::Separator, Row::Entry(top(4))]
+        );
+    }
+
+    #[test]
+    fn a_swatch_row_keeps_the_separator_after_it() {
+        let entries: Vec<Entry> = vec![
+            item("a", "A").into(),
+            swatches("color", Vec::new(), None).into(),
+            Entry::Separator,
+            item("b", "B").into(),
+        ];
+        assert_eq!(
+            clean(&entries, None),
+            vec![
+                Row::Entry(top(0)),
+                Row::Swatches(top(1)),
+                Row::Separator,
+                Row::Entry(top(3))
+            ]
         );
     }
 

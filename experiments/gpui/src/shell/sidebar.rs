@@ -279,6 +279,8 @@ pub struct Sidebar {
     folder_picker: Entity<crate::inspector::FolderPicker>,
     moving_folders: Vec<FolderId>,
     menu_position: Point<Pixels>,
+    /// The tag picker the auto-tags dialog's add button opens.
+    auto_tag_picker: Entity<crate::inspector::TagPicker>,
     /// The smart-folder editor, while open.
     smart_editor: Option<(Entity<smart_folder::SmartFolderEditor>, Subscription)>,
     /// The open context menu, whose checks follow what its rows toggle.
@@ -318,7 +320,11 @@ impl Sidebar {
             LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)
         });
         let folder_picker = cx.new(|cx| crate::inspector::FolderPicker::new(session.clone(), cx));
+        let auto_tag_picker = cx.new(|cx| crate::inspector::TagPicker::new(session.clone(), cx));
         let subscriptions = vec![
+            cx.subscribe(&auto_tag_picker, |this, _, event, cx| {
+                this.auto_tag_picked(event, cx)
+            }),
             cx.observe(&filter, |_, _, cx| cx.notify()),
             // The switcher shows whether its popover is open.
             cx.subscribe(&library_popover, |_, _, _: &Toggled, cx| cx.notify()),
@@ -360,6 +366,7 @@ impl Sidebar {
             folder_picker,
             moving_folders: Vec::new(),
             menu_position: Point::default(),
+            auto_tag_picker,
             menu: None,
             _menu: Vec::new(),
             scroll: ScrollHandle::new(),
@@ -618,6 +625,24 @@ fn content_sort_field(value: &str) -> Option<ContentSortField> {
         .map(|(.., field)| *field)
 }
 
+/// `buildExportContextEntry`: the export submenu of a folder or smart
+/// folder.
+fn export_submenu() -> menu::Entry {
+    // TODO: export the scope's originals to a chosen folder, open the
+    // export dialog, or write a Picto Pack. Export is not built yet, so the
+    // rows choose nothing.
+    menu::submenu(
+        "Export",
+        vec![
+            menu::item("export", "Export Originals...").into(),
+            menu::item("export", "Export As...").into(),
+            menu::item("export", "Export as Picto Pack...").into(),
+        ],
+    )
+    .icon("menu-file-export")
+    .into()
+}
+
 /// A menu row's padding inside its panel, which a view in a submenu fills.
 const MENU_PADDING: f32 = 4.;
 
@@ -687,11 +712,7 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
         change_icon(node.icon_picker),
         ui::color_picker::menu_row("color", node.color.as_deref()).into(),
         menu::Entry::Separator,
-        // TODO: "Export" is a submenu: Export Originals..., Export As...,
-        // Export as Picto Pack.... Export is not built yet.
-        menu::item("export", "Export")
-            .icon("menu-file-export")
-            .into(),
+        export_submenu(),
         menu::Entry::Separator,
         menu::item("delete", "Delete")
             .icon("menu-trash")
@@ -768,13 +789,7 @@ fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
         menu::Entry::Separator,
     ]);
     if !group {
-        // TODO: "Export" is a submenu: Export Originals..., Export As...,
-        // Export as Picto Pack.... Export is not built yet.
-        entries.push(
-            menu::item("export", "Export")
-                .icon("menu-file-export")
-                .into(),
-        );
+        entries.push(export_submenu());
     }
     entries.extend([
         menu::Entry::Separator,
@@ -1579,7 +1594,9 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         self.menu_position = position;
-        let menu = cx.new(|cx| Menu::new(entries, position, cx));
+        // The system rows' menus never offer a search (`showSearch: false`).
+        let searchable = !matches!(target, Target::System);
+        let menu = cx.new(|cx| Menu::new(entries, position, cx).search(searchable));
         let chosen = target.clone();
         // The subscriptions of a menu replaced by this one go first, so its
         // release does not clear this menu's highlight.
@@ -2491,6 +2508,7 @@ impl Render for Sidebar {
             .children(dialog)
             .children(smart_editor)
             .child(self.folder_picker.clone())
+            .child(self.auto_tag_picker.clone())
             .children(self.drag_capture(cx))
             .children(self.drag_ghost(window, cx))
     }

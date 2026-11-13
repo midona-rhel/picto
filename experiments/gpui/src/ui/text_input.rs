@@ -73,7 +73,13 @@ pub struct TextInput {
     area: gpui::ScrollHandle,
     /// The caret offset the expanded area last scrolled to show.
     revealed: Option<usize>,
+    /// A text area (`GlassTextarea`): its text is always drawn wrapped
+    /// from the top of its box, and Enter is a line break.
+    text_area: bool,
 }
+
+/// `.textarea`'s `line-height: 1.4` at 13px.
+pub const AREA_LINE: f32 = 13. * 1.4;
 
 /// The byte range of each line of `text`, without its line break.
 pub fn hard_lines(text: &str) -> Vec<Range<usize>> {
@@ -148,6 +154,9 @@ pub enum Kind {
     Compact,
     /// A colour's hex code, in the monospaced font at 12px (`.hexField`).
     Mono,
+    /// A dialog's text area (`GlassInput.module.css` `.textarea`): 13px on
+    /// a 1.4 line.
+    Area,
 }
 
 impl Kind {
@@ -159,7 +168,8 @@ impl Kind {
             | Kind::Popover
             | Kind::Rename(_)
             | Kind::Menu
-            | Kind::Compact => crate::theme::FONT_UI,
+            | Kind::Compact
+            | Kind::Area => crate::theme::FONT_UI,
             Kind::Mono => crate::theme::FONT_MONO,
             Kind::Sidebar | Kind::Inspector | Kind::SidebarRename => crate::theme::FONT_INSPECTOR,
         }
@@ -172,7 +182,8 @@ impl Kind {
             | Kind::Form
             | Kind::Popover
             | Kind::SidebarRename
-            | Kind::Menu => crate::theme::TEXT_MD,
+            | Kind::Menu
+            | Kind::Area => crate::theme::TEXT_MD,
             Kind::Rename(size) => size,
         }
     }
@@ -188,6 +199,7 @@ impl Kind {
             Kind::Menu => 36.,
             Kind::Compact => 24.,
             Kind::Mono => 30.,
+            Kind::Area => AREA_LINE,
         }
     }
     /// The popover's input has no `::placeholder` rule, so it keeps
@@ -735,7 +747,9 @@ impl TextElement {
     /// Whether the input is drawn wrapped this frame.
     fn wrapped(&self, window: &Window, cx: &App) -> bool {
         let input = self.input.read(cx);
-        input.multiline && input.overflowing && input.focus_handle.is_focused(window)
+        input.multiline
+            && ((input.text_area && !input.content.is_empty())
+                || (input.overflowing && input.focus_handle.is_focused(window)))
     }
 
     fn prepaint_wrapped(
@@ -1129,6 +1143,10 @@ impl Render for TextInput {
         // centred in the field.
         let root = if self.expanded(window) {
             div().w_full()
+        } else if self.text_area {
+            // From the top of the box, filling it, so a press below the
+            // text still lands in the field.
+            div().size_full()
         } else {
             div().size_full().flex().items_center()
         };
@@ -1156,11 +1174,18 @@ impl Render for TextInput {
         .on_action(cx.listener(Self::up))
         .on_action(cx.listener(Self::down))
         .on_action(cx.listener(|this, _: &Commit, window, cx| {
+            if this.text_area {
+                this.replace_text_in_range(None, "\n", window, cx);
+                return;
+            }
             if this.submits {
                 cx.emit(Submitted);
                 return;
             }
             this.commit(cx);
+            // An in-place rename ends here rather than waiting for the blur,
+            // which a window that is not active never reports.
+            this.finish_rename(true, cx);
             window.blur(cx);
         }))
         .on_action(cx.listener(|this, _: &Cancel, window, cx| {
@@ -1223,6 +1248,7 @@ impl TextInput {
             last_lines: None,
             area: gpui::ScrollHandle::new(),
             revealed: None,
+            text_area: false,
         }
     }
     /// The sidebar's tree filter.
@@ -1314,6 +1340,18 @@ impl TextInput {
         input.kind = Kind::Form;
         input
     }
+    /// A dialog's text area (`GlassTextarea`), wrapped from the top of its
+    /// box, where Enter starts a new line.
+    pub fn text_area(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::new(cx);
+        input.placeholder = placeholder.into();
+        input.kind = Kind::Area;
+        input.multiline = true;
+        input.text_area = true;
+        // Escape is left to the dialog.
+        input.submits = true;
+        input
+    }
     /// A small field of the filter bar's editors, at 12px.
     pub fn compact(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
         let mut input = Self::new(cx);
@@ -1334,6 +1372,13 @@ impl TextInput {
         input.placeholder = "".into();
         input.kind = Kind::Number;
         input
+    }
+    pub fn set_placeholder(&mut self, placeholder: &'static str) {
+        self.placeholder = placeholder.into();
+    }
+    /// Puts the caret after the text, where a browser's focus leaves it.
+    pub fn caret_at_end(&mut self, cx: &mut Context<Self>) {
+        self.move_to(self.content.len(), cx);
     }
     /// Replaces the text, which Escape then goes back to.
     pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {

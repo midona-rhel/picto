@@ -72,9 +72,6 @@ pub const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconMan", "Man"),
     ("IconWoman", "Woman"),
     ("IconAccessible", "Accessible"),
-    ("IconPersonSimple", "Person"),
-    ("IconPersonMale", "Male"),
-    ("IconPersonFemale", "Female"),
     ("IconMail", "Mail"),
     ("IconMessage", "Message"),
     ("IconBell", "Bell"),
@@ -124,6 +121,9 @@ pub const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconCoffee", "Coffee"),
     ("IconPizza", "Pizza"),
     ("IconApple", "Apple"),
+    ("IconPersonSimple", "Person"),
+    ("IconPersonMale", "Male"),
+    ("IconPersonFemale", "Female"),
 ];
 
 /// `.compact`: the picker's box, padding and tiles.

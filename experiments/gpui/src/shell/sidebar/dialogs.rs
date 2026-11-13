@@ -3,7 +3,6 @@
 use super::{Sidebar, folder_id, tree};
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::tag_token_input::{self, TagTokenInput};
 use crate::ui::{self, action_button::Look as ButtonLook, menu::Return, modal, modal::Size};
 use gpui::*;
 use picto_library::{FolderId, Lifecycle};
@@ -28,8 +27,11 @@ pub enum Dialog {
     /// `FolderAutoTagsModal`: the tags every chosen folder gives the items
     /// it receives. Each change is saved at once.
     AutoTags {
-        tags: Entity<TagTokenInput>,
-        _changed: Subscription,
+        folders: Vec<FolderId>,
+        tags: Vec<String>,
+        /// Where the add button was last drawn, which the picker opens
+        /// above.
+        add_button: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
     },
     /// `FolderWatchModal`: the directory a folder imports from.
     Watch {
@@ -163,30 +165,168 @@ impl Sidebar {
                         .collect()
                 },
             );
-            let _ = this.update_in(cx, move |this, window, cx| {
-                let search = crate::tags::token_search(this.session.clone());
-                let tags = cx.new(|cx| TagTokenInput::new(common, search, cx));
-                let folders = unique.clone();
-                let changed = cx.subscribe_in(
-                    &tags,
-                    window,
-                    move |this, tags, _: &tag_token_input::Changed, window, cx| {
-                        let names = tags.read(cx).values().to_vec();
-                        this.save_auto_tags(folders.clone(), names, window, cx);
-                    },
-                );
-                let focus = tags.read(cx).input_focus(cx);
+            let _ = this.update(cx, move |this, cx| {
                 this.open_dialog(
                     Dialog::AutoTags {
-                        tags,
-                        _changed: changed,
+                        folders: unique,
+                        tags: common,
+                        add_button: Default::default(),
                     },
                     cx,
-                )
-                .focus_first(focus);
+                );
             });
         })
         .detach();
+    }
+
+    /// The add button: the tag picker opens above it, on the dialog's tags.
+    fn open_auto_tag_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Dialog::AutoTags {
+            tags, add_button, ..
+        }) = self.dialog.content()
+        else {
+            return;
+        };
+        let records = tags
+            .iter()
+            .map(|tag| crate::inspector::tag_picker::record(tag))
+            .collect();
+        let anchor = add_button.get().origin;
+        self.auto_tag_picker.update(cx, |picker, cx| {
+            picker.open_above(
+                point(f32::from(anchor.x), f32::from(anchor.y)),
+                records,
+                window,
+                cx,
+            )
+        });
+    }
+
+    /// A tag picked or unpicked in the picker: the dialog's tags follow and
+    /// are saved (`onApplyTags`).
+    pub(super) fn auto_tag_picked(
+        &mut self,
+        event: &crate::inspector::tag_picker::Event,
+        cx: &mut Context<Self>,
+    ) {
+        let crate::inspector::tag_picker::Event::Toggle { name, add, .. } = event else {
+            return;
+        };
+        let Some(Dialog::AutoTags { folders, tags, .. }) = self.dialog.content_mut() else {
+            return;
+        };
+        if *add {
+            if !tags.contains(name) {
+                tags.push(name.clone());
+            }
+        } else {
+            tags.retain(|tag| tag != name);
+        }
+        let (folders, names) = (folders.clone(), tags.clone());
+        self.save_auto_tags(folders, names, cx);
+        cx.notify();
+    }
+
+    /// A chip's remove button.
+    fn remove_auto_tag(&mut self, tag: &str, cx: &mut Context<Self>) {
+        let Some(Dialog::AutoTags { folders, tags, .. }) = self.dialog.content_mut() else {
+            return;
+        };
+        tags.retain(|current| current != tag);
+        let (folders, names) = (folders.clone(), tags.clone());
+        self.save_auto_tags(folders, names, cx);
+        cx.notify();
+    }
+
+    /// `TagAssignmentControl`: "Automatically add tags" over the tags as
+    /// chips, each with its remove button, and the add button: the whole
+    /// width with "Add tags" while there are none, a 26px square after the
+    /// chips once there are.
+    fn tag_assignment(
+        tags: &[String],
+        add_button: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = theme::theme(cx);
+        let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
+        let mut values = div()
+            .min_h(px(26.))
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .content_start()
+            .gap(px(4.));
+        for (position, tag) in tags.iter().enumerate() {
+            let (namespace, subtag) = crate::tags::split(tag);
+            let namespace = namespace.unwrap_or("general");
+            let removed = tag.clone();
+            values = values.child(
+                ui::chip(("auto-tag", position), subtag.to_owned(), {
+                    crate::tags::chip_color(namespace)
+                })
+                .namespace(
+                    (show_prefixes && crate::tags::chip_shows_namespace(namespace))
+                        .then(|| namespace.to_owned().into()),
+                )
+                .on_remove(cx.listener(move |this, _, _, cx| this.remove_auto_tag(&removed, cx))),
+            );
+        }
+        let empty = tags.is_empty();
+        let measure = canvas(move |bounds, _, _| add_button.set(bounds), |_, _, _, _| {})
+            .absolute()
+            .inset_0();
+        let add = div()
+            .id("auto-tags-add")
+            .group("auto-tags-add")
+            .relative()
+            .h(px(26.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .bg(theme.surface_hover())
+            .text_color(if empty {
+                theme.text_tertiary()
+            } else {
+                theme.text_secondary()
+            })
+            .cursor_pointer()
+            .hover(move |style| style.bg(theme.surface_active()).text_color(theme.text()))
+            .child(measure)
+            .on_click(cx.listener(|this, _, window, cx| this.open_auto_tag_picker(window, cx)));
+        let glyph = || {
+            svg()
+                .path("plus")
+                .size(px(14.))
+                .text_color(if empty {
+                    theme.text_tertiary()
+                } else {
+                    theme.text_secondary()
+                })
+                .group_hover("auto-tags-add", move |style| style.text_color(theme.text()))
+        };
+        let add = if empty {
+            add.w_full()
+                .gap(px(8.))
+                .pl(px(16.))
+                .pr(px(24.))
+                .font_family(theme::FONT_UI)
+                .text(theme::TEXT_MD)
+                .line_height(px(26.))
+                .child(glyph())
+                .child("Add tags")
+        } else {
+            add.w(px(26.)).child(glyph())
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .text(theme::TEXT_MD)
+            .line_height(px(theme::LINE_HEIGHT_MD))
+            .text_color(theme.text())
+            .child("Automatically add tags")
+            .child(values.child(add))
     }
 
     /// `foldersController.setAutoTags` for each folder.
@@ -194,26 +334,27 @@ impl Sidebar {
         &mut self,
         folders: Vec<FolderId>,
         names: Vec<String>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
-            move |library| {
-                let ids = if names.is_empty() {
-                    Vec::new()
-                } else {
-                    library.ensure_tag_definitions(&names)?.0
-                };
-                let now = crate::now_ms();
-                for folder in folders {
-                    library.set_folder_auto_tags(folder, ids.clone(), now)?;
-                }
-                Ok(())
-            },
-            |_, (), _, _| {},
-            window,
-            cx,
-        );
+        let work = move |library: &picto_library::Library| -> picto_library::Result<()> {
+            let ids = if names.is_empty() {
+                Vec::new()
+            } else {
+                library.ensure_tag_definitions(&names)?.0
+            };
+            let now = crate::now_ms();
+            for folder in folders {
+                library.set_folder_auto_tags(folder, ids.clone(), now)?;
+            }
+            Ok(())
+        };
+        let answer = self.session.update(cx, |session, cx| {
+            session.edit(work, crate::session::Reread::NOTHING, cx)
+        });
+        cx.spawn(async move |_, _| {
+            let _ = answer.await;
+        })
+        .detach();
     }
 
     /// "Attach Watched Folder...": the folder's watch as it is stored.
@@ -352,8 +493,11 @@ impl Sidebar {
             .label("Cancel")
             .on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx)));
         let element = match &layer.content {
-            Dialog::AutoTags { tags, .. } => {
-                frame("Set Auto Tags", Size::Small, cx).child(tags.clone())
+            Dialog::AutoTags {
+                tags, add_button, ..
+            } => {
+                let control = Self::tag_assignment(tags, add_button.clone(), cx);
+                frame("Set Auto Tags", Size::Small, cx).child(control)
             }
             Dialog::Watch {
                 path,

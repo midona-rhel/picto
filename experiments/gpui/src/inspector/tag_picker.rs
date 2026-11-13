@@ -328,6 +328,8 @@ pub struct TagPicker {
     menu: menu::Host,
     menu_tag: Option<TagRecord>,
     filter: Option<FilterMode>,
+    /// The layer the panel is drawn on, above a dialog that opened it.
+    layer: usize,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -379,6 +381,7 @@ impl TagPicker {
             menu,
             menu_tag: None,
             filter: None,
+            layer: 5,
             _subscriptions: subscriptions,
         }
     }
@@ -401,7 +404,29 @@ impl TagPicker {
         cx: &mut Context<Self>,
     ) {
         self.filter = None;
+        self.layer = 5;
         self.show(anchor, entity, window, cx);
+    }
+
+    /// Opens over a dialog, its bottom just above the dialog's button at
+    /// `anchor` (`anchorPlacement: 'above'`), on the tags `entity` names.
+    pub fn open_above(
+        &mut self,
+        anchor: Point<f32>,
+        entity: Vec<TagRecord>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.filter = None;
+        self.layer = 15;
+        self.show(None, entity, window, cx);
+        let view = window.viewport_size();
+        self.geometry = overlay_shell::place_above(
+            anchor,
+            size(f32::from(view.width), f32::from(view.height)),
+            if self.sidebar { WIDE } else { NARROW },
+            HEIGHT,
+        );
     }
 
     /// Opens in the filter mode below a control of the filter bar, on the
@@ -425,6 +450,7 @@ impl TagPicker {
                 .collect(),
         });
         self.pinned = false;
+        self.layer = 5;
         self.show(None, include, window, cx);
         let view = window.viewport_size();
         self.geometry = overlay_shell::place_below(
@@ -1562,6 +1588,7 @@ impl Render for TagPicker {
             },
         )
         .pinned(self.pinned)
+        .layer(self.layer)
         .on_move(move |geometry, _, cx| {
             let _ = moved.update(cx, |this, cx| {
                 this.geometry = geometry;

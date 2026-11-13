@@ -41,6 +41,9 @@ pub enum Look {
     Hex,
     /// `.saveFilterEditor input`: the saved filter's name.
     SavedFilter,
+    /// `GlassInput.module.css` `.textarea`: three lines of text in a dialog,
+    /// from 8px below its top edge.
+    TextArea,
 }
 
 struct Frame {
@@ -117,6 +120,12 @@ impl Look {
             },
             Look::ModalSmall => Frame {
                 height: theme::CONTROL_SM,
+                ..Look::Modal.frame(theme)
+            },
+            Look::TextArea => Frame {
+                // `min-height: 60px` is less than three 18.2px lines with
+                // `padding: 8px 10px` and the border, which the box takes.
+                height: 3. * super::text_input::AREA_LINE + 2. * AREA_PADDING + 2.,
                 ..Look::Modal.frame(theme)
             },
             Look::Modal => Frame {
@@ -386,8 +395,13 @@ impl RenderOnce for Field {
                 } else {
                     frame.right
                 }))
-                // The input centres its line, so twice the drop above it.
-                .pt(px(2. * frame.drop))
+                // The input centres its line, so twice the drop above it;
+                // a text area starts at its padding.
+                .pt(px(if self.look == Look::TextArea {
+                    AREA_PADDING
+                } else {
+                    2. * frame.drop
+                }))
                 .child(self.input.clone()),
         );
         if clear && self.look == Look::TitlebarSearch {
@@ -507,6 +521,9 @@ impl Field {
             .child(deferred(anchored().child(overlay)).with_priority(2))
     }
 }
+
+/// `.textarea`'s padding above and below its text.
+const AREA_PADDING: f32 = 8.;
 
 /// `.fieldControlExpanded { max-height: 240px }`
 const EXPANDED_MAX: f32 = 240.;
