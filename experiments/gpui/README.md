@@ -357,14 +357,13 @@ One model, separate views, shared components:
   the viewer. It talks to `backend.rs`, the small adapter to the existing Rust
   owners, and says what kind of thing changed.
 - Each part of the window is its own cached view that repaints only for the
-  changes it shows: `shell/` (the root, the sidebar, the library popover, the toolbar), `grid/`
-  (the grid view with its layout, saved view, labels, reveal, keyboard
-  Add Tags, Export (for an item, a selection and a destination),
-  source-address list and Pin, and in the library switcher's popover
-  choosing another library, Create Library, Open Library and Library Manager
-  (those rows only close the popover). Each has a `TODO` where its action
-  belongs. The Filter button only clears a filter the inspector set; there
-  is no filter bar.
+  changes it shows: `shell/` (the root, the sidebar, the library popover, the
+  toolbar), `grid/` (the grid view with its layout, saved view, labels,
+  reveal, keyboard movement, rubber band, hover preview, tile artwork,
+  thumbnail cache and originals), `inspector/` (one item, several items, and
+  the destination), `viewer/` (the media surface with its zoom and pan
+  arithmetic in `camera.rs`, Flash, and the viewer toolbar the titlebar
+  shows) and `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
   tooltip, context menu, popover, library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
