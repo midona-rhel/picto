@@ -1,3 +1,4 @@
+mod app_menu;
 mod application;
 mod assets;
 mod backend;
@@ -37,39 +38,10 @@ pub fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// The application menu. Its rows show the keys bound to their actions, so
-/// it is set again whenever the shortcuts are rebound.
+/// The application menu (`app_menu`). Its rows show the keys bound to
+/// their actions, so it is set again whenever the shortcuts are rebound.
 pub fn set_app_menus(cx: &mut App) {
-    cx.set_menus(vec![
-        Menu {
-            name: "Picto GPUI".into(),
-            items: vec![
-                MenuItem::action("Settings…", settings::OpenSettings),
-                MenuItem::action("Quit", Quit),
-            ],
-            disabled: false,
-        },
-        // Production's File menu rows that this app performs.
-        Menu {
-            name: "File".into(),
-            items: vec![
-                MenuItem::action("Import Files…", keymap::ImportFiles),
-                MenuItem::action("Import Folder…", keymap::ImportFolder),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "Media Examples".into(),
-            items: [
-                MenuItem::action("SVG", DemoSvg),
-                MenuItem::action("Flash (Ruffle)", DemoFlash),
-            ]
-            .into_iter()
-            .chain(viewer::document::demos::menu_items())
-            .collect(),
-            disabled: false,
-        },
-    ]);
+    app_menu::set_menus(cx);
 }
 
 /// Chromium draws Picto's text with `-webkit-font-smoothing: antialiased`,
@@ -120,6 +92,7 @@ fn prepare(cx: &mut App) {
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    app_menu::bind(cx);
     imports::bind(cx);
     viewer::document::bind(cx);
     // The registry's shortcuts, with the preset and the bindings the user
@@ -230,62 +203,63 @@ fn main() {
     let (events, delivered) = std::sync::mpsc::channel();
     let application = application::Application::new(root.clone(), events);
     let closing = application.clone();
-    gpui_platform::application()
-        .with_assets(assets::Assets)
-        .run(move |cx: &mut App| {
-            prepare(cx);
-            // The dock badge and the system notifications, for the app
-            // proper only.
-            desktop::enable(cx);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            // Stop the workers and checkpoint the copy before the process
-            // ends, as the Electron app closes its library before quitting.
-            cx.on_app_quit(move |cx| {
-                state::flush(cx);
-                closing.close();
-                async {}
-            })
-            .detach();
-            cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
-            let window_bounds = main_window_bounds(cx);
-            // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
-            // keyboard from whatever the user is working in, and keeps it
-            // drawing while it is covered.
-            let background = covered::enabled();
-            let window = cx
-                .open_window(
-                    WindowOptions {
-                        window_bounds: Some(window_bounds),
-                        window_min_size: Some(size(px(1000.), px(600.))),
-                        titlebar: Some(TitlebarOptions {
-                            title: Some("Picto GPUI · Library copy".into()),
-                            appears_transparent: true,
-                            traffic_light_position: Some(point(px(12.), px(15.))),
-                        }),
-                        // The toolbar sits in the titlebar. AppKit would drag the
-                        // window from anywhere in that zone, controls included, so
-                        // the drag regions are declared by the shell instead.
-                        app_owns_titlebar_drag: true,
-                        focus: !background,
-                        ..Default::default()
-                    },
-                    move |window, cx| {
-                        covered::keep_painting(window);
-                        cx.new(|cx| {
-                            // The window's place is kept as it changes
-                            // (`queueSaveMainWindowState`).
-                            cx.observe_window_bounds(window, |_, window, cx| {
-                                remember_window(window, cx)
-                            })
-                            .detach();
-                            Shell::new(root, application, delivered, window, cx)
+    let app = gpui_platform::application().with_assets(assets::Assets);
+    // A click on the Dock icon brings back the main window Close Window hid.
+    app.on_reopen(app_menu::reopen);
+    app.run(move |cx: &mut App| {
+        prepare(cx);
+        // The dock badge and the system notifications, for the app proper
+        // only.
+        desktop::enable(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        // Stop the workers and checkpoint the copy before the process
+        // ends, as the Electron app closes its library before quitting.
+        cx.on_app_quit(move |cx| {
+            state::flush(cx);
+            closing.close();
+            async {}
+        })
+        .detach();
+        cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
+        let window_bounds = main_window_bounds(cx);
+        // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
+        // keyboard from whatever the user is working in, and keeps it
+        // drawing while it is covered.
+        let background = covered::enabled();
+        let window = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(window_bounds),
+                    window_min_size: Some(size(px(1000.), px(600.))),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Picto GPUI · Library copy".into()),
+                        appears_transparent: true,
+                        traffic_light_position: Some(point(px(12.), px(15.))),
+                    }),
+                    // The toolbar sits in the titlebar. AppKit would drag the
+                    // window from anywhere in that zone, controls included, so
+                    // the drag regions are declared by the shell instead.
+                    app_owns_titlebar_drag: true,
+                    focus: !background,
+                    ..Default::default()
+                },
+                move |window, cx| {
+                    covered::keep_painting(window);
+                    cx.new(|cx| {
+                        // The window's place is kept as it changes
+                        // (`queueSaveMainWindowState`).
+                        cx.observe_window_bounds(window, |_, window, cx| {
+                            remember_window(window, cx)
                         })
-                    },
-                )
-                .unwrap();
-            pointer::start(window.into(), cx);
-            if !background {
-                cx.activate(true);
-            }
-        });
+                        .detach();
+                        Shell::new(root, application, delivered, window, cx)
+                    })
+                },
+            )
+            .unwrap();
+        pointer::start(window.into(), cx);
+        if !background {
+            cx.activate(true);
+        }
+    });
 }

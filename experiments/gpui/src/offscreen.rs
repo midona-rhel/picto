@@ -15,7 +15,9 @@
 //! one, or `lazy` / `eager`: from there on, draw a frame only when a real
 //! window would (see `settle`) / redraw every tick, the default, or
 //! `notify <tone> <title> | <message>`, which shows a notification
-//! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button).
+//! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button), or
+//! `action <name>` (`action app_menu::Accept`, `action app_menu::SetRating
+//! 3`), which chooses an application menu row.
 //! `PICTO_GPUI_LAZY=1` starts a script lazy. `PICTO_GPUI_WINDOW=1213x865`
 //! sets the main window's size. `PICTO_GPUI_STATE=<folder>` keeps what the
 //! script arranges (rail widths, folds, filters, shortcuts…) in that folder
@@ -145,6 +147,15 @@ fn plays_a_script() {
             lazy = line == "lazy";
         } else if let Some(rest) = line.strip_prefix("notify ") {
             notify_line(&mut cx, rest);
+        } else if let Some(name) = line.strip_prefix("action ") {
+            // An application menu row chosen: its action, sent to where the
+            // keyboard is, as AppKit sends it.
+            let action = cx
+                .update(|cx| crate::app_menu::named(name.trim(), cx))
+                .unwrap_or_else(|| panic!("no action {name}"));
+            cx.update_window(window, |_, window, cx| window.dispatch_action(action, cx))
+                .unwrap();
+            settle(&mut cx, window, pace, lazy);
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {

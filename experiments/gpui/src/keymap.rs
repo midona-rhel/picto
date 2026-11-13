@@ -57,7 +57,10 @@ actions!(
         AddToFolder,
         ImportFiles,
         ImportFolder,
-        PasteImport
+        PasteImport,
+        ExportOriginals,
+        ExportAs,
+        ExportPictoPack
     ]
 );
 
@@ -162,6 +165,10 @@ pub fn targets(id: &str) -> Vec<Target> {
         // An application menu accelerator in production, so the whole
         // window's.
         "file.import" => vec![to!(App, ImportFiles)],
+        // Application menu accelerators too. The export area handles the
+        // actions; until it does, the keys and the menu rows do nothing.
+        "file.export" => vec![to!(App, ExportOriginals)],
+        "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
@@ -264,8 +271,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    ("file.export", "no export"),
-    ("file.exportAs", "no export"),
     (
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",
@@ -463,6 +468,24 @@ pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
         preset,
         overrides: overrides.clone(),
     });
+    // The application menu's keys, after the registry's so that a row
+    // whose action the registry binds shows the registry's keys.
+    for accelerator in crate::app_menu::accelerators(preset, overrides) {
+        let predicate = accelerator.predicate.map(|source| {
+            Rc::new(KeyBindingContextPredicate::parse(&source).expect("menu key predicate"))
+        });
+        match KeyBinding::load(
+            &accelerator.keystroke,
+            accelerator.action,
+            predicate,
+            false,
+            None,
+            cx,
+        ) {
+            Ok(binding) => bindings.push(binding.with_meta(FROM_REGISTRY)),
+            Err(error) => eprintln!("menu: {}: {error}", accelerator.keystroke),
+        }
+    }
     // A document's scrolling keys come after the registry's, which they
     // override where pages are shown (Space).
     bindings.extend(
