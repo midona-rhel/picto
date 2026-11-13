@@ -569,16 +569,27 @@ impl Inspector {
                 crate::text::size_to_gigabytes(view.size as u64),
                 cx,
             ));
-        if view.kind != Kind::System && view.total > 0 {
-            // TODO: Export opens the export dialog for everything in this
-            // folder or smart folder.
-            properties = properties.child(
-                div().mt(px(12.)).child(
-                    ui::action_row("scope-export", "inspector-export", "Export")
-                        .glyph(16.)
-                        .height(theme::CONTROL_MD),
-                ),
-            );
+        let scope = match view.kind {
+            Kind::Folder(folder_id) => Some(ItemScope::Folder { folder_id }),
+            Kind::Smart(smart_folder_id) => Some(ItemScope::SmartFolder { smart_folder_id }),
+            Kind::System => None,
+        };
+        if let Some(scope) = scope.filter(|_| view.total > 0) {
+            // Everything the folder or smart folder holds, in its query's
+            // order, as the sidebar's export takes it.
+            let target = picto_library::selection::SelectionTarget::Query {
+                query: picto_library::query::RootQuery {
+                    scope,
+                    view: Default::default(),
+                },
+                excluded_root_ids: Vec::new(),
+            };
+            properties = properties.child(div().mt(px(12.)).child(Self::export_row(
+                "scope-export",
+                target,
+                view.total,
+                cx,
+            )));
         }
         panel = panel.child(self.section("Properties", Some(properties.into_any_element()), cx));
 

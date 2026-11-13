@@ -248,6 +248,12 @@ impl RenderOnce for ActionButton {
             button = button.child(label);
         }
         if self.disabled {
+            // CSS fades the button as one layer; GPUI fades its border and
+            // fill apart, and a border drawn over its own fill would show
+            // twice as strong. A border the fill's colour adds nothing.
+            if border == background {
+                button = button.border_color(theme::clear(border));
+            }
             return button.opacity(0.35);
         }
         if let Some(tip) = &self.tip {

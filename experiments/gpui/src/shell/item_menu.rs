@@ -400,6 +400,9 @@ impl Shell {
                 paste_tags: true,
                 set_rating: true,
                 export: true,
+                // Production's viewer menu leaves Export Originals... with
+                // nothing to do; here it exports the shown item's files.
+                export_originals: true,
                 search_by_image: media,
                 regenerate: media,
                 library_cover: media,

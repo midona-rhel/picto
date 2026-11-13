@@ -175,15 +175,12 @@ impl Imports {
                 );
             }
             Dropped::Pack(path) => {
-                // TODO: inspect the pack (`picto_pack.inspect`) and open the
-                // Picto Pack import dialog for it.
-                self.report(
-                    "Could not import Picto Pack",
-                    &format!(
-                        "Picto Pack import is not built yet: {}",
-                        path.to_string_lossy()
-                    ),
-                );
+                // `openPictoPackImport`: what the pack holds, in its dialog.
+                if self.allow(cx)
+                    && let Some(exports) = crate::export::get(cx)
+                {
+                    exports.update(cx, |exports, cx| exports.open_pack(path, cx));
+                }
             }
             Dropped::Folder(path) => {
                 if self.allow(cx) {
@@ -292,7 +289,7 @@ impl Imports {
 
     /// `allowTaskAction('import')`: while an import is open another cannot
     /// start; the one in the way comes forward, and the reason is given.
-    fn allow(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn allow(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((blocking, _)) = task::gate(&self.tasks, IMPORT) else {
             return true;
         };
@@ -354,11 +351,9 @@ impl Imports {
         .detach();
     }
 
-    /// Errors production shows as a notification. There is no notification
-    /// host yet, so they are written to standard error.
+    /// Errors production shows as an error notification.
     fn report(&self, title: &str, message: &str) {
-        // TODO: show this as an error notification (`showErrorNotification`).
-        eprintln!("picto: {title}: {message}");
+        crate::export::notify(crate::export::Level::Error, title, message);
     }
 
     // ── The folder dialog ───────────────────────────────────────

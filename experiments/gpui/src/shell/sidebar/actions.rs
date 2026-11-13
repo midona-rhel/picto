@@ -313,7 +313,40 @@ impl Sidebar {
                     import_folder(Some(id), window, cx);
                 }
             }
-            // TODO: the "Export" submenu's rows wait for export.
+            "export-originals" | "export-as" | "export-pack" => {
+                // `scopeExportEntry`: everything the folder or smart folder
+                // holds, in its query's order.
+                let source = match (folder_id(node), smart_folder_id(node)) {
+                    (Some(id), _) => crate::export::PackSource::Folder(id),
+                    (_, Some(id)) => crate::export::PackSource::SmartFolder(id),
+                    _ => return,
+                };
+                let scope = match source {
+                    crate::export::PackSource::Folder(folder_id) => ItemScope::Folder { folder_id },
+                    crate::export::PackSource::SmartFolder(smart_folder_id) => {
+                        ItemScope::SmartFolder { smart_folder_id }
+                    }
+                    crate::export::PackSource::Items(_) => return,
+                };
+                let target = picto_library::selection::SelectionTarget::Query {
+                    query: RootQuery {
+                        scope,
+                        view: Default::default(),
+                    },
+                    excluded_root_ids: Vec::new(),
+                };
+                let (count, name) = (
+                    entries[index].count.unwrap_or(0),
+                    entries[index].label.clone(),
+                );
+                if let Some(exports) = crate::export::get(cx) {
+                    exports.update(cx, |exports, cx| match action {
+                        "export-originals" => exports.export_originals(target, cx),
+                        "export-as" => exports.export_as(target, count, cx),
+                        _ => exports.export_pack(source, count, Some(name), cx),
+                    });
+                }
+            }
             _ => {}
         }
     }

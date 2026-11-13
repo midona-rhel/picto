@@ -13,6 +13,12 @@
 //! the order they opened), or `pace <milliseconds>`, how long the app runs
 //! after each input line (200 unless set), for pictures taken soon after
 //! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
+//!
+//! A system file, folder or save dialog cannot be driven here, so
+//! `answer <path>` answers the next one the app asks for with that path
+//! without opening it, and `answer` alone cancels the next one
+//! (`crate::prompt`). Give it before the line that opens the dialog; the
+//! answers are used in order.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -105,6 +111,10 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200));
+        } else if line == "answer" {
+            crate::prompt::answer_next(None);
+        } else if let Some(path) = line.strip_prefix("answer ") {
+            crate::prompt::answer_next(Some(PathBuf::from(path.trim())));
         } else if let Some(time) = line.strip_prefix("pace ") {
             pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {

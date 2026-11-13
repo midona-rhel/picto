@@ -4,6 +4,7 @@ mod backend;
 mod cover;
 mod covered;
 mod demo;
+mod export;
 mod grid;
 mod imports;
 mod inspector;
@@ -13,6 +14,7 @@ mod motion;
 #[cfg(all(test, target_os = "macos"))]
 mod offscreen;
 mod pointer;
+mod prompt;
 mod screens;
 mod session;
 mod settings;
@@ -51,6 +53,11 @@ pub fn set_app_menus(cx: &mut App) {
             items: vec![
                 MenuItem::action("Import Files…", keymap::ImportFiles),
                 MenuItem::action("Import Folder…", keymap::ImportFolder),
+                MenuItem::action("Import Picto Pack…", keymap::ImportPictoPack),
+                MenuItem::separator(),
+                MenuItem::action("Export Originals…", keymap::ExportOriginals),
+                MenuItem::action("Export As…", keymap::ExportAs),
+                MenuItem::action("Export as Picto Pack…", keymap::ExportPictoPack),
             ],
             disabled: false,
         },

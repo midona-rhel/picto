@@ -57,7 +57,11 @@ actions!(
         AddToFolder,
         ImportFiles,
         ImportFolder,
-        PasteImport
+        PasteImport,
+        ExportOriginals,
+        ExportAs,
+        ExportPictoPack,
+        ImportPictoPack
     ]
 );
 
@@ -162,6 +166,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         // An application menu accelerator in production, so the whole
         // window's.
         "file.import" => vec![to!(App, ImportFiles)],
+        // Application menu accelerators too.
+        "file.export" => vec![to!(App, ExportOriginals)],
+        "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
@@ -264,8 +271,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    ("file.export", "no export"),
-    ("file.exportAs", "no export"),
     (
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",

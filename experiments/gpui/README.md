@@ -851,6 +851,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   on `tasks` changes (150 ms coalesced) and every second while one works; a
   task left running when the app closed takes the foreground when it
   resumes.
+- Exporting (`filesController.ts`, `ExportModal.tsx`, `PictoPackModal.tsx`,
+  `export/`): Export Originals... (the system's folder dialog, then every
+  file as it is, through `media.export`), Export As... (the Export dialog:
+  destination with Browse, format select, quality slider for JPEG, WebP and
+  AVIF, the optional width and height that take digits only, Keep Aspect
+  Ratio) and Export as Picto Pack... (the pack dialog, then the system's save
+  dialog with a safe file name, through `picto_pack.export`), from the item
+  menu's Export submenu (the grid's and the viewer's), the inspector's
+  Export (an item, the selection, a folder or smart folder), the sidebar's
+  Export submenu on folders and smart folders, the File menu, ⌘E and ⇧⌘E. A
+  selection after Select All or a shift range exports all of it, loaded or
+  not (`Session::target_for`); a folder or smart folder exports its query.
+  Picto Packs are imported from a drop of one pack (others mixed in are
+  refused) and the File menu's Import Picto Pack...: `picto_pack.inspect`,
+  the dialog with what the pack holds, then `picto_pack.import` while the
+  dialog says "Working...". An import that is open blocks it, as it blocks
+  other imports.
 - Thumbnails an import is still waiting for: a tile whose thumbnail file
   does not exist asks the application to render it
   (`media.render_thumbnail_now`, as the media protocol does on a miss), and
@@ -1032,8 +1049,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   A cover saved as a rendered crop shows here; production's media protocol
   serves a thumbnail only for a hash that has an original, so it falls back
   to the download glyph for those covers.
-- Drawn with their hover states and tooltips but not wired: the
-  inspector's Export (for an item, a selection and a destination), and in
+- Drawn with their hover states and tooltips but not wired: in
   the library switcher's popover
   choosing another library, Create Library, Open Library and Library Manager
   (those rows only close the popover). Each has a `TODO` where its action
@@ -1069,8 +1085,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   empty state). The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: the Export submenu's three rows (`TODO`s);
-  watching a directory (the
+- Not in the sidebar yet: watching a directory (the
   watch is stored, the watcher is a `TODO`, and the dialog does not check the
   folder's structure). The activity
   button's tooltip opens below it, not to its right as `position="right"`
@@ -1163,8 +1178,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Item menu rows shown, enabled as production has them, that do nothing yet
   (each with a `TODO` where it is received): Open With Other (the system's
   application list), Copy and Copy for several items (GPUI's macOS
-  pasteboard drops file lists), Export Originals, Export As and Export as
-  Picto Pack (`media.export` and `picto_pack.export`, after a folder or save dialog), Search by Image (production uploads
+  pasteboard drops file lists), Search by Image (production uploads
   the original from a hidden browser window), Set as Library Cover (the
   cover dialog that frames the square), Find Items with This Media (an
   ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
@@ -1196,11 +1210,21 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   cover is cropped once per session, so a cover changed elsewhere meanwhile
   shows the old one. A library with an icon but no cover shows the books
   glyph, not its icon.
-- No export, cloud, localization or site login.
+- No cloud, localization or site login.
+- Export: results and failures are notifications in production; here they
+  go to standard error through `export::notify`, the one place the
+  notification host will take them (`TODO`). Production reports nothing when
+  Export As or the item menu's Export Originals finishes, and nothing when
+  Export As fails; here every export reports what it wrote and the first
+  reason a file was skipped. Exports show no progress (production shows
+  none either: `media.export` and `picto_pack.export` answer once they are
+  done and report no progress). The file dialog for Import Picto Pack takes
+  every type, and a `.picto-pack` opened from Finder is not received (no
+  associated-file handling). The dialogs' system windows have not been used
+  with the pointer; the off-screen tool answers them (`answer`).
 - Imports: errors (a refused or failed import, a blocked one, a failed task
   control) are written to standard error, as there is no notification host
-  yet (`TODO`). Picto Packs are not imported (a dropped pack is refused with
-  a `TODO`), and the File menu has no Import Picto Pack. The file chooser
+  yet (`TODO`). The file chooser
   takes every type (GPUI's prompt has no type filter), and its "Import
   files" title is the macOS prompt button. A drag from a browser is not
   handled: GPUI delivers only file paths, so the in-memory files and links
@@ -1226,8 +1250,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
-  reasons in `keymap::NOT_YET`: Export and Export As,
-  Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
+  reasons in `keymap::NOT_YET`: Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
   which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
   Remove from Group, Toggle Grayscale, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
@@ -1370,6 +1393,12 @@ PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
 
+A system dialog cannot be driven off-screen, so `answer <path>` has the next
+folder, file or save dialog the app asks for answer with that path without
+opening (`answer` alone cancels it); put it before the line that opens the
+dialog. Only the off-screen test reads it (`prompt.rs`). The reference's
+dialogs are the system's own and cannot be answered from a script.
+
 The reference takes `dragfiles`, `drop` and `dragexit` too, through the
 browser's drag events (`Input.dispatchDragEvent`), so a drop imports into
 the reference's own copy. Its CSS animations do not run while its window
@@ -1482,6 +1511,10 @@ One model, separate views, shared components:
   collection question), and shows the foreground tasks (the task dialog and
   task bar); `shell/import.rs` is the window's side (the drop and its
   overlay, the menu rows and keys).
+- `export/` exports originals, converted files and Picto Packs and imports
+  packs through the application's commands, with the Export and Picto Pack
+  dialogs; `shell/export.rs` takes the File menu's rows and keys.
+  `prompt.rs` opens the system's folder, file and save dialogs.
 - `screens/` holds the destinations that are screens rather than a grid.
   A screen can hand the toolbar controls to show in the grid's place.
 - `settings/` is the settings model the app reads, the shortcut registry, and
