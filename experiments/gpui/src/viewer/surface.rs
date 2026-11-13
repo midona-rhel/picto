@@ -318,6 +318,17 @@ impl MediaSurface {
         self.mode == Mode::Image && self.image_size().is_some()
     }
 
+    /// Whether a host shows the zoom (percentage, actual size, fit): an
+    /// image once its size is known, or a document the viewer zooms itself
+    /// (`supportsZoom` with `usesRendererZoom` in `DetailWindow.tsx`).
+    pub fn shows_zoom(&self) -> bool {
+        match self.mode {
+            Mode::Image => self.has_image(),
+            Mode::Document => self.document_zoom.0,
+            _ => false,
+        }
+    }
+
     /// The camera a newly shown image opens with.
     fn opening(&self, image: Size, pane: Size) -> Camera {
         if self.options.opens_actual {
@@ -341,6 +352,8 @@ impl MediaSurface {
             self.document_zoom = (document.zoomable(cx), document.percent(cx));
         }
         cx.emit(Event::Zoom);
+        // The detail window observes the surface for its percentage.
+        cx.notify();
     }
 
     /// Runs a control on the playing movie, and shows the controls again
@@ -1047,6 +1060,7 @@ impl Render for MediaSurface {
         let image_mode = self.mode == Mode::Image;
         let image = self.image_size().filter(|_| image_mode);
         let pane = self.pane();
+        let camera_before = self.camera;
         // A newly shown image opens fitted, once the pane has been measured.
         if self.needs_fit
             && pane.0 > 0.
@@ -1057,7 +1071,10 @@ impl Render for MediaSurface {
             let opening = self.opening(image, pane);
             self.set_camera(opening, cx);
         }
-        if self.animate(cx) {
+        // A camera moved while drawing notifies no one (the detail window
+        // observes the surface for its zoom percentage, read before this
+        // ran): another frame tells them, also after a glide's last step.
+        if self.animate(cx) || self.camera != camera_before {
             window.request_animation_frame();
         }
         // The navigator appears a moment after the image first overflows.

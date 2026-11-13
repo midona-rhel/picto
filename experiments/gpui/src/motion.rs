@@ -446,6 +446,10 @@ pub fn pulse(elapsed: Duration) -> f32 {
 
 /// Progress of an animation that began `elapsed` ago, in `0..=1`.
 pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
+    // A move that takes no time is already over.
+    if duration.is_zero() {
+        return 1.;
+    }
     (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0., 1.)
 }
 

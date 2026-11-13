@@ -186,6 +186,28 @@ impl TagPicker {
         self.opening.is_some()
     }
 
+    /// Takes the layout and counts last chosen in any picker, as each
+    /// `TagSelectPanel` reads `picto-tag-picker-layout` and
+    /// `picto-tag-picker-counts` when it opens.
+    fn read_layout(&mut self, cx: &App) {
+        let kept = crate::state::get(cx);
+        self.layout = if kept.tag_picker_list {
+            Layout::List
+        } else {
+            Layout::Grid
+        };
+        self.counts = kept.tag_picker_counts;
+    }
+
+    /// Keeps this picker's layout and counts for the next one to open.
+    fn keep_layout(&self, cx: &mut App) {
+        let (list, counts) = (self.layout == Layout::List, self.counts);
+        crate::state::update(cx, |state| {
+            state.tag_picker_list = list;
+            state.tag_picker_counts = counts;
+        });
+    }
+
     fn width(&self) -> f32 {
         NARROW + (WIDE - NARROW) * self.rail_width.value_with(motion::EASE_DEFAULT)
     }
@@ -266,6 +288,7 @@ impl TagPicker {
     ) {
         if self.opening.is_none() {
             self.opening = Some(ui::popover::Opening::new(window, cx));
+            self.read_layout(cx);
         }
         let view = window.viewport_size();
         let width = if self.sidebar { WIDE } else { NARROW };
