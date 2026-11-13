@@ -136,6 +136,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   16px glyphs, and native editable search (selection, clipboard, IME). Fewer
   than three trimmed characters leave filtering off. Query generations prevent
   an old result replacing a newer query.
+- A tile that draws more pixels than its 512px thumbnail holds shows its
+  original instead, by the rule of `thumbnailPlan.ts`: still images only,
+  never GIF or JPEG XL, after a quarter of a second in the viewport, decoded
+  off the drawing thread to exactly the size the tile shows, two at a time,
+  and let go when the tile leaves the viewport.
 - Real paginated results (500 per page, loaded near the end) and
   viewport-only tiles. Thumbnails load six at a time in the order of
   `thumbnailPlan.ts`: the viewport before the margin around it, nearest its
@@ -261,9 +266,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - The grid lays out every loaded item; the Electron grid's windowed model for
   very large libraries is not ported.
 - Accessibility exposes the native window but not the control tree.
-- The grid is still one element tree per tile, and never loads an original
-  for a tile larger than its thumbnail. The media surface still carries
-  colours of its own.
+- The grid is still one element tree per tile. The media surface still
+  carries colours of its own.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
 - Windows and Linux are not built or tested. The Ruffle frame path reads back

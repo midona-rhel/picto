@@ -6,7 +6,6 @@ pub mod format;
 pub mod layout;
 pub mod marquee;
 pub mod nav;
-#[allow(dead_code)]
 pub mod originals;
 pub mod prefs;
 pub mod preview;
@@ -30,6 +29,7 @@ pub struct MenuRequested(pub Point<Pixels>);
 pub struct GridView {
     session: Entity<Session>,
     thumbnails: Entity<Thumbnails>,
+    originals: Entity<originals::Originals>,
     /// Keyboard focus returns here after a click on a tile.
     focus: FocusHandle,
     scroll: ScrollHandle,
@@ -99,6 +99,31 @@ struct TileData {
     thumbnail: PathBuf,
     selected: bool,
     thumb: Thumb,
+    /// The original, decoded for this tile's size, once it is worth having.
+    original: Option<std::sync::Arc<RenderImage>>,
+}
+
+/// Whether a tile letterboxes its media, and the media's rect inside the
+/// tile's image area. Only the grid mode letterboxes by choice; waterfall and
+/// justified tiles already have their item's shape. Video and audio always
+/// do. An item of unknown shape takes the whole area.
+fn media_rect(
+    tile: &layout::Tile,
+    item: &RootSummary,
+    prefs: &ViewPrefs,
+) -> (bool, (f32, f32, f32, f32)) {
+    let image_height = tile.h - prefs.text_height();
+    let timed = item.mime.starts_with("video/") || item.mime.starts_with("audio/");
+    let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
+    let rect = match aspect(item).filter(|_| contain) {
+        Some(aspect) => {
+            let scale = (tile.w / aspect).min(image_height);
+            let (w, h) = (aspect * scale, scale);
+            ((tile.w - w) / 2., (image_height - h) / 2., w, h)
+        }
+        None => (0., 0., tile.w, image_height),
+    };
+    (contain, rect)
 }
 
 /// Places artwork of `size` (drawing units, `art::MARGIN` included) drawn at
@@ -132,9 +157,13 @@ impl GridView {
                 cx.notify();
             }
         });
+        let originals = cx.new(originals::Originals::new);
+        // An original that finished decoding is drawn on the next frame.
+        cx.observe(&originals, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             thumbnails,
+            originals,
             focus,
             scroll: ScrollHandle::new(),
             layout: Layout::default(),
@@ -410,6 +439,7 @@ impl GridView {
             thumbnail,
             selected,
             thumb,
+            original,
         } = data;
         let image_height = tile.h - prefs.text_height();
         let audio = item.mime.starts_with("audio/");
@@ -417,18 +447,7 @@ impl GridView {
         let timed = item.mime.starts_with("video/") || audio;
         // Letterboxed media keeps its own rect inside the tile; badges and the
         // selection stroke follow that rect, not the tile.
-        // Only the grid mode letterboxes by choice; waterfall and justified
-        // tiles already have their item's shape. Video and audio always do.
-        let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
-        let (x, y, w, h) = match aspect(&item).filter(|_| contain) {
-            Some(aspect) => {
-                let scale = (tile.w / aspect).min(image_height);
-                let (w, h) = (aspect * scale, scale);
-                ((tile.w - w) / 2., (image_height - h) / 2., w, h)
-            }
-            // An item of unknown shape takes the whole tile.
-            None => (0., 0., tile.w, image_height),
-        };
+        let (contain, (x, y, w, h)) = media_rect(&tile, &item, prefs);
         // The image fades in over its dominant colour, then that colour fades
         // away beneath it, which matters for images with transparency.
         let placeholder = item
@@ -510,17 +529,21 @@ impl GridView {
             ));
         } else {
             media = media.child(layer().bg(placeholder).opacity(placeholder_alpha));
-            let image = img(thumbnail)
-                .image_cache(&self.thumbnails)
-                .size_full()
-                .rounded(px(theme::TILE_RADIUS))
-                // A thumbnail of another shape than its item (cover art, a
-                // rotated video) is fitted, not cropped.
-                .object_fit(if contain {
-                    ObjectFit::Contain
-                } else {
-                    ObjectFit::Cover
-                });
+            // The original, where the tile outgrew its thumbnail, takes the
+            // thumbnail's place with no second reveal.
+            let image = match original {
+                Some(original) => img(original),
+                None => img(thumbnail).image_cache(&self.thumbnails),
+            }
+            .size_full()
+            .rounded(px(theme::TILE_RADIUS))
+            // A thumbnail of another shape than its item (cover art, a
+            // rotated video) is fitted, not cropped.
+            .object_fit(if contain {
+                ObjectFit::Contain
+            } else {
+                ObjectFit::Cover
+            });
             media = if audio {
                 // Audio: a faint tint, and the cover art in grey at half
                 // strength over it.
@@ -850,6 +873,7 @@ impl Render for GridView {
                         thumbnail: session.thumbnail(&item.content_hash),
                         selected,
                         thumb: Thumb::Pending,
+                        original: None,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -900,6 +924,39 @@ impl Render for GridView {
                 })
                 .collect::<Vec<_>>()
         };
+        // Tiles in the viewport that draw more pixels than their thumbnail
+        // holds ask for their original, which arrives after a short dwell.
+        let scale = window.scale_factor();
+        let wants = {
+            let session = self.session.read(cx);
+            tiles
+                .iter()
+                .filter(|data| {
+                    data.thumb == Thumb::Loaded
+                        && data.tile.y + data.tile.h > top
+                        && data.tile.y < top + viewport
+                })
+                .filter_map(|data| {
+                    let (contain, (_, _, w, h)) = media_rect(&data.tile, &data.item, &prefs);
+                    let source = data.item.width.zip(data.item.height);
+                    originals::wants_original(&data.item.mime, (w, h), source, contain, scale).then(
+                        || originals::Want {
+                            hash: data.item.content_hash.clone(),
+                            path: session.original(&data.item.content_hash, &data.item.mime),
+                            size: originals::decode_size((w, h), source, contain, scale),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        self.originals
+            .update(cx, |originals, cx| originals.plan(wants, window, cx));
+        {
+            let originals = self.originals.read(cx);
+            for data in &mut tiles {
+                data.original = originals.get(&data.item.content_hash);
+            }
+        }
         self.reveal.update(&decoded, now);
         // Keep painting while a fade or a thumbnail reveal is in motion.
         if animating || self.reveal.active(now) {

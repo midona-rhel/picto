@@ -208,6 +208,19 @@ impl Session {
         }
     }
 
+    /// Where the library keeps an original: beside its thumbnail's folder,
+    /// under its content hash and its type's extension.
+    pub fn original(&self, hash: &str, mime: &str) -> PathBuf {
+        if hash.len() < 4 {
+            return PathBuf::new();
+        }
+        self.blobs
+            .join("f")
+            .join(&hash[..2])
+            .join(&hash[2..4])
+            .join(format!("{hash}.{}", crate::grid::format::extension(mime)))
+    }
+
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
         if hash.len() < 4 {
             return PathBuf::new();
