@@ -115,6 +115,8 @@ impl Size {
 
 const HEADER: f32 = 48.;
 const FOOTER: f32 = 44.;
+/// `.panel`'s 1px glass border, which the contents sit inside.
+const BORDER: f32 = 1.;
 /// The body's padding, and the scrollbar gutter it keeps on the right.
 const BODY_PADDING: f32 = 16.;
 
@@ -131,6 +133,8 @@ pub struct Modal {
     on_close: Option<Handler>,
     focus: Option<FocusHandle>,
     priority: usize,
+    /// `flush`: the body has no padding, only the scrollbar's gutter.
+    flush: bool,
 }
 
 /// A dialog's help text (`.pickerHint`, `.inlineLabel`, `.settingHint`):
@@ -175,6 +179,7 @@ pub fn modal(
         on_close: None,
         focus: None,
         priority: 10,
+        flush: false,
     }
 }
 
@@ -206,6 +211,11 @@ impl Modal {
     /// Escape reaches it.
     pub fn focus(mut self, focus: &FocusHandle) -> Self {
         self.focus = Some(focus.clone());
+        self
+    }
+    /// `flush`: content that reaches the body's edges, such as a list.
+    pub fn flush(mut self) -> Self {
+        self.flush = true;
         self
     }
     /// Dialogs opened over another one draw above it.
@@ -251,7 +261,8 @@ impl RenderOnce for Modal {
         let viewport = window.viewport_size();
         let max_height = f32::from(viewport.height) * self.size.max_height();
         let has_footer = !self.footer.is_empty();
-        let body_height = max_height - HEADER - if has_footer { FOOTER } else { 0. };
+        let padding = if self.flush { 0. } else { BODY_PADDING };
+        let body_height = max_height - 2. * BORDER - HEADER - if has_footer { FOOTER } else { 0. };
         let scroll = window
             .use_keyed_state(
                 ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "body".into()),
@@ -287,7 +298,7 @@ impl RenderOnce for Modal {
         let (scale, drop) = motion::modal_pop(shown);
         let frame = (*measured.read(cx))
             .filter(|_| self.presence.animating())
-            .map(|height| motion::scaled_frame(width, height, scale, (0.5, 0.5)));
+            .map(|height| motion::scaled_frame(width, height + 2. * BORDER, scale, (0.5, 0.5)));
         let measure = canvas(
             move |bounds, _, cx| {
                 measured.update(cx, |height, _| {
@@ -299,7 +310,7 @@ impl RenderOnce for Modal {
         .absolute()
         .inset_0();
         let mut content = div()
-            .w(px(width))
+            .w(px(width - 2. * BORDER))
             .flex()
             .flex_col()
             .child(measure)
@@ -350,11 +361,11 @@ impl RenderOnce for Modal {
                             .max_h(px(body_height.max(0.)))
                             .overflow_y_scroll()
                             .track_scroll(&scroll)
-                            .pt(px(BODY_PADDING))
-                            .pb(px(BODY_PADDING))
-                            .pl(px(BODY_PADDING))
+                            .pt(px(padding))
+                            .pb(px(padding))
+                            .pl(px(padding))
                             // `scrollbar-gutter: stable` keeps the gutter.
-                            .pr(px(BODY_PADDING + super::scrollbar::GUTTER))
+                            .pr(px(padding + super::scrollbar::GUTTER))
                             .children(self.body),
                     )
                     .child(super::scrollbar("modal-scrollbar", &scroll, window, cx)),
@@ -390,16 +401,21 @@ impl RenderOnce for Modal {
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         panel = match frame {
             // Centred by the backdrop, so the smaller frame stays centred.
-            Some((left, top, scaled_width, scaled_height)) => panel
-                .w(px(scaled_width))
-                .h(px(scaled_height))
-                .child(content.absolute().left(px(-left)).top(px(-top))),
+            Some((left, top, scaled_width, scaled_height)) => {
+                panel.w(px(scaled_width)).h(px(scaled_height)).child(
+                    content
+                        .absolute()
+                        .left(px(BORDER - left))
+                        .top(px(BORDER - top)),
+                )
+            }
             None => panel
                 .w(px(width))
                 .max_h(px(max_height))
+                .p(px(BORDER))
                 .flex()
                 .flex_col()
-                .child(content.relative().max_h(px(max_height))),
+                .child(content.relative().max_h(px(max_height - 2. * BORDER))),
         };
         panel = panel
             .child(edge().border_1().border_color(over(0.10)))

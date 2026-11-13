@@ -81,11 +81,31 @@ impl Inspector {
         let Some(target) = self.target(cx) else {
             return;
         };
-        let selection = SelectionTarget::Explicit {
-            root_ids: target.ids,
-        };
+        self.edit_items(
+            target.ids,
+            touches,
+            move |library, target| work(library, target).map(|_| ()),
+            then,
+            cx,
+        );
+    }
+
+    /// [`Inspector::edit`] for the items given rather than those the rail
+    /// describes: the Add Tags and Folders dialogs edit the grid's selection.
+    pub(super) fn edit_items(
+        &mut self,
+        ids: Vec<RootId>,
+        touches: Touches,
+        work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<()> + Send + 'static,
+        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if ids.is_empty() {
+            return;
+        }
+        let selection = SelectionTarget::Explicit { root_ids: ids };
         let answer = self.session.read(cx).run(move |library| {
-            let result = work(library, &selection).map(|_| ());
+            let result = work(library, &selection);
             (result, crate::backend::navigation(library))
         });
         cx.spawn(async move |this, cx| {
@@ -180,6 +200,12 @@ impl Inspector {
         created: bool,
         cx: &mut Context<Self>,
     ) {
+        if add {
+            // `addTargetTags` remembers the tags for the Recent view.
+            let added = [tag_name.clone()];
+            self.session
+                .update(cx, |session, _| session.record_tags_use(&added));
+        }
         self.edit(
             Touches::Tags,
             move |library, target| library.apply_tags(target, &[tag_name], add),
@@ -319,16 +345,131 @@ impl Inspector {
         visible.then(|| point(f32::from(rail.left()), f32::from(rail.top()) + 80.))
     }
 
-    /// T (`organize.addTag`).
+    /// The viewer menu's Add Tags.
     pub fn add_tags(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
         let anchor = self.keyboard_anchor(visible);
         self.open_tag_picker(anchor, window, cx);
     }
 
-    /// F (`organize.addFolder`).
+    /// The viewer menu's Add to Folder.
     pub fn add_to_folder(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
         let anchor = self.keyboard_anchor(visible);
         self.open_folder_picker(anchor, window, cx);
+    }
+
+    // ── The dialogs ─────────────────────────────────────────────
+
+    /// The grid's selected items, in grid order.
+    fn selected_ids(&self, cx: &App) -> Vec<RootId> {
+        let session = self.session.read(cx);
+        session
+            .selection
+            .iter()
+            .filter_map(|index| session.items.get(*index))
+            .map(|item| item.root_id)
+            .collect()
+    }
+
+    /// T and the grid menu's Add Tags (`TagSelectModal`): the dialog checks
+    /// the tags of the item the inspector shows, or last showed
+    /// (`displayedInspectorItemDetailsAtom`), whatever is selected.
+    pub fn open_tag_dialog(&mut self, cx: &mut Context<Self>) {
+        let names = {
+            let session = self.session.read(cx);
+            self.item
+                .iter()
+                .flat_map(|item| &item.tag_ids)
+                .filter_map(|id| session.tags.get(&id.0))
+                .map(name)
+                .collect()
+        };
+        let selected = self.session.read(cx).selection.len();
+        self.tag_dialog
+            .update(cx, |dialog, cx| dialog.open(names, selected, cx));
+    }
+
+    /// F, ⌘⇧J and the grid menu's Add to Folder (`FolderPickerModal`), on
+    /// the folders of the item the inspector shows, or last showed.
+    pub fn open_folder_dialog(&mut self, cx: &mut Context<Self>) {
+        let members = self
+            .item
+            .iter()
+            .flat_map(|item| item.folder_ids.iter().copied())
+            .collect();
+        let selected = self.session.read(cx).selection.len();
+        self.folder_dialog
+            .update(cx, |dialog, cx| dialog.open(members, selected, cx));
+    }
+
+    /// The Add Tags dialog's Apply: the tags go on the selected items and
+    /// come off, and the ones added become recent.
+    pub(super) fn apply_tag_dialog(
+        &mut self,
+        add: Vec<String>,
+        remove: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let ids = self.selected_ids(cx);
+        if ids.is_empty() {
+            return;
+        }
+        if !add.is_empty() {
+            self.session
+                .update(cx, |session, _| session.record_tags_use(&add));
+        }
+        self.edit_items(
+            ids,
+            Touches::Tags,
+            move |library, target| {
+                if !add.is_empty() {
+                    library.apply_tags(target, &add, true)?;
+                }
+                if !remove.is_empty() {
+                    library.apply_tags(target, &remove, false)?;
+                }
+                Ok(())
+            },
+            |_, _| {},
+            cx,
+        );
+    }
+
+    /// The Folders dialog's Apply: the selected items join and leave the
+    /// folders, the ones joined become recent, and the selection is
+    /// cleared (`settleSelectionAfterMutation`).
+    pub(super) fn apply_folder_dialog(
+        &mut self,
+        add: Vec<FolderId>,
+        remove: Vec<FolderId>,
+        cx: &mut Context<Self>,
+    ) {
+        let ids = self.selected_ids(cx);
+        if ids.is_empty() {
+            return;
+        }
+        self.session.update(cx, |session, _| {
+            for folder in &add {
+                session.record_folder_use(*folder);
+            }
+        });
+        self.edit_items(
+            ids,
+            Touches::Folders,
+            move |library, target| {
+                for folder in add {
+                    library.add_to_folder(target, folder)?;
+                }
+                for folder in remove {
+                    library.remove_from_folder(target, folder)?;
+                }
+                Ok(())
+            },
+            |this, cx| {
+                this.session
+                    .update(cx, |session, cx| session.clear_selection(cx))
+            },
+            cx,
+        );
     }
 
     pub(super) fn close_pickers(&mut self, window: &mut Window, cx: &mut Context<Self>) {

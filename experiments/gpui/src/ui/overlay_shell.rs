@@ -599,6 +599,9 @@ pub enum Mark {
     /// `.checkBoxExcluded`: a filter leaves it out; the negative colour with
     /// a white cross.
     Excluded,
+    /// `FolderPickerModal`'s `.checkRemove`: a folder the items will leave;
+    /// the negative colour with a white minus.
+    Removed,
 }
 
 /// `highlightMatch`: a row's label with the search's first match in bold,
@@ -656,6 +659,10 @@ pub fn check_box(mark: Mark, cx: &App) -> Div {
             .bg(theme.negative())
             .border_color(gpui::transparent_black())
             .child(super::icon("x", 10., theme.on_primary())),
+        Mark::Removed => base
+            .bg(theme.negative())
+            .border_color(gpui::transparent_black())
+            .child(super::icon("minus", 10., theme.on_primary())),
     }
 }
 

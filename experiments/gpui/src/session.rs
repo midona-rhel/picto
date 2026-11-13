@@ -219,6 +219,10 @@ pub struct Session {
     /// Production keeps them in the renderer's localStorage; here they last
     /// for the session.
     pub recent_folders: Vec<picto_library::FolderId>,
+    /// Tags put on items, newest first, for the Add Tags dialog's Recent
+    /// view (`picto-recent-tags`). Like the folders, they last for the
+    /// session.
+    pub recent_tags: Vec<String>,
     /// The selected items and the one shown, to select again by id once a
     /// [`Session::refresh_results`] page is in.
     reselect: Option<(Vec<RootId>, Option<RootId>)>,
@@ -310,6 +314,7 @@ impl Session {
             place_label: None,
             reselect: None,
             recent_folders: Vec::new(),
+            recent_tags: Vec::new(),
         }
     }
 
@@ -575,6 +580,12 @@ impl Session {
     /// folders, each kept once, at most 30.
     pub fn record_folder_use(&mut self, folder: picto_library::FolderId) {
         record_recent(&mut self.recent_folders, folder);
+    }
+
+    /// `recordRecentItems('picto-recent-tags', …)`: the tags go to the front
+    /// in their order, each kept once, at most 30.
+    pub fn record_tags_use(&mut self, tags: &[String]) {
+        record_recent_names(&mut self.recent_tags, tags);
     }
 
     /// Fetches the current destination again after an edit that may change
@@ -1458,6 +1469,22 @@ fn record_recent(recent: &mut Vec<picto_library::FolderId>, folder: picto_librar
     recent.truncate(30);
 }
 
+/// `recordRecentItems`: `names` first, in their order, then the others,
+/// each once, at most 30.
+fn record_recent_names(recent: &mut Vec<String>, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let mut next = Vec::with_capacity(30);
+    for name in names.iter().chain(recent.iter()) {
+        if !next.contains(name) {
+            next.push(name.clone());
+        }
+    }
+    next.truncate(30);
+    *recent = next;
+}
+
 /// Back and Forward without the places that no longer exist, each moved to
 /// its destination's new position, and where the current place now is.
 fn remap_history(
@@ -1485,6 +1512,17 @@ fn remap_history(
 mod tests {
     use super::{SubscriptionActivity, Visit, record_recent, remap_history};
     use picto_library::FolderId;
+
+    #[test]
+    fn recent_tags_put_the_new_ones_first_in_their_order() {
+        let mut recent = vec!["b".to_owned(), "c".to_owned()];
+        super::record_recent_names(&mut recent, &["a".to_owned(), "c".to_owned()]);
+        assert_eq!(recent, ["a", "c", "b"]);
+        let many = (0..40).map(|n| n.to_string()).collect::<Vec<_>>();
+        super::record_recent_names(&mut recent, &many);
+        assert_eq!(recent.len(), 30);
+        assert_eq!(recent[0], "0");
+    }
 
     #[test]
     fn recent_folders_are_newest_first_each_once_and_at_most_thirty() {

@@ -389,8 +389,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Details section with the search and a folder's auto-tag and watch state.
 - The inspector's tag picker (`TagSelectPanel` in `OverlayShell`), from
   Add Tags, the "+" after the tag chips, a right-click in the Tags section
-  and T: a 540×480 glass panel docked left of the inspector at the button
-  (80px below the rail's top from the keyboard, centred when the rail is
+  and the viewer menu's Add Tags: a 540×480 glass panel docked left of the inspector at the button
+  (80px below the rail's top from the viewer menu, centred when the rail is
   hidden), over a clear backdrop that closes it on a click or right-click,
   dragged by its header or footer after 5px, Escape to close, a pin that
   keeps it open without the backdrop. The search asks the library's ranked
@@ -410,13 +410,28 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   to Group or Remove from this Group, and Copy Tag.
 - The folder picker (`FolderPickerPanel` with `FolderTree`), from Add to
   Folder, the "+" after the folder chips, a right-click in the Folders
-  section and F: the folder tree with its guide lines, folding chevrons and
+  section and the viewer menu's Add to Folder: the folder tree with its guide lines, folding chevrons and
   parent names, the search (matches with their ancestors, every branch
   open), the items' folders checked, a click that adds the items to the
   folder or takes them out, the Recent and Selected views (Tab cycles), the
   arrows and Enter, and a row's menu with New Subfolder and New Sibling
   Folder, which ask for a name in a dialog, create the folder and add the
   items to it.
+- The Add Tags and Folders dialogs (`TagSelectModal`, `FolderPickerModal`
+  on the shared `SelectionModalShell`: `inspector/tag_dialog.rs`,
+  `inspector/folder_dialog.rs`, `ui/selection_modal.rs`), from T, F, ⌘⇧J and
+  the grid menu's Add Tags and Add to Folder: a 680×614 (560×574) glass
+  dialog with the search, a rail of Recent, Selected (Members) and All, then
+  the tag groups with their dots and counts, and a list of check-box rows
+  (the tag list virtualised to the whole count, 100 a page; the folder tree
+  with its fold buttons). Clicks and Enter only mark tags or folders; the
+  footer sums them ("+1, −2 · 3 files", or "N files selected") and Apply (N)
+  writes them to the selection through the inspector's edit path, Cancel,
+  Escape, the close button and the backdrop forget them. The arrows, Enter
+  and Tab work in the tag dialog's search as in production; in the folder
+  dialog Enter applies. As in production the checks start from the item the
+  inspector shows or last showed, whatever is selected; Folders' Apply
+  clears the selection. Recent tags and folders last for the session.
 - After any of these edits the library is read again: the sidebar's
   destinations and counts, the tags, the item or the selection's summary,
   and the grid when its destination's results can change (Untagged, a
@@ -790,10 +805,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
   not its rounded corners.
-- The pickers: T, F, ⌘⇧J and the grid menu's Add Tags and Add to Folder
-  open the inspector's pickers, where production opens the separate
-  `TagSelectModal` and `FolderPickerModal` dialogs (with a pending selection
-  and Apply), which are not ported. With
+- The Add Tags and Folders dialogs: Tab in the folder dialog's search does
+  not move the keyboard to the next control as the browser does, the fold
+  chevron turns at once rather than over 120 ms, row highlights do not fade
+  over 60 ms, and a folder's own glyph is drawn as the plain folder (`TODO`).
+- The pickers: with
   several items selected, a picker starts from the tags or folders they all
   share (production starts from the details of the item last shown). The
   pickers' layout, counts, folded rail, pin and recent folders last for the
@@ -969,7 +985,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   organizer, Batch Rename, Auto Tag, New Smart Folder (the smart folder
   editor), Import Files, Import Folder and Paste Import, and Set as Thumbnail. "Add Tags" and "Add to Folder"
   dispatch the shortcuts' `AddTags` and `AddToFolder`, which open the
-  inspector's pickers. "Open in New Window" opens the item alone in a detail window.
+  Add Tags and Folders dialogs (the inspector's pickers from the viewer's
+  menu). "Open in New Window" opens the item alone in a detail window.
   "Add to “…”" appears once a folder has been used (the folder picker and
   this row record it; for the session only). Errors go to the
   console, not to notifications. Edits that change what the destination
@@ -1008,8 +1025,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
   Remove from Group, Toggle Grayscale, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
-  are not bound either. T, F and ⌘⇧J open the inspector's pickers rather than
-  production's picker dialogs; batch rename for several items is a `TODO`. Space scrolls the grid
+  are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
   itself. The application menu's accelerators that also work while a text
