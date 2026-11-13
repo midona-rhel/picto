@@ -1,8 +1,8 @@
-//! Which way a key or a click on the grid opens or closes an item, under
-//! the Controls settings, as `GridScreen.tsx` decides it: Space toggles
-//! Quick Look (or pages the grid), Enter the media view, a double-click opens
-//! the media view or the default application, and a middle-click a window of
-//! its own.
+//! Which way a key or a click on the grid opens an item, under the Controls
+//! settings, as `GridScreen.tsx` decides it: Space toggles Quick Look (or
+//! pages the grid), a double-click opens the media view or the default
+//! application, and a middle-click a window of its own. Inside a viewer,
+//! Space, Enter and Escape close it through the viewer's own keys.
 
 /// What a gesture asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,10 +15,8 @@ pub enum Action {
     OpenWindow,
     /// The default application for the file.
     OpenDefault,
-    /// Scroll the grid by most of its height, down or (with Shift) up.
-    ScrollPage {
-        down: bool,
-    },
+    /// Scroll the grid down by most of its height.
+    ScrollPage,
     Nothing,
 }
 
@@ -34,29 +32,15 @@ pub struct State {
 /// `view.quicklook` (Space). The media view takes it first and closes, as
 /// its own handler does; otherwise `spaceKeyAction` either pages the grid
 /// or toggles Quick Look for a single selected item.
-pub fn space(setting: &str, shift: bool, state: State) -> Action {
+pub fn space(setting: &str, state: State) -> Action {
     if state.media_view {
         Action::CloseMediaView
     } else if setting == "scroll" {
-        Action::ScrollPage { down: !shift }
+        Action::ScrollPage
     } else if state.quick_look {
         Action::CloseQuickLook
     } else if state.single {
         Action::OpenQuickLook
-    } else {
-        Action::Nothing
-    }
-}
-
-/// `view.detailView` (Enter): closes whichever viewer is open, else opens
-/// the media view on a single selected item.
-pub fn enter(state: State) -> Action {
-    if state.quick_look {
-        Action::CloseQuickLook
-    } else if state.media_view {
-        Action::CloseMediaView
-    } else if state.single {
-        Action::OpenMediaView
     } else {
         Action::Nothing
     }
@@ -85,7 +69,7 @@ pub fn middle_click(setting: &str) -> Action {
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, State, double_click, enter, middle_click, space};
+    use super::{Action, State, double_click, middle_click, space};
 
     const ONE: State = State {
         media_view: false,
@@ -95,52 +79,38 @@ mod tests {
 
     #[test]
     fn space_toggles_quick_look_by_default() {
-        assert_eq!(space("quick_look", false, ONE), Action::OpenQuickLook);
+        assert_eq!(space("quick_look", ONE), Action::OpenQuickLook);
         let open = State {
             quick_look: true,
             ..ONE
         };
-        assert_eq!(space("quick_look", false, open), Action::CloseQuickLook);
+        assert_eq!(space("quick_look", open), Action::CloseQuickLook);
         // Nothing, or several items, selected: nothing to preview.
         let several = State {
             single: false,
             ..ONE
         };
-        assert_eq!(space("quick_look", false, several), Action::Nothing);
+        assert_eq!(space("quick_look", several), Action::Nothing);
     }
 
     #[test]
     fn space_pages_the_grid_when_set_to_scroll() {
-        assert_eq!(
-            space("scroll", false, ONE),
-            Action::ScrollPage { down: true }
-        );
-        assert_eq!(
-            space("scroll", true, ONE),
-            Action::ScrollPage { down: false }
-        );
+        assert_eq!(space("scroll", ONE), Action::ScrollPage);
+        let several = State {
+            single: false,
+            ..ONE
+        };
+        assert_eq!(space("scroll", several), Action::ScrollPage);
     }
 
     #[test]
-    fn space_and_enter_close_the_media_view() {
+    fn space_closes_the_media_view() {
         let viewing = State {
             media_view: true,
             ..ONE
         };
-        assert_eq!(space("quick_look", false, viewing), Action::CloseMediaView);
-        assert_eq!(space("scroll", false, viewing), Action::CloseMediaView);
-        assert_eq!(enter(viewing), Action::CloseMediaView);
-    }
-
-    #[test]
-    fn enter_opens_the_media_view_and_closes_quick_look() {
-        assert_eq!(enter(ONE), Action::OpenMediaView);
-        let peeking = State {
-            quick_look: true,
-            ..ONE
-        };
-        assert_eq!(enter(peeking), Action::CloseQuickLook);
-        assert_eq!(enter(State::default()), Action::Nothing);
+        assert_eq!(space("quick_look", viewing), Action::CloseMediaView);
+        assert_eq!(space("scroll", viewing), Action::CloseMediaView);
     }
 
     #[test]

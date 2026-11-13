@@ -18,11 +18,13 @@ use std::{cell::Cell, collections::HashSet, rc::Rc};
 actions!(subscriptions, [Open, Deselect]);
 
 /// The screen's own keys, over the browser's: Enter opens the selected
-/// subscription and Escape clears the selection.
+/// subscription and Escape clears the selection. Like the registry's keys,
+/// they give way to a text field, a menu, a popover or a dialog.
 pub fn bind(cx: &mut App) {
+    let context = Some("Subscriptions && !TextInput && !Menu && !Modal && !Popover");
     cx.bind_keys([
-        KeyBinding::new("enter", Open, Some("Subscriptions")),
-        KeyBinding::new("escape", Deselect, Some("Subscriptions")),
+        KeyBinding::new("enter", Open, context),
+        KeyBinding::new("escape", Deselect, context),
     ]);
 }
 

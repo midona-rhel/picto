@@ -22,6 +22,10 @@ use std::path::PathBuf;
 use surface::MediaSurface;
 use toolbar::ViewerToolbar;
 
+// The viewer's actions. Their keys come from the shortcut registry
+// (`crate::keymap`): they apply while the viewer has the keyboard and win
+// over the grid's bindings of the same keys; Flash keeps its keys for the
+// movie.
 actions!(
     viewer,
     [
@@ -30,33 +34,10 @@ actions!(
         FitToWindow,
         ActualSize,
         ZoomIn,
-        ZoomOut
+        ZoomOut,
+        Close
     ]
 );
-
-/// The viewer's shortcuts from the View group of `shortcuts.ts`. They apply
-/// while the viewer has the keyboard and win over the grid's bindings of the
-/// same keys; Flash keeps its keys for the movie.
-pub fn bind(cx: &mut App) {
-    let viewer = Some("Viewer && !Flash");
-    cx.bind_keys([
-        // view.prevImage / view.nextImage
-        KeyBinding::new("left", PreviousItem, viewer),
-        KeyBinding::new("a", PreviousItem, viewer),
-        KeyBinding::new("right", NextItem, viewer),
-        KeyBinding::new("d", NextItem, viewer),
-        // view.fitWindow, with Shift+F for keyboards without a backtick.
-        KeyBinding::new("`", FitToWindow, viewer),
-        KeyBinding::new("shift-f", FitToWindow, viewer),
-        // view.actualSize
-        KeyBinding::new("cmd-0", ActualSize, viewer),
-        // view.zoomIn / view.zoomOut
-        KeyBinding::new("+", ZoomIn, viewer),
-        KeyBinding::new("=", ZoomIn, viewer),
-        KeyBinding::new("-", ZoomOut, viewer),
-    ]);
-    detail::bind(cx);
-}
 
 /// Which end of the results a step ran into.
 #[derive(Clone, Copy, PartialEq)]
@@ -450,6 +431,10 @@ impl Render for Viewer {
             .size_full()
             .overflow_hidden()
             .bg(theme::theme(cx).background())
+            .on_action(cx.listener(|this, _: &Close, _, cx| {
+                this.session
+                    .update(cx, |session, cx| session.close_viewer(cx));
+            }))
             .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
             .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {

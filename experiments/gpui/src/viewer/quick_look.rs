@@ -4,10 +4,10 @@
 //! from the sides; a close button in the top-right corner and the
 //! previous / count / next strip along the bottom. It follows the
 //! selection: stepping moves the grid's selection, which keeps it in view.
-//! Space, Enter and Escape close it; the shell routes those keys.
+//! It has the viewer's keys (`Viewer`), so Space, Enter and Escape close it.
 use super::{
-    ActualSize, FitToWindow, Media, NextItem, PreviousItem, ZoomIn, ZoomOut, browsing_recent,
-    options, record_view, show_selection, strip, surface::MediaSurface,
+    ActualSize, Close, FitToWindow, Media, NextItem, PreviousItem, ZoomIn, ZoomOut,
+    browsing_recent, options, record_view, show_selection, strip, surface::MediaSurface,
 };
 use crate::session::{Change, Session};
 use crate::{theme, ui};
@@ -222,11 +222,11 @@ impl Render for QuickLook {
         let step = |id: &'static str,
                     icon: &'static str,
                     label: &'static str,
-                    key: &'static str,
+                    shortcut: &'static str,
                     delta: isize,
                     enabled: bool,
                     cx: &mut Context<Self>| {
-            strip::strip_button(id, icon, ui::tip(label).keys(&[key]))
+            strip::strip_button(id, icon, ui::tip(label).shortcut(shortcut, cx))
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, window, cx| this.step(delta, window, cx)))
         };
@@ -238,6 +238,8 @@ impl Render for QuickLook {
             .absolute()
             .inset_0()
             .bg(theme.background())
+            // Space, Enter and Escape: the viewer's close keys.
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
             .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
             .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
@@ -267,7 +269,7 @@ impl Render for QuickLook {
                         strip::strip_button(
                             "quick-look-close",
                             "toolbar-close",
-                            ui::tip("Close").keys(&["Space"]),
+                            ui::tip("Close").shortcut("view.quicklook", cx),
                         )
                         .width(CLOSE_SIZE)
                         .glyph(rgb(theme::QUICK_LOOK_GLYPH))
@@ -280,7 +282,7 @@ impl Render for QuickLook {
                         "quick-look-previous",
                         "toolbar-chevron-left",
                         "Previous",
-                        "←",
+                        "view.prevImage",
                         -1,
                         index > 0,
                         cx,
@@ -290,7 +292,7 @@ impl Render for QuickLook {
                         "quick-look-next",
                         "toolbar-chevron-right",
                         "Next",
-                        "→",
+                        "view.nextImage",
                         1,
                         index + 1 < total,
                         cx,

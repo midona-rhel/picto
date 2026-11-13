@@ -276,9 +276,31 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   once decoded, as `ImageCrossfadeFrame` swaps them.
 - A collection's members step with the bottom strip of
   `QuickLookNavigation` (48×32 buttons, monospace counter).
-- Enter opens and closes the media view on a single selected item, Escape
-  and Space close it. Originals decode off the drawing thread; stale loads
-  are fenced.
+- Enter or a double-click opens the media view on the one selected item;
+  Enter, Space or Escape close it. Originals decode off the drawing thread;
+  stale loads are fenced.
+- One keyboard, from the shortcut registry (`keymap.rs`): every binding the
+  app makes for a registry shortcut is built from the registry's current
+  keys, both slots, the EU preset and the user's overrides, and rebuilt when
+  Settings applies a change; tooltips and menu rows read their keys from it
+  too. Each id maps to actions in the key context of production's scope:
+  `Browser` for the app-wide keys (Back and Forward on both bindings, ⌘1–⌘4
+  to All, Inbox, Untagged and Trash, ⌘F into the grid's or the Tags
+  screen's search, the rail toggles, Undo and Redo, New Folder, New
+  Subfolder, Rename into the inspector's name field, Copy File Path),
+  `Grid` while the grid shows (movement with Shift extending, Select All,
+  Escape to deselect, Enter and Space, ratings 0–5 for the whole selection,
+  Open with Default App, Reveal in Finder, ⌘⌫ by scope as
+  `gridRemovalAction` decides, Restore in the Trash, Accept and Reject in the
+  Inbox, ⌘O to open in a new window, and T, F and ⌘⇧J, which reach the
+  shell where the pickers will open), `Viewer` (previous, next, fit, actual
+  size, zoom, close, ratings for the shown item, in the media view and Quick
+  Look), `DetailWindow` (the viewer's keys except that only Escape closes,
+  ⇧T and Copy File Path) and `Duplicates`. None of them fires while a text
+  field, a context menu, a popover or a dialog has the keyboard; Escape goes
+  to the menu, then the popover, the dialog, the viewer and the selection.
+  ⌘, works in every window. The ids the app cannot perform yet are listed
+  in `keymap::NOT_YET`, and a test keeps every id either bound or listed.
 - One media surface, three hosts: the media view, Quick Look and the detail
   window all show items through `viewer/surface.rs`, which takes per-host
   options (navigator, resize following) and the Preview settings: an image
@@ -292,10 +314,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `--color-surface-hover` in 200 ms, and the previous / count / next strip
   along the bottom, disabled at the ends of the results. Space toggles it
   for a single selected item (`spaceKeyAction`, or pages the grid by 90% of
-  its height when that is `scroll`, Shift paging up); Space, Enter and
-  Escape close it; the arrows and A/D step through the results by moving
+  its height when that is `scroll`); Space, Enter and Escape close it; the arrows and A/D step through the results by moving
   the grid's selection, which it follows; zoom keys work as in the media
-  view. While it is open the grid's other keys are held back.
+  view, ratings rate its item. While it is open the shell drops its `Grid`
+  key context, so the grid's other keys are held back.
 - The detail window (`DetailWindow.tsx`, `open_in_new_window`): a window of
   its own, sized by `calcDetailWindowSize` (the media's shape within 85% of
   the display's work area, at least 400×300), centred, frameless with the
@@ -383,7 +405,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Not yet equivalent to Picto
 
-- Tags screen: ⌘F does not move to its search; a failed save of the tag
+- Tags screen: a failed save of the tag
   preferences is held as the settings model's error, not shown as a toast; the editor's
   name field is dimmed while an edit runs but still takes typing; Undo does
   not reach tag edits; tag and group changes made elsewhere show when the
@@ -404,10 +426,11 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   others change the settings model and are saved, with a `TODO` where they
   belong (theme, zoom, language, the grid's wheel action, image rendering
   and the transparency grid, video autoplay and loop, notifications,
-  imports, rejecting, subscriptions).
+  imports, subscriptions). Rejecting with "Delete" chosen does nothing,
+  since the prototype never deletes library files.
   The keyboard preset, language, audio visualization and shortcut bindings
   live for the session only, since production keeps them in the renderer's
-  localStorage; the app's own key bindings do not follow edited shortcuts.
+  localStorage.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
   are downloaded and their storage) are drawn but not performed; every model
@@ -453,8 +476,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 - Not in the sidebar yet: the Subscriptions activity dot, drag reorder and
   drops from the grid (the rows have the drop looks; nothing drives them),
   Quick Access, keyboard movement through the rows (the focused look is
-  there; nothing moves focus to a row), the New Folder and New Subfolder
-  shortcuts, and the confirmation before deleting a folder (it deletes at
+  there; nothing moves focus to a row), the Set Folder Auto Tags shortcut,
+  and the confirmation before deleting a folder (it deletes at
   once). Menu rows shown but not performed yet, each
   with a `TODO`: Add to Quick Access, Move to..., Set Auto Tags..., Import
   Folder (Here)..., Attach Watched Folder..., Edit Smart Folder..., Edit
@@ -475,8 +498,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   collection's first member in the collection frame, and the detail window
   steps its members with the strip.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
-  corners do not clip a zoomed image. No right-click menu, rating or copy
-  keys, and no video, audio or document players (the surface has none yet).
+  corners do not clip a zoomed image. No right-click menu or Copy (the
+  file itself), and no video, audio or document players (the surface has
+  none yet).
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
@@ -520,10 +544,25 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   which does not exist yet, so neither is ever shown; collections step
   through members with the bottom strip instead of the reader surface. No
   transparency checkerboard (off by default in Picto), no per-image zoom
-  memory, no viewer context menu, rating or copy shortcuts, and no video
-  shortcuts (there is no video playback). Next stops at the last loaded item
+  memory, no viewer context menu, no copy shortcut, no Inbox review
+  controls, and no video shortcuts (there is no video playback). Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
+- Shortcuts not performed yet, bound to nothing and listed with their
+  reasons in `keymap::NOT_YET`: Import, Export and Export As, Paste Import,
+  New Smart Folder, Set Folder Auto Tags, Regenerate Thumbnail, Open in New
+  Window, Auto-Tag, Copy (⌘C copies files, which GPUI's macOS clipboard
+  cannot hold), Remove from Group, Toggle Grayscale, Always on Top, Toggle
+  Logs, the document pages, every video key, and the duplicate review's
+  Keep Left, Keep Right and Smart Merge; production's deferred ids are not
+  bound either. ⌘⌫ in the Trash (Delete Permanently) and Reject with
+  "Delete" chosen are bound but do nothing, so no library file is ever
+  deleted. T, F and ⌘⇧J reach the shell with a `TODO` until the pickers
+  exist; batch rename for several items is a `TODO`. Space scrolls the grid
+  at once rather than smoothly, and `+` also answers to Shift+= (GPUI
+  matches the typed character), where production's `+` needs the key
+  itself. The application menu's accelerators that also work while a text
+  field has the keyboard in production (⌘1–⌘4, ⌃R, ⌘⌥C) do not here.
 - Motion: GPUI cannot scale an element's contents, so where production
   scales a panel (menus, the library popover, dialogs, tooltips) the panel's
   surface, border and shadow are drawn in the scaled rectangle about the

@@ -18,24 +18,10 @@ use picto_library::{RootDetails, RootId, RootKind};
 use std::collections::HashMap;
 use std::time::Instant;
 
-actions!(
-    detail_window,
-    [CloseWindow, ToggleAlwaysOnTop, CopyFilePath]
-);
-
-/// The detail window's own shortcuts from `shortcuts.ts`; the viewer's
-/// (previous, next, zoom) apply inside it as in the media view.
-pub fn bind(cx: &mut App) {
-    let window = Some("DetailWindow");
-    cx.bind_keys([
-        // view.closeDetail
-        KeyBinding::new("escape", CloseWindow, window),
-        // view.alwaysOnTop
-        KeyBinding::new("shift-t", ToggleAlwaysOnTop, window),
-        // edit.copyFilePath
-        KeyBinding::new("cmd-alt-c", CopyFilePath, window),
-    ]);
-}
+// The detail window's own actions. Their keys come from the shortcut
+// registry (`crate::keymap`, the `DetailWindow` scope), as do the viewer's
+// previous, next and zoom actions it shares with the media view.
+actions!(detail_window, [CloseWindow, ToggleAlwaysOnTop]);
 
 /// `.toolbar`: 38px tall, 10px in from either side.
 const TOOLBAR_HEIGHT: f32 = 38.;
@@ -461,7 +447,7 @@ impl DetailWindow {
                 )
                 .child(
                     ui::icon_button("detail-actual-size", "toolbar-actual-size")
-                        .tip(ui::tip("Actual size").keys(&["⌘", "0"]))
+                        .tip(ui::tip("Actual size").shortcut("view.actualSize", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface
                                 .update(cx, |surface, cx| surface.actual_size(cx));
@@ -469,7 +455,7 @@ impl DetailWindow {
                 )
                 .child(
                     ui::icon_button("detail-fit", "toolbar-fit")
-                        .tip(ui::tip("Fit to window").keys(&["`"]))
+                        .tip(ui::tip("Fit to window").shortcut("view.fitWindow", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface.update(cx, |surface, cx| surface.fit(cx));
                         })),
@@ -486,7 +472,7 @@ impl DetailWindow {
                         } else {
                             "Always on top"
                         })
-                        .keys(&["⇧", "T"]),
+                        .shortcut("view.alwaysOnTop", cx),
                     )
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_on_top(window, cx))),
             )
@@ -500,7 +486,7 @@ impl DetailWindow {
                         cx,
                     )),
                 "detail-close-tooltip",
-                ui::tip("Close").keys(&["Esc"]),
+                ui::tip("Close").shortcut("view.closeDetail", cx),
                 theme::CONTROL_MD,
                 window,
                 cx,
@@ -538,7 +524,6 @@ impl Render for DetailWindow {
         let mut pane = div()
             .id("detail-window")
             .track_focus(&self.focus)
-            .key_context("Viewer")
             .relative()
             .size_full()
             .overflow_hidden()
@@ -616,7 +601,9 @@ impl Render for DetailWindow {
                     this.toggle_on_top(window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &CopyFilePath, _, cx| this.copy_path(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)),
+            )
             .child(pane)
     }
 }
