@@ -269,6 +269,36 @@ fn pdf_first_page_draws() {
 }
 
 #[test]
+fn a_multi_page_pdf_measures_and_draws_every_page() {
+    let path = fixture("pages.pdf");
+    // Letter, A5 and Letter across, measured when the document opens.
+    assert_eq!(
+        pages::measure(RendererKind::Pdf, &path).unwrap(),
+        vec![(612., 792.), (420., 595.), (792., 612.)]
+    );
+    // The document's thread draws the pages asked for, in order, and skips
+    // one given up before its turn.
+    let (worker, sizes) =
+        futures::executor::block_on(pages::PageWorker::open(RendererKind::Pdf, path))
+            .unwrap()
+            .unwrap();
+    assert_eq!(sizes.len(), 3);
+    let given_up = worker.render(0, (612, 792));
+    let second = worker.render(1, (210, 298));
+    let third = worker.render(2, (396, 306));
+    drop(given_up);
+    let second = futures::executor::block_on(second).unwrap().unwrap();
+    let third = futures::executor::block_on(third).unwrap().unwrap();
+    assert_drawn(&second.image, (210, 298), "PDF page 2");
+    assert_drawn(&third.image, (396, 306), "PDF page 3");
+    // Page 2's band is red, page 3's green: each request drew its own page.
+    let red = second.image.get_pixel(105, 298 - 220);
+    assert!(red[0] > 150 && red[1] < 100, "page 2: {red:?}");
+    let green = third.image.get_pixel(198, 306 - 215);
+    assert!(green[1] > 120 && green[0] < 100, "page 3: {green:?}");
+}
+
+#[test]
 fn djvu_first_page_draws() {
     let (image, size) = first_page(RendererKind::Djvu, &fixture("page.djvu"));
     assert_drawn(&image, size, "DjVu");
@@ -467,7 +497,7 @@ mod gpu {
     /// Whether the document has what it was loading.
     fn settled(document: &Document, cx: &App) -> bool {
         match document {
-            Document::Paged(paged) => paged.read(cx).drawn(),
+            Document::Paged(paged) => paged.read(cx).settled(),
             Document::Reader(reader) => reader.read(cx).loaded(),
             Document::Font(font) => font.read(cx).settled(),
             Document::Unsupported { .. } => true,
@@ -484,8 +514,8 @@ mod gpu {
     ) -> RgbaImage {
         let kind = renderer_kind(mime);
         assert!(kind.is_document(), "{mime} is not a document");
-        let document =
-            cx.update(|cx| Document::open(kind, path.to_owned(), mime, "Fixture".into(), cx));
+        let document = cx
+            .update(|cx| Document::open(kind, path.to_owned(), mime, "Fixture".into(), false, cx));
         let window = cx
             .open_window(size(px(WIDTH), px(HEIGHT)), |_, cx| {
                 cx.new(|_| Root {
@@ -550,6 +580,7 @@ mod gpu {
         let out = std::env::var_os("PICTO_GPUI_MATRIX_OUT").map(std::path::PathBuf::from);
         let mut cases: Vec<(std::path::PathBuf, &str)> = vec![
             (fixture("page.pdf"), "application/pdf"),
+            (fixture("pages.pdf"), "application/pdf"),
             (fixture("page.djvu"), "image/vnd.djvu"),
             (fixture("comic.cbz"), "application/vnd.comicbook+zip"),
             (fixture("notes.txt"), "text/plain"),

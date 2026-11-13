@@ -8,8 +8,9 @@
 //! `pointer.rs`), `wait <milliseconds>`, `shot <name>`, which saves
 //! `<name>.png`, or `window <n>`, which sends what follows to the app's nth
 //! window (0 is the main one; Settings and a detail window come after it in
-//! the order they opened). `PICTO_GPUI_WINDOW=1213x865` sets the main
-//! window's size.
+//! the order they opened), or `pace <milliseconds>`, how long the app runs
+//! after each input line (200 unless set), for pictures taken soon after
+//! one. `PICTO_GPUI_WINDOW=1213x865` sets the main window's size.
 use crate::pointer;
 use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
@@ -74,6 +75,7 @@ fn plays_a_script() {
         .unwrap();
     let main: AnyWindowHandle = window.into();
     let mut window = main;
+    let mut pace = Duration::from_millis(200);
     // The library opens and the first page and its thumbnails arrive.
     settle(&mut cx, window, Duration::from_secs(3));
     for line in script.lines().map(str::trim) {
@@ -101,6 +103,8 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200));
+        } else if let Some(time) = line.strip_prefix("pace ") {
+            pace = Duration::from_millis(time.trim().parse().expect("pace <milliseconds>"));
         } else if let Some(time) = line.strip_prefix("wait ") {
             let time = time.trim().parse().expect("wait <milliseconds>");
             settle(&mut cx, window, Duration::from_millis(time));
@@ -108,7 +112,7 @@ fn plays_a_script() {
             let event = pointer::parse(line).unwrap_or_else(|| panic!("not a line: {line}"));
             cx.update_window(window, |_, window, cx| event.deliver(window, cx))
                 .unwrap();
-            settle(&mut cx, window, Duration::from_millis(200));
+            settle(&mut cx, window, pace);
         }
     }
     closing.close();

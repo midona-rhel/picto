@@ -458,6 +458,13 @@ pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
         preset,
         overrides: overrides.clone(),
     });
+    // A document's scrolling keys come after the registry's, which they
+    // override where pages are shown (Space).
+    bindings.extend(
+        crate::viewer::document::scroll_bindings()
+            .into_iter()
+            .map(|binding| binding.with_meta(FROM_REGISTRY)),
+    );
     // Adding bindings redraws every window, so tooltips and the
     // application menu's key equivalents follow.
     cx.bind_keys(bindings);

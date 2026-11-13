@@ -6,11 +6,20 @@
 //! A member shows its thumbnail first. Once it has been in view for 200 ms
 //! its full media is asked for: an image's original fades in over the
 //! thumbnail, and any other member opens in a media surface of its own (the
-//! PDF viewer, the media player, ...). The last 100 members asked for stay
-//! loaded (`useWarmGroupMediaBudget`).
+//! PDF viewer, the media player, ...), under its thumbnail, which fades out
+//! the same way once the surface has drawn its first frame or page. The
+//! last 100 members asked for stay loaded (`useWarmGroupMediaBudget`).
+//!
+//! A PDF, DjVu or comic member shows all its pages, one under the other at
+//! the column's width, in its frame: the reader is where a collection of
+//! documents is read, so its pages scroll with the rest. Each such member is
+//! measured as the collection opens, so its frame has its final height
+//! before it is in view.
 use super::Media;
+use super::document::geometry::PageSize;
 use super::document::kind::{RendererKind, renderer_kind};
-use super::surface::MediaSurface;
+use super::document::{paged, pages};
+use super::surface::{self, MediaSurface};
 use crate::session::Session;
 use crate::{motion, theme, ui};
 use gpui::prelude::FluentBuilder as _;
@@ -40,18 +49,37 @@ pub struct MemberMenu {
 
 impl EventEmitter<MemberMenu> for GroupReader {}
 
+/// What a member's frame is shaped by.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    /// A picture of this size, if known.
+    Picture(Option<(f32, f32)>),
+    /// Pages of these natural sizes, inline one under the other.
+    Pages(Vec<PageSize>),
+}
+
+/// A member's frame height for a column `width` wide: a picture at that
+/// width, pages at the width inside the frame's border; never under 180px.
+pub fn frame_height(shape: &Shape, width: f32) -> f32 {
+    match shape {
+        Shape::Picture(size) => size
+            .filter(|(w, h)| *w > 0. && *h > 0.)
+            .map_or(0., |(w, h)| width * h / w),
+        Shape::Pages(sizes) => {
+            paged::inline_height(sizes, (width - 2. * BORDER).max(1.)) + 2. * BORDER
+        }
+    }
+    .max(MIN_HEIGHT)
+}
+
 /// Where each member's frame lies in the column: its top, from the top of
-/// the scrolled content, and its height, for a column `width` wide. A frame
-/// takes the member's shape at that width, but is never under 180px tall.
-pub fn layout(shapes: &[Option<(f32, f32)>], width: f32) -> Vec<(f32, f32)> {
+/// the scrolled content, and its height, for a column `width` wide.
+pub fn layout(shapes: &[Shape], width: f32) -> Vec<(f32, f32)> {
     let mut top = SPACE;
     shapes
         .iter()
         .map(|shape| {
-            let height = shape
-                .filter(|(w, h)| *w > 0. && *h > 0.)
-                .map_or(0., |(w, h)| width * h / w)
-                .max(MIN_HEIGHT);
+            let height = frame_height(shape, width);
             let place = (top, height);
             top += height + SPACE;
             place
@@ -85,6 +113,13 @@ struct Member {
     /// Shown as an image (`detailRendererKind` `image`); anything else
     /// opens in a media surface once warm.
     image: bool,
+    /// A PDF, DjVu or comic: shown as its pages, measured as the
+    /// collection opens.
+    paged: Option<RendererKind>,
+    pages: Option<Vec<PageSize>>,
+    /// The thumbnail over a member's surface fading out once the surface
+    /// has drawn.
+    uncover: motion::Fade,
     thumbnail: Option<Arc<RenderImage>>,
     full: Option<Arc<RenderImage>>,
     /// `.fullImage`'s 130 ms fade in once the original has decoded.
@@ -149,7 +184,13 @@ impl GroupReader {
         self.clear(cx);
         self.root = Some(root);
         for media in media {
-            let image = renderer_kind(&media.mime) == RendererKind::Image;
+            let kind = renderer_kind(&media.mime);
+            let image = kind == RendererKind::Image;
+            let paged = matches!(
+                kind,
+                RendererKind::Pdf | RendererKind::Djvu | RendererKind::Cbz
+            )
+            .then_some(kind);
             let index = self.members.len();
             let load = ImageAssetLoader::load(Resource::Path(media.thumbnail.clone().into()), cx);
             let load = cx.background_executor().spawn(load);
@@ -162,14 +203,37 @@ impl GroupReader {
                     }
                 });
             });
+            let mut tasks = vec![task];
+            if let Some(kind) = paged {
+                let path = media.path.clone();
+                let key = media.key.clone();
+                let measure = cx
+                    .background_executor()
+                    .spawn(async move { pages::measure(kind, &path) });
+                tasks.push(cx.spawn(async move |this, cx| {
+                    let measured = measure.await;
+                    let _ = this.update(cx, |this: &mut Self, cx| {
+                        if let Some(member) = this.members.get_mut(index)
+                            && member.media.key == key
+                            && let Ok(sizes) = measured
+                        {
+                            member.pages = Some(sizes);
+                            cx.notify();
+                        }
+                    });
+                }));
+            }
             self.members.push(Member {
                 media,
                 image,
+                paged,
+                pages: None,
+                uncover: motion::Fade::default(),
                 thumbnail: None,
                 full: None,
                 reveal: motion::Fade::default(),
                 surface: None,
-                tasks: vec![task],
+                tasks,
             });
         }
         cx.notify();
@@ -197,12 +261,17 @@ impl GroupReader {
         (f32::from(self.viewport.width) - 2. * SPACE - ui::scrollbar::GUTTER).max(0.)
     }
 
+    fn shape(member: &Member) -> Shape {
+        match (&member.pages, member.paged, member.media.natural) {
+            (Some(pages), _, _) => Shape::Pages(pages.clone()),
+            // Until measured, the first page has the thumbnail's shape.
+            (None, Some(_), Some(natural)) => Shape::Pages(vec![natural]),
+            _ => Shape::Picture(member.media.natural),
+        }
+    }
+
     fn places(&self) -> Vec<(f32, f32)> {
-        let shapes: Vec<_> = self
-            .members
-            .iter()
-            .map(|member| member.media.natural)
-            .collect();
+        let shapes: Vec<_> = self.members.iter().map(Self::shape).collect();
         layout(&shapes, self.column_width())
     }
 
@@ -247,6 +316,7 @@ impl GroupReader {
                     cx.drop_image(image, None);
                 }
                 member.reveal = motion::Fade::default();
+                member.uncover = motion::Fade::default();
                 if let Some(surface) = member.surface.take() {
                     surface.update(cx, |surface, _| surface.stop());
                 }
@@ -292,6 +362,18 @@ impl GroupReader {
                 media.open(&mut surface, cx);
                 surface
             });
+            let key = member.media.key.clone();
+            cx.subscribe(
+                &surface,
+                move |this: &mut Self, _, event: &surface::Event, cx| {
+                    if matches!(event, surface::Event::Progressed)
+                        && this.members.get(index).is_some_and(|m| m.media.key == key)
+                    {
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
             member.surface = Some(surface);
         }
         cx.notify();
@@ -311,23 +393,64 @@ impl GroupReader {
                 .rounded(px(inner))
                 .object_fit(ObjectFit::Fill)
         };
+        // A paged member: its pages at the width inside the border. The
+        // thumbnail is the first page's; the rest are blank sheets until
+        // the member's surface draws them.
+        let pages = match Self::shape(member) {
+            Shape::Pages(sizes) if member.paged.is_some() => Some(
+                paged::inline_column(&sizes, (self.column_width() - 2. * BORDER).max(1.)).pages,
+            ),
+            _ => None,
+        };
+        let warm = member.surface.is_some() && !member.image;
+        // Over a warm member's surface the thumbnail fades out once the
+        // surface has drawn.
+        let cover = if warm {
+            1. - member.uncover.value_with(motion::EASE)
+        } else {
+            1.
+        };
+        let thumbnail = member
+            .thumbnail
+            .clone()
+            .filter(|_| cover > 0.)
+            .map(|thumbnail| {
+                let id = format!("group-thumb-{}", member.media.key);
+                let layer = match pages.as_ref().and_then(|pages| pages.first()) {
+                    // The first page's place: the frame's top, its width.
+                    Some(first) => img(thumbnail)
+                        .id(ElementId::Name(id.into()))
+                        .absolute()
+                        .left(px(first.0))
+                        .top(px(first.1))
+                        .w(px(first.2))
+                        .h(px(first.3))
+                        .object_fit(ObjectFit::Fill),
+                    None => picture(thumbnail, id),
+                };
+                if warm { layer.opacity(cover) } else { layer }
+            });
+        let blank = pages.iter().flatten().skip(1).map(|page| {
+            div()
+                .absolute()
+                .left(px(page.0))
+                .top(px(page.1))
+                .w(px(page.2))
+                .h(px(page.3))
+                .bg(rgb(theme::DOCUMENT_PAPER))
+        });
+        let (below, above) = if warm {
+            (None, thumbnail)
+        } else {
+            (thumbnail, None)
+        };
         let content = div()
             .absolute()
             .inset(px(BORDER))
             .overflow_hidden()
             .rounded(px(inner))
-            .when_some(
-                member
-                    .thumbnail
-                    .clone()
-                    .filter(|_| member.image || member.surface.is_none()),
-                |content, thumbnail| {
-                    content.child(picture(
-                        thumbnail,
-                        format!("group-thumb-{}", member.media.key),
-                    ))
-                },
-            )
+            .children(blank)
+            .children(below)
             .when_some(member.full.clone(), |content, full| {
                 content.child(
                     picture(full, format!("group-full-{}", member.media.key))
@@ -336,7 +459,8 @@ impl GroupReader {
             })
             .when_some(member.surface.clone(), |content, surface| {
                 content.child(div().absolute().inset_0().child(surface))
-            });
+            })
+            .children(above);
         ui::glass_panel(
             ElementId::NamedInteger("group-member".into(), index as u64),
             theme::RADIUS_LG,
@@ -366,7 +490,21 @@ impl GroupReader {
 
 impl Render for GroupReader {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let animating = self.members.iter().any(|member| member.reveal.animating());
+        // A warm member's thumbnail starts fading once its surface has
+        // drawn its first frame or page.
+        for member in &mut self.members {
+            if let Some(surface) = &member.surface
+                && !member.image
+                && !member.uncover.on()
+                && surface.read(cx).settled(cx)
+            {
+                member.uncover.set(true, motion::FULL_IMAGE_FADE);
+            }
+        }
+        let animating = self
+            .members
+            .iter()
+            .any(|member| member.reveal.animating() || member.uncover.animating());
         if animating {
             window.request_animation_frame();
         }
@@ -431,17 +569,39 @@ impl Render for GroupReader {
 
 #[cfg(test)]
 mod tests {
-    use super::{in_view, layout, retain_warm};
+    use super::{Shape, in_view, layout, retain_warm};
 
     #[test]
     fn frames_take_the_member_shape_at_the_column_width() {
-        let places = layout(&[Some((1000., 500.)), Some((100., 400.)), None], 500.);
+        let places = layout(
+            &[
+                Shape::Picture(Some((1000., 500.))),
+                Shape::Picture(Some((100., 400.))),
+                Shape::Picture(None),
+            ],
+            500.,
+        );
         assert_eq!(places, vec![(16., 250.), (282., 2000.), (2298., 180.)]);
     }
 
     #[test]
     fn a_frame_is_never_under_180_tall() {
-        assert_eq!(layout(&[Some((4000., 100.))], 553.), vec![(16., 180.)]);
+        assert_eq!(
+            layout(&[Shape::Picture(Some((4000., 100.)))], 553.),
+            vec![(16., 180.)]
+        );
+    }
+
+    #[test]
+    fn a_document_member_holds_all_its_pages() {
+        // Two letter pages at 502 inside a 1px border: 649.6 each, 8 apart.
+        let places = layout(&[Shape::Pages(vec![(612., 792.), (612., 792.)])], 504.);
+        let height = 2. * 502. * 792. / 612. + 8. + 2.;
+        assert!((places[0].1 - height).abs() < 0.01, "{places:?}");
+        // Before it is measured, the first page alone has the thumbnail's
+        // shape, which the measured first page keeps.
+        let one = layout(&[Shape::Pages(vec![(2550., 3300.)])], 504.);
+        assert!((one[0].1 - (502. * 3300. / 2550. + 2.)).abs() < 0.01);
     }
 
     #[test]

@@ -151,7 +151,7 @@ impl QuickLook {
         }
         self.open = false;
         self.recorded = None;
-        self.surface.update(cx, |surface, _| surface.stop());
+        self.surface.update(cx, |surface, _| surface.rest());
         self.group.update(cx, |group, cx| group.clear(cx));
         if let Some(focus) = self.return_focus.take() {
             window.focus(&focus, cx);
@@ -181,7 +181,7 @@ impl QuickLook {
         };
         self.recorded = root;
         if let Some(details) = collection {
-            self.surface.update(cx, |surface, _| surface.stop());
+            self.surface.update(cx, |surface, _| surface.rest());
             self.group.update(cx, |group, cx| group.show(&details, cx));
             return;
         }
