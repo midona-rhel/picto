@@ -815,6 +815,29 @@ impl GridView {
             } else {
                 media.child(image.opacity(image_alpha))
             };
+            // A picture that fills a tile of another shape (the grid mode
+            // with Fit Thumbnails on) is drawn larger than the tile: cut it
+            // to the tile, and to the tile's round corners. GPUI clips to
+            // rectangles only, so the corners are painted over in the
+            // colour behind the tile.
+            if !contain {
+                let behind = theme.background();
+                media = media.overflow_hidden().child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            window.paint_drop_shadows_outside(
+                                bounds,
+                                Corners::all(px(theme::TILE_RADIUS)),
+                                &[BoxShadow::new(px(0.), px(0.), behind.into())
+                                    .spread_radius(px(theme::TILE_RADIUS))],
+                            );
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                );
+            }
         }
         cell = cell.child(media.child(layer().border_1().border_color(theme.border())));
         let collection = item.kind == picto_library::RootKind::Collection;
