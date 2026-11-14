@@ -92,9 +92,8 @@ impl Select {
     }
 }
 
-/// The open menu's layer: above whatever holds the select, dialogs
-/// (`ui::modal`, 10) and their popovers (20) included, as `CmSelect`'s
-/// portal is.
+/// The open menu's layer (`--layer-menu`): above whatever holds the
+/// select, dialogs included, as `CmSelect`'s portal is.
 const LAYER: usize = super::layer::MENU;
 
 /// `--control-height-sm`, the height of the button and of each choice.

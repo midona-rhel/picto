@@ -48,7 +48,7 @@ pub enum Nav {
 }
 
 /// `MARGIN`: the panel keeps this far inside the window.
-pub const MARGIN: f32 = 12.;
+const MARGIN: f32 = 12.;
 /// `DRAG_THRESHOLD`
 const DRAG_THRESHOLD: f32 = 5.;
 const HEADER: f32 = 40.;
@@ -135,7 +135,7 @@ pub fn place(opens: Opens, viewport: Size<Pixels>, width: f32, height: f32) -> G
 
 /// The panel dragged by `delta` from `start`, kept 12px inside the window
 /// and below the titlebar, whose buttons it must never cover.
-pub fn dragged(
+fn dragged(
     start: Geometry,
     delta: Point<f32>,
     viewport: Size<Pixels>,

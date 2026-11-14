@@ -1774,14 +1774,21 @@ One model, separate views, shared components:
   detail window, with `trigger.rs` deciding which a key or click opens) and
   `screens/` (the destinations that are screens of their own).
 - `ui/` holds the shared components, one implementation each: icon button,
-  tooltip, context menu (with submenus, search and swatches), dialog, popover, the
-  floating selection panel of the pickers (`overlay_shell`), library avatar, sidebar row, section
+  tooltip, context menu (with submenus, search and swatches), dialog (with
+  the form pieces in `form.rs`), the floating panel (`popover.rs`: one
+  placement rule and one layer element for every popover, dropdown and
+  calendar), the floating selection panel of the pickers (`overlay_shell`),
+  library avatar, sidebar row, section
   header, chip, inspector section, action row, action button, property row,
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom
   control, empty state, the titlebar drag region, the filter bar's field and
   buttons, segmented glyph controls (the match rule and the sort
-  direction), the colour editor and the date picker. Views compose these.
+  direction), the colour editor and the date picker. Views compose these;
+  a few still draw a button or row of their own. `layer.rs` is the one
+  drawing order of everything that floats (production's `--layer-*`
+  scale): GPUI sorts all deferred layers by priority whatever their
+  nesting, so a tooltip in a dialog needs the higher layer.
 - `imports/` starts imports (drops, choosers, paste) through the
   application's queue, asks what an import needs (the folder dialog, the
   collection question), and shows the foreground tasks (the task dialog and

@@ -338,7 +338,7 @@ impl RenderOnce for Floating {
 
 /// The scale a popover is drawn at, `elapsed` after it opened: 0.96 growing
 /// to 1 over `--duration-menu-in` on `--ease-scale-in`.
-pub fn scale(elapsed: std::time::Duration) -> f32 {
+fn scale(elapsed: std::time::Duration) -> f32 {
     motion::menu_in(elapsed)
 }
 

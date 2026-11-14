@@ -1,5 +1,8 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
-//! Electron frontend. Views compose these and style nothing themselves.
+//! Electron frontend. Views compose these; a few still draw a button or a
+//! row of their own that belongs here. Everything that floats over the
+//! window takes its drawing order from [`layer`] and, when it opens beside
+//! a control, its place and its layer element from [`popover`].
 pub mod action_button;
 mod action_row;
 mod avatar;
