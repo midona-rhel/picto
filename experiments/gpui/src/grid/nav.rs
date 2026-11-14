@@ -73,6 +73,9 @@ pub fn scroll_into_view(
     }
 }
 
+/// The smallest tile size the zoom goes down to.
+pub const SMALLEST_TILE: f32 = 150.;
+
 /// `onGridWheel` with the Controls setting "Mouse wheel: Zoom": the tile
 /// size one wheel event moves to, 25 larger scrolling up and 25 smaller
 /// scrolling down, within 150 to 900. `delta_y` is the browser's `deltaY`
@@ -82,7 +85,7 @@ pub fn wheel_zoom(current: f32, delta_y: f32) -> Option<f32> {
         return None;
     }
     let step = if delta_y < 0. { 25. } else { -25. };
-    let next = (current + step).clamp(150., 900.);
+    let next = (current + step).clamp(SMALLEST_TILE, 900.);
     (next != current).then_some(next)
 }
 

@@ -1,7 +1,7 @@
 //! The decoded thumbnails, kept across frames. The grid says which it wants,
 //! most wanted first, as `thumbnailPlan.ts` orders them; this loads those a
 //! few at a time, drops loads the grid has scrolled away from, and keeps the
-//! rest for scrolling back until there are too many.
+//! rest for scrolling back until they take more memory than the budget.
 use gpui::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -34,8 +34,23 @@ struct Entry {
     drawn: bool,
 }
 
-/// Decoded thumbnails kept beyond the ones wanted now.
-const CAPACITY: usize = 192;
+/// What a decoded thumbnail usually takes: 512 × 384 pixels (a 4:3 picture
+/// at the long edge thumbnails are stored at), four bytes each.
+const TYPICAL_BYTES: usize = (crate::grid::originals::THUMBNAIL_LONG_EDGE
+    * crate::grid::originals::THUMBNAIL_LONG_EDGE
+    * 0.75) as usize
+    * 4;
+/// The least an entry is counted at, so thumbnails that could not be read
+/// are let go too.
+const ENTRY_BYTES: usize = 4096;
+
+/// How many bytes of decoded thumbnails are kept, wanted ones included: a
+/// window full of the smallest tiles, and a window's worth either side.
+pub fn budget(window: (f32, f32)) -> usize {
+    let across = (window.0 / crate::grid::nav::SMALLEST_TILE).ceil().max(1.);
+    let down = (window.1 / crate::grid::nav::SMALLEST_TILE).ceil().max(1.);
+    3 * (across * down) as usize * TYPICAL_BYTES
+}
 /// `thumbnailDecodeWorker.ts` runs six loads at once.
 const CONCURRENCY: usize = 6;
 
@@ -217,6 +232,16 @@ async fn regenerate_one(
     }
 }
 
+/// The bytes a decoded picture takes, all its frames.
+fn decoded_bytes(image: &RenderImage) -> usize {
+    (0..image.frame_count())
+        .map(|frame| {
+            let size = image.size(frame);
+            size.width.0.max(0) as usize * size.height.0.max(0) as usize * 4
+        })
+        .sum()
+}
+
 /// The `.png` a `.jpg` thumbnail resource falls back to.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {
@@ -356,8 +381,8 @@ impl Thumbnails {
 
     /// The grid's thumbnails for this frame, most wanted first. A load that
     /// is no longer wanted is abandoned, the most wanted that are missing
-    /// start, and decoded thumbnails beyond the capacity are let go, oldest
-    /// first, never one that is wanted or pinned.
+    /// start, and decoded thumbnails beyond the window's [`budget`] are let
+    /// go, oldest first, never one that is wanted or pinned.
     pub fn plan(&mut self, wanted: Vec<Resource>, window: &mut Window, cx: &mut App) {
         self.wanted = wanted.iter().cloned().collect();
         // Dropping an unfinished entry cancels its read and decode.
@@ -385,32 +410,41 @@ impl Thumbnails {
                 pending += 1;
             }
         }
-        let capacity = CAPACITY.max(self.wanted.len() + self.pins.len());
-        if self.entries.len() <= capacity {
-            return;
+        let cost = |entry: &Entry| {
+            entry
+                .item
+                .get()
+                .and_then(Result::ok)
+                .map_or(0, |image| decoded_bytes(&image))
+                .max(ENTRY_BYTES)
+        };
+        let mut held_bytes = self.entries.values().map(cost).sum::<usize>();
+        let viewport = window.viewport_size();
+        let budget = budget((f32::from(viewport.width), f32::from(viewport.height)));
+        if held_bytes > budget {
+            let mut oldest_first = self
+                .entries
+                .iter()
+                .map(|(resource, entry)| (entry.used, resource.clone()))
+                .collect::<Vec<_>>();
+            oldest_first.sort_unstable_by_key(|(used, _)| *used);
+            for (_, resource) in oldest_first {
+                if held_bytes <= budget {
+                    break;
+                }
+                if self.held(&resource) {
+                    continue;
+                }
+                if let Some(entry) = self.entries.remove(&resource) {
+                    held_bytes -= cost(&entry);
+                    if let Some(Ok(image)) = entry.item.get() {
+                        crate::atlas::release(image, cx);
+                        crate::stats::thumbnail_evicted(entry.drawn);
+                    }
+                }
+            }
         }
-        let mut oldest_first = self
-            .entries
-            .iter()
-            .map(|(resource, entry)| (entry.used, resource.clone()))
-            .collect::<Vec<_>>();
-        oldest_first.sort_unstable_by_key(|(used, _)| *used);
-        let mut over = self.entries.len() - capacity;
-        for (_, resource) in oldest_first {
-            if over == 0 {
-                break;
-            }
-            if self.held(&resource) {
-                continue;
-            }
-            over -= 1;
-            if let Some(entry) = self.entries.remove(&resource)
-                && let Some(Ok(image)) = entry.item.get()
-            {
-                crate::atlas::release(image, cx);
-                crate::stats::thumbnail_evicted(entry.drawn);
-            }
-        }
+        crate::stats::thumbnail_bytes(held_bytes);
     }
 }
 
@@ -445,10 +479,10 @@ impl ImageCache for Thumbnails {
 
 #[cfg(test)]
 mod tests {
-    use super::{CAPACITY, Thumbnails, fallback, load_order, primary};
+    use super::{Thumbnails, budget, fallback, load_order, primary};
     use gpui::{
         AnyWindowHandle, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
-        RenderImage, Resource, Styled as _, TestAppContext, Window, div, img, px,
+        RenderImage, Resource, Styled as _, TestAppContext, Window, div, img, px, size,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -480,14 +514,15 @@ mod tests {
 
     /// Scrolling through several thousand tiles, a band at a time: every
     /// thumbnail is decoded and drawn, and the sprite atlas ends holding no
-    /// more than the cache keeps, not every thumbnail ever shown.
+    /// more than the window's budget (and the band on screen), not every
+    /// thumbnail ever shown.
     #[test]
     fn scrolling_through_thousands_of_tiles_keeps_the_atlas_bounded() {
         const TILES: usize = 3000;
         const BAND: usize = 40;
         let folder = tempfile::tempdir().unwrap();
         let first = folder.path().join("0.jpg");
-        image::RgbImage::from_pixel(8, 6, image::Rgb([200, 90, 20]))
+        image::RgbImage::from_pixel(96, 72, image::Rgb([200, 90, 20]))
             .save(&first)
             .unwrap();
         let paths = (0..TILES)
@@ -500,7 +535,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut cx = TestAppContext::single();
-        let window = cx.add_window(|_, cx| Band {
+        let window = cx.open_window(size(px(300.), px(300.)), |_, cx| Band {
             thumbnails: cx.new(Thumbnails::new),
             shown: Vec::new(),
         });
@@ -546,7 +581,19 @@ mod tests {
                     .count()
             })
             .unwrap();
-        assert!(held > 0 && held <= CAPACITY + BAND, "{held} in the atlas");
+        let each = 96 * 72 * 4;
+        assert!(
+            held > BAND && held * each <= budget((300., 300.)) + BAND * each,
+            "{held} in the atlas"
+        );
+    }
+
+    #[test]
+    fn the_budget_keeps_three_windows_of_the_smallest_tiles() {
+        // 1213 × 865: 9 × 6 tiles of 150 a window, 3 windows of 786 kB.
+        assert_eq!(budget((1213., 865.)), 3 * 54 * 786_432);
+        // Never less than one tile a window.
+        assert_eq!(budget((0., 0.)), 3 * 786_432);
     }
 
     #[test]
