@@ -894,15 +894,14 @@ impl Render for AiTagger {
             cx.notify();
         }));
         // Opened as a dialog, it is closed as one: the dialogs' close button
-        // where the docked panel has its pin.
-        shell = shell.header(toggle_rail);
+        // where the docked panel has its sidebar and pin buttons.
         shell = if self.centred {
             shell.header(ui::window_chrome::close_button(
                 "ai-close",
                 cx.listener(|this, _, window, cx| this.close(window, cx)),
             ))
         } else {
-            shell.header(pin)
+            shell.header(toggle_rail).header(pin)
         };
         shell = shell.child(body);
 

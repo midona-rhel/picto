@@ -211,13 +211,17 @@ impl AiTagger {
             self.opening = Some(ui::popover::Opening::new(window, cx));
         }
         let view = window.viewport_size();
-        let width = if self.sidebar { WIDE } else { NARROW };
         self.centred = anchor.is_none();
-        // A dialog has no pin; one left on by a docked review would leave it
-        // with no backdrop to close it by.
+        // A dialog has neither the pin nor the sidebar's button: one pinned
+        // by a docked review would have no backdrop to close it by, and one
+        // whose sidebar was hidden no way to choose its models.
         if self.centred {
             self.pinned = false;
+            self.sidebar = true;
+            self.width_fade = motion::Fade::at(true);
+            self.rail_shown = motion::Fade::at(true);
         }
+        let width = if self.sidebar { WIDE } else { NARROW };
         self.geometry =
             overlay_shell::place(overlay_shell::Opens::beside(anchor), view, width, HEIGHT);
         self.explicit = target;
