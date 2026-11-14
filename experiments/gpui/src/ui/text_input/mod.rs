@@ -141,6 +141,8 @@ pub struct TextInput {
     /// What assistive technology calls the field (production's
     /// `aria-label`, or the label it sits under).
     name: Option<SharedString>,
+    /// A password field (`<input type="password">`): see [`TextInput::masked`].
+    masked: bool,
 }
 
 /// A face a field draws its text in, for text edited in place in the face
@@ -195,7 +197,53 @@ impl TextInput {
             killing: false,
             face: None,
             name: None,
+            masked: false,
         }
+    }
+
+    /// A password field, as `<input type="password">` is: a bullet is drawn
+    /// for each character while the text itself is kept; Copy and Cut do
+    /// nothing; a double-click selects it all and the word moves go to its
+    /// ends, as words cannot be seen; what an input method composes goes in
+    /// as typed rather than marked; assistive technology and the input
+    /// method are given the bullets, never the text.
+    pub fn masked(mut self) -> Self {
+        self.masked = true;
+        self
+    }
+
+    /// The text as drawn: the bullets of a password field.
+    pub(super) fn drawn(&self) -> SharedString {
+        if self.masked {
+            SharedString::from(
+                std::iter::repeat_n(BULLET, self.content.chars().count()).collect::<String>(),
+            )
+        } else {
+            self.content.clone()
+        }
+    }
+
+    /// A byte offset into the text as one into the text drawn.
+    pub(super) fn drawn_offset(&self, offset: usize) -> usize {
+        if !self.masked {
+            return offset;
+        }
+        self.content[..offset.min(self.content.len())].chars().count() * BULLET.len_utf8()
+    }
+
+    /// A byte offset into the text drawn as one into the text.
+    pub(super) fn content_offset(&self, drawn: usize) -> usize {
+        if !self.masked {
+            return drawn;
+        }
+        self.content
+            .char_indices()
+            .nth(drawn / BULLET.len_utf8())
+            .map_or(self.content.len(), |(offset, _)| offset)
+    }
+
+    pub(super) fn is_masked(&self) -> bool {
+        self.masked
     }
 
     /// What assistive technology calls the field; without a name it is
@@ -222,12 +270,13 @@ impl TextInput {
             return root;
         }
         let role = match self.kind {
+            _ if self.masked => gpui::Role::PasswordInput,
             Kind::Number => gpui::Role::SpinButton,
             Kind::Search | Kind::Sidebar | Kind::Popover | Kind::Menu => gpui::Role::SearchInput,
             _ if self.multiline => gpui::Role::MultilineTextInput,
             _ => gpui::Role::TextInput,
         };
-        let mut root = root.role(role).aria_value(self.content.clone());
+        let mut root = root.role(role).aria_value(self.drawn());
         if !self.placeholder.is_empty() {
             root = root.aria_placeholder(crate::i18n::t_shared(self.placeholder.clone()));
         }
@@ -239,8 +288,11 @@ impl TextInput {
         {
             root = root.aria_numeric_value(number);
         }
-        let text = self.content.clone();
-        let (start, end) = (self.selected_range.start, self.selected_range.end);
+        let text = self.drawn();
+        let (start, end) = (
+            self.drawn_offset(self.selected_range.start),
+            self.drawn_offset(self.selected_range.end),
+        );
         let (anchor, focus) = if self.selection_reversed {
             (end, start)
         } else {
@@ -429,6 +481,9 @@ impl TextInput {
         }
     }
 }
+
+/// What a password field draws for each character (Chromium's disc).
+const BULLET: char = '\u{2022}';
 
 /// `.textarea`'s `line-height: 1.4` at 13px.
 pub const AREA_LINE: f32 = 13. * 1.4;

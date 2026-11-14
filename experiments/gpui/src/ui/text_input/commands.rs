@@ -186,12 +186,21 @@ impl TextInput {
     /// Option-Left (Control-Left elsewhere) moves from the caret's end of a
     /// selection, as Chromium does, rather than from its start.
     pub(super) fn word_left(&mut self, extend: bool, cx: &mut Context<Self>) {
-        let target = editing::word_start_before(&self.content, self.cursor_offset());
+        // A password field's words cannot be seen: its start.
+        let target = if self.masked {
+            0
+        } else {
+            editing::word_start_before(&self.content, self.cursor_offset())
+        };
         self.go(target, false, extend, cx);
     }
 
     pub(super) fn word_right(&mut self, extend: bool, cx: &mut Context<Self>) {
-        let target = editing::word_right(&self.content, self.cursor_offset(), Platform::CURRENT);
+        let target = if self.masked {
+            self.content.len()
+        } else {
+            editing::word_right(&self.content, self.cursor_offset(), Platform::CURRENT)
+        };
         self.go(target, false, extend, cx);
     }
 
@@ -287,7 +296,11 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         let cursor = self.cursor_offset();
-        let start = editing::word_start_before(&self.content, cursor);
+        let start = if self.masked {
+            0
+        } else {
+            editing::word_start_before(&self.content, cursor)
+        };
         self.delete_or_selection(start..cursor, None, cx);
     }
 
@@ -298,7 +311,11 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         let cursor = self.cursor_offset();
-        let end = editing::word_right(&self.content, cursor, Platform::CURRENT);
+        let end = if self.masked {
+            self.content.len()
+        } else {
+            editing::word_right(&self.content, cursor, Platform::CURRENT)
+        };
         self.delete_or_selection(cursor..end, None, cx);
     }
 
@@ -516,14 +533,15 @@ impl TextInput {
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        // A password field's text is not copied, as the system's are not.
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
         }
     }
     pub(super) fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
+        if !self.selected_range.is_empty() && !self.masked {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));

@@ -282,6 +282,29 @@ fn a_text_field_exposes_its_text_placeholder_and_selection() {
 }
 
 #[test]
+fn a_password_field_exposes_bullets_never_its_text() {
+    use ui::text_input::{Kind, TextInput};
+    let mut harness = Harness::new(|window, cx| {
+        let input = window.use_keyed_state("input", cx, |_, cx| {
+            let mut input = TextInput::new(Kind::Form, cx).masked().name(t("Cookie"));
+            input.set_text("sess=été42".to_owned(), cx);
+            input.caret_at_end(cx);
+            input
+        });
+        div().w(px(200.)).child(input)
+    });
+    let tree = harness.tree();
+    let field = tree.find(Role::PasswordInput, "Cookie");
+    let bullets = "\u{2022}".repeat(10);
+    assert_eq!(field.value(), Some(bullets.as_str()));
+    let run = field.children()[0];
+    assert_eq!(run.value(), Some(bullets.as_str()));
+    let selection = field.node().text_selection().expect("a caret");
+    assert_eq!(selection.focus.character_index, 10, "the caret after the text");
+    assert_complete(&mut harness, &tree);
+}
+
+#[test]
 fn a_number_field_is_a_spin_button_between_its_steppers() {
     let mut harness = Harness::new(|_, _| {
         div().child(
