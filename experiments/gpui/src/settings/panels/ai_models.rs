@@ -313,8 +313,11 @@ impl SettingsWindow {
                 .padding(0.)
         };
         let slug = model.slug.clone();
+        // `.modelState` is 286px and lets a longer state overflow over the
+        // model's description (German's "Heruntergeladen" with two
+        // buttons); here it grows instead and the description gives way.
         let mut state = div()
-            .w(px(286.))
+            .min_w(px(286.))
             .flex_none()
             .flex()
             .items_center()
