@@ -107,11 +107,14 @@ impl Scope {
             Scope::Anywhere => return None,
             Scope::TextField => return Some("TextInput".into()),
             Scope::App => "Browser",
+            // i18n: a key context
             Scope::Grid => "Grid",
             // Flash keeps its keys for the movie.
             Scope::Viewer => "Viewer && !Flash",
             Scope::GroupEditor => viewer::group_editor::CONTEXT,
+            // i18n: a key context
             Scope::Duplicates => "Duplicates",
+            // i18n: a key context
             Scope::Subscriptions => "Subscriptions",
             Scope::DetailWindow => "DetailWindow && !Flash",
             Scope::Media => "Media && !Flash",

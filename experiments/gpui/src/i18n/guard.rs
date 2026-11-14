@@ -29,10 +29,14 @@ use std::path::{Path, PathBuf};
 /// (`electron/windows/menu.mjs` is not localized), and the shortcut
 /// registry, data whose labels, groups and descriptions Settings draws
 /// through `t()` and whose key names stay English as production writes
-/// them.
-const NOT_SHOWN: [&str; 4] = [
+/// them; and this module's own data (the languages' number and date
+/// words, the English plural suffix).
+const NOT_SHOWN: [&str; 7] = [
     "offscreen.rs",
     "i18n/tests.rs",
+    "i18n/guard.rs",
+    "i18n/format.rs",
+    "i18n/mod.rs",
     "app_menu.rs",
     "settings/registry.rs",
 ];
@@ -88,6 +92,13 @@ const CONVERTED: &[&str] = &[
     "history.rs",
     "session/",
     "export/",
+    "keymap.rs",
+    "state.rs",
+    "text.rs",
+    "i18n/",
+    "application.rs",
+    "screens/mod.rs",
+    "cover.rs",
 ];
 
 /// Calls whose literal argument is drawn.
@@ -440,7 +451,10 @@ fn identifier(literal: &Literal) -> bool {
         || before.ends_with("==")
         || before.ends_with("!=")
         || before.ends_with("icon(")
-        || before.rsplit('\n').next().is_some_and(|line| line.contains("json!("))
+        || before
+            .rsplit('\n')
+            .next()
+            .is_some_and(|line| line.contains("json!("))
         || before.ends_with("Some(") && (after.starts_with(") =>") || after.starts_with(") |"))
 }
 

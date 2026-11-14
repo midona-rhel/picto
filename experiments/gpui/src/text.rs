@@ -162,6 +162,7 @@ pub fn size_to_terabytes(value: u64) -> String {
     if value < 1024 {
         return format!("{value} B");
     }
+    // i18n: units, English as production's formatBytes writes them
     let units = ["KB", "MB", "GB", "TB"];
     let mut amount = value as f64 / 1024.;
     let mut unit = 0;
@@ -267,6 +268,7 @@ pub fn inspector_type(mime: &str) -> String {
 /// `mimeLabel` in the filter bar's type menu: a family's name, a few
 /// common types by their usual names, else the subtype's plain name.
 pub fn filter_type(mime: &str) -> String {
+    // i18n: translated where drawn (the filter menu's rows, as production's)
     let family = match mime {
         "image/*" => Some("Images"),
         "video/*" => Some("Videos"),

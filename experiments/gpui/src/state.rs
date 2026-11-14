@@ -213,6 +213,7 @@ impl State {
             let field = |key: &str| window.get(key).and_then(Value::as_f64).map(|n| n as f32);
             let (width, height) = (field("width")?, field("height")?);
             (width.is_finite() && height.is_finite()).then(|| WindowPlace {
+                // i18n: a JSON field
                 x: field("x").filter(|x| x.is_finite()),
                 y: field("y").filter(|y| y.is_finite()),
                 width,
@@ -422,6 +423,7 @@ pub fn location() -> Option<PathBuf> {
 pub fn config_folder() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
+        // i18n: a folder's name
         home().map(|home| home.join("Library").join("Application Support"))
     } else if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)

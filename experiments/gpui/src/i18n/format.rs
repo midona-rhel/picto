@@ -346,8 +346,7 @@ pub fn relative_in(locale: Locale, amount: i64, unit: Unit) -> String {
                 (Hour, true, _) => "Stunde",
                 (Hour, false, _) => "Stunden",
                 (Day, true, _) => "Tag",
-                (Day, false, true) => "Tagen",
-                (Day, false, false) => "Tagen",
+                (Day, false, _) => "Tagen",
                 (Month, true, _) => "Monat",
                 (Month, false, _) => "Monaten",
             };
