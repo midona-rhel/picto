@@ -64,6 +64,7 @@ const CONVERTED: &[&str] = &[
     "ui/panel_section.rs",
     "ui/tag_token_input.rs",
     "tags.rs",
+    "viewer/",
 ];
 
 /// Calls whose literal argument is drawn.

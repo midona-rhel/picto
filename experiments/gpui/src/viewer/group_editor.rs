@@ -11,6 +11,7 @@ use crate::grid::{
     marquee, preview, reveal,
     thumbnails::{self, Thumbnails},
 };
+use crate::i18n::t;
 use crate::session::Session;
 use crate::{theme, ui};
 use gpui::*;
@@ -929,7 +930,7 @@ impl Render for GroupEditor {
                     crate::desktop::copy_files(&files, cx)
                 };
                 if let Err(error) = copied {
-                    crate::ui::notify::error("Could not copy selection", error, cx);
+                    crate::ui::notify::error(t("Could not copy selection"), error, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &QuickLookMember, _, cx| {

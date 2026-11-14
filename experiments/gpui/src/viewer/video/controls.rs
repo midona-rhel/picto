@@ -3,6 +3,7 @@
 //! its row of buttons, and `VolumePanel`.
 use super::button::media_button;
 use super::model;
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
 use gpui::*;
@@ -140,7 +141,8 @@ impl RenderOnce for VolumePanel {
             child("mute"),
             model::volume_icon(self.volume, self.muted),
             16.,
-            ui::tip(if self.muted { "Unmute" } else { "Mute" }).shortcut("video.toggleMute", cx),
+            ui::tip(if self.muted { t("Unmute") } else { t("Mute") })
+                .shortcut("video.toggleMute", cx),
         )
         .on_hover(move |inside, window, cx| hover(&entered, inside, window, cx))
         .on_click(move |_, window, cx| {

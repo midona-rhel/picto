@@ -4,6 +4,7 @@
 //! system's default application. Word and PowerPoint files come here by
 //! decision: they keep their embedded thumbnail and open elsewhere.
 use super::shell;
+use crate::i18n::t;
 use crate::theme;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
@@ -13,11 +14,11 @@ use std::sync::Arc;
 /// `Preview is not available for {mime}.`
 pub fn message(mime: &str) -> String {
     let mime = if mime.is_empty() {
-        "this file type"
+        t("this file type")
     } else {
         mime
     };
-    format!("Preview is not available for {mime}.")
+    crate::tf!("Preview is not available for {value0}.", mime)
 }
 
 pub fn view(
@@ -55,8 +56,8 @@ pub fn view(
         .child(
             ui::action_button("document-open-default", Look::Standard)
                 .icon("menu-external-link", 14.)
-                .label("Open with Default App")
-                .tip(ui::tip("Open with Default App").shortcut("file.openDefaultApp", cx))
+                .label(t("Open with Default App"))
+                .tip(ui::tip(t("Open with Default App")).shortcut("file.openDefaultApp", cx))
                 .on_click(move |_, _, cx| crate::desktop::open_default(&path, cx)),
         );
     shell::shell(scroll, 1, 1).content(Some(content))

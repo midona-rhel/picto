@@ -11,6 +11,7 @@ use super::{
     surface::{self, MediaSurface},
 };
 use crate::grid::menu as rows;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::tooltip;
@@ -614,7 +615,7 @@ impl DetailWindow {
                 .as_ref()
                 .map(|details| details.root.name.clone())
                 .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| "Group".to_owned())
+                .unwrap_or_else(|| t("Group").to_owned())
         } else {
             self.entry().map(Entry::title).unwrap_or_default()
         };
@@ -658,7 +659,7 @@ impl DetailWindow {
                 )
                 .child(
                     ui::icon_button("detail-actual-size", "toolbar-actual-size")
-                        .tip(ui::tip("Actual size").shortcut("view.actualSize", cx))
+                        .tip(ui::tip(t("Actual size")).shortcut("view.actualSize", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface
                                 .update(cx, |surface, cx| surface.actual_size(cx));
@@ -666,7 +667,7 @@ impl DetailWindow {
                 )
                 .child(
                     ui::icon_button("detail-fit", "toolbar-fit")
-                        .tip(ui::tip("Fit to window").shortcut("view.fitWindow", cx))
+                        .tip(ui::tip(t("Fit to window")).shortcut("view.fitWindow", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface.update(cx, |surface, cx| surface.fit(cx));
                         })),
@@ -680,9 +681,9 @@ impl DetailWindow {
                 ui::icon_button("detail-pin", if self.on_top { "pin-filled" } else { "pin" })
                     .tip(
                         ui::tip(if self.on_top {
-                            "Unpin"
+                            t("Unpin")
                         } else {
-                            "Always on top"
+                            t("Always on top")
                         })
                         .shortcut("view.alwaysOnTop", cx),
                     )
@@ -696,7 +697,7 @@ impl DetailWindow {
                         |_, window, _| window.remove_window(),
                     )),
                 "detail-close-tooltip",
-                ui::tip("Close").shortcut("view.closeDetail", cx),
+                ui::tip(t("Close")).shortcut("view.closeDetail", cx),
                 theme::CONTROL_MD,
                 window,
                 cx,

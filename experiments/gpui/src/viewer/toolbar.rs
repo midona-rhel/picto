@@ -4,6 +4,7 @@
 //! zoom percentage and a logarithmic zoom slider. Right: fit, actual size,
 //! previous and next.
 use super::surface::{self, MediaSurface};
+use crate::i18n::t;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
@@ -202,7 +203,7 @@ impl Render for ViewerToolbar {
                 .get(session.displayed)
                 .map(|entry| entry.label.clone())
                 .filter(|label| !label.is_empty())
-                .unwrap_or_else(|| "Collections".to_owned());
+                .unwrap_or_else(|| t("Collections").to_owned());
             let name = session
                 .selected_details()
                 .map(|details| details.root.name.clone())
@@ -213,9 +214,9 @@ impl Render for ViewerToolbar {
         });
 
         let back = if member_open {
-            "Back to group"
+            crate::i18n::en("Back to group")
         } else {
-            "Back to grid"
+            crate::i18n::en("Back to grid")
         };
         let mut left = div().flex().items_center().gap(px(4.)).flex_none().child(
             ui::icon_button("viewer-back", "history-back")
@@ -295,14 +296,14 @@ impl Render for ViewerToolbar {
             right = right
                 .child(
                     ui::icon_button("viewer-fit", "toolbar-fit")
-                        .tip(ui::tip("Fit to window").shortcut("view.fitWindow", cx))
+                        .tip(ui::tip(t("Fit to window")).shortcut("view.fitWindow", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface.update(cx, |surface, cx| surface.fit(cx));
                         })),
                 )
                 .child(
                     ui::icon_button("viewer-actual-size", "toolbar-actual-size")
-                        .tip(ui::tip("Actual size").shortcut("view.actualSize", cx))
+                        .tip(ui::tip(t("Actual size")).shortcut("view.actualSize", cx))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.surface
                                 .update(cx, |surface, cx| surface.actual_size(cx));
@@ -312,7 +313,7 @@ impl Render for ViewerToolbar {
         if shown && !editing {
             right = right.child(
                 ui::icon_button("viewer-edit-group", "menu-group-edit")
-                    .tip(ui::tip("Edit group"))
+                    .tip(ui::tip(t("Edit group")))
                     .on_click(cx.listener(|this, _, window, cx| {
                         let _ = this
                             .viewer
@@ -331,7 +332,7 @@ impl Render for ViewerToolbar {
                     .child(
                         ui::icon_button("viewer-previous", "toolbar-chevron-left")
                             .disabled(!can_previous)
-                            .tip(ui::tip("Previous").shortcut("view.prevImage", cx))
+                            .tip(ui::tip(t("Previous")).shortcut("view.prevImage", cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let _ = this
                                     .viewer
@@ -341,7 +342,7 @@ impl Render for ViewerToolbar {
                     .child(
                         ui::icon_button("viewer-next", "toolbar-chevron-right")
                             .disabled(!can_next)
-                            .tip(ui::tip("Next").shortcut("view.nextImage", cx))
+                            .tip(ui::tip(t("Next")).shortcut("view.nextImage", cx))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let _ = this
                                     .viewer

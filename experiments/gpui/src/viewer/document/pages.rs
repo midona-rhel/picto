@@ -45,6 +45,7 @@ impl Pdf {
             hayro::hayro_syntax::LoadPdfError::Decryption(_) => {
                 anyhow!("This PDF is encrypted.")
             }
+            // i18n: an error the document view shows through t()
             hayro::hayro_syntax::LoadPdfError::Invalid => anyhow!("Could not open this PDF."),
         })?;
         if pdf.pages().is_empty() {
@@ -93,6 +94,7 @@ impl PageSource for Pdf {
         let (out_width, out_height) = (pixmap.width() as u32, pixmap.height() as u32);
         // On an opaque white page premultiplied and straight alpha agree.
         RgbaImage::from_raw(out_width, out_height, pixmap.data_as_u8_slice().to_vec())
+            // i18n: an error the document view shows through t()
             .ok_or_else(|| anyhow!("Could not render this PDF page."))
     }
 }
@@ -139,6 +141,7 @@ impl PageSource for Djvu {
             .render_to_size(width, height)
             .map_err(|error| anyhow!("Could not render this DjVu page: {error}"))?;
         RgbaImage::from_raw(pixmap.width, pixmap.height, pixmap.data)
+            // i18n: an error the document view shows through t()
             .ok_or_else(|| anyhow!("Could not render this DjVu page."))
     }
 }

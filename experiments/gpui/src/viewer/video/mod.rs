@@ -19,6 +19,7 @@ mod ffmpeg;
 pub mod model;
 mod visualizer;
 
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
 use backend::{Backend, Frame, Status};
@@ -224,7 +225,7 @@ pub fn key_context(base: &'static str, showing: bool) -> KeyContext {
     let mut context = KeyContext::default();
     context.add(base);
     if showing {
-        context.add("Media");
+        context.add("Media"); // i18n: a key context
     }
     context
 }
@@ -292,6 +293,7 @@ pub fn on_actions<E: InteractiveElement>(
 /// `reportPlaybackFailure`: one diagnostic line in production's shape.
 fn report_playback_failure(source: &Path, message: &str, status: &Status) {
     let entry = serde_json::json!({
+        // i18n: a JSON field
         "level": "ERROR",
         "source": "renderer",
         "target": "media.playback",
@@ -913,7 +915,7 @@ impl VideoPlayer {
                 label_button(
                     "media-rate",
                     model::rate_label(rate),
-                    ui::tip("Playback speed"),
+                    ui::tip(t("Playback speed")),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.rate_open = !this.rate_open;
@@ -990,11 +992,11 @@ impl VideoPlayer {
                 model::format_time(self.playback.duration)
             ));
         let skip = |seconds: f64| {
-            format!(
-                "Skip {} {}s",
-                if seconds < 0. { "back" } else { "forward" },
-                SKIP_STEP
-            )
+            if seconds < 0. {
+                crate::tf!("Skip back {value0}s", SKIP_STEP)
+            } else {
+                crate::tf!("Skip forward {value0}s", SKIP_STEP)
+            }
         };
         let left = div()
             .flex()
@@ -1009,7 +1011,7 @@ impl VideoPlayer {
                         "player-play"
                     },
                     20.,
-                    ui::tip(if playing { "Pause" } else { "Play" })
+                    ui::tip(if playing { t("Pause") } else { t("Play") })
                         .shortcut("video.togglePlay", cx),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1054,7 +1056,7 @@ impl VideoPlayer {
                     "media-loop",
                     if looping { "repeat" } else { "repeat-off" },
                     18.,
-                    ui::tip(if looping { "Loop on" } else { "Loop off" })
+                    ui::tip(if looping { t("Loop on") } else { t("Loop off") })
                         .shortcut("video.toggleLoop", cx),
                 )
                 .toggled(looping)
@@ -1070,7 +1072,7 @@ impl VideoPlayer {
                     "media-fullscreen",
                     "maximize",
                     18.,
-                    ui::tip("Fullscreen").shortcut("video.fullscreen", cx),
+                    ui::tip(t("Fullscreen")).shortcut("video.fullscreen", cx),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.reveal(cx);

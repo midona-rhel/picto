@@ -7,6 +7,7 @@
 //! take most of a second. If the save fails or is cancelled, the view goes
 //! back to the item, but only while it is still where this review left it.
 use super::review_art::{self, Art, GLOW_INSET, GLYPH, HALF_WIDTH, HEIGHT, Half, SHADOW_MARGIN};
+use crate::i18n::t;
 use crate::ui::tooltip::{self, Tip};
 use crate::{motion, theme, ui};
 use gpui::*;
@@ -378,7 +379,7 @@ fn half(
             0,
             Decision::Accept,
             "check",
-            "Accept",
+            t("Accept"),
             "inbox.accept",
             rgba(theme::REVIEW_ACCEPT_TINT),
         ),
@@ -386,8 +387,9 @@ fn half(
             "inbox-review-reject",
             1,
             Decision::Reject,
+            // i18n: an icon's name
             "x",
-            "Reject",
+            t("Reject"),
             "inbox.reject",
             rgba(theme::REVIEW_REJECT_TINT),
         ),

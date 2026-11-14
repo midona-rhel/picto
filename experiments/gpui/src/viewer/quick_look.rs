@@ -10,6 +10,7 @@ use super::{
     group, point_at_member, record_view, show_selection, step_within, strip,
     surface::{self, MediaSurface},
 };
+use crate::i18n::t;
 use crate::session::{Change, Session};
 use crate::{theme, ui};
 use gpui::{prelude::FluentBuilder as _, *};
@@ -421,7 +422,7 @@ impl Render for QuickLook {
                         strip::strip_button(
                             "quick-look-close",
                             "toolbar-close",
-                            ui::tip("Close").shortcut("view.quicklook", cx),
+                            ui::tip(t("Close")).shortcut("view.quicklook", cx),
                         )
                         .width(CLOSE_SIZE)
                         .glyph(rgb(theme::QUICK_LOOK_GLYPH))
@@ -433,7 +434,7 @@ impl Render for QuickLook {
                     .child(step(
                         "quick-look-previous",
                         "toolbar-chevron-left",
-                        "Previous",
+                        t("Previous"),
                         "view.prevImage",
                         -1,
                         index > 0,
@@ -443,7 +444,7 @@ impl Render for QuickLook {
                     .child(step(
                         "quick-look-next",
                         "toolbar-chevron-right",
-                        "Next",
+                        t("Next"),
                         "view.nextImage",
                         1,
                         index + 1 < total,
