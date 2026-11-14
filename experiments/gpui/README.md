@@ -272,6 +272,33 @@ more than production does. Rename, Remove from List, Move…, Delete…, Show
 in File Manager, New Library and the blocking notice were run end to end
 in the off-screen tool on generated libraries.
 
+Decided, where this app differs from production on purpose:
+
+- **A switch closes the detail, Settings and log windows.** Production
+  keeps them open across `switchLibrary`; each holds the closed library's
+  session, and a command from one would reach the library opened next.
+  Closing them is the only way here to be sure nothing of one library is
+  written to another, so it stays (`host::close_views`).
+- **An older schema is refused, never migrated.** The core would migrate
+  it in place as it opens, a change this app cannot undo and production
+  makes with its own backup. The user opens that library once in Picto
+  (which updates it), quits Picto, and opens it here; the refusal says so.
+- **The Electron app's probe has limits.** It looks at process names and
+  paths, not at what a process has open: on macOS any executable inside a
+  `Picto.app` or named `Picto`/`Picto Helper…`, on Linux an executable or
+  process named `picto` or a `Picto…AppImage`, on Windows `Picto.exe`. It
+  does not see Picto run from source (`electron .`, named `Electron`), an
+  installation renamed to something else, Picto run by another user whose
+  processes this one may not read, or Picto on another machine using the
+  same library over a network share; it does count any unrelated program
+  of those names as Picto (refusing more, never less). It runs at each open
+  and whenever the main window becomes active, not continuously: Picto
+  started while this app stays in the background is noticed only when the
+  window is next brought forward. The installed Picto does not take the
+  core's `.picto-library.lock`, so until it does, this probe and the notice
+  are all that keep the two apart; the owner should quit Picto before
+  opening a library here.
+
 What stays as it was: `--make-copy` reads its source read-only;
 `<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
 refuse paths outside the open library, whichever kind it is, and Show in
