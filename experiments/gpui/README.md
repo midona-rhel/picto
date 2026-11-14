@@ -382,7 +382,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   with its clear button, and the inspector's name and notes. One-pixel
   blinking caret, text that scrolls to keep the caret in view, and an
   ellipsis when a field is not being edited.
-- Text editing in every field (`ui/text_input.rs`), as production's browser
+- Text editing in every field (`ui/text_input/`), as production's browser
   fields edit on a Mac: words (⌥←/→, ⌥⇧, ⌥⌫, ⌥⌦) cut where Chromium cuts them,
   with the dictionaries for Chinese, Japanese and Thai; rows (⌘←/→, ⌘⌫, and
   ↑/↓ to the ends of a one-line field); the text's ends (⌘↑/↓); paragraphs
@@ -1815,7 +1815,7 @@ One model, separate views, shared components:
 
 ## Attribution
 
-`ui/text_input.rs` adapts GPUI 0.2.2's official `examples/input.rs`, Apache-2.0; see
+`ui/text_input/` adapts GPUI 0.2.2's official `examples/input.rs`, Apache-2.0; see
 `LICENSE-gpui`. Sidebar icons are Tabler Icons, MIT; see `assets/LICENSE-tabler`.
 Toolbar glyphs are Picto's own, from `src/shared/ui/icons/toolbar-icons.tsx`.
 `assets/fixtures/interactive.swf` comes from Ruffle's

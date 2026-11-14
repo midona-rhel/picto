@@ -8,7 +8,7 @@ mod commands;
 /// Windows and Linux equivalents), on byte offsets into the text and with
 /// no layout: graphemes, words as Chromium finds them, paragraphs, what a
 /// one-line field keeps of pasted text, and the history Undo walks.
-pub mod editing;
+mod editing;
 mod element;
 mod input_handler;
 mod mouse;
@@ -38,7 +38,6 @@ actions!(
         Paste,
         Cut,
         Copy,
-        Quit,
         Commit,
         Cancel,
         Newline,

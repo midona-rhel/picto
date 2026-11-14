@@ -1,7 +1,7 @@
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
-pub fn previous_grapheme(text: &str, offset: usize) -> usize {
+pub(super) fn previous_grapheme(text: &str, offset: usize) -> usize {
     text.grapheme_indices(true)
         .rev()
         .map(|(index, _)| index)
@@ -9,7 +9,7 @@ pub fn previous_grapheme(text: &str, offset: usize) -> usize {
         .unwrap_or(0)
 }
 
-pub fn next_grapheme(text: &str, offset: usize) -> usize {
+pub(super) fn next_grapheme(text: &str, offset: usize) -> usize {
     text.grapheme_indices(true)
         .map(|(index, _)| index)
         .find(|index| *index > offset)
@@ -20,7 +20,7 @@ pub fn next_grapheme(text: &str, offset: usize) -> usize {
 /// it: Unicode's word rules with the dictionaries for Chinese, Japanese
 /// and Thai, except that a full stop parts letters (`example.com`) and
 /// joins only digits (`3.14`), and a colon parts everything.
-pub fn segments(text: &str) -> Vec<Range<usize>> {
+fn segments(text: &str) -> Vec<Range<usize>> {
     let mut bounds: Vec<usize> = icu_segmenter::WordSegmenter::new_dictionary(Default::default())
         .segment_str(text)
         .collect();
@@ -48,7 +48,7 @@ fn is_space(text: &str, range: &Range<usize>) -> bool {
 
 /// Option-Left (Control-Left elsewhere): the start of the word before
 /// the caret, or of the text.
-pub fn word_start_before(text: &str, offset: usize) -> usize {
+pub(super) fn word_start_before(text: &str, offset: usize) -> usize {
     segments(text)
         .into_iter()
         .rev()
@@ -58,7 +58,7 @@ pub fn word_start_before(text: &str, offset: usize) -> usize {
 
 /// Option-Right on a Mac: the end of the word after the caret, or of
 /// the text.
-pub fn word_end_after(text: &str, offset: usize) -> usize {
+fn word_end_after(text: &str, offset: usize) -> usize {
     segments(text)
         .into_iter()
         .find(|segment| segment.end > offset && !is_space(text, segment))
@@ -67,7 +67,7 @@ pub fn word_end_after(text: &str, offset: usize) -> usize {
 
 /// Control-Right on Windows and Linux: past the word the caret is in
 /// and the space after it, to the start of the next word.
-pub fn next_word_start(text: &str, offset: usize) -> usize {
+fn next_word_start(text: &str, offset: usize) -> usize {
     let segments = segments(text);
     let mut rest = segments
         .iter()
@@ -85,7 +85,7 @@ pub fn next_word_start(text: &str, offset: usize) -> usize {
 
 /// The word Option-Right (Control-Right elsewhere) and Option-Delete go
 /// to on this platform.
-pub fn word_right(text: &str, offset: usize) -> usize {
+pub(super) fn word_right(text: &str, offset: usize) -> usize {
     if cfg!(target_os = "macos") {
         word_end_after(text, offset)
     } else {
@@ -96,7 +96,7 @@ pub fn word_right(text: &str, offset: usize) -> usize {
 /// What a double-click on the character at `offset` selects: its word,
 /// run of space or mark; with `trailing_space` (Windows), a word with
 /// the space after it.
-pub fn word_at(text: &str, offset: usize, trailing_space: bool) -> Range<usize> {
+pub(super) fn word_at(text: &str, offset: usize, trailing_space: bool) -> Range<usize> {
     let segments = segments(text);
     let Some(index) = segments
         .iter()
@@ -119,12 +119,12 @@ pub fn word_at(text: &str, offset: usize, trailing_space: bool) -> Range<usize> 
 
 /// The start of the paragraph `offset` is in: just after the line
 /// break before it.
-pub fn paragraph_start(text: &str, offset: usize) -> usize {
+pub(super) fn paragraph_start(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map_or(0, |index| index + 1)
 }
 
 /// The end of the paragraph `offset` is in: at the line break after it.
-pub fn paragraph_end(text: &str, offset: usize) -> usize {
+pub(super) fn paragraph_end(text: &str, offset: usize) -> usize {
     text[offset..]
         .find('\n')
         .map_or(text.len(), |index| offset + index)
@@ -132,7 +132,7 @@ pub fn paragraph_end(text: &str, offset: usize) -> usize {
 
 /// What a triple-click in text of several lines selects: the
 /// paragraph with its line break.
-pub fn paragraph_at(text: &str, offset: usize) -> Range<usize> {
+pub(super) fn paragraph_at(text: &str, offset: usize) -> Range<usize> {
     let end = paragraph_end(text, offset);
     let end = if end < text.len() { end + 1 } else { end };
     paragraph_start(text, offset)..end
@@ -141,7 +141,7 @@ pub fn paragraph_at(text: &str, offset: usize) -> Range<usize> {
 /// Control-T: the range to replace, what replaces it and where the
 /// caret goes. The characters either side of the caret swap and the
 /// caret moves past them; at the end of a line, the two before it swap.
-pub fn transpose(text: &str, offset: usize) -> Option<(Range<usize>, String, usize)> {
+pub(super) fn transpose(text: &str, offset: usize) -> Option<(Range<usize>, String, usize)> {
     if offset == 0 {
         return None;
     }
@@ -166,7 +166,7 @@ pub fn transpose(text: &str, offset: usize) -> Option<(Range<usize>, String, usi
 /// Control-Delete on a Mac: where to delete back to so that only the
 /// last code point of the character before the caret goes (an accent
 /// typed as its own mark, say).
-pub fn decomposed_backward(text: &str, offset: usize) -> usize {
+pub(super) fn decomposed_backward(text: &str, offset: usize) -> usize {
     let start = previous_grapheme(text, offset);
     text[start..offset]
         .char_indices()
@@ -176,19 +176,19 @@ pub fn decomposed_backward(text: &str, offset: usize) -> usize {
 
 /// What a one-line field (`<input>`) keeps of pasted text: line breaks
 /// at the end dropped, the others made spaces.
-pub fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     text.trim_end_matches(['\r', '\n'])
         .replace("\r\n", " ")
         .replace(['\r', '\n'], " ")
 }
 
 /// Pasted text for a field of several lines, its line breaks all `\n`.
-pub fn normalize_breaks(text: &str) -> String {
+pub(super) fn normalize_breaks(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 /// The byte offset of a UTF-16 offset into `text`.
-pub fn utf8_offset(text: &str, utf16: usize) -> usize {
+pub(super) fn utf8_offset(text: &str, utf16: usize) -> usize {
     let mut utf8 = 0;
     let mut counted = 0;
     for c in text.chars() {
@@ -203,9 +203,9 @@ pub fn utf8_offset(text: &str, utf16: usize) -> usize {
 
 /// A field's text and selection at one moment.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Snapshot {
-    pub text: String,
-    pub selection: Range<usize>,
+pub(super) struct Snapshot {
+    pub(super) text: String,
+    pub(super) selection: Range<usize>,
 }
 
 /// How many steps a field can take back.
@@ -213,7 +213,7 @@ const DEPTH: usize = 200;
 
 /// An edit made by typing: characters put in, or deleted one at a time.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Typing {
+pub(super) enum Typing {
     Insert,
     Delete,
 }
@@ -225,7 +225,7 @@ pub enum Typing {
 /// paste, a cut, deleting a word or a line) is a step of its own.
 /// Taking a step back selects the text it brings back.
 #[derive(Default, Debug)]
-pub struct History {
+pub(super) struct History {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     typing: Option<Typing>,
@@ -233,7 +233,7 @@ pub struct History {
 
 impl History {
     /// Notes the state before an edit, and how it was made.
-    pub fn record(&mut self, before: Snapshot, typing: Option<Typing>) {
+    pub(super) fn record(&mut self, before: Snapshot, typing: Option<Typing>) {
         let continues = match (self.typing, typing) {
             (Some(_), Some(Typing::Insert)) => true,
             (Some(Typing::Delete), Some(Typing::Delete)) => true,
@@ -250,22 +250,22 @@ impl History {
     }
 
     /// Ends the run of typing: what is typed next is a new step.
-    pub fn close(&mut self) {
+    pub(super) fn close(&mut self) {
         self.typing = None;
     }
 
-    pub fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         *self = Self::default();
     }
 
     #[cfg(test)]
-    pub fn can_undo(&self) -> bool {
+    pub(super) fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
 
     /// The state before the last step, with what it brings back
     /// selected, given the state now (which Redo returns to).
-    pub fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
+    pub(super) fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
         let before = self.undo.pop()?;
         self.typing = None;
         let selection = changed(&current.text, &before.text, current.selection.end);
@@ -278,7 +278,7 @@ impl History {
 
     /// The state the last Undo left, with the caret after what it
     /// changes.
-    pub fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
+    pub(super) fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
         let after = self.redo.pop()?;
         self.typing = None;
         let end = changed(&current.text, &after.text, current.selection.start).end;
@@ -294,7 +294,7 @@ impl History {
 /// common start and their common end. The common start goes no further
 /// than `at`, where the caret in `from` shows the edit was, so that of
 /// two equal characters the one edited is the one found.
-pub fn changed(from: &str, to: &str, at: usize) -> Range<usize> {
+fn changed(from: &str, to: &str, at: usize) -> Range<usize> {
     let mut prefix = 0;
     for (a, b) in from.chars().zip(to.chars()) {
         if a != b || prefix + a.len_utf8() > at {
@@ -313,7 +313,7 @@ pub fn changed(from: &str, to: &str, at: usize) -> Range<usize> {
 }
 
 /// The byte range of each line of `text`, without its line break.
-pub fn hard_lines(text: &str) -> Vec<Range<usize>> {
+pub(super) fn hard_lines(text: &str) -> Vec<Range<usize>> {
     let mut lines = Vec::new();
     let mut start = 0;
     for (index, _) in text.match_indices('\n') {
