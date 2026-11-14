@@ -150,9 +150,11 @@ pub struct Incoming {
 }
 
 /// Opens what arrived, as `drainAssociatedFiles` does: each pack is queued
-/// for its import dialog, a library is this copy (nothing to do) or
-/// refused, and the main window comes forward.
-pub fn accept(incoming: Incoming, root: &Path, cx: &mut gpui::App) {
+/// for its import dialog, a library is the open one (nothing to do) or
+/// refused (a file the system hands over never opens a library here,
+/// `libraries::admission`), and the main window comes forward.
+pub fn accept(incoming: Incoming, cx: &mut gpui::App) {
+    let root = crate::libraries::host::current(cx).map(|(root, _)| root);
     for entry in incoming.entries {
         match entry.kind {
             Kind::Pack => {
@@ -161,7 +163,10 @@ pub fn accept(incoming: Incoming, root: &Path, cx: &mut gpui::App) {
                 }
             }
             Kind::Library => {
-                let same = crate::application::guard(&entry.path).is_ok_and(|copy| copy == root);
+                let same = entry
+                    .path
+                    .canonicalize()
+                    .is_ok_and(|path| Some(&path) == root.as_ref());
                 if !same {
                     // TODO: open another library (production's
                     // `switchLibrary`); the app opens only the copy it was

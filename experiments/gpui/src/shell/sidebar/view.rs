@@ -19,12 +19,12 @@ impl Sidebar {
     /// glyph stays lit.
     fn library(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let (cover, name) = {
+        let (cover, name, copy) = {
             let session = self.session.read(cx);
             let name = session
                 .library_name()
                 .unwrap_or_else(|| t("No library").into());
-            (session.library_cover.clone(), name)
+            (session.library_cover.clone(), name, session.disposable())
         };
         let open = self.library_popover.read(cx).is_open();
         let state = window.use_keyed_state("library-switcher", cx, |_, _| Switcher::default());
@@ -139,6 +139,21 @@ impl Sidebar {
                     .line_height(px(24.))
                     .child(name),
             )
+            // A disposable copy says so where the library is named, so it is
+            // never taken for the library it was copied from.
+            .children(copy.then(|| {
+                div()
+                    .relative()
+                    .flex_none()
+                    .px(px(5.))
+                    .rounded(px(theme::RADIUS_SM))
+                    .border_1()
+                    .border_color(theme.border_secondary())
+                    .text(theme::TEXT_XS)
+                    .line_height(px(14.))
+                    .text_color(theme.text_tertiary())
+                    .child(en("Library copy"))
+            }))
             .child(
                 ui::icon(
                     "selector",

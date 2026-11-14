@@ -15,6 +15,7 @@ mod i18n;
 mod imports;
 mod inspector;
 mod keymap;
+mod libraries;
 mod logins;
 mod meter;
 mod motion;
@@ -189,29 +190,59 @@ fn remember_window(window: &Window, cx: &mut App) {
     state::update(cx, |state| state.window = Some(place));
 }
 
+/// What the main window opens first.
+enum Initial {
+    /// A disposable copy from the command line, with this process holding
+    /// its instance.
+    Copy(std::path::PathBuf, opening::instance::Instance),
+    /// A library named on the command line with `--allow-real-libraries`.
+    Named(std::path::PathBuf),
+    /// No library named: the one this app had open last, if it may be
+    /// opened, else the gate.
+    Last,
+}
+
 fn main() {
     logins::keep_credentials_in_process();
     diagnostics::install_logger();
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
     let working_directory = std::env::current_dir().unwrap_or_default();
-    // The one argument the app needs is the root of a disposable copy that
-    // run.sh or `--make-copy` made; anything else, and the library it was
-    // copied from, is refused. Files after it (or, with no copy, files a
-    // file manager opens with the app) are opened as production opens them
-    // (`opening`).
-    let launch = match opening::parse(std::env::args_os().skip(1).collect(), application::guard) {
-        Ok(launch) => launch,
-        Err(error) => {
-            eprintln!("picto: {error}");
-            std::process::exit(2);
+    let mut arguments: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // `--allow-real-libraries` first: a debug or test build may then open
+    // libraries the user keeps (`libraries::admission`).
+    let flag = arguments
+        .first()
+        .is_some_and(|first| first == libraries::admission::FLAG);
+    if flag {
+        arguments.remove(0);
+    }
+    libraries::set_flag(flag);
+    // The first argument is the root of a disposable copy that run.sh or
+    // `--make-copy` made; files after it (or, with no copy, files a file
+    // manager opens with the app) are opened as production opens them
+    // (`opening`). With no argument the app opens the library it had open
+    // last, or shows the gate.
+    let launch = if arguments.is_empty() {
+        None
+    } else {
+        match opening::parse(arguments, application::guard) {
+            Ok(launch) => Some(launch),
+            Err(error) => {
+                eprintln!("picto: {error}");
+                std::process::exit(2);
+            }
         }
     };
-    let (root, rest) = match launch {
+    // What the app is asked to open, from this launch, later launches on
+    // the same library, and the system (macOS `application:openURLs:`).
+    let (incoming, arrived) = futures::channel::mpsc::unbounded::<opening::Incoming>();
+    let (initial, rest) = match launch {
+        None => (Initial::Last, Vec::new()),
         // `--make-copy <library>`: make a disposable copy of the library,
         // print where it is, and stop; the copy is then opened by passing
-        // that path.
-        opening::Launch::MakeCopy(source) => {
+        // that path. The library is only read.
+        Some(opening::Launch::MakeCopy(source)) => {
             match application::make_copy(&source) {
                 Ok(copy) => println!("{}", desktop::system_path(&copy).display()),
                 Err(error) => {
@@ -224,19 +255,37 @@ fn main() {
         // `--detach` after the copy: cut it loose from the real library's
         // cloud sync, watched folders and queued runs, and stop. For opening
         // the copy with another app (the Electron reference) that would
-        // otherwise resume that work.
-        opening::Launch::Open {
+        // otherwise resume that work. A folder without the marker is
+        // refused (`application::detach`).
+        Some(opening::Launch::Open {
             copy, detach: true, ..
-        } => {
+        }) => {
             if let Err(error) = application::detach(&copy) {
                 eprintln!("picto: {error}");
                 std::process::exit(2);
             }
             return;
         }
-        opening::Launch::Open { copy, rest, .. } => (copy, rest),
+        Some(opening::Launch::Open { copy, rest, .. }) => {
+            let request = opening::instance::Request {
+                cwd: working_directory.clone(),
+                args: rest.clone(),
+            };
+            let instance = copy_instance(&copy, &request, &incoming);
+            (Initial::Copy(copy, instance), rest)
+        }
+        // A library the user keeps, named with the flag: opened if the
+        // rules let it, after the user's consent.
+        Some(opening::Launch::HandOver { files, .. })
+            if flag && files.len() == 1 && files[0].to_lowercase().ends_with(".library") =>
+        {
+            (
+                Initial::Named(working_directory.join(&files[0])),
+                Vec::new(),
+            )
+        }
         // Files and no copy: they go to the instance most recently active.
-        opening::Launch::HandOver { files, refused } => {
+        Some(opening::Launch::HandOver { files, refused }) => {
             let request = opening::instance::Request {
                 cwd: working_directory,
                 args: files,
@@ -254,35 +303,46 @@ fn main() {
             }
         }
     };
-    // What the app is asked to open, from this launch, later launches on
-    // the same copy, and the system (macOS `application:openURLs:`).
-    let (incoming, mut arrived) = futures::channel::mpsc::unbounded::<opening::Incoming>();
+    run(initial, rest, working_directory, incoming, arrived);
+}
+
+/// The copy's one instance: a launch on a copy already open hands its
+/// files to that instance, which comes forward, and this launch ends.
+fn copy_instance(
+    copy: &std::path::Path,
+    request: &opening::instance::Request,
+    incoming: &futures::channel::mpsc::UnboundedSender<opening::Incoming>,
+) -> opening::instance::Instance {
     let from_launches = incoming.clone();
-    let request = opening::instance::Request {
-        cwd: working_directory.clone(),
-        args: rest.clone(),
-    };
-    // One instance per copy: a launch on a copy already open hands its
-    // files to that instance, which comes forward, and ends.
-    let instance = match opening::instance::start(&root, &request, move |request| {
+    match opening::instance::start(copy, request, move |request| {
         let _ = from_launches.unbounded_send(opening::Incoming {
             entries: opening::from_arguments(&request.args, &request.cwd),
             forward: true,
         });
     }) {
-        Ok(opening::instance::Started::Primary(instance)) => &*Box::leak(Box::new(instance)),
+        Ok(opening::instance::Started::Primary(instance)) => instance,
         Ok(opening::instance::Started::HandedOver) => {
             eprintln!(
                 "picto: handed to the app already open on {}",
-                root.display()
+                copy.display()
             );
-            return;
+            std::process::exit(0);
         }
         Err(error) => {
             eprintln!("picto: {error}");
             std::process::exit(2);
         }
-    };
+    }
+}
+
+/// Runs the app: the main window, the gate or the first library in it.
+fn run(
+    initial: Initial,
+    rest: Vec<String>,
+    working_directory: std::path::PathBuf,
+    incoming: futures::channel::mpsc::UnboundedSender<opening::Incoming>,
+    mut arrived: futures::channel::mpsc::UnboundedReceiver<opening::Incoming>,
+) {
     let _ = incoming.unbounded_send(opening::Incoming {
         entries: opening::from_arguments(&rest, &working_directory),
         forward: false,
@@ -290,9 +350,6 @@ fn main() {
     // Panics are recorded for the log window from here on, and those of
     // the previous session are shown there.
     diagnostics::crash::install();
-    let (events, delivered) = std::sync::mpsc::channel();
-    let application = application::Application::new(root.clone(), events);
-    let closing = application.clone();
     let app = gpui_platform::application().with_assets(assets::Assets);
     // A click on the Dock icon brings back the main window Close Window hid.
     app.on_reopen(app_menu::reopen);
@@ -303,7 +360,6 @@ fn main() {
             forward: true,
         });
     });
-    let opened_root = root.clone();
     app.run(move |cx: &mut App| {
         prepare(cx);
         // The dock badge and the system notifications, for the app proper
@@ -333,7 +389,7 @@ fn main() {
                     // window from anywhere in that zone, controls included, so
                     // the drag regions are declared by the shell instead.
                     ..ui::window_chrome::frameless(
-                        "Picto GPUI · Library copy",
+                        i18n::en("Picto GPUI"),
                         Some(point(px(12.), px(15.))),
                     )
                 },
@@ -347,39 +403,67 @@ fn main() {
                         })
                         .detach();
                         // A launch with files and no copy goes to the
-                        // instance whose window was active last.
-                        cx.observe_window_activation(window, move |_, window, _| {
+                        // instance whose window was active last; a library
+                        // the user keeps is checked against the Electron
+                        // app again.
+                        cx.observe_window_activation(window, move |_, window, cx| {
                             if window.is_window_active() {
-                                instance.mark_active();
+                                cx.defer(libraries::host::activated);
                             }
                         })
                         .detach();
-                        Shell::new(root, application, delivered, window, cx)
+                        libraries::host::Main::new(cx)
                     })
                 },
             )
             .unwrap();
-        // Stop the workers and checkpoint the copy before the process
+        app_menu::set_main_window(window.into(), cx);
+        libraries::host::attach(window, incoming, cx);
+        app_menu::set_menus(cx);
+        match initial {
+            Initial::Copy(root, instance) => libraries::host::start(
+                root,
+                libraries::Kind::Copy,
+                Some(std::sync::Arc::new(instance)),
+                window,
+                cx,
+            ),
+            Initial::Named(path) => {
+                libraries::host::request(&path, libraries::Origin::CommandLine { flag: true }, cx)
+            }
+            Initial::Last => {
+                // Only a library this process may open is even looked at.
+                let last = state::get(cx).last_library.clone();
+                if let Some(last) = last
+                    && libraries::listed(&last, &libraries::facts())
+                {
+                    libraries::host::request(
+                        std::path::Path::new(&last),
+                        libraries::Origin::LastOpened,
+                        cx,
+                    );
+                }
+            }
+        }
+        // Stop the workers and checkpoint the library before the process
         // ends, as the Electron app closes its library before quitting.
         // Registered after the window opened, so the session's own quit
         // hook (a view change still to save) runs first.
         cx.on_app_quit(move |cx| {
             state::flush(cx);
-            closing.close();
+            libraries::host::close_for_quit(cx);
             async {}
         })
         .detach();
         // Input playback is a debug build's only (`seams.rs`).
         #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
-        #[cfg(not(debug_assertions))]
-        let _ = window;
         // Opened as production's `drainAssociatedFiles` opens them, once
         // the window is up.
         cx.spawn(async move |cx| {
             use futures::StreamExt as _;
             while let Some(incoming) = arrived.next().await {
-                cx.update(|cx| opening::accept(incoming, &opened_root, cx));
+                cx.update(|cx| opening::accept(incoming, cx));
             }
         })
         .detach();

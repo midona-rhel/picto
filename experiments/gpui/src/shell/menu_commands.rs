@@ -170,6 +170,7 @@ impl Shell {
             thumbnails,
             import: crate::imports::blocked(cx).is_none(),
             library: session.library_name(),
+            recent: Vec::new(),
         }
     }
 

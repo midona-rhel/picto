@@ -198,15 +198,30 @@ pub fn rail_groups(namespaces: &[TagNamespaceRecord], general: bool) -> Vec<TagN
 }
 
 /// The Selected view: the items' tags by name, by group and then by name.
-pub fn records_by_group<'a>(names: impl IntoIterator<Item = &'a String>) -> Vec<TagRecord> {
+/// Production's two tag browsers disagree on where tags without a group
+/// go: its dialog files them under no group at all (`TagSelectModal.tsx`
+/// `tagRecord`: `''`), which sorts first; its picker files them under
+/// General (`TagSelectPanel.tsx`), which sorts among the groups. Each is
+/// kept: `general_first` is the dialog's order.
+pub fn records_by_group<'a>(
+    names: impl IntoIterator<Item = &'a String>,
+    general_first: bool,
+) -> Vec<TagRecord> {
     let mut records = names
         .into_iter()
         .map(|name| record(name))
         .collect::<Vec<_>>();
+    let group = |record: &TagRecord| {
+        let name = record.namespace.to_lowercase();
+        if general_first && name == "general" {
+            String::new()
+        } else {
+            name
+        }
+    };
     records.sort_by(|left, right| {
-        left.namespace
-            .to_lowercase()
-            .cmp(&right.namespace.to_lowercase())
+        group(left)
+            .cmp(&group(right))
             .then_with(|| crate::text::natural_order(&left.subname, &right.subname))
     });
     records
@@ -731,10 +746,17 @@ mod tests {
     #[test]
     fn the_selected_view_lists_by_group_then_name() {
         let names = ["zeta", "series:x", "alpha", "creator:b", "item10", "item9"].map(String::from);
-        let records = records_by_group(&names);
+        // The picker: General among the groups, by its name.
+        let records = records_by_group(&names, false);
         assert_eq!(
             records.iter().map(record_name).collect::<Vec<_>>(),
             ["creator:b", "alpha", "item9", "item10", "zeta", "series:x"]
+        );
+        // The dialog: tags without a group before every group.
+        let records = records_by_group(&names, true);
+        assert_eq!(
+            records.iter().map(record_name).collect::<Vec<_>>(),
+            ["alpha", "item9", "item10", "zeta", "creator:b", "series:x"]
         );
     }
 

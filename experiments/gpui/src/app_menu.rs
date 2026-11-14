@@ -28,16 +28,10 @@ actions!(
         Hide,
         HideOthers,
         ShowAllApps,
-        // TODO: open the Library Manager window, create a library, open a
-        // `.library` folder, and switch to a recent one. Blocked on the
-        // owner's decision on opening real libraries: this app only opens
-        // the disposable copy it was started with.
+        // The Library menu's rows (`crate::libraries`).
         LibraryManager,
         NewLibrary,
         OpenLibrary,
-        OpenRecentLibrary,
-        // TODO: forget every library but the open one, then set the menu
-        // again (the history is kept by the Library Manager's store).
         ClearRecentLibraries,
         Subscriptions,
         NewFolder,
@@ -96,6 +90,22 @@ pub struct MoveToTrash {
 #[action(namespace = app_menu, no_json)]
 pub struct RemoveFromFolder {
     pub keyed: bool,
+}
+
+/// A row of Recent Libraries: the library at `path`.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = app_menu, no_json)]
+pub struct OpenRecentLibrary {
+    pub path: String,
+}
+
+/// A library Recent Libraries lists (`buildRecentLibrariesMenu`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recent {
+    pub path: String,
+    pub name: String,
+    pub pinned: bool,
+    pub current: bool,
 }
 
 /// Set Rating's rows, 0 for No Rating.
@@ -211,8 +221,10 @@ pub struct MenuContext {
     pub thumbnails: bool,
     /// No task holds imports back (`canImport`).
     pub import: bool,
-    /// The open library's name, the one row Recent Libraries has.
+    /// The open library's name.
     pub library: Option<String>,
+    /// The libraries Recent Libraries lists, pinned ones first.
+    pub recent: Vec<Recent>,
 }
 
 impl Default for MenuContext {
@@ -226,6 +238,7 @@ impl Default for MenuContext {
             thumbnails: false,
             import: true,
             library: None,
+            recent: Vec::new(),
         }
     }
 }
@@ -429,29 +442,58 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
     let mut library = vec![
         item("Library Manager…", LibraryManager)
             .keys(fixed("Mod+Shift+L", main_window))
-            .todo()
             .into(),
         Separator,
         item("New Library…", NewLibrary)
             .keys(fixed("Mod+N", main_window))
-            .todo()
             .into(),
-        item("Open Library…", OpenLibrary).todo().into(),
+        item("Open Library…", OpenLibrary).into(),
         Separator,
     ];
-    // Production lists the libraries opened before, the open one checked;
-    // this app knows only the open one.
-    if let Some(name) = &context.library {
-        let mut current = item(name.clone(), OpenRecentLibrary).todo();
-        current.checked = true;
+    // The libraries opened before, pinned ones first (marked with a pin, as
+    // production writes them), the open one checked.
+    // Production's history always holds the open library; a context that
+    // lists none still shows it.
+    let open = context.library.as_ref().map(|name| Recent {
+        path: String::new(),
+        name: name.clone(),
+        pinned: false,
+        current: true,
+    });
+    let recent = if context.recent.is_empty() {
+        open.into_iter().collect::<Vec<_>>()
+    } else {
+        context.recent.clone()
+    };
+    if !recent.is_empty() {
+        let row = |recent: &Recent| {
+            let title = if recent.pinned {
+                format!("\u{1F4CC} {}", recent.name)
+            } else {
+                recent.name.clone()
+            };
+            let mut row = item(
+                title,
+                OpenRecentLibrary {
+                    path: recent.path.clone(),
+                },
+            );
+            row.checked = recent.current;
+            Entry::from(row)
+        };
+        let pinned = recent.iter().filter(|recent| recent.pinned);
+        let rest = recent.iter().filter(|recent| !recent.pinned);
+        let mut entries = pinned.clone().map(row).collect::<Vec<_>>();
+        if !entries.is_empty() && rest.clone().next().is_some() {
+            entries.push(Separator);
+        }
+        entries.extend(rest.map(row));
+        entries.push(Separator);
+        entries.push(item("Clear History", ClearRecentLibraries).into());
         library.push(Entry::Submenu {
             title: "Recent Libraries".into(),
             enabled: true,
-            entries: vec![
-                current.into(),
-                Separator,
-                item("Clear History", ClearRecentLibraries).todo().into(),
-            ],
+            entries,
         });
         library.push(Separator);
     }
@@ -1030,7 +1072,7 @@ pub fn in_window_action(path: &str, cx: &App) -> Option<Box<dyn Action>> {
 #[derive(Default)]
 struct Current {
     context: MenuContext,
-    main: Option<WindowHandle<crate::shell::Shell>>,
+    main: Option<AnyWindowHandle>,
     main_hidden: bool,
 }
 
@@ -1059,19 +1101,15 @@ pub fn set_context(context: MenuContext, cx: &mut App) -> bool {
 
 /// Sets the application menu for the current context and key bindings.
 pub fn set_menus(cx: &mut App) {
-    let context = context(cx);
+    let mut context = context(cx);
+    context.recent = crate::libraries::recent(cx);
     cx.set_menus(gpui_menus(&context));
-}
-
-/// The main window, for what other windows send to it.
-pub fn main_window(cx: &App) -> Option<WindowHandle<crate::shell::Shell>> {
-    cx.try_global::<Current>()?.main
 }
 
 /// The main window, for the rows production sends to it whichever window
 /// has the keyboard, and for Close Window.
 pub fn set_main_window(window: AnyWindowHandle, cx: &mut App) {
-    current(cx).main = window.downcast::<crate::shell::Shell>();
+    current(cx).main = Some(window);
 }
 
 /// The Dock icon was clicked: the main window that Close Window hid comes
@@ -1161,7 +1199,7 @@ fn close_window(cx: &mut App) {
             return;
         }
         let main = current(cx).main;
-        let is_main = main.is_some_and(|main| AnyWindowHandle::from(main) == handle);
+        let is_main = main == Some(handle);
         if is_main && Platform::CURRENT.is_mac() {
             current(cx).main_hidden = true;
             let _ = handle.update(cx, |_, window, _| {
@@ -1225,16 +1263,33 @@ pub fn bind(cx: &mut App) {
     // Subscriptions… goes to the main window from any window
     // (`sendToMainWindow`).
     cx.on_action(|_: &Subscriptions, cx| {
-        let Some(main) = current(cx).main else {
-            return;
-        };
         cx.defer(move |cx| {
-            let _ = main.update(cx, |shell, window, cx| {
-                shell.show_screen(crate::backend::Screen::Subscriptions, cx);
-                window.activate_window();
+            let Some(shell) = crate::libraries::host::shell(cx) else {
+                return;
+            };
+            shell.update(cx, |shell, cx| {
+                shell.show_screen(crate::backend::Screen::Subscriptions, cx)
             });
+            if let Some(main) = current(cx).main {
+                let _ = main.update(cx, |_, window, _| window.activate_window());
+            }
         });
     });
+    // The Library menu, from any window.
+    cx.on_action(|_: &LibraryManager, cx| cx.defer(crate::libraries::manager::open));
+    // `New Library…` opens the Library Manager, as production's does.
+    cx.on_action(|_: &NewLibrary, cx| cx.defer(crate::libraries::manager::open));
+    cx.on_action(|_: &OpenLibrary, cx| cx.defer(crate::libraries::host::open_dialog));
+    cx.on_action(|action: &OpenRecentLibrary, cx| {
+        if action.path.is_empty() {
+            return;
+        }
+        let path = std::path::PathBuf::from(&action.path);
+        cx.defer(move |cx| {
+            crate::libraries::host::request(&path, crate::libraries::Origin::Recent, cx)
+        });
+    });
+    cx.on_action(|_: &ClearRecentLibraries, cx| cx.defer(crate::libraries::clear_history));
     cx.on_action(|_: &EditCut, cx| edit(cx, Some(Box::new(crate::ui::text_input::Cut)), None));
     // Outside a text field, Copy puts the files themselves on the
     // clipboard, as ⌘C over the grid, the viewer and a detail window does.
@@ -1764,17 +1819,7 @@ mod tests {
                 }
             });
         }
-        assert_eq!(
-            unbuilt,
-            [
-                "Library Manager…",
-                "New Library…",
-                "Open Library…",
-                "Main",
-                "Clear History",
-                "Check for Updates…",
-            ]
-        );
+        assert_eq!(unbuilt, ["Check for Updates…"]);
     }
 
     fn bound(

@@ -201,9 +201,10 @@ impl Desktop {
                     Some(count) => {
                         this.batch.clear();
                         this.batch_active = false;
-                        if notifications_allowed(cx) {
-                            platform::notify("Subscriptions finished", &finished_body(count), cx);
-                        }
+                        // Whatever Settings › Notifications says, as in
+                        // production: those settings are for the pop-ups
+                        // inside the window.
+                        platform::notify("Subscriptions finished", &finished_body(count), cx);
                     }
                     // An unavailable activity is not evidence that the run
                     // added nothing: the batch waits for a later change.
@@ -421,6 +422,28 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
+/// Show in File Manager for a library in the Library Manager: its folder,
+/// only when it is the open library or one the list of libraries holds.
+pub fn reveal_library(path: &Path, cx: &mut App) {
+    let text = path.to_string_lossy();
+    let open = crate::libraries::host::current(cx).is_some_and(|(root, _)| root == path);
+    let state = crate::state::get(cx);
+    let listed = state.library_history.iter().any(|known| *known == text)
+        || state.pinned_libraries.iter().any(|known| *known == text);
+    if !open && !listed {
+        return crate::ui::notify::error(
+            "Could not show file",
+            format!("{} is not a library in the list", path.display()),
+            cx,
+        );
+    }
+    if live(cx) {
+        cx.reveal_path(&system_path(path));
+    } else {
+        record(format!("reveal {}", path.display()));
+    }
+}
+
 /// `picto:shell:openWithApplication`: the file, if it is one of the copy's,
 /// in the application at `application` (macOS only, as in production).
 #[cfg(target_os = "macos")]
@@ -562,13 +585,6 @@ fn badge_count(count: &serde_json::Value) -> u64 {
         .or_else(|| count.as_f64().map(|count| count.max(0.) as u64))
         .unwrap_or(0)
         .min(MAX_BADGE)
-}
-
-/// Production shows this notification whatever Settings › Notifications
-/// says; here it follows the pop-up switch and the Information tone, as an
-/// in-app notification of the same kind would.
-fn notifications_allowed(cx: &mut App) -> bool {
-    crate::ui::notify::shows(crate::ui::notify::Tone::Info, cx)
 }
 
 #[cfg(target_os = "macos")]

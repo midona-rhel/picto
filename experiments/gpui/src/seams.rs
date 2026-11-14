@@ -113,6 +113,42 @@ pub fn app_data() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Every variable above, which drive, observe or redirect the app.
+#[cfg(debug_assertions)]
+const ALL: [&str; 11] = [
+    "PICTO_GPUI_POINTER",
+    "PICTO_GPUI_BACKGROUND",
+    "PICTO_GPUI_WINDOW",
+    "PICTO_GPUI_MENU",
+    "PICTO_GPUI_APP_MENU",
+    "PICTO_GPUI_STATE",
+    "PICTO_GPUI_INSPECTOR",
+    "PICTO_GPUI_HOLD_RUNS",
+    "PICTO_GPUI_SILENT",
+    "PICTO_GPUI_APP_DATA",
+    "PICTO_GPUI_HOLD_DOWNLOADS",
+];
+
+/// The automation seam active in this process, if any: one of the
+/// variables above set, or a test build (the off-screen tool, the dialogs'
+/// answers and the record of desktop requests live there). A process with
+/// one never opens a library the user keeps (`crate::libraries`). A release
+/// build has none.
+pub fn automation() -> Option<&'static str> {
+    if cfg!(test) {
+        return Some("a test build");
+    }
+    #[cfg(debug_assertions)]
+    {
+        ALL.into_iter()
+            .find(|name| std::env::var_os(name).is_some())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
 /// How a held model download answers (`PICTO_GPUI_HOLD_DOWNLOADS`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HeldDownload {

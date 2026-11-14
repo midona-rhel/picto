@@ -41,8 +41,8 @@ use std::time::Duration;
 /// system's keychain. The core files a login under the service's name alone
 /// (`picto` / `<site>`), not under a library, so a login saved, removed or
 /// settled here would replace or delete the one the user's Picto keeps for
-/// that service; this app opens only disposable copies, so its logins go
-/// with the process. Called first in `main`, before any thread starts.
+/// that service, which the user's Picto shares; until the owner decides
+/// otherwise, this app's logins go with the process. Called first in `main`, before any thread starts.
 pub fn keep_credentials_in_process() {
     // SAFETY: nothing else runs yet, so no thread reads the environment
     // while it changes.
@@ -143,10 +143,19 @@ struct GlobalLogins(Entity<Logins>);
 impl Global for GlobalLogins {}
 
 impl Logins {
-    /// The app's login session, made on first use.
+    /// The app's login session, made on first use. Another library's
+    /// session (the library was switched) cancels a login under way for the
+    /// one before, whose credential would go to the wrong library.
     pub fn global(session: &Entity<Session>, cx: &mut App) -> Entity<Logins> {
         if let Some(global) = cx.try_global::<GlobalLogins>() {
-            return global.0.clone();
+            let logins = global.0.clone();
+            logins.update(cx, |logins, cx| {
+                if logins.session != *session {
+                    logins.cancel(cx);
+                    logins.session = session.clone();
+                }
+            });
+            return logins;
         }
         let session = session.clone();
         let logins = cx.new(|_| Logins {
