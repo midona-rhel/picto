@@ -103,11 +103,7 @@ impl Shell {
             // ── Copying ──
             Action::CopyPath => {
                 if let Some(file) = file {
-                    self.with_path(
-                        file,
-                        |path, cx| write_text(path.to_string_lossy().into_owned(), cx),
-                        cx,
-                    );
+                    self.with_path(file, |path, cx| copy_paths(&[path], cx), cx);
                 }
             }
             Action::CopyName => {
@@ -141,7 +137,12 @@ impl Shell {
                         })
                         .collect()
                 };
-                if !lines.is_empty() {
+                if action == Action::CopySelectionPaths {
+                    let paths: Vec<PathBuf> = lines.into_iter().map(PathBuf::from).collect();
+                    if !paths.is_empty() {
+                        copy_paths(&paths, cx);
+                    }
+                } else if !lines.is_empty() {
                     write_text(lines.join("\n"), cx);
                 }
             }
@@ -165,13 +166,21 @@ impl Shell {
                     files_of(ids),
                     cx,
                     move |_, files, cx| {
-                        let lines = files
-                            .into_iter()
-                            .flatten()
-                            .map(|(hash, path)| if links { link(&hash, &path) } else { path })
-                            .collect::<Vec<_>>();
-                        if !lines.is_empty() {
-                            write_text(lines.join("\n"), cx);
+                        let files = files.into_iter().flatten();
+                        if links {
+                            let lines = files
+                                .map(|(hash, path)| link(&hash, &path))
+                                .collect::<Vec<_>>();
+                            if !lines.is_empty() {
+                                write_text(lines.join("\n"), cx);
+                            }
+                        } else {
+                            let paths = files
+                                .map(|(_, path)| PathBuf::from(path))
+                                .collect::<Vec<_>>();
+                            if !paths.is_empty() {
+                                copy_paths(&paths, cx);
+                            }
                         }
                     },
                 );
@@ -834,6 +843,14 @@ fn display_name(name: &str) -> String {
 
 fn write_text(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
+}
+
+/// "Copy File Path": the files' paths as text, only if each is a file of
+/// the library copy.
+fn copy_paths(paths: &[PathBuf], cx: &mut App) {
+    if let Err(error) = crate::desktop::copy_paths(paths, cx) {
+        crate::ui::notify::error("Could not copy file path", error, cx);
+    }
 }
 
 /// `resolveTargetFilePaths`: the content hash and path of every file of

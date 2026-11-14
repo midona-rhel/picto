@@ -10,13 +10,18 @@
 //! file manager, and putting files on the clipboard. Those reach the desktop
 //! only in the real app; anywhere else (the off-screen checks) each is
 //! written down instead, for the checks to read with [`requests`], so that
-//! nothing opens on the screen and the clipboard is left alone.
+//! nothing opens on the screen and the clipboard is left alone. Only files
+//! inside the open copy are handed over, whatever path the library stored
+//! (the hand-offs, the drag out of the grid and "Copy File Path" refuse any
+//! other with a notification).
 use crate::application::{self, Event};
 use crate::session::Session;
 use gpui::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// `CHANGE_DEBOUNCE_MS`: a burst of changes sets the badge once.
@@ -36,17 +41,23 @@ pub fn enable(cx: &mut App) {
     cx.set_global(Enabled);
 }
 
-/// Starts the badge and the subscription notification for the session's
-/// library, if the app enabled them.
+/// Notes the session's library as the only one whose files may be handed to
+/// the desktop, and starts the badge and the subscription notification for
+/// it, if the app enabled them.
 pub fn start(session: &Entity<Session>, cx: &mut App) {
+    let root = session.read(cx).root().to_path_buf();
+    cx.set_global(HandOff(root));
     if !cx.has_global::<Enabled>() {
         return;
     }
     let desktop = cx.new(|cx| Desktop::new(session.clone(), cx));
-    cx.set_global(Running(desktop));
+    cx.set_global(Running { _desktop: desktop });
 }
 
-struct Running(#[allow(dead_code)] Entity<Desktop>);
+/// The desktop services, kept for the app's life.
+struct Running {
+    _desktop: Entity<Desktop>,
+}
 
 impl Global for Running {}
 
@@ -228,19 +239,110 @@ impl Desktop {
 
 // ── Files handed to the desktop ─────────────────────────────
 
+/// The canonical root of the open library copy. Only its own files are
+/// handed to the desktop: a stored path that still names the library the
+/// copy was made from, or anything else outside the copy, would let another
+/// application edit, move or delete a file the user keeps.
+struct HandOff(PathBuf);
+
+impl Global for HandOff {}
+
+/// Whether `path` lies below `root`. Both are canonical, so neither holds a
+/// link or a `..` step; Windows' verbatim prefix (`\\?\C:\`, `\\?\UNC\`) is
+/// read as the plain form it stands for, and Windows compares names without
+/// case, as its file systems do. The root itself is not inside.
+fn inside(root: &Path, path: &Path) -> bool {
+    let (root, path) = (system_path(root), system_path(path));
+    let same = |left: std::path::Component, right: std::path::Component| {
+        if cfg!(windows) {
+            left.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+        } else {
+            left == right
+        }
+    };
+    let mut parts = path.components();
+    for part in root.components() {
+        match parts.next() {
+            Some(next) if same(part, next) => {}
+            _ => return false,
+        }
+    }
+    let rest: Vec<_> = parts.collect();
+    !rest.is_empty()
+        && rest
+            .iter()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
+/// `paths`, each as the canonical path of a file of the open copy, or why
+/// they cannot be handed to the desktop: one of them is missing or lies
+/// outside the copy.
+fn checked(paths: &[PathBuf], cx: &App) -> Result<Vec<PathBuf>, String> {
+    match cx.try_global::<HandOff>() {
+        Some(HandOff(root)) => checked_in(root, paths),
+        None => Err("No library is open.".into()),
+    }
+}
+
+/// [`checked`] against the copy at the canonical `root`.
+fn checked_in(root: &Path, paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    paths
+        .iter()
+        .map(|path| match path.canonicalize() {
+            Ok(canonical) if inside(root, &canonical) => Ok(canonical),
+            Ok(_) => Err(format!(
+                "{} is not a file of this library copy, so it was not handed to the desktop.",
+                path.display()
+            )),
+            Err(error) => Err(format!("{}: {error}", path.display())),
+        })
+        .collect()
+}
+
+/// [`checked`] for one file.
+fn checked_one(path: &Path, cx: &App) -> Result<PathBuf, String> {
+    checked(&[path.to_path_buf()], cx).map(|mut paths| paths.remove(0))
+}
+
+/// The files of the open copy a drag out of the window hands to the system:
+/// all of them, or none, with a notification, when one is not the copy's.
+pub fn drag_out(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
+    match checked(paths, cx) {
+        Ok(paths) => paths,
+        Err(error) => {
+            crate::ui::notify::error("Could not drag files", error, cx);
+            Vec::new()
+        }
+    }
+}
+
 /// What was asked of the desktop in a run that does not reach it.
+#[cfg(test)]
 static REQUESTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// Whether this run reaches the desktop: only the app proper does.
+/// Whether this run reaches the desktop: only the app proper does; the
+/// off-screen checks write each request down instead.
+#[cfg(test)]
 fn live(cx: &App) -> bool {
     cx.has_global::<Enabled>()
 }
 
+#[cfg(not(test))]
+fn live(_: &App) -> bool {
+    true
+}
+
+#[cfg(test)]
 fn record(request: String) {
     if let Ok(mut requests) = REQUESTS.lock() {
         requests.push(request);
     }
 }
+
+#[cfg(not(test))]
+fn record(_: String) {}
 
 /// What was asked of the desktop since the last look, oldest first, in a
 /// run that does not reach it.
@@ -292,32 +394,41 @@ pub fn open_link(link: &str, cx: &mut App) {
     }
 }
 
-/// `shell.openPath`: the file in its default application.
-pub fn open_default(path: &Path, cx: &App) {
+/// `shell.openPath`: the file in its default application, if it is one of
+/// the copy's.
+pub fn open_default(path: &Path, cx: &mut App) {
+    let path = match checked_one(path, cx) {
+        Ok(path) => path,
+        Err(error) => return crate::ui::notify::error("Could not open file", error, cx),
+    };
     if live(cx) {
-        cx.open_with_system(&system_path(path));
+        cx.open_with_system(&system_path(&path));
     } else {
         record(format!("open-default {}", path.display()));
     }
 }
 
-/// `shell.showItemInFolder`: Finder or Explorer, with the file selected.
-pub fn reveal(path: &Path, cx: &App) {
+/// `shell.showItemInFolder`: Finder or Explorer, with the file selected, if
+/// it is one of the copy's.
+pub fn reveal(path: &Path, cx: &mut App) {
+    let path = match checked_one(path, cx) {
+        Ok(path) => path,
+        Err(error) => return crate::ui::notify::error("Could not show file", error, cx),
+    };
     if live(cx) {
-        cx.reveal_path(&system_path(path));
+        cx.reveal_path(&system_path(&path));
     } else {
         record(format!("reveal {}", path.display()));
     }
 }
 
-/// `picto:shell:openWithApplication`: the file in the application at
-/// `application` (macOS only, as in production).
+/// `picto:shell:openWithApplication`: the file, if it is one of the copy's,
+/// in the application at `application` (macOS only, as in production).
+#[cfg(target_os = "macos")]
 pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Application selection is only available on macOS".into());
-    }
+    let file = checked_one(file, cx)?;
     if live(cx) {
-        platform::open_with(application, file)
+        platform::open_with(application, &file)
     } else {
         record(format!(
             "open-with {} | {}",
@@ -328,13 +439,18 @@ pub fn open_with(application: &Path, file: &Path, cx: &App) -> Result<(), String
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn open_with(_application: &Path, _file: &Path, _cx: &App) -> Result<(), String> {
+    Err("Application selection is only available on macOS".into())
+}
+
 /// `writeClipboardFilePaths`: the files themselves on the clipboard, each
-/// once, for Finder or another application to paste.
+/// once, for Finder or another application to paste, if all are the copy's.
 pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     let mut unique: Vec<PathBuf> = Vec::new();
-    for path in paths {
-        if !path.as_os_str().is_empty() && !unique.contains(path) {
-            unique.push(path.clone());
+    for path in checked(paths, cx)? {
+        if !unique.contains(&path) {
+            unique.push(path);
         }
     }
     if unique.is_empty() {
@@ -348,18 +464,39 @@ pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
     }
 }
 
-/// `picto:shell:openWithChooser`: the system's own application chooser on
-/// the file, which only Windows offers (its "Open with" dialog).
-pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
-    if !cfg!(target_os = "windows") {
-        return Err("The system application chooser is unavailable".into());
+/// "Copy File Path": the paths as text, one a line, if all are the copy's
+/// files. The text is the path as the system writes it.
+pub fn copy_paths(paths: &[PathBuf], cx: &mut App) -> Result<(), String> {
+    let paths = checked(paths, cx)?;
+    if paths.is_empty() {
+        return Err("No files were selected.".into());
     }
+    let text = paths
+        .iter()
+        .map(|path| system_path(path).display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    Ok(())
+}
+
+/// `picto:shell:openWithChooser`: the system's own application chooser on
+/// the file, if it is one of the copy's, which only Windows offers (its
+/// "Open with" dialog).
+#[cfg(target_os = "windows")]
+pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
+    let file = checked_one(file, cx)?;
     if live(cx) {
-        platform::open_with_chooser(&system_path(file))
+        platform::open_with_chooser(&system_path(&file))
     } else {
         record(format!("open-with-chooser {}", file.display()));
         Ok(())
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn open_with_chooser(_file: &Path, _cx: &App) -> Result<(), String> {
+    Err("The system application chooser is unavailable".into())
 }
 
 /// An application that opens a file (`getAssociatedApplications`).
@@ -628,8 +765,14 @@ mod platform {
         }
     }
 
-    /// `picto_get_associated_applications`.
+    /// `picto_get_associated_applications`. It runs on a background thread,
+    /// which has no autorelease pool of its own, so the images and data
+    /// AppKit hands back autoreleased are let go in one made for the call.
     pub fn applications(file: &Path) -> Vec<Application> {
+        objc2::rc::autoreleasepool(|_| applications_in_pool(file))
+    }
+
+    fn applications_in_pool(file: &Path) -> Vec<Application> {
         let Some(url) = CFURL::from_path(file, false) else {
             return Vec::new();
         };
@@ -720,11 +863,6 @@ mod platform {
     unsafe extern "C" {}
 
     /// `app.setBadgeCount`: the number on the dock icon, none for zero.
-    /// The Mac lists the applications instead (`applications`).
-    pub fn open_with_chooser(_file: &Path) -> Result<(), String> {
-        Err("The system application chooser is unavailable".into())
-    }
-
     pub fn set_badge(count: u64) {
         let Some(application) = AnyClass::get(c"NSApplication") else {
             return;
@@ -874,11 +1012,6 @@ mod platform {
         Ok(())
     }
 
-    /// Production picks an application on macOS only.
-    pub fn open_with(_application: &Path, _file: &Path) -> Result<(), String> {
-        Err("Application selection is only available on macOS".into())
-    }
-
     /// `picto:shell:openWithChooser`: Windows' "Open with" dialog on the
     /// file, from which the user picks the application.
     pub fn open_with_chooser(file: &Path) -> Result<(), String> {
@@ -995,16 +1128,7 @@ mod platform {
         }
     }
 
-    /// Production picks an application on macOS only.
-    pub fn open_with(_application: &Path, _file: &Path) -> Result<(), String> {
-        Err("Application selection is only available on macOS".into())
-    }
-
-    /// Production has no application chooser on Linux.
-    pub fn open_with_chooser(_file: &Path) -> Result<(), String> {
-        Err("The system application chooser is unavailable".into())
-    }
-
+    /// Production offers no application list on Linux.
     pub fn applications(_file: &Path) -> Vec<Application> {
         Vec::new()
     }
@@ -1147,6 +1271,105 @@ mod tests {
             super::system_path(Path::new("/tmp/a.jpg")),
             PathBuf::from("/tmp/a.jpg")
         );
+    }
+
+    /// A canonical path below the copy's root is the copy's; the root
+    /// itself, a sibling whose name starts the same, a step back out and
+    /// anything elsewhere are not.
+    #[cfg(unix)]
+    #[test]
+    fn only_paths_below_the_copy_are_the_copys() {
+        let root = Path::new("/private/tmp/picto-gpui-library.a1/Main.library");
+        let inside = |path: &str| super::inside(root, Path::new(path));
+        assert!(inside(
+            "/private/tmp/picto-gpui-library.a1/Main.library/blobs/f/ab/cd/x.jpg"
+        ));
+        assert!(!inside("/private/tmp/picto-gpui-library.a1/Main.library"));
+        assert!(!inside(
+            "/private/tmp/picto-gpui-library.a1/Main.library2/x.jpg"
+        ));
+        assert!(!inside(
+            "/private/tmp/picto-gpui-library.a1/Main.library/../Main.library2/x.jpg"
+        ));
+        assert!(!inside("/Users/someone/Pictures/Main.library/blobs/x.jpg"));
+        assert!(!inside("blobs/x.jpg"));
+        // Names differ by case on Linux and on a case-sensitive Mac volume;
+        // the canonical path has the case the disk has, so no folding.
+        assert!(!inside(
+            "/private/tmp/picto-gpui-library.a1/main.library/blobs/x.jpg"
+        ));
+    }
+
+    /// Windows: the canonical root carries the verbatim prefix and the
+    /// stored path may not; names compare without case.
+    #[cfg(windows)]
+    #[test]
+    fn only_paths_below_the_copy_are_the_copys() {
+        let root =
+            Path::new(r"\\?\C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library");
+        let inside = |path: &str| super::inside(root, Path::new(path));
+        assert!(inside(
+            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\blobs\f\x.jpg"
+        ));
+        assert!(inside(
+            r"\\?\c:\users\me\appdata\local\temp\picto-gpui-library.a1\main.library\blobs\x.jpg"
+        ));
+        assert!(!inside(
+            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library"
+        ));
+        assert!(!inside(
+            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library.old\x.jpg"
+        ));
+        assert!(!inside(
+            r"C:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\..\x.jpg"
+        ));
+        assert!(!inside(
+            r"D:\Users\me\AppData\Local\Temp\picto-gpui-library.a1\Main.library\x.jpg"
+        ));
+        assert!(!inside(r"C:\Users\me\Pictures\Main.library\blobs\x.jpg"));
+        // A copy on a network share.
+        let share = Path::new(r"\\?\UNC\server\share\picto-gpui-library.a1\Main.library");
+        assert!(super::inside(
+            share,
+            Path::new(r"\\server\share\picto-gpui-library.a1\Main.library\blobs\x.jpg")
+        ));
+        assert!(!super::inside(
+            share,
+            Path::new(r"\\other\share\picto-gpui-library.a1\Main.library\blobs\x.jpg")
+        ));
+    }
+
+    /// Real files: one in the copy is handed over by its canonical path; a
+    /// missing one, one outside, and (where links can be made) a link in the
+    /// copy that leads out are refused, and then nothing is handed over.
+    #[test]
+    fn only_the_copys_own_files_are_handed_to_the_desktop() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("Main.library");
+        std::fs::create_dir_all(root.join("blobs")).unwrap();
+        let file = root.join("blobs").join("a.jpg");
+        std::fs::write(&file, b"a").unwrap();
+        let outside = folder.path().join("kept.jpg");
+        std::fs::write(&outside, b"b").unwrap();
+        let root = root.canonicalize().unwrap();
+        let handed = super::checked_in(&root, &[file.clone()]).unwrap();
+        assert_eq!(handed, [file.canonicalize().unwrap()]);
+        assert!(super::checked_in(&root, &[outside.clone()]).is_err());
+        assert!(super::checked_in(&root, &[file.clone(), outside]).is_err());
+        assert!(super::checked_in(&root, &[root.join("blobs").join("gone.jpg")]).is_err());
+        assert!(
+            super::checked_in(
+                &root,
+                &[root.join("blobs").join("..").join("..").join("kept.jpg")]
+            )
+            .is_err()
+        );
+        #[cfg(unix)]
+        {
+            let link = root.join("blobs").join("link.jpg");
+            std::os::unix::fs::symlink(folder.path().join("kept.jpg"), &link).unwrap();
+            assert!(super::checked_in(&root, &[link]).is_err());
+        }
     }
 
     #[test]

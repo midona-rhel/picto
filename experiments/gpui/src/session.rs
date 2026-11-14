@@ -476,6 +476,11 @@ impl Session {
         crate::application::guard(&self.root).is_ok()
     }
 
+    /// The disposable copy's canonical root.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     /// The library's blob store.
     pub fn blobs(&self) -> &std::path::Path {
         &self.blobs
