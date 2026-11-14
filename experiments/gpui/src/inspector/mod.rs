@@ -937,8 +937,8 @@ impl Inspector {
             let tip = if self.copied == Some(color) {
                 t("Copied!").to_owned()
             } else {
-                format!(
-                    "{} · Click to filter · Right-click for actions",
+                crate::tf!(
+                    "{value0} · Click to filter · Right-click for actions",
                     colors::hex(color)
                 )
             };

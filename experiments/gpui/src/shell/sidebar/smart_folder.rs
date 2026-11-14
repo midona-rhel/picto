@@ -133,7 +133,8 @@ impl SmartFolderEditor {
     ) -> Self {
         let (name, icon, color, notes, view) = match &target {
             Target::Create { .. } => (
-                t("New Smart Folder").to_owned(),
+                // i18n: the new smart folder's name, English as production's
+                "New Smart Folder".to_owned(),
                 None,
                 None,
                 String::new(),
@@ -1111,11 +1112,11 @@ impl SmartFolderEditor {
             .hover(move |style| style.bg(theme.surface_hover()))
             .child(ui::icon(glyph, 16., theme.text()).flex_none())
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(self.icon.clone().unwrap_or("Default".into())),
+                div().flex_1().min_w_0().truncate().child(
+                    self.icon
+                        .clone()
+                        .unwrap_or(crate::i18n::en("Default").into()),
+                ),
             )
             .child(ui::icon("chevron-down", 14., theme.text_tertiary()).flex_none())
             .child(

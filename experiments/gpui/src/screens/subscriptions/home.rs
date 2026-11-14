@@ -351,13 +351,13 @@ impl SubscriptionsScreen {
                 query.last_failure_message.as_deref(),
             )
             .to_owned(),
-            (_, Some(total)) => format!(
-                "{} / {} images downloaded",
+            (_, Some(total)) => crate::tf!(
+                "{value0} / {value1} images downloaded",
                 crate::grid::format::grouped(downloaded),
                 crate::grid::format::grouped(total)
             ),
-            (_, None) => format!(
-                "{} images downloaded",
+            (_, None) => crate::tf!(
+                "{value0} images downloaded",
                 crate::grid::format::grouped(downloaded)
             ),
         };

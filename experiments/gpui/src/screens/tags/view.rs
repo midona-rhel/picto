@@ -146,7 +146,7 @@ impl TagsScreen {
                     .justify_between()
                     .text_color(theme.text_tertiary())
                     .text(theme::TEXT_SM)
-                    .child(format!("Groups({})", groups.len()))
+                    .child(format!("{}{})", t("Groups("), groups.len()))
                     .child(
                         ui::icon_button("create-tag-group", "tags-plus")
                             .size(20.)

@@ -409,13 +409,15 @@ impl SubscriptionsScreen {
                     .text_color(theme.text_tertiary())
                     .whitespace_nowrap()
                     .child(format!(
-                        "{} / {} posts processed",
+                        "{} / {} {}",
                         crate::grid::format::grouped(settled),
-                        crate::grid::format::grouped(target)
+                        crate::grid::format::grouped(target),
+                        t("posts processed")
                     ))
                     .child(format!(
-                        "{} files downloaded",
-                        crate::grid::format::grouped(downloaded)
+                        "{} {}",
+                        crate::grid::format::grouped(downloaded),
+                        t("files downloaded")
                     )),
             )
             .child(

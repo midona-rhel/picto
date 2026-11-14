@@ -429,8 +429,9 @@ impl TagsScreen {
                                                 // The modal body's 20px line.
                                                 .line_height(px(20.))
                                                 .child(format!(
-                                                    "{} media items",
-                                                    tag.assignment_count
+                                                    "{} {}",
+                                                    tag.assignment_count,
+                                                    t("media items")
                                                 )),
                                         ),
                                 ),

@@ -379,6 +379,26 @@ window: the Inbox badge, the "Subscriptions finished" system notification,
 and the guarded file hand-offs. `mod.rs` is portable; `macos.rs`,
 `windows.rs` and `linux.rs` hold each platform's calls.
 
+**Languages** (`src/i18n/`). Production's eight catalogs
+(`src/i18n/locales/*.json` at the repository root, included when the app is
+built; there is no copy here) and its rules: `t("English text")` looks a
+message up by production's English key and shows English when no catalog
+holds it; `tf!("… {value0} …", a)` fills the placeholders in order; plurals
+are what production passes (`plural_s`, its `'' : 's'`, in every language).
+The language is the one chosen in Settings (kept as `locale` in
+`state.json`), else the system's when it is one of the eight, else English;
+choosing one shows it at once in every window, as production's `setLocale`
+does. The shared menu, select and text field translate the labels and
+placeholders they are given, and the sidebar and the titlebar's title show
+names through `t()` when drawn, as production's `translateMessage` does, so a
+name read in the previous language is shown in the new one. Numbers and
+dates are written in the system's language, not the interface's, as
+production's `toLocaleString()` and `Intl` without a locale write them
+(`format.rs`: grouping, dates and relative times for the eight languages,
+checked against ICU; any other system language writes them as American
+English); undo history counts use the interface's language, as
+`historyMessages.ts` does. `guard.rs` reads the sources (below).
+
 **Settings and state** (`src/settings/`, `state.rs`). One settings model
 loaded from the library's `setting` row `application` and `view_pref` row
 `grid:defaults` with production's per-field fallbacks; the Settings window
@@ -437,6 +457,20 @@ version are kept. The app starts on All each launch, as production does.
   a release build does not hold their names. The off-screen tool's
   variables, its dialog answers (`prompt.rs`) and the record of desktop
   requests (`desktop/`) exist in test builds only.
+- **Every shown text goes through `t`.** Write production's English key
+  exactly (its punctuation, `…`, capitals): `t("Move to Trash")`,
+  `tf!("Delete {value0} items", count)`, or hand a menu row, a select's
+  choice or a placeholder the key itself (they translate it). A text
+  production has no key for stays English and is written `en("…")` and
+  listed in `src/i18n/gpui_only.txt`. A literal that is a key but is not
+  shown (an id, a key context, a JSON field, a file name production writes
+  in English) carries `// i18n: <why>` on its line or the line above;
+  `// i18n: translated where drawn` covers a table up to the next blank
+  line. `i18n::guard::every_shown_text_goes_through_t` fails on a literal
+  given to `t` that is not a key, on a key left outside `t`, and on a
+  literal handed straight to a drawing call (`.child`, `.label`, a tooltip,
+  a notification, …); it cannot see a text built with `format!` and drawn
+  later, or a literal kept in a variable that is not a key.
 - **Comments describe behaviour**: no ticket numbers. A missing behaviour is
   a `TODO:` saying what is missing, and a `TODO` is never removed until the
   behaviour exists.
@@ -682,6 +716,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Glass and blur | backdrop blur behind panels on Metal and wgpu, shadows cut out as CSS draws them, menus in pop-up windows over the system's blur on macOS | read; seen on macOS |
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
 | Kept across launches | window place, rails, folds, filters, recents, shortcuts | tests (pure parts) |
+| Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
 add to last folder, copy and paste tags, slideshow, navigator, the layout and
@@ -746,8 +781,21 @@ re-checked by reading the code; the rest were checked against it.
   Create Library, Open Library and Library Manager only close the popover;
   the application menu's Library Manager, New Library, Open Library, Recent
   Libraries and Clear History are disabled.
-- Localization: English only; the Language setting is saved and read by
-  nothing (production has eight locales).
+- Localization, partly: the application menu stays English, as production's
+  (`menu.mjs` is not translated); texts production writes without a key
+  stay English (`src/i18n/gpui_only.txt`), and so do texts built with
+  `format!` from English words in both apps (count rows such as "Move 3 to
+  Trash", the Tags screen's delete messages, the overwrite confirmation's
+  message, the export report this app adds). Han characters are drawn with
+  the system's fallback font, chosen by the system's languages, not the
+  interface's: with Japanese chosen on a system without Japanese among its
+  languages, CoreText may draw Chinese glyph forms where production (which
+  sets `<html lang>`) draws Japanese ones. The off-screen tool on Windows and
+  Linux (CI) holds only the bundled Roboto and Fira Mono, which have no
+  Chinese or Japanese glyphs, so pictures in those languages show missing
+  glyphs there; real windows use DirectWrite's system fallback on Windows
+  and the system's fonts through fontconfig on Linux (a CJK font must be
+  installed).
 - App-wide UI zoom (production's ⌘= / ⌘− / ⌘0 outside the viewer): every
   size is in pixels. Settings' Zoom Level is saved and, as in production,
   not applied.
@@ -825,6 +873,14 @@ re-checked by reading the code; the rest were checked against it.
   can leave them open on their own.
 
 ### Production bugs not copied
+
+- Production translates its shortcut registry and Settings' sections once,
+  when a window loads (`t()` in module-level tables), so a language chosen
+  later shows the shortcuts' labels in the old one until a restart; here
+  they follow at once. Where production calls `t()` on a key in one place
+  and forgets it in another for the same text (the new-folder tooltip, the
+  filter chips' labels and units, the Resolution editor's rows, the smart
+  folder dialog's create title), this app translates both.
 
 - Production's window-wide shortcut handler swallows Tab on every control
   that is not a text field (toggling both panels, behind a dialog too), sends

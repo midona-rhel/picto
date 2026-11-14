@@ -160,7 +160,7 @@ impl SettingsWindow {
                         .text(theme::TEXT_SM)
                         .line_height(px(theme::TEXT_SM * 1.55))
                         .text_color(theme.text_tertiary())
-                        .child(format!("© {year} Picto contributors")),
+                        .child(format!("© {year} {}", t("Picto contributors"))),
                 )
                 .into_any_element(),
         ]

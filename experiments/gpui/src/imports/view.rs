@@ -198,16 +198,16 @@ impl Imports {
                     .text_color(theme.text_tertiary())
                     .font_features(theme::tabular_figures())
                     .children((task.existing > 0).then(|| {
-                        div().child(format!(
-                            "{} already in library",
+                        div().child(crate::tf!(
+                            "{value0} already in library",
                             crate::grid::format::grouped(task.existing)
                         ))
                     }))
                     .children((task.failed > 0).then(|| {
                         div()
                             .text_color(rgb(theme::TASK_WARNING_GLYPH))
-                            .child(format!(
-                                "{} failed",
+                            .child(crate::tf!(
+                                "{value0} failed",
                                 crate::grid::format::grouped(task.failed)
                             ))
                     })),
@@ -321,8 +321,8 @@ impl Imports {
             .min_w_0()
             .child(titles(
                 crate::tf!("Stop importing “{value0}”?", task.title),
-                format!(
-                    "{} of {} files are done so far",
+                crate::tf!(
+                    "{value0} of {value1} files are done so far",
                     crate::grid::format::grouped(task.done),
                     crate::grid::format::grouped(task.total)
                 ),

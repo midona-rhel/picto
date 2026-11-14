@@ -245,7 +245,7 @@ impl Organizer {
                     .flex_none()
                     .text(theme::TEXT_XS)
                     .text_color(theme.text_tertiary())
-                    .child(format!("{} items", grouped(group.member_count))),
+                    .child(format!("{} {}", grouped(group.member_count), t("items"))),
             )
     }
 }
@@ -325,9 +325,10 @@ impl Render for Organizer {
                     .line_height(px(20.))
                     .text_color(counter_color)
                     .child(format!(
-                        "{} / {} bytes",
+                        "{} / {} {}",
                         grouped(bytes as u64),
-                        grouped(self.maximum_bytes)
+                        grouped(self.maximum_bytes),
+                        t("bytes")
                     )),
             );
         if too_long {
