@@ -862,9 +862,7 @@ Navigation and results
 - Settings reads the library's statistics and cloud state once when it
   opens; the keyboard preset, audio visualization and shortcut edits apply
   only on Save, without production's live preview†; an undo that reverts a
-  settings write does not reload the model†. "Reset all views" deletes the
-  `view_pref` rows with its own SQL rather than through the core's
-  `settings.view.reset`.
+  settings write does not reload the model†.
 
 Drawing (GPUI cannot scale or rotate an element's contents, and has no
 radial gradients, masks or blend modes)
