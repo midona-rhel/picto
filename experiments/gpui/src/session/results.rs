@@ -589,7 +589,15 @@ impl Session {
                     .map(|place| place.map(|ordinal| ordinal as usize)),
             )
             .collect::<HashMap<_, _>>();
-        self.selection.reconcile(&places);
+        if self.selection.reconcile(&places) {
+            crate::ui::notify::warning(
+                crate::i18n::t("Part of the selection left this view"),
+                crate::i18n::t(
+                    "A selected range lost its first or last item, so that range is no longer selected.",
+                ),
+                cx,
+            );
+        }
         let moved = |end: End| match places.get(&end.id) {
             Some(Some(ordinal)) => Some(End {
                 id: end.id,

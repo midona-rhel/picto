@@ -332,7 +332,10 @@ impl Selection {
     /// moves to where it is now (`None`: it left the destination). Items
     /// that left are dropped, and so is a span whose end left, since no run
     /// of the order is what it described. Items not in `places` keep theirs.
-    pub fn reconcile(&mut self, places: &HashMap<RootId, Option<usize>>) {
+    /// Answers whether a span was dropped that way, which production warns
+    /// of.
+    pub fn reconcile(&mut self, places: &HashMap<RootId, Option<usize>>) -> bool {
+        let mut lost_end = false;
         let moved = |id: &RootId, at: usize| match places.get(id) {
             Some(Some(now)) => Some(*now),
             Some(None) => None,
@@ -355,12 +358,12 @@ impl Selection {
                         ordinal: moved(&end.id, end.ordinal)?,
                     })
                 };
-                let spans = merge(
-                    spans
-                        .iter()
-                        .filter_map(|(low, high)| Some(span_of(end(low)?, end(high)?)))
-                        .collect(),
-                );
+                let kept = spans
+                    .iter()
+                    .filter_map(|(low, high)| Some(span_of(end(low)?, end(high)?)))
+                    .collect::<Vec<_>>();
+                lost_end = kept.len() < spans.len();
+                let spans = merge(kept);
                 let included = follow(included)
                     .into_iter()
                     .filter(|(_, at)| !in_spans(&spans, *at))
@@ -372,6 +375,7 @@ impl Selection {
         if self.is_empty() {
             self.excluded.clear();
         }
+        lost_end
     }
 
     /// What an edit of the selection addresses in the destination `query`
@@ -555,18 +559,19 @@ mod tests {
     fn a_refresh_moves_items_and_drops_those_that_left() {
         let mut chosen = Selection::of([end(1), end(2), end(3)]);
         let places = HashMap::from([(end(1).id, Some(4)), (end(2).id, None)]);
-        chosen.reconcile(&places);
+        // Items that left a chosen set are not a range's lost end.
+        assert!(!chosen.reconcile(&places));
         assert_eq!(chosen.count(100), 2);
         assert_eq!(chosen.chosen(), vec![end(3).id, end(1).id]);
         // A span whose end left the destination is dropped.
         let mut spanned = Selection::default();
         spanned.extend(end(3), end(2000), false, window(1500, 10));
-        spanned.reconcile(&HashMap::from([(end(3).id, None)]));
+        assert!(spanned.reconcile(&HashMap::from([(end(3).id, None)])));
         assert!(spanned.is_empty());
         // One whose ends moved follows them.
         let mut moved = Selection::default();
         moved.extend(end(3), end(2000), false, window(1500, 10));
-        moved.reconcile(&HashMap::from([(end(3).id, Some(5))]));
+        assert!(!moved.reconcile(&HashMap::from([(end(3).id, Some(5))])));
         assert_eq!(moved.count(10_000), 1996);
     }
 }
