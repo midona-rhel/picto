@@ -31,17 +31,17 @@ pub const DARK: Theme = Theme {
     light: false,
 };
 /// `:root[data-theme="blue"]`
-pub const BLUE: Theme = Theme {
+const BLUE: Theme = Theme {
     background: 0x0d1630,
     ..DARK
 };
 /// `:root[data-theme="purple"]`
-pub const PURPLE: Theme = Theme {
+const PURPLE: Theme = Theme {
     background: 0x1c1424,
     ..DARK
 };
 /// `:root[data-theme="gray"]`
-pub const GRAY: Theme = Theme {
+const GRAY: Theme = Theme {
     background: 0x37383c,
     ..DARK
 };
@@ -54,7 +54,7 @@ pub const LIGHT: Theme = Theme {
     light: true,
 };
 /// `:root[data-mantine-color-scheme="light"][data-theme="lightgray"]`
-pub const LIGHT_GRAY: Theme = Theme {
+const LIGHT_GRAY: Theme = Theme {
     background: 0xe3e4e6,
     ..LIGHT
 };

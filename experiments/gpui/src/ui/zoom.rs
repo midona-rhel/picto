@@ -35,7 +35,7 @@ pub fn step_tile(size: f32, larger: bool) -> f32 {
 /// Where a zoom percentage sits on the viewer's 0–100 track: 5% at the left
 /// end, 100% in the middle, 800% at the right end, logarithmic on each side
 /// (`zoomToSlider` in `GridToolbar.tsx`).
-pub fn percent_to_position(percent: f32) -> f32 {
+fn percent_to_position(percent: f32) -> f32 {
     if percent <= 100. {
         50. * (percent / PERCENT_MINIMUM).ln() / (100. / PERCENT_MINIMUM).ln()
     } else {
@@ -44,7 +44,7 @@ pub fn percent_to_position(percent: f32) -> f32 {
 }
 
 /// The inverse of [`percent_to_position`] (`sliderToZoom`).
-pub fn position_to_percent(position: f32) -> f32 {
+fn position_to_percent(position: f32) -> f32 {
     if position <= 50. {
         PERCENT_MINIMUM * (100. / PERCENT_MINIMUM).powf(position / 50.)
     } else {

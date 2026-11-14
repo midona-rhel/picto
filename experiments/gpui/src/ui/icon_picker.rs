@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// `CURATED_ICONS` in `iconRegistry.ts`: the name stored on a folder, which
 /// is also the glyph's file in `assets/`, and its label.
-pub const CURATED_ICONS: [(&str, &str); 115] = [
+const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconPhoto", "Photo"),
     ("IconVideo", "Video"),
     ("IconMusic", "Music"),

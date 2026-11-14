@@ -44,7 +44,7 @@ pub struct Activity {
 /// `subscriptionActivityPulse`, 2.4 s: from 65% opacity with a 3px glow at
 /// 30% to full opacity with a 9px glow at 60% and back, each half on
 /// `ease-in-out`. Returns the opacity, the glow's blur and its strength.
-pub fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
+fn activity_pulse(elapsed: std::time::Duration) -> (f32, f32, f32) {
     let along = motion::pulse(elapsed);
     let between = |from: f32, to: f32| from + (to - from) * along;
     (between(0.65, 1.), between(3., 9.), between(30., 60.))

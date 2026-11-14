@@ -56,7 +56,7 @@ pub struct Hsv {
 }
 
 /// `hexToHsv`; anything that is not `#rrggbb` is mid grey.
-pub fn hex_to_hsv(hex: &str) -> Hsv {
+fn hex_to_hsv(hex: &str) -> Hsv {
     let rgb = theme::parse_hex_code(hex).unwrap_or(0x808080);
     let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.;
     let (red, green, blue) = (channel(16), channel(8), channel(0));
@@ -80,7 +80,7 @@ pub fn hex_to_hsv(hex: &str) -> Hsv {
 }
 
 /// `hsvToHex`, in capitals.
-pub fn hsv_to_hex(hsv: Hsv) -> String {
+fn hsv_to_hex(hsv: Hsv) -> String {
     let chroma = hsv.value * hsv.saturation;
     let segment = hsv.hue / 60.;
     let secondary = chroma * (1. - ((segment % 2.) - 1.).abs());

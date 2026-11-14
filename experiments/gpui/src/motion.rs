@@ -17,7 +17,7 @@ pub const MENU_IN: Duration = Duration::from_millis(70);
 /// `menuIn` and `librarySwitcherIn`: the scale a menu or popover grows from.
 pub const MENU_IN_SCALE: f32 = 0.96;
 /// `menuOut`: the scale a dismissed context menu shrinks to as it fades.
-pub const MENU_OUT_SCALE: f32 = 0.95;
+const MENU_OUT_SCALE: f32 = 0.95;
 /// CSS `ease`.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
@@ -124,7 +124,7 @@ pub const CARD_HOVER: Duration = Duration::from_millis(120);
 /// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
 pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
-pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
+const STATUS_PULSE: Duration = Duration::from_millis(2400);
 
 /// Duplicate review: an original fades in over its thumbnail (`.fullImage`).
 pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
@@ -162,8 +162,8 @@ pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);
 pub const TOOLTIP_OFFSET: f32 = 6.;
 /// Mantine's `pop` transition, which `KbdTooltip` uses: hidden, the tooltip
 /// is at `scale(.9) translateY(10px)` about its centre.
-pub const TOOLTIP_POP_SCALE: f32 = 0.9;
-pub const TOOLTIP_POP_RISE: f32 = 10.;
+const TOOLTIP_POP_SCALE: f32 = 0.9;
+const TOOLTIP_POP_RISE: f32 = 10.;
 
 /// `inspectorFadeIn` / `inspectorFadeOut`: the inspector rail fades rather
 /// than slides when it becomes available or unavailable (a screen opened
@@ -171,8 +171,8 @@ pub const TOOLTIP_POP_RISE: f32 = 10.;
 pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
 
 /// `modalIn` / `modalOut`: the panel's scale and drop when hidden.
-pub const MODAL_SCALE: f32 = 0.97;
-pub const MODAL_DROP: f32 = 4.;
+const MODAL_SCALE: f32 = 0.97;
+const MODAL_DROP: f32 = 4.;
 
 /// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
 /// before going back once the pointer leaves it.
@@ -265,19 +265,6 @@ pub const REVIEW_PILL_IN: Duration = Duration::from_millis(130);
 pub const REVIEW_GLOW: Duration = Duration::from_millis(160);
 /// `.action`'s `color`: 140 ms (`ease`).
 pub const REVIEW_TINT: Duration = Duration::from_millis(140);
-
-/// Where a fade that set off from `from` toward 0 or 1 has got to.
-fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
-    let target = if hovered { 1. } else { 0. };
-    from + (target - from) * EASE_DEFAULT.ease(progress(elapsed, duration))
-}
-
-struct HoverFade {
-    hovered: bool,
-    since: std::time::Instant,
-    from: f32,
-    duration: Duration,
-}
 
 /// One two-state value that moves as a CSS transition does. Components keep
 /// one per element for their hover highlight.
@@ -387,41 +374,27 @@ pub fn hover_fade(
     (value, set)
 }
 
-/// Two-state values that move as CSS transitions do: toward the new state on
-/// the default curve, starting from wherever the previous move had reached.
-/// Used for hover highlights and for sliding the rails in and out.
+/// Two-state values that move as CSS transitions do, one [`Fade`] per key:
+/// for hover highlights and for sliding the rails in and out.
 #[derive(Default)]
 pub struct Fades {
-    fades: std::collections::HashMap<(&'static str, usize), HoverFade>,
+    fades: std::collections::HashMap<(&'static str, usize), Fade>,
 }
 
 impl Fades {
     pub fn set(&mut self, key: (&'static str, usize), hovered: bool, duration: Duration) {
-        let from = self.value(key);
-        self.fades
-            .retain(|_, fade| fade.hovered || fade.since.elapsed() < fade.duration);
-        self.fades.insert(
-            key,
-            HoverFade {
-                hovered,
-                since: std::time::Instant::now(),
-                from,
-                duration,
-            },
-        );
+        // Fades back at rest are forgotten; one that is unknown is at 0.
+        self.fades.retain(|_, fade| fade.on() || fade.animating());
+        self.fades.entry(key).or_default().set(hovered, duration);
     }
 
     /// The highlight's strength, 0 at rest and 1 fully hovered.
     pub fn value(&self, key: (&'static str, usize)) -> f32 {
-        self.fades.get(&key).map_or(0., |fade| {
-            fade_value(fade.from, fade.hovered, fade.since.elapsed(), fade.duration)
-        })
+        self.fades.get(&key).map_or(0., Fade::value)
     }
 
     pub fn animating(&self) -> bool {
-        self.fades
-            .values()
-            .any(|fade| fade.since.elapsed() < fade.duration)
+        self.fades.values().any(Fade::animating)
     }
 }
 
@@ -528,18 +501,16 @@ mod tests {
     }
 
     #[test]
-    fn a_reversed_hover_fade_continues_from_where_it_was() {
-        let duration = Duration::from_millis(150);
-        assert_eq!(fade_value(0., true, Duration::ZERO, duration), 0.);
-        assert_eq!(fade_value(0., true, duration, duration), 1.);
-        let halfway = fade_value(0., true, Duration::from_millis(75), duration);
-        assert!(halfway > 0. && halfway < 1.);
-        // The pointer leaves mid-fade: the fade-out starts at that strength.
-        assert_eq!(
-            fade_value(halfway, false, Duration::ZERO, duration),
-            halfway
-        );
-        assert_eq!(fade_value(halfway, false, duration, duration), 0.);
+    fn keyed_fades_start_at_rest_and_forget_what_has_settled() {
+        let mut fades = Fades::default();
+        assert_eq!(fades.value(("row", 1)), 0.);
+        fades.set(("row", 1), true, Duration::ZERO);
+        assert_eq!(fades.value(("row", 1)), 1.);
+        fades.set(("row", 1), false, Duration::ZERO);
+        // Settled at rest: the next change forgets it.
+        fades.set(("row", 2), true, Duration::from_secs(10));
+        assert!(!fades.fades.contains_key(&("row", 1)));
+        assert!(fades.animating());
     }
 
     #[test]

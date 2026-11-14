@@ -7,7 +7,7 @@ use gpui::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 /// `FOLDER_COLORS`: the label and the stored hex, `None` for the default.
-pub const FOLDER_COLORS: [(&str, Option<&str>); 10] = [
+const FOLDER_COLORS: [(&str, Option<&str>); 10] = [
     ("Default", None),
     ("Blue", Some("#339AF0")),
     ("Red", Some("#FA5252")),

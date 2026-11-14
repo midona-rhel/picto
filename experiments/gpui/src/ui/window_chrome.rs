@@ -55,7 +55,7 @@ pub fn rim(cx: &App) -> Option<impl IntoElement + use<>> {
 /// system titlebar these windows hide; on Linux while the window's
 /// decorations are the client's (an X11 desktop without a compositor keeps
 /// the window manager's frame, buttons and all). Never on macOS.
-pub fn draws_caption_buttons(window: &Window) -> bool {
+fn draws_caption_buttons(window: &Window) -> bool {
     if cfg!(target_os = "macos") {
         false
     } else if cfg!(target_os = "windows") {
