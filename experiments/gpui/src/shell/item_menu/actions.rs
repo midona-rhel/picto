@@ -97,10 +97,21 @@ impl Shell {
                     );
                 }
             }
+            // Windows' own application chooser on the file, the only
+            // system that offers this row.
             Action::OpenWithOther => {
-                // TODO: open Windows' own application chooser on the file
-                // (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), which
-                // is the only system that offers this row.
+                if let Some(file) = file {
+                    self.with_path(
+                        file,
+                        |path, cx| {
+                            if let Err(error) = crate::desktop::open_with_chooser(&path, cx) {
+                                crate::ui::notify::error("Could not open file", error, cx);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
             Action::LoadingApplications => {}
             Action::OpenFolder => {

@@ -6562,6 +6562,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "wgpu 27.0.1",
+ "zbus 5.19.0",
  "zip 8.6.0",
 ]
 

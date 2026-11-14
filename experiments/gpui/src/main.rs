@@ -216,6 +216,11 @@ fn main() {
         // The dock badge and the system notifications, for the app proper
         // only.
         desktop::enable(cx);
+        // Off macOS the system files the app's notifications under this
+        // identity (the Mac takes it from the bundle).
+        if !cfg!(target_os = "macos") {
+            cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         app_menu::quit_with_main_window(cx);
         // Stop the workers and checkpoint the copy before the process
