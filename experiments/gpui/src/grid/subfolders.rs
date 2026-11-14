@@ -287,6 +287,8 @@ pub struct Header {
     /// The folders whose covers were last asked for; asked again when the
     /// list changes or a folder changed.
     asked: Vec<FolderId>,
+    /// The latest ask: an earlier one's covers arrive late and are dropped.
+    request: super::Latest,
     pub stale: bool,
     /// The disclosure, open until it is closed; it opens again for the
     /// next folder that has children.
@@ -307,6 +309,7 @@ impl Default for Header {
             children: Vec::new(),
             covers: HashMap::new(),
             asked: Vec::new(),
+            request: super::Latest::default(),
             stale: false,
             expanded: true,
             geometry: Geometry::default(),
@@ -387,6 +390,7 @@ impl GridView {
         if (ids != header.asked || header.stale) && !ids.is_empty() {
             header.asked = ids.clone();
             header.stale = false;
+            let request = header.request.next();
             let job = self.session.read(cx).run(move |library| {
                 ids.iter()
                     .map(|id| (*id, read_cover(library, *id, &blobs)))
@@ -398,6 +402,9 @@ impl GridView {
                 };
                 let _ = this.update(cx, |this, cx| {
                     let header = &mut this.subfolders;
+                    if !header.request.is(request) {
+                        return;
+                    }
                     header.covers.retain(|id, _| header.asked.contains(id));
                     header.covers.extend(covers);
                     cx.notify();

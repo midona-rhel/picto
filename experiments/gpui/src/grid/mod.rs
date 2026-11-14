@@ -120,6 +120,9 @@ pub struct GridView {
     /// The drag left the window before its files were resolved; it is
     /// handed to the system when they are (`nativeDragRequestRef.pending`).
     drag_out_waiting: bool,
+    /// The drag whose files are being resolved: a reply for an earlier drag
+    /// is dropped.
+    drag_request: Latest,
     _session: Subscription,
     _thumbnails: Subscription,
 }
@@ -168,6 +171,12 @@ fn drag_out_paths(found: &serde_json::Value) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether the destination (`entry`, the session's current one) is still
+/// the grid of `scope`, the one a reply was asked for.
+fn shows(entry: Option<&crate::backend::Navigation>, scope: &ItemScope) -> bool {
+    entry.is_some_and(|entry| entry.screen.is_none() && entry.scope == *scope)
+}
+
 /// The item's aspect ratio when it is known. Audio without dimensions is
 /// drawn two to one.
 fn aspect(item: &RootSummary) -> Option<f64> {
@@ -177,6 +186,24 @@ fn aspect(item: &RootSummary) -> Option<f64> {
         }
         _ if item.mime.starts_with("audio/") => Some(2.),
         _ => None,
+    }
+}
+
+/// Numbers the requests of one kind, so that a reply can tell whether it
+/// answers the latest one: anything asked since makes it stale.
+#[derive(Default)]
+pub(crate) struct Latest(u64);
+
+impl Latest {
+    /// A new request, which every earlier one's reply now answers late.
+    pub fn next(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+
+    /// Whether a reply to `request` still answers the latest request.
+    pub fn is(&self, request: u64) -> bool {
+        self.0 == request
     }
 }
 
@@ -663,6 +690,7 @@ impl GridView {
             reorder: None,
             drag_files: None,
             drag_out_waiting: false,
+            drag_request: Latest::default(),
             _session: subscription,
             _thumbnails: changed,
         }
@@ -816,13 +844,15 @@ impl GridView {
                 return;
             }
             // The item under the magnifier when the pointer arrived is the
-            // one previewed, as the Electron grid's timer captures it.
+            // one previewed, as the Electron grid's timer captures it: the
+            // item the tile was laid out for, if the session still holds it.
+            let laid_out = self.layout_ids.get(index).copied();
             let target = self
                 .session
                 .read(cx)
                 .items
                 .get(index)
-                .filter(|item| !item.mime.starts_with("video/"))
+                .filter(|item| Some(item.root_id.0) == laid_out && !item.mime.starts_with("video/"))
                 .map(|item| (item.root_id, item.content_hash.clone()));
             if let Some((id, hash)) = target {
                 self.preview.show = Some(cx.spawn(async move |this, cx| {
@@ -1069,6 +1099,7 @@ impl GridView {
         };
         self.drag_files = Some(None);
         self.drag_out_waiting = false;
+        let request = self.drag_request.next();
         let answer = self.session.read(cx).dispatch(
             "media.resolve_target_paths",
             serde_json::json!({ "target": target }),
@@ -1076,6 +1107,10 @@ impl GridView {
         cx.spawn_in(window, async move |this, cx| {
             let resolved = answer.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // Only for the drag going on now.
+                if !this.drag_request.is(request) {
+                    return;
+                }
                 let files = match resolved {
                     Ok(Ok(found)) => drag_out_paths(&found),
                     Ok(Err(error)) => {
@@ -1261,6 +1296,7 @@ impl GridView {
             return;
         }
         let reselect = items.roots.clone();
+        let source = items.source.clone();
         let answer = self.session.update(cx, |session, _| {
             session.dispatch(
                 "folders.items.reorder",
@@ -1272,6 +1308,12 @@ impl GridView {
             match answer.await {
                 Ok(Ok(_)) => {
                     let _ = session.update(cx, |session, cx| {
+                        // The folder is shown in its new order only while it
+                        // is still the destination: the view preferences
+                        // written are the destination's.
+                        if !shows(session.nav.get(session.scope), &source) {
+                            return;
+                        }
                         session.reselect = Some(reselect);
                         session.update_view(
                             serde_json::json!({
@@ -1650,6 +1692,7 @@ impl Render for GridView {
                     // Tiles of the window before mean other items now.
                     self.marquee = None;
                     self.hovered = None;
+                    self.reorder = None;
                 }
                 let aspects = session
                     .items
@@ -2301,8 +2344,43 @@ impl Render for GridView {
 
 #[cfg(test)]
 mod tests {
-    use super::drag_out_paths;
+    use super::{Latest, drag_out_paths, shows};
+    use picto_library::FolderId;
+    use picto_library::query::ItemScope;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_reply_applies_only_while_its_destination_is_shown() {
+        let folder = |id| ItemScope::Folder {
+            folder_id: FolderId(id),
+        };
+        let entry = crate::backend::Navigation {
+            label: "Art".into(),
+            count: None,
+            scope: folder(1),
+            screen: None,
+            random: false,
+            icon: None,
+            tint: None,
+            group: false,
+            watched: false,
+            depth: 0,
+            parent: None,
+        };
+        assert!(shows(Some(&entry), &folder(1)));
+        assert!(!shows(Some(&entry), &folder(2)));
+        assert!(!shows(None, &folder(1)));
+    }
+
+    #[test]
+    fn a_reply_is_stale_once_anything_was_asked_since() {
+        let mut latest = Latest::default();
+        let first = latest.next();
+        assert!(latest.is(first));
+        let second = latest.next();
+        assert!(!latest.is(first));
+        assert!(latest.is(second));
+    }
 
     #[test]
     fn dragged_out_files_are_each_file_once() {
