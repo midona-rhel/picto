@@ -464,7 +464,7 @@ impl GridView {
             let two_lines = header
                 .children
                 .iter()
-                .map(|child| super::name_width(&child.label, window) > name_room)
+                .map(|child| super::tile::name_width(&child.label, window) > name_room)
                 .collect();
             header.lines = Some((name_room, two_lines));
         }
@@ -841,7 +841,7 @@ impl GridView {
                 ))
                 .into_any_element(),
             None => {
-                let wraps = super::name_width(&child.label, window) > name_room;
+                let wraps = super::tile::name_width(&child.label, window) > name_room;
                 div()
                     .max_w(px(name_room))
                     .min_w_0()

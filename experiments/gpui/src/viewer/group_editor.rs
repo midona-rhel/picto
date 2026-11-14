@@ -747,8 +747,8 @@ impl Render for GroupEditor {
             let magnifier = self.hovered == Some(index)
                 && !item.mime.starts_with("video/")
                 && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME;
-            let cell = grid::tile_art(
-                grid::TileLook {
+            let cell = grid::tile::tile_art(
+                grid::tile::TileLook {
                     tile,
                     item,
                     thumbnail: self.thumbs[index].clone(),
