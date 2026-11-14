@@ -1,8 +1,9 @@
-# Texts only this app shows, with no key in production's en.json: they
-# stay English in every language. One per line, as written in the code
+# Texts with no key in production's en.json: they stay English in every
+# language. Nearly all are texts production also writes in English without
+# t(); this app's own are Could not copy file, Could not copy file path and
+# This font cannot be previewed. One per line, as written in the code
 # (a line break as \n). The guard (guard.rs) keeps this list exact.
 
-# Production shows these in English too (no key in its catalogs).
 Edit Rules
 Edit Smart Folder
 New Smart Folder or Group
