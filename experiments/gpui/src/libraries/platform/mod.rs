@@ -31,3 +31,48 @@ fn unix_identity(path: &std::path::Path) -> std::io::Result<String> {
         .map_or(0, |since| since.as_nanos());
     Ok(format!("{}:{}:{made}", meta.dev(), meta.ino()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::file_identity;
+    use std::path::{Path, PathBuf};
+
+    fn database_in(library: &Path) -> PathBuf {
+        std::fs::create_dir_all(library).unwrap();
+        let database = library.join("library.sqlite");
+        std::fs::write(&database, b"a database").unwrap();
+        database
+    }
+
+    /// Whether the file system records when a file was made. Without it a
+    /// replacement can only be told by its inode, which may be the old one.
+    fn keeps_creation_time(file: &Path) -> bool {
+        std::fs::metadata(file).is_ok_and(|meta| meta.created().is_ok())
+    }
+
+    #[test]
+    fn a_moved_library_keeps_its_identity_and_a_replaced_one_gets_another() {
+        let folder = tempfile::tempdir().unwrap();
+        let library = folder.path().join("Kept.library");
+        let first = file_identity(&database_in(&library)).unwrap();
+        assert_eq!(
+            file_identity(&library.join("library.sqlite")).unwrap(),
+            first
+        );
+
+        let moved = folder.path().join("Moved.library");
+        std::fs::rename(&library, &moved).unwrap();
+        assert_eq!(file_identity(&moved.join("library.sqlite")).unwrap(), first);
+
+        // Another library made where the first was. File systems round a
+        // file's creation time to the clock's tick (up to 10 ms on Linux),
+        // and the new file may be handed the old one's inode, so the
+        // replacement is made a few ticks later, as any real one is.
+        std::fs::remove_dir_all(&moved).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let replacement = database_in(&library);
+        if keeps_creation_time(&replacement) {
+            assert_ne!(file_identity(&replacement).unwrap(), first);
+        }
+    }
+}

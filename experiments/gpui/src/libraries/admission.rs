@@ -523,36 +523,47 @@ pub(crate) mod tests {
         }
     }
 
+    /// A probe that finds no Electron app and reports the database file's
+    /// identity it is told, so the consent rule is tested apart from what
+    /// a file system makes of a replaced file (`platform::tests`).
+    struct Database(&'static str);
+
+    impl Probes for Database {
+        fn picto_process(&self) -> Result<Option<String>, String> {
+            Ok(None)
+        }
+
+        fn file_identity(&self, _: &Path) -> std::io::Result<String> {
+            Ok(self.0.to_owned())
+        }
+    }
+
     #[test]
     fn consent_is_asked_once_per_library_and_its_database() {
         let folder = tempfile::tempdir().unwrap();
         let root = real_library(folder.path(), "Kept");
-        let decision = admit(&root, Origin::Manager, &release(), &[], &not_running());
+        let first = Database("first");
+        let decision = admit(&root, Origin::Manager, &release(), &[], &first);
         let Decision::Ask { identity, .. } = decision else {
             panic!("{decision:?}");
         };
         assert_eq!(identity.path, root.to_string_lossy());
+        assert_eq!(identity.database, "first");
+        let consents = [identity];
         assert!(matches!(
-            admit(
-                &root,
-                Origin::Manager,
-                &release(),
-                &[identity.clone()],
-                &not_running()
-            ),
+            admit(&root, Origin::Manager, &release(), &consents, &first),
             Decision::Real { .. }
         ));
         // Another library put at the same path is asked about again.
-        std::fs::remove_dir_all(&root).unwrap();
-        let again = real_library(folder.path(), "Kept");
+        let replaced = Database("second");
         assert!(matches!(
-            admit(
-                &again,
-                Origin::Manager,
-                &release(),
-                &[identity],
-                &not_running()
-            ),
+            admit(&root, Origin::Manager, &release(), &consents, &replaced),
+            Decision::Ask { .. }
+        ));
+        // And a consent says nothing of the same database somewhere else.
+        let elsewhere = real_library(folder.path(), "Other");
+        assert!(matches!(
+            admit(&elsewhere, Origin::Manager, &release(), &consents, &first),
             Decision::Ask { .. }
         ));
     }
