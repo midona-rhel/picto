@@ -185,6 +185,7 @@ impl Menu {
             let opened = cx
                 .open_window(options, move |window, cx| {
                     without_system_shadow(window);
+                    crate::ui::window_chrome::system_blur_behind(window);
                     pop_in(window, None);
                     // The scale starts with the first frame the window
                     // shows; begun now, it would be over before then.

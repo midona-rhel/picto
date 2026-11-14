@@ -50,7 +50,7 @@ pub use check::check;
 pub use chip::{Chip, chip};
 pub use empty_state::{empty_state, empty_state_action};
 pub use field::field;
-pub use glass::{GlassPanel, glass_edges, glass_panel};
+pub use glass::{GlassPanel, fill_over_system_blur, fill_without_blur, glass_edges, glass_panel};
 pub use icon_button::icon_button;
 pub use modal::modal;
 pub use number_input::number_input;
