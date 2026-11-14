@@ -83,6 +83,22 @@ pub fn hold_runs() -> bool {
     seam!("PICTO_GPUI_HOLD_RUNS").is_some()
 }
 
+/// `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>`: every site login's
+/// addresses move onto that origin (path and query kept), and the sign-in
+/// window loads nothing outside it, so a sign-in is driven end to end
+/// against local pages and never reaches a real site (`logins::sites`).
+/// Only a loopback `http:` origin is taken.
+pub fn login_origin() -> Option<String> {
+    let value = seam!("PICTO_GPUI_LOGIN_ORIGIN")?;
+    let url = url::Url::parse(value.to_str()?).ok()?;
+    let loopback = match url.host()? {
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
+        url::Host::Domain(name) => name == "localhost",
+    };
+    (url.scheme() == "http" && loopback).then(|| url.origin().ascii_serialization())
+}
+
 /// `PICTO_GPUI_SILENT`: every player and Flash movie starts muted.
 pub fn silent() -> bool {
     seam!("PICTO_GPUI_SILENT").is_some()

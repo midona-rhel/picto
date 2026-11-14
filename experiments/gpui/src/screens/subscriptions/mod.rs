@@ -2,6 +2,7 @@
 //! library's subscriptions, and one subscription's workspace when a card is
 //! opened. Opening a subscription is a place of the screen, so Back returns
 //! to the grid and the scope title names it.
+mod accounts;
 mod cover;
 mod data;
 mod detail;

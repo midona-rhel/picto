@@ -81,6 +81,25 @@ pub fn order_out(ns_window: &AnyObject) {
     }
 }
 
+/// Puts the window in front of the app's others without making it key or
+/// bringing the app forward (`orderFront:`).
+pub fn order_front(ns_window: &AnyObject) {
+    // SAFETY: `orderFront:` is an NSWindow method taking its sender, an
+    // object that may be nil.
+    unsafe {
+        let _: () = msg_send![ns_window, orderFront: None::<&AnyObject>];
+    }
+}
+
+/// Shows the window behind every other window (`orderBack:`).
+pub fn order_back(ns_window: &AnyObject) {
+    // SAFETY: `orderBack:` is an NSWindow method taking its sender, an
+    // object that may be nil.
+    unsafe {
+        let _: () = msg_send![ns_window, orderBack: None::<&AnyObject>];
+    }
+}
+
 /// Turns off the shadow and edge highlight the system traces round what a
 /// window draws.
 pub fn without_shadow(ns_window: &AnyObject) {

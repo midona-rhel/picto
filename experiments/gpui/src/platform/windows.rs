@@ -13,6 +13,7 @@ unsafe extern "system" {
         height: i32,
         flags: u32,
     ) -> i32;
+    fn ShowWindow(window: isize, command: i32) -> i32;
 }
 
 /// Floats the window over every window that does not float
@@ -37,5 +38,23 @@ pub fn set_topmost(window: &Window, topmost: bool) {
     // place and activation, so the zeros are ignored.
     unsafe {
         SetWindowPos(win32.hwnd.get(), after, 0, 0, 0, 0, KEEP_PLACE);
+    }
+}
+
+/// Shows the window without activating it (`SW_SHOWNA`), or hides it
+/// (`SW_HIDE`).
+pub fn show_without_activating(window: &Window, shown: bool) {
+    const SW_HIDE: i32 = 0;
+    const SW_SHOWNA: i32 = 8;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return;
+    };
+    // SAFETY: `hwnd` is the live window GPUI made; `ShowWindow` takes it
+    // and a show command.
+    unsafe {
+        ShowWindow(win32.hwnd.get(), if shown { SW_SHOWNA } else { SW_HIDE });
     }
 }

@@ -89,13 +89,16 @@ impl Presence {
     }
 }
 
-/// `.sm`, `.md` and `.lg`: the panel's width and the share of the window's
-/// height it may take.
+/// `.sm`, `.md`, `.lg` and `.xl`: the panel's width and the share of the
+/// window's height it may take.
 #[derive(Clone, Copy)]
 pub enum Size {
     Small,
     Medium,
     Large,
+    /// `.xl`: `min(900px, 100vw - 48px)` wide and exactly
+    /// `min(600px, 100vh - 48px)` tall, whatever it holds.
+    ExtraLarge,
 }
 
 impl Size {
@@ -109,13 +112,26 @@ impl Size {
             Size::Small => 400.,
             Size::Medium => 560.,
             Size::Large => 680.,
+            Size::ExtraLarge => 900.,
         }
     }
     fn max_height(self) -> f32 {
         match self {
             Size::Small | Size::Medium => 0.8,
-            Size::Large => 0.85,
+            Size::Large | Size::ExtraLarge => 0.85,
         }
+    }
+    /// The panel's width in a window `viewport` wide.
+    fn width_in(self, viewport: f32) -> f32 {
+        match self {
+            Size::ExtraLarge => self.width().min(viewport - 48.),
+            _ => self.width(),
+        }
+    }
+    /// The panel's own height, for a size that has one, in a window
+    /// `viewport` tall.
+    fn fixed_height(self, viewport: f32) -> Option<f32> {
+        matches!(self, Size::ExtraLarge).then(|| 600_f32.min(viewport - 48.))
     }
 }
 
@@ -219,7 +235,10 @@ impl RenderOnce for Modal {
             window.request_animation_frame();
         }
         let shown = self.presence.panel();
-        let max_height = f32::from(window.viewport_size().height) * self.size.max_height();
+        let viewport = window.viewport_size();
+        let fixed_height = self.size.fixed_height(f32::from(viewport.height));
+        let max_height =
+            fixed_height.unwrap_or(f32::from(viewport.height) * self.size.max_height());
         let has_footer = !self.footer.is_empty();
         let padding = if self.flush { 0. } else { BODY_PADDING };
         let body_height = max_height - 2. * BORDER - HEADER - if has_footer { FOOTER } else { 0. };
@@ -249,7 +268,9 @@ impl RenderOnce for Modal {
         // the contents' height, measured on an earlier frame; until there is
         // one, and whenever the dialog is at rest, the contents size the
         // panel as usual.
-        let width = self.width.unwrap_or(self.size.width());
+        let width = self
+            .width
+            .unwrap_or(self.size.width_in(f32::from(viewport.width)));
         let measured = window.use_keyed_state(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "height".into()),
             cx,
@@ -323,10 +344,16 @@ impl RenderOnce for Modal {
                     .relative()
                     .flex_none()
                     .max_h(px(body_height.max(0.)))
+                    .when(fixed_height.is_some(), |body| {
+                        body.h(px(body_height.max(0.)))
+                    })
                     .child(
                         div()
                             .id("modal-body")
                             .max_h(px(body_height.max(0.)))
+                            .when(fixed_height.is_some(), |body| {
+                                body.h(px(body_height.max(0.)))
+                            })
                             .overflow_y_scroll()
                             .track_scroll(&scroll)
                             .track_focus(&body_focus)
@@ -385,6 +412,7 @@ impl RenderOnce for Modal {
             None => panel
                 .w(px(width))
                 .max_h(px(max_height))
+                .when_some(fixed_height, |panel, height| panel.h(px(height)))
                 .p(px(BORDER))
                 .flex()
                 .flex_col()

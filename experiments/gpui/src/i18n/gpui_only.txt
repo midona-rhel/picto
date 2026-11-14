@@ -121,3 +121,8 @@ A library with that name already exists in the selected folder. Choose another l
 Use default library icon
 Delete Library
 Continue
+Not used by a subscription
+queries
+Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.
+Sign in with your E-Hentai account. Picto verifies ExHentai access before saving the browser session.
+Waiting for the site…

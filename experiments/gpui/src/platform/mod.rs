@@ -2,6 +2,9 @@
 //! for, one module per system. The UI layer reaches them through one shared
 //! function each (`ui::window_chrome`), which does nothing where a system
 //! has no such call.
+/// The sign-in window of site logins, one interface over each system's web
+/// view.
+pub mod login_window;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]

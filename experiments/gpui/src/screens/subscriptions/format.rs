@@ -400,6 +400,26 @@ pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     relative(round(days as f64 / 30.), Unit::Month)
 }
 
+/// The Accounts dialog's `formatRelativeTime` (`authUtils.ts`): as
+/// [`relative_time`], but days however far back.
+pub fn relative_time_in_days(value: Option<&str>, now: DateTime<Local>) -> String {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return t("Never").to_owned();
+    };
+    let Some(time) = parse_time(value) else {
+        return value.to_owned();
+    };
+    let minutes = round((time - now).num_milliseconds() as f64 / 60_000.);
+    if minutes.abs() < 60 {
+        return relative(minutes, Unit::Minute);
+    }
+    let hours = round(minutes as f64 / 60.);
+    if hours.abs() < 48 {
+        return relative(hours, Unit::Hour);
+    }
+    relative(round(hours as f64 / 24.), Unit::Day)
+}
+
 /// `formatDateTime`: the medium date and short time, as en-US writes them.
 pub fn date_time(value: Option<&str>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {

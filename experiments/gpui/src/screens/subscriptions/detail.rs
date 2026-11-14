@@ -980,9 +980,15 @@ impl SubscriptionsScreen {
                         .cursor_pointer()
                         .text_color(rgb(theme::FAILURE_TEXT))
                         .child(warning)
-                        // TODO: open the accounts window on this source's
-                        // site, once site logins are built.
-                        .on_click(|_, _, cx| cx.stop_propagation()),
+                        // `onOpenAuth`: the Accounts dialog on the service
+                        // that owns this source's login.
+                        .on_click({
+                            let site = query.site_id.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_accounts(Some(&site), cx);
+                            })
+                        }),
                 );
             }
             if let Some(message) = query
@@ -1245,16 +1251,26 @@ impl SubscriptionsScreen {
                 // `recovery_action` is `fix_credentials` for a login
                 // problem; production derives no other action a row shows
                 // (`mapIssue`: Retry now and Review source never appear).
-                // TODO: open the accounts window for a login problem; until
-                // site logins are built the button shows disabled.
+                // Fix login opens the Accounts dialog on the service of the
+                // problem's source (none: the first service).
                 let fix = (issue.kind.contains("auth")
                     || issue.kind.contains("credential")
                     || issue.kind == "unauthorized")
                     .then(|| {
+                        let site = issue.query.and_then(|query| {
+                            self.subscription(detail.subscription)?
+                                .queries
+                                .iter()
+                                .find(|entry| entry.id == query)
+                                .map(|entry| entry.site_id.clone())
+                        });
                         ui::small_button(("issue-fix", issue.id as usize), "shield-lock")
                             .glyph(13.)
-                            .disabled(true)
+                            .disabled(self.busy())
                             .tip(ui::tip(t("Fix login")))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_accounts(site.as_deref(), cx)
+                            }))
                     });
                 // The message's tooltip holds it with its detail
                 // (`title={[message, detail].join('\n')}`).
