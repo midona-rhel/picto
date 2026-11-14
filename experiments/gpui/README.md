@@ -732,7 +732,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Glass and blur | backdrop blur behind panels on Metal and wgpu, shadows cut out as CSS draws them, menus in pop-up windows over the system's blur on macOS | read; seen on macOS |
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
 | Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
-| Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); 100% byte-identical to before |
+| Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
@@ -776,13 +776,12 @@ re-checked by reading the code; the rest were checked against it.
   pointing-hand cursor in them (GPUI sets the cursor from the key window);
   the input method's candidate window for the menu's search field. A select's
   list inside a pop-up menu is checked by placement tests only.
-- **The interface zoom on a screen.** Its keys have reached a real window
-  on macOS (the zoom was kept), but the window has not been looked at
-  zoomed: the screen was locked. Not seen at all: the macOS pop-up menu
-  windows and their system blur at a zoom other than 100% (placed by the
-  same numbers as the in-window menus, which the pictures show), the input
-  method's candidate window, a file dropped from Finder, a trackpad scroll
-  and the resize edges on Linux, zoomed.
+- **The interface zoom, partly.** Seen on macOS in a real window at 150%
+  (crisp text, the traffic lights unchanged) with a pop-up menu window
+  opened by a press: its panel's corner on the pointer on screen. Not seen
+  zoomed: the pop-up's blur over colourful content, the input method's
+  candidate window, a file dropped from Finder, a trackpad scroll, the
+  resize edges on Linux, and anything on a Windows or Linux screen.
 - **Network work.** No subscription run, source run or gallery download has
   been started from this app; their commands were checked with
   `PICTO_GPUI_HOLD_RUNS`.
