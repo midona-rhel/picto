@@ -19,6 +19,10 @@ use std::{
 
 /// The file `run.sh` writes into a copy, naming the library it copied.
 pub const MARKER: &str = ".gpui-disposable";
+/// What the folder holding a copy is called (`run.sh`, `million.sh`).
+const SCRATCH_PREFIX: &str = "picto-gpui-";
+/// Written once the copy has been cut loose the first time.
+const DETACHED: &str = ".gpui-detached";
 
 /// What the application says happened, as the Electron renderer receives it.
 #[derive(Clone, Debug, PartialEq)]
@@ -107,6 +111,24 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
             source.display()
         ));
     }
+    // A marker is only a file: one copied along with a library, or left in
+    // a folder that was moved, would open something the user keeps. A
+    // disposable copy is also where the scripts put it: in a folder of its
+    // own named `picto-gpui-…`, directly in a temporary folder.
+    if !in_scratch(&root) {
+        return Err(format!(
+            "{} is not in a picto-gpui-… folder of a temporary folder, where run.sh and million.sh make copies; it is not opened",
+            root.display()
+        ));
+    }
+    // A link in the copy leads out of it: what is written or deleted through
+    // it lands wherever it points, which may be the real library.
+    if let Some(link) = first_link(&root) {
+        return Err(format!(
+            "{} is a symbolic link inside the copy; it is not opened",
+            link.display()
+        ));
+    }
     // The same database file reached another way (a hard link) is the real
     // library, whatever the folder is called.
     let (copy, real) = (root.join("library.sqlite"), source.join("library.sqlite"));
@@ -120,6 +142,63 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
     Ok(root)
 }
 
+/// The temporary folders a copy may live in: the system's, and `/tmp` where
+/// the scripts make theirs.
+fn scratch_folders() -> Vec<PathBuf> {
+    let mut folders = vec![std::env::temp_dir()];
+    if cfg!(unix) {
+        folders.extend([PathBuf::from("/tmp"), PathBuf::from("/var/tmp")]);
+    }
+    folders
+        .into_iter()
+        .filter_map(|folder| folder.canonicalize().ok())
+        .collect()
+}
+
+/// Whether the (canonical) `root` is `<temporary folder>/picto-gpui-…/<name>`.
+fn in_scratch(root: &Path) -> bool {
+    let Some(holder) = root.parent() else {
+        return false;
+    };
+    let named = holder
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(SCRATCH_PREFIX));
+    named
+        && holder
+            .parent()
+            .is_some_and(|parent| scratch_folders().iter().any(|folder| folder == parent))
+}
+
+/// The first symbolic link among the copy's own entries and its blob
+/// folders, where the application writes and deletes.
+fn first_link(root: &Path) -> Option<PathBuf> {
+    let folders = [
+        root.to_path_buf(),
+        root.join("blobs"),
+        root.join("blobs").join("f"),
+        root.join("blobs").join("t"),
+    ];
+    for folder in &folders[..2] {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                return Some(entry.path());
+            }
+        }
+    }
+    folders[2..]
+        .iter()
+        .find(|folder| {
+            folder
+                .symlink_metadata()
+                .is_ok_and(|data| data.file_type().is_symlink())
+        })
+        .cloned()
+}
+
 /// Cuts the copy loose from work the real library has going on elsewhere,
 /// before the application starts its workers on it:
 /// - cloud sync is disconnected, so no snapshot of the copy is ever written
@@ -128,32 +207,77 @@ pub fn guard(root: &Path) -> Result<PathBuf, String> {
 ///   imported (or deleted after import);
 /// - runs that were queued or running in the real library are cancelled, and
 ///   schedules have no next run, so no subscription downloads unless the user
-///   starts it. Choosing a schedule again sets its next run.
+///   starts it. Choosing a schedule again sets its next run;
+/// - no import job deletes the file it imports: a job queued in the real
+///   library by a moving import, a subscription or a watched folder names a
+///   file outside the copy, and would remove the user's only original once
+///   the copy had it;
+/// - the first time, import jobs still queued from the real library are
+///   marked failed rather than run, and the stored file paths, which the
+///   database backup carries over pointing into the real library, are
+///   pointed at the copy's own files, so that nothing opened, revealed,
+///   copied or dragged out before the application repairs them is a file of
+///   the real library.
 ///
 /// Each step is idempotent; the copy is detached again on every launch.
 pub fn detach(root: &Path) -> Result<(), String> {
-    let connection = rusqlite::Connection::open(root.join("library.sqlite"))
+    let mut connection = rusqlite::Connection::open(root.join("library.sqlite"))
         .map_err(|error| format!("open the copy's database: {error}"))?;
     let now = chrono::Utc::now().to_rfc3339();
-    connection
-        .execute_batch(&format!(
-            "BEGIN IMMEDIATE;
-             UPDATE cloud_state
+    let first = !root.join(DETACHED).exists();
+    let source = std::fs::read_to_string(root.join(MARKER))
+        .ok()
+        .map(|marker| marker.trim().to_owned())
+        .filter(|source| Path::new(source).is_absolute());
+    let detached = (|| -> rusqlite::Result<()> {
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        transaction.execute_batch(
+            "UPDATE cloud_state
                 SET provider = NULL, account_label = NULL, remote_root = NULL,
                     paused = 1, state = 'disabled', phase = 'idle', blocking = 0,
                     message = ''
               WHERE provider IS NOT NULL OR remote_root IS NOT NULL;
              UPDATE folder_definition SET watch_enabled = 0 WHERE watch_enabled = 1;
-             UPDATE subscription_run_query
-                SET status = 'cancelled', finished_at = '{now}'
-              WHERE status IN ('pending', 'running');
-             UPDATE subscription_run
-                SET status = 'cancelled', finished_at = '{now}'
-              WHERE status IN ('pending', 'running');
              UPDATE subscription SET next_run_at = NULL WHERE next_run_at IS NOT NULL;
-             COMMIT;"
-        ))
-        .map_err(|error| format!("detach the copy: {error}"))
+             UPDATE ingest_job SET delete_after_ingest = 0 WHERE delete_after_ingest = 1;",
+        )?;
+        for table in ["subscription_run_query", "subscription_run"] {
+            transaction.execute(
+                &format!(
+                    "UPDATE {table} SET status = 'cancelled', finished_at = ?1
+                      WHERE status IN ('pending', 'running')"
+                ),
+                [&now],
+            )?;
+        }
+        if first {
+            transaction.execute(
+                "UPDATE ingest_job
+                    SET status = 'failed', updated_at = ?1,
+                        last_error = 'Queued in the library this copy was made from; not run in a copy'
+                  WHERE status IN ('pending', 'running')",
+                [&now],
+            )?;
+            if let Some(source) = &source {
+                // `substr` rather than `LIKE`: a path may hold `%` or `_`.
+                let copy = root.to_string_lossy();
+                transaction.execute(
+                    "UPDATE media_file
+                        SET file_path = ?2 || substr(file_path, length(?1) + 1)
+                      WHERE substr(file_path, 1, length(?1) + 1) IN (?1 || '/', ?1 || char(92))",
+                    [source.as_str(), copy.as_ref()],
+                )?;
+            }
+        }
+        transaction.commit()
+    })();
+    detached.map_err(|error| format!("detach the copy: {error}"))?;
+    if first {
+        std::fs::write(root.join(DETACHED), format!("{now}\n"))
+            .map_err(|error| format!("mark the copy detached: {error}"))?;
+    }
+    Ok(())
 }
 
 /// The open application, its runtime, and where its events go.
@@ -312,11 +436,21 @@ mod tests {
         assert_eq!(coalesce([]), (None, vec![]));
     }
 
+    /// A folder as `run.sh` makes one: `picto-gpui-library.…` in the
+    /// temporary folder.
+    fn scratch() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("picto-gpui-library.")
+            .tempdir()
+            .unwrap()
+    }
+
     #[test]
     fn only_a_marked_copy_outside_its_source_is_opened() {
-        let scratch = tempfile::tempdir().unwrap();
-        let source = scratch.path().join("Real.library");
-        let copy = scratch.path().join("copy").join("Real.library");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let scratch = scratch();
+        let source = elsewhere.path().join("Real.library");
+        let copy = scratch.path().join("Real.library");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::create_dir_all(&copy).unwrap();
         std::fs::write(source.join("library.sqlite"), b"real").unwrap();
@@ -342,6 +476,63 @@ mod tests {
         std::fs::remove_file(copy.join("library.sqlite")).unwrap();
         std::fs::write(copy.join(MARKER), "\n").unwrap();
         assert!(guard(&copy).is_err());
+    }
+
+    /// A marker travels with the files: a marked copy that was moved or
+    /// copied out of the scratch folders is something the user keeps.
+    #[test]
+    fn a_marked_folder_outside_the_scratch_folders_is_refused() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let source = elsewhere.path().join("Real.library");
+        std::fs::create_dir_all(&source).unwrap();
+        let mark = |folder: &std::path::Path| {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("library.sqlite"), b"copy").unwrap();
+            std::fs::write(folder.join(MARKER), format!("{}\n", source.display())).unwrap();
+        };
+        // Named as a copy's folder is, but not in a temporary folder.
+        let moved = elsewhere
+            .path()
+            .join("picto-gpui-library.moved")
+            .join("Kept.library");
+        mark(&moved);
+        assert!(guard(&moved).is_err());
+        // In a temporary folder, but not in a folder of the scripts' naming.
+        let stray = tempfile::tempdir().unwrap();
+        let unnamed = stray.path().join("Kept.library");
+        mark(&unnamed);
+        assert!(guard(&unnamed).is_err());
+        // Deeper than the scripts put it.
+        let scratch = scratch();
+        let deep = scratch.path().join("more").join("Kept.library");
+        mark(&deep);
+        assert!(guard(&deep).is_err());
+        let placed = scratch.path().join("Kept.library");
+        mark(&placed);
+        assert!(guard(&placed).is_ok());
+    }
+
+    /// What is written through a link lands where the link points.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_with_a_link_in_it_is_refused() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let source = elsewhere.path().join("Real.library");
+        std::fs::create_dir_all(source.join("blobs").join("f")).unwrap();
+        let link = std::os::unix::fs::symlink;
+        for linked in ["blobs", "blobs/f", "blobs/t", "thumbnails"] {
+            let scratch = scratch();
+            let copy = scratch.path().join("Real.library");
+            std::fs::create_dir_all(&copy).unwrap();
+            std::fs::write(copy.join("library.sqlite"), b"copy").unwrap();
+            std::fs::write(copy.join(MARKER), format!("{}\n", source.display())).unwrap();
+            assert!(guard(&copy).is_ok());
+            if let Some((folder, _)) = linked.split_once('/') {
+                std::fs::create_dir_all(copy.join(folder)).unwrap();
+            }
+            link(source.join("blobs"), copy.join(linked)).unwrap();
+            assert!(guard(&copy).is_err(), "{linked}");
+        }
     }
 
     /// Opens the application on a real copy, sends commands as the Electron
@@ -466,6 +657,12 @@ mod tests {
     #[test]
     fn a_copy_keeps_no_cloud_watch_or_queued_work() {
         let scratch = tempfile::tempdir().unwrap();
+        // The copy's marker names the library it was made from.
+        std::fs::write(
+            scratch.path().join(MARKER),
+            "/Users/me/Pictures/Real.library\n",
+        )
+        .unwrap();
         let mut connection =
             rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
         picto_library::schema::create(&mut connection).unwrap();
@@ -479,11 +676,30 @@ mod tests {
                  VALUES (1, 's1', 'Daily', 'daily', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
                  INSERT INTO subscription_run (run_id, subscription_id, requested_by, status, created_at)
                  VALUES (1, 1, 'scheduled', 'pending', '2026-01-01T00:00:00Z'),
-                        (2, 1, 'user', 'succeeded', '2026-01-01T00:00:00Z');",
+                        (2, 1, 'user', 'succeeded', '2026-01-01T00:00:00Z');
+                 INSERT INTO ingest_job (ingest_job_id, job_key, source_kind, source_path, payload_json,
+                                         delete_after_ingest, status, available_at, created_at, updated_at)
+                 VALUES (1, 'moving', 'file', '/Users/me/Downloads/only-copy.png', '{}', 1, 'pending', 'now', 'now', 'now'),
+                        (2, 'claimed', 'file', '/Users/me/Downloads/claimed.png', '{}', 1, 'running', 'now', 'now', 'now'),
+                        (3, 'done', 'file', '/Users/me/Downloads/done.png', '{}', 1, 'succeeded', 'now', 'now', 'now');
+                 INSERT INTO media_file (file_id, content_hash, file_path, mime, size_bytes)
+                 VALUES (1, 'aa', '/Users/me/Pictures/Real.library/blobs/f/aa/aa.png', 'image/png', 1),
+                        (2, 'bb', '/Users/me/Pictures/Real.library.bak/blobs/f/bb/bb.png', 'image/png', 1);",
             )
             .unwrap();
         drop(connection);
         detach(scratch.path()).unwrap();
+        // An import started in the copy and cut short by quitting is the
+        // user's own: the next launch leaves it queued, but still deletes
+        // nothing it imports from.
+        rusqlite::Connection::open(scratch.path().join("library.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO ingest_job (ingest_job_id, job_key, source_kind, source_path, payload_json,
+                                         delete_after_ingest, status, available_at, created_at, updated_at)
+                 VALUES (4, 'own', 'file', '/Users/me/Desktop/own.png', '{}', 1, 'pending', 'now', 'now', 'now');",
+            )
+            .unwrap();
         // Again, on the next launch.
         detach(scratch.path()).unwrap();
         let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
@@ -503,6 +719,29 @@ mod tests {
         assert_eq!(
             one("SELECT group_concat(status) FROM subscription_run ORDER BY run_id"),
             "cancelled,succeeded"
+        );
+        // No job deletes its source, and what the real library had queued
+        // is not run.
+        assert_eq!(
+            one("SELECT CAST(sum(delete_after_ingest) AS TEXT) FROM ingest_job"),
+            "0"
+        );
+        assert_eq!(
+            one(
+                "SELECT group_concat(status) FROM (SELECT status FROM ingest_job ORDER BY ingest_job_id)"
+            ),
+            "failed,failed,succeeded,pending"
+        );
+        // Stored paths lead into the copy; a folder that only starts with
+        // the source's name is not the source.
+        let copy = scratch.path().to_string_lossy().into_owned();
+        assert_eq!(
+            one("SELECT file_path FROM media_file WHERE file_id = 1"),
+            format!("{copy}/blobs/f/aa/aa.png")
+        );
+        assert_eq!(
+            one("SELECT file_path FROM media_file WHERE file_id = 2"),
+            "/Users/me/Pictures/Real.library.bak/blobs/f/bb/bb.png"
         );
     }
 }
