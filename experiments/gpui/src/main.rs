@@ -97,6 +97,10 @@ fn prepare(cx: &mut App) {
     if let Some(keys) = app_menu::Platform::CURRENT.quit_keys() {
         keymap::bind_written(keys, Box::new(Quit), None, cx);
     }
+    // Quit and Settings… are app-wide, as their menu rows (in the menu bar
+    // or the window's application menu) are.
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
     app_menu::bind(cx);
     imports::bind(cx);
     viewer::document::bind(cx);
@@ -239,7 +243,6 @@ fn main() {
         if !cfg!(target_os = "macos") {
             cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
         }
-        cx.on_action(|_: &Quit, cx| cx.quit());
         app_menu::quit_with_main_window(cx);
         // Stop the workers and checkpoint the copy before the process
         // ends, as the Electron app closes its library before quitting.
@@ -249,7 +252,6 @@ fn main() {
             async {}
         })
         .detach();
-        cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
         let window_bounds = main_window_bounds(cx);
         // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
         // keyboard from whatever the user is working in, and keeps it
