@@ -1,8 +1,9 @@
 //! The sidebar's edits through the library: creating, duplicating,
 //! deleting, moving and renaming folders and smart folders, their
-//! appearance, sorting and Quick Access.
+//! appearance, sorting and Quick Access. A folder's or smart folder's name
+//! and notes are written here for the inspector too.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
-use crate::session::{Change, Report, Reread, edit_then_in};
+use crate::session::{Change, Report, Reread, Session, edit_then, edit_then_in};
 use crate::ui::text_input::{Renamed, TextInput};
 use gpui::*;
 use picto_library::model::ContentSortField;
@@ -26,6 +27,108 @@ pub(super) fn smart_input(
         notes: record.notes,
         view: record.view,
     })
+}
+
+/// The destination list shows `name` for the node at once; the name it
+/// showed before, if the node is listed.
+fn relabel(session: &Entity<Session>, node: &str, name: &str, cx: &mut App) -> Option<String> {
+    session.update(cx, |session, cx| {
+        let entry = session.nav.iter_mut().find(|entry| entry.id() == node)?;
+        let previous = std::mem::replace(&mut entry.label, name.to_owned());
+        if previous != name {
+            cx.emit(Change::Navigation);
+        }
+        Some(previous)
+    })
+}
+
+/// `foldersController.rename`, and `smartFoldersController.update` with a
+/// new name: the sidebar and the title show the name at once, the
+/// definition is written, and a name the library refuses puts the old one
+/// back. Production leaves the failure to the console. `then` is told on
+/// the view whether it was saved.
+pub(crate) fn rename_node<V: 'static>(
+    session: &Entity<Session>,
+    node: String,
+    name: String,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, bool, &mut Context<V>) + 'static,
+) {
+    let previous = relabel(session, &node, &name, cx);
+    let (folder, smart, written) = (folder_id(&node), smart_folder_id(&node), name.clone());
+    let restore = session.clone();
+    edit_then(
+        session,
+        Report::default(),
+        Reread::NOTHING,
+        move |library| -> picto_library::Result<()> {
+            if let Some(id) = folder {
+                library.rename_folder(id, &written)?;
+            } else if let Some(id) = smart {
+                let mut input = smart_input(library, id)?;
+                input.name = written;
+                library.update_smart_folder(id, input)?;
+            }
+            Ok(())
+        },
+        cx,
+        move |view, result, cx| {
+            let shown = || {
+                restore
+                    .read(cx)
+                    .nav
+                    .iter()
+                    .any(|entry| entry.id() == node && entry.label == name)
+            };
+            if result.is_err()
+                && let Some(previous) = previous.filter(|_| shown())
+            {
+                relabel(&restore, &node, &previous, cx);
+            }
+            then(view, result.is_ok(), cx)
+        },
+    );
+}
+
+/// `foldersController.applyNotes`, and `smartFoldersController.update` with
+/// new notes, keeping the rest of the definition as the library has it now.
+/// `then` is told on the view whether they were saved.
+pub(crate) fn set_node_notes<V: 'static>(
+    session: &Entity<Session>,
+    node: &str,
+    notes: String,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, bool, &mut Context<V>) + 'static,
+) {
+    let (folder, smart) = (folder_id(node), smart_folder_id(node));
+    let notes = (!notes.is_empty()).then_some(notes);
+    edit_then(
+        session,
+        Report::default(),
+        Reread::NOTHING,
+        move |library| -> picto_library::Result<()> {
+            if let Some(id) = folder {
+                let record = library
+                    .folders()?
+                    .into_iter()
+                    .find(|record| record.folder_id == id)
+                    .ok_or_else(|| LibraryError::NotFound(format!("folder {id}")))?;
+                library.set_folder_metadata(
+                    id,
+                    record.icon.as_deref(),
+                    record.color.as_deref(),
+                    notes.as_deref(),
+                )?;
+            } else if let Some(id) = smart {
+                let mut input = smart_input(library, id)?;
+                input.notes = notes;
+                library.update_smart_folder(id, input)?;
+            }
+            Ok(())
+        },
+        cx,
+        move |view, result, cx| then(view, result.is_ok(), cx),
+    );
 }
 
 /// `emptySmartFolderPayload`: a smart folder with no rules is a group.
@@ -291,49 +394,10 @@ impl Sidebar {
         );
     }
 
-    /// Writes a renamed folder or smart folder. The row shows the new name
-    /// at once, as the Electron sidebar patches its node before the write.
-    fn apply_rename(
-        &mut self,
-        node: &str,
-        original: &str,
-        name: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if name.is_empty() || name == original {
-            return;
-        }
-        self.session.update(cx, |session, cx| {
-            if let Some(entry) = session.nav.iter_mut().find(|entry| entry.id() == node) {
-                entry.label = name.clone();
-                cx.emit(Change::Navigation);
-            }
-        });
-        if let Some(id) = folder_id(node) {
-            edit_then_in(
-                &self.session,
-                Report::default(),
-                Reread::NOTHING,
-                move |library| library.rename_folder(id, &name).map(|_| ()),
-                window,
-                cx,
-                |_, _, _, _| {},
-            );
-        } else if let Some(id) = smart_folder_id(node) {
-            edit_then_in(
-                &self.session,
-                Report::default(),
-                Reread::NOTHING,
-                move |library| {
-                    let mut input = smart_input(library, id)?;
-                    input.name = name;
-                    library.update_smart_folder(id, input).map(|_| ())
-                },
-                window,
-                cx,
-                |_, _, _, _| {},
-            );
+    /// Writes a renamed folder or smart folder (`rename_node`).
+    fn apply_rename(&mut self, node: &str, original: &str, name: String, cx: &mut Context<Self>) {
+        if !name.is_empty() && name != original {
+            rename_node(&self.session, node.to_owned(), name, cx, |_, _, _| {});
         }
     }
 
@@ -590,7 +654,7 @@ impl Sidebar {
         // A rename already open is committed first.
         if let Some(open) = self.renaming.take() {
             let value = open.input.read(cx).value().trim().to_owned();
-            self.apply_rename(&open.node, &open.original, value, window, cx);
+            self.apply_rename(&open.node, &open.original, value, cx);
         }
         let input = cx.new(|cx| TextInput::sidebar_rename(&name, window, cx));
         let subscription = cx.subscribe_in(
@@ -609,7 +673,7 @@ impl Sidebar {
                     return;
                 };
                 if let Renamed::Commit(value) = event {
-                    this.apply_rename(&open.node, &open.original, value.clone(), window, cx);
+                    this.apply_rename(&open.node, &open.original, value.clone(), cx);
                 }
                 // Enter and Escape leave nothing focused; the keyboard goes back
                 // to the window.

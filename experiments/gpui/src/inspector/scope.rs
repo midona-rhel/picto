@@ -4,14 +4,12 @@
 //! folder whether it tags and watches.
 use super::{Inspector, PREVIEW};
 use crate::grid::format;
-use crate::session::{Change, Session};
+use crate::session::Session;
 use crate::theme;
 use crate::ui::{self, field::Look, text_input::TextInput};
 use gpui::*;
 use picto_library::query::ItemScope;
-use picto_library::{
-    FolderId, FolderRecord, LibraryError, SmartFolderId, SmartFolderInput, SmartFolderRecord,
-};
+use picto_library::{FolderId, FolderRecord, LibraryError, SmartFolderId, SmartFolderRecord};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -373,8 +371,8 @@ impl Inspector {
     }
 
     /// Saves a new name or notes for the folder or smart folder showing,
-    /// through the library's folder owners. A name the library refuses puts
-    /// the fields back as they were.
+    /// as the sidebar does (`rename_node`, `set_node_notes`). A name the
+    /// library refuses puts the fields back as they were.
     pub(super) fn commit_scope(
         &mut self,
         key: u64,
@@ -391,118 +389,62 @@ impl Inspector {
             return;
         };
         let (kind, index) = (view.kind, view.index);
-        let Some(record) = self.scope.records.get(&kind).cloned().flatten() else {
+        if self.scope.records.get(&kind).cloned().flatten().is_none() {
+            return;
+        }
+        // The row is found by id: the sidebar may rebuild the destination
+        // list while the save runs.
+        let Some(node) = self.session.read(cx).nav.get(index).map(|entry| entry.id()) else {
             return;
         };
-        // The row is found again by id when the save lands: the sidebar may
-        // have rebuilt the destination list in between.
-        let node = self.session.read(cx).nav.get(index).map(|entry| entry.id());
-        let job = self
-            .session
-            .read(cx)
-            .run(move |library| match (kind, record) {
-                (
-                    Kind::Folder(id),
-                    Record::Folder {
-                        mut record,
-                        auto_tags,
-                    },
-                ) => {
-                    // The sidebar may have renamed or recoloured it since the
-                    // record was read; write over what the library has now.
-                    if let Some(fresh) = library
-                        .folders()?
-                        .into_iter()
-                        .find(|folder| folder.folder_id == id)
-                    {
-                        record = fresh;
-                    }
-                    if let Some(name) = name {
-                        library.rename_folder(id, &name)?;
-                        record.name = name;
-                    }
-                    if let Some(notes) = notes {
-                        library.set_folder_metadata(
-                            id,
-                            record.icon.as_deref(),
-                            record.color.as_deref(),
-                            Some(&notes),
-                        )?;
-                        record.notes = (!notes.is_empty()).then_some(notes);
-                    }
-                    Ok(Record::Folder { record, auto_tags })
-                }
-                (Kind::Smart(id), Record::Smart(mut record)) => {
-                    if let Some(fresh) = library
-                        .smart_folders()?
-                        .into_iter()
-                        .find(|folder| folder.smart_folder_id == id)
-                    {
-                        record = fresh;
-                    }
-                    if let Some(name) = name {
-                        record.name = name;
-                    }
-                    if let Some(notes) = notes {
-                        record.notes = (!notes.is_empty()).then_some(notes);
-                    }
-                    library.update_smart_folder(
-                        id,
-                        SmartFolderInput {
-                            name: record.name.clone(),
-                            parent_id: record.parent_id,
-                            icon: record.icon.clone(),
-                            color: record.color.clone(),
-                            notes: record.notes.clone(),
-                            view: record.view.clone(),
-                        },
-                    )?;
-                    Ok(Record::Smart(record))
-                }
-                _ => Err(LibraryError::InvalidState(
-                    "the record is not this destination's".into(),
-                )),
-            });
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = job.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(record) => {
-                    let name = match &record {
-                        Record::Folder { record, .. } => record.name.clone(),
-                        Record::Smart(record) => record.name.clone(),
-                    };
-                    this.scope.records.insert(kind, Some(record));
-                    // The sidebar and the title show the new name too.
-                    this.session.update(cx, |session, cx| {
-                        if let Some(entry) = session
-                            .nav
-                            .iter_mut()
-                            .find(|entry| Some(entry.id()) == node)
-                            && entry.label != name
-                        {
-                            entry.label = name;
-                            cx.emit(Change::Navigation);
-                        }
-                    });
-                    this.refresh_scope(cx);
-                }
-                Err(error) => {
-                    eprintln!("inspector: saving {kind:?} failed: {error}");
-                    if let Some(view) = this.scope.view.clone() {
-                        let key = view.kind.key();
-                        this.scope
-                            .name
-                            .update(cx, |field, cx| field.set_field(key, view.name, cx));
-                        this.scope
-                            .notes
-                            .update(cx, |field, cx| field.set_field(key, view.notes, cx));
-                    }
-                }
-            });
-        })
-        .detach();
+        let (saved_name, saved_notes) = (name.clone(), notes.clone());
+        let then = move |this: &mut Self, saved: bool, cx: &mut Context<Self>| {
+            this.scope_saved(kind, saved.then_some((saved_name, saved_notes)), cx)
+        };
+        match (name, notes) {
+            (Some(name), _) => {
+                crate::shell::sidebar::rename_node(&self.session, node, name, cx, then)
+            }
+            (None, Some(notes)) => {
+                crate::shell::sidebar::set_node_notes(&self.session, &node, notes, cx, then)
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// A save of the destination's name or notes is done: the record shown
+    /// takes them, or the fields go back to what it has.
+    fn scope_saved(
+        &mut self,
+        kind: Kind,
+        saved: Option<(Option<String>, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((name, notes)) = saved else {
+            if let Some(view) = self.scope.view.clone() {
+                let key = view.kind.key();
+                self.scope
+                    .name
+                    .update(cx, |field, cx| field.set_field(key, view.name, cx));
+                self.scope
+                    .notes
+                    .update(cx, |field, cx| field.set_field(key, view.notes, cx));
+            }
+            return;
+        };
+        let notes = notes.map(|notes| (!notes.is_empty()).then_some(notes));
+        let (record_name, record_notes) = match self.scope.records.get_mut(&kind) {
+            Some(Some(Record::Folder { record, .. })) => (&mut record.name, &mut record.notes),
+            Some(Some(Record::Smart(record))) => (&mut record.name, &mut record.notes),
+            _ => return,
+        };
+        if let Some(name) = name {
+            *record_name = name;
+        }
+        if let Some(notes) = notes {
+            *record_notes = notes;
+        }
+        self.refresh_scope(cx);
     }
 
     pub(super) fn release_collage(&mut self, cx: &mut Context<Self>) {

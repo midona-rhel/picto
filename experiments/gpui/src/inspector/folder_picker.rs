@@ -7,7 +7,7 @@
 //! for the top level, among the folders the moving ones can go under.
 use super::membership;
 use crate::backend::Navigation;
-use crate::session::Session;
+use crate::session::{Report, Reread, Session};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -707,13 +707,15 @@ impl FolderPicker {
         }
         create.busy = true;
         let parent = create.parent;
-        let answer = self
-            .session
-            .read(cx)
-            .run(move |library| library.create_folder(&name, parent));
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this, cx| match result {
+        // `foldersController.create` tells of a folder nested too deep;
+        // anything else stays on the console.
+        crate::session::edit_then(
+            &self.session,
+            Report::folder_depth(),
+            Reread::NAVIGATION,
+            move |library| library.create_folder(&name, parent),
+            cx,
+            move |this, result, cx| match result {
                 Ok((folder, _)) => {
                     this.create.close(cx);
                     if let Some(parent) = parent {
@@ -722,21 +724,14 @@ impl FolderPicker {
                     }
                     this.toggle(folder, cx);
                 }
-                Err(error) => {
-                    // `foldersController.create` tells of a folder nested
-                    // too deep; anything else stays on the console.
-                    let message = error.to_string();
-                    if !crate::ui::notify::folder_depth(&message, cx) {
-                        eprintln!("folder picker: {message}");
-                    }
+                Err(_) => {
                     if let Some(dialog) = this.create.get_mut() {
                         dialog.content.busy = false;
                     }
                     cx.notify();
                 }
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     fn dismiss_create(&mut self, cx: &mut Context<Self>) {
