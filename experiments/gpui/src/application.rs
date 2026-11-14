@@ -170,6 +170,105 @@ fn in_scratch(root: &Path) -> bool {
             .is_some_and(|parent| scratch_folders().iter().any(|folder| folder == parent))
 }
 
+/// Makes a disposable copy of the library at `source` and returns its root,
+/// for opening with this app: what `run.sh` does on macOS, done here so
+/// that every system has it (`picto-gpui-spike --make-copy <library>`).
+///
+/// The copy goes in a new `picto-gpui-library.…` folder of the system's
+/// temporary folder, where [`guard`] allows one. The database is copied with
+/// SQLite's online backup from a read-only connection, which includes
+/// committed WAL data and never writes the live files; it is copied first,
+/// so every file it names is already there when the rest is copied.
+/// Everything else in the library folder is copied with the system's own
+/// file copy, which clones where the file system can (APFS, btrfs, XFS,
+/// ReFS) and copies in full elsewhere. A symbolic link anywhere in the
+/// library is refused, as the guard would refuse it in the copy. The marker
+/// names the source, and the copy is detached as every launch detaches it.
+/// The source is only read; on any failure the new folder is removed.
+pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
+    let source = source
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", source.display()))?;
+    if !source.join("library.sqlite").is_file() {
+        return Err(format!("{} has no library.sqlite", source.display()));
+    }
+    let name = source
+        .file_name()
+        .ok_or_else(|| format!("{} has no name", source.display()))?;
+    let scratch = tempfile::Builder::new()
+        .prefix(&format!("{SCRATCH_PREFIX}library."))
+        .tempdir()
+        .map_err(|error| format!("make a temporary folder: {error}"))?;
+    let copy = scratch.path().join(name);
+    let made = (|| -> Result<(), String> {
+        std::fs::create_dir(&copy).map_err(|error| format!("{}: {error}", copy.display()))?;
+        let database = rusqlite::Connection::open_with_flags(
+            source.join("library.sqlite"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("open the library's database: {error}"))?;
+        database
+            .backup(rusqlite::MAIN_DB, copy.join("library.sqlite"), None)
+            .map_err(|error| format!("copy the library's database: {error}"))?;
+        drop(database);
+        let entries =
+            std::fs::read_dir(&source).map_err(|error| format!("{}: {error}", source.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let file_name = entry.file_name();
+            if is_database_file(&file_name.to_string_lossy()) {
+                continue;
+            }
+            copy_tree(&entry.path(), &copy.join(&file_name))?;
+        }
+        std::fs::write(copy.join(MARKER), format!("{}\n", source.display()))
+            .map_err(|error| format!("write the marker: {error}"))?;
+        detach(&copy)
+    })();
+    if let Err(error) = made {
+        // `scratch` removes the new folder as it drops.
+        return Err(error);
+    }
+    let kept = scratch.keep();
+    guard(&kept.join(name))
+}
+
+/// The database's own files, which the online backup has already copied.
+fn is_database_file(name: &str) -> bool {
+    matches!(
+        name,
+        "library.sqlite" | "library.sqlite-wal" | "library.sqlite-shm" | "library.sqlite-journal"
+    )
+}
+
+/// Copies `from` to `to`, folders and all, refusing symbolic links.
+fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+    let kind = from
+        .symlink_metadata()
+        .map_err(|error| format!("{}: {error}", from.display()))?
+        .file_type();
+    if kind.is_symlink() {
+        return Err(format!(
+            "{} is a symbolic link; a copy with one would lead out of itself, so none was made",
+            from.display()
+        ));
+    }
+    if kind.is_dir() {
+        std::fs::create_dir(to).map_err(|error| format!("{}: {error}", to.display()))?;
+        for entry in
+            std::fs::read_dir(from).map_err(|error| format!("{}: {error}", from.display()))?
+        {
+            let entry = entry.map_err(|error| error.to_string())?;
+            copy_tree(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(from, to)
+            .map(drop)
+            .map_err(|error| format!("copy {}: {error}", from.display()))
+    }
+}
+
 /// The first symbolic link among the copy's own entries and its blob
 /// folders, where the application writes and deletes.
 fn first_link(root: &Path) -> Option<PathBuf> {
@@ -443,6 +542,44 @@ mod tests {
             .prefix("picto-gpui-library.")
             .tempdir()
             .unwrap()
+    }
+
+    /// `--make-copy`: a marked, detached copy in a folder the guard allows,
+    /// with the database backed up and the rest copied; the source is left
+    /// as it was, and a library holding a link is refused.
+    #[test]
+    fn make_copy_makes_an_openable_copy_and_leaves_the_source_alone() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let source = elsewhere.path().join("Real.library");
+        std::fs::create_dir_all(source.join("blobs").join("f").join("ab")).unwrap();
+        std::fs::write(source.join("blobs/f/ab/one.jpg"), b"picture").unwrap();
+        let mut database = rusqlite::Connection::open(source.join("library.sqlite")).unwrap();
+        picto_library::schema::create(&mut database).unwrap();
+        database
+            .execute_batch("CREATE TABLE note(text); INSERT INTO note VALUES ('kept');")
+            .unwrap();
+        drop(database);
+
+        let copy = super::make_copy(&source).unwrap();
+        let holder = copy.parent().unwrap().to_path_buf();
+        assert_eq!(guard(&copy).unwrap(), copy);
+        assert_eq!(
+            std::fs::read(copy.join("blobs/f/ab/one.jpg")).unwrap(),
+            b"picture"
+        );
+        let copied = rusqlite::Connection::open(copy.join("library.sqlite")).unwrap();
+        let text: String = copied
+            .query_row("SELECT text FROM note", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(text, "kept");
+        assert!(!source.join(MARKER).exists());
+        std::fs::remove_dir_all(&holder).unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(elsewhere.path(), source.join("blobs/out")).unwrap();
+            assert!(super::make_copy(&source).is_err());
+        }
     }
 
     #[test]

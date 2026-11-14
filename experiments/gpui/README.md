@@ -24,6 +24,21 @@ ordinary library root, the way the Electron app opens one:
   `/tmp` are not on the same APFS volume the launcher stops with a message
   rather than copying tens of gigabytes.
 
+On Windows and Linux (and on macOS too), the app makes the copy itself:
+
+```sh
+picto-gpui-spike --make-copy /path/to/Main.library   # prints the copy's path
+picto-gpui-spike <that path>
+```
+
+It makes the same copy in a new `picto-gpui-library.*` folder of the
+system's temporary folder (`%TEMP%` on Windows): the database by SQLite's
+online backup from a read-only connection, everything else by the system's
+own file copy, which clones where the file system can (APFS, btrfs and XFS
+reflinks, ReFS block cloning) and copies in full elsewhere, so a large library
+needs that much free space there. A symbolic link anywhere in the library is
+refused, and a failed copy leaves nothing behind (`application::make_copy`).
+
 Reading the library to make the copy is the only access to it. The copy holds
 `.gpui-disposable`, naming the library it was copied from; the app refuses a
 folder without it, the library it names, and any folder inside that library,

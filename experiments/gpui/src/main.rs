@@ -180,8 +180,25 @@ fn remember_window(window: &Window, cx: &mut App) {
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
-    // The one argument is the root of a disposable copy that run.sh made.
-    // Anything else, and the library it was copied from, is refused.
+    // `--make-copy <library>`: make a disposable copy of the library, print
+    // where it is, and stop; the copy is then opened by passing that path.
+    if std::env::args().nth(1).as_deref() == Some("--make-copy") {
+        let Some(source) = std::env::args().nth(2) else {
+            eprintln!("picto: --make-copy takes the library to copy");
+            std::process::exit(2);
+        };
+        match application::make_copy(std::path::Path::new(&source)) {
+            Ok(copy) => println!("{}", desktop::system_path(&copy).display()),
+            Err(error) => {
+                eprintln!("picto: {error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+    // The one argument is the root of a disposable copy that run.sh or
+    // `--make-copy` made. Anything else, and the library it was copied from,
+    // is refused.
     let root = PathBuf::from(
         std::env::args()
             .nth(1)

@@ -105,10 +105,14 @@ jobs:
           library="$scratch/Synthetic.library"
           (cd ../.. && PICTO_DEMO_ITEMS=2000 cargo run --locked -p picto_core --example million_grid_demo -- "$(native "$library")")
           printf 'synthetic:million_grid_demo\n' > "$library/.gpui-disposable"
+          # The pictures are taken in a copy the app itself makes, as a user
+          # on this system would make one.
+          copy="$(./target/debug/picto-gpui-spike --make-copy "$(native "$library")" | tail -n 1)"
+          echo "copy: $copy"
           out="$(unix "$RUNNER_TEMP")/pictures"
           mkdir -p "$out"
           PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
-          PICTO_GPUI_COPY="$(native "$library")" \
+          PICTO_GPUI_COPY="$copy" \
           PICTO_GPUI_SCRIPT="$(native "$PWD/ci/smoke.txt")" \
           PICTO_GPUI_OUT="$(native "$out")" \
             cargo test --locked -- --ignored --exact offscreen::plays_a_script --nocapture
