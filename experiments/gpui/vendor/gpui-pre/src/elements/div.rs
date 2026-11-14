@@ -2475,6 +2475,7 @@ impl Interactivity {
                     window.a11y.set_focus(node_id);
                 }
             }
+            #[cfg(any(test, feature = "test-support"))]
             if self.override_role.is_none()
                 && !self.click_listeners.is_empty()
                 && !self.aria.presentational

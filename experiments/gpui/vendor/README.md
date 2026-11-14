@@ -361,7 +361,7 @@ diff --color -ruN gpui-pre-0.3.12/src/app.rs b/gpui-pre/src/app.rs
 diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/div.rs
 --- a/gpui-pre/src/elements/div.rs
 +++ b/gpui-pre/src/elements/div.rs
-@@ -1440,6 +1440,67 @@
+@@ -1440,9 +1440,70 @@
      /// Set the selected state for this element.
      fn aria_selected(mut self, selected: bool) -> Self {
          self.interactivity().aria.selected = Some(selected);
@@ -386,9 +386,9 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +    /// treats what lies outside it as inert (`aria-modal`).
 +    fn aria_modal(mut self, modal: bool) -> Self {
 +        self.interactivity().aria.modal = modal;
-+        self
-+    }
-+
+         self
+     }
+ 
 +    /// Mark this element as busy (`aria-busy`): its contents are still
 +    /// being loaded.
 +    fn aria_busy(mut self, busy: bool) -> Self {
@@ -426,9 +426,12 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +    /// element does not move the focus.
 +    fn a11y_focus(mut self, handle: &FocusHandle) -> Self {
 +        self.interactivity().a11y_focus_handle = Some(handle.clone());
-         self
-     }
- 
++        self
++    }
++
+     /// Set the expanded state for this element.
+     fn aria_expanded(mut self, expanded: bool) -> Self {
+         self.interactivity().aria.expanded = Some(expanded);
 @@ -2175,6 +2236,13 @@
      pub(crate) column_index: Option<usize>,
      pub(crate) row_count: Option<usize>,
@@ -451,10 +454,13 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
  
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
-@@ -2395,6 +2464,32 @@
-             }
-         }
- 
+@@ -2392,6 +2461,33 @@
+                         .a11y
+                         .note_focus_without_node(focus_handle.id, "it has no element id");
+                 }
++            }
++        }
++
 +        if window.a11y.is_active() {
 +            if let Some(handle) = self.a11y_focus_handle.as_ref()
 +                && let Some(global_id) = global_id
@@ -466,6 +472,7 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +                    window.a11y.set_focus(node_id);
 +                }
 +            }
++            #[cfg(any(test, feature = "test-support"))]
 +            if self.override_role.is_none()
 +                && !self.click_listeners.is_empty()
 +                && !self.aria.presentational
@@ -478,13 +485,10 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +                #[cfg(not(any(feature = "inspector", debug_assertions)))]
 +                let at = String::new();
 +                window.a11y.unexposed_clickables.push((at, bounds));
-+            }
-+        }
-+
-         if self.report_active_descendant_focus && window.a11y.is_active() {
-             if let Some(global_id) = global_id {
-                 window
-@@ -3652,10 +3747,31 @@
+             }
+         }
+ 
+@@ -3652,10 +3748,31 @@
          if let Some(count) = self.aria.column_count {
              node.set_column_count(count);
          }
