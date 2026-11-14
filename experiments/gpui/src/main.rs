@@ -217,6 +217,7 @@ fn main() {
         // only.
         desktop::enable(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        app_menu::quit_with_main_window(cx);
         // Stop the workers and checkpoint the copy before the process
         // ends, as the Electron app closes its library before quitting.
         cx.on_app_quit(move |cx| {

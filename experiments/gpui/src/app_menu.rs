@@ -1151,10 +1151,11 @@ fn edit(cx: &mut App, in_field: Option<Box<dyn Action>>, otherwise: Option<Box<d
 }
 
 /// Close Window: Settings closes as its close button closes it, dropping
-/// its draft; a detail window closes; the main window is hidden, as
-/// production's closes while the app keeps running (on macOS it does not
-/// quit when its last window closes, and the Dock icon brings a main window
-/// back).
+/// its draft; a detail window closes; on macOS the main window is hidden,
+/// as production's closes while the app keeps running (it does not quit
+/// when its last window closes, and the Dock icon brings a main window
+/// back). On Windows and Linux the main window closes, which quits the app
+/// ([`quit_with_main_window`]).
 fn close_window(cx: &mut App) {
     let Some(handle) = cx.active_window() else {
         return;
@@ -1164,7 +1165,8 @@ fn close_window(cx: &mut App) {
             return;
         }
         let main = current(cx).main;
-        if main.is_some_and(|main| AnyWindowHandle::from(main) == handle) {
+        let is_main = main.is_some_and(|main| AnyWindowHandle::from(main) == handle);
+        if is_main && Platform::CURRENT.is_mac() {
             current(cx).main_hidden = true;
             let _ = handle.update(cx, |_, window, _| {
                 crate::ui::window_chrome::order_out(window)
@@ -1173,6 +1175,24 @@ fn close_window(cx: &mut App) {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     });
+}
+
+/// Off macOS the app ends with its main window, however that closes (its
+/// close button, Close, Alt+F4, the window manager), as production quits
+/// when its windows are all closed there (`window-all-closed`). Production
+/// leaves a detail or Settings window open on its own after the main one
+/// closes; here they go with it, since they show the main window's library.
+pub fn quit_with_main_window(cx: &mut App) {
+    if Platform::CURRENT.is_mac() {
+        return;
+    }
+    cx.on_window_closed(|cx, closed| {
+        let main = current(cx).main;
+        if main.is_some_and(|main| main.window_id() == closed) {
+            cx.quit();
+        }
+    })
+    .detach();
 }
 
 /// The app-wide commands: the Picto menu's, the window commands and the
