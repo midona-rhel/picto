@@ -58,8 +58,18 @@ that starts with the source library's path to start with the copy's, so that
 nothing opened, revealed, copied or dragged out is a file of the real
 library.
 
-The application data the core keeps outside a library (AI models, caches) is
-pointed at `app-data/` beside the copy, never at the Electron app's folder.
+The application data the core keeps outside a library (its AI models, in
+`models/`) is, in a debug build, `app-data/` beside the copy, or the folder
+`PICTO_GPUI_APP_DATA` names; never the Electron app's folder
+(`application::application_data`). The core may write there whenever it
+opens (it recovers interrupted model downloads), so to try the AI tagger with
+models production already downloaded, point the variable at a folder holding
+an APFS clone of them (`cp -Rc "$HOME/Library/Application Support/picto/models"
+<folder>/models`), not at the real folder. A release build uses production's
+own location, `picto` in the per-user application data folder
+(`app.getPath('appData')`): `~/Library/Application Support/picto` on macOS,
+`%APPDATA%\picto` on Windows, `$XDG_CONFIG_HOME/picto` or `~/.config/picto` on
+Linux, so it finds and manages the models production downloaded.
 
 Files are handed to the rest of the desktop only through `src/desktop/`
 (open with the default application, Open With, reveal in the file manager,
@@ -690,6 +700,8 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_INSPECTOR=<width>` | debug builds | inspector width whatever was kept |
 | `PICTO_GPUI_HOLD_RUNS` | debug builds | the Subscriptions screen logs its commands and answers runs and gallery downloads itself instead of starting network work |
 | `PICTO_GPUI_SILENT` | debug builds | every player and Flash movie starts muted |
+| `PICTO_GPUI_APP_DATA=<folder>` | debug builds | the core's application data (AI models in `models/`) there instead of beside the copy |
+| `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once |
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
 | `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
 | `PICTO_GPUI_TEST_LIBRARY`, `PICTO_GPUI_TEST_WEBM`, `PICTO_GPUI_TEST_AUDIO`, `PICTO_GPUI_TEST_VIDEO` | ignored tests | inputs |
@@ -756,12 +768,13 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
 | Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
+| AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
 | Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
 add to last folder, copy and paste tags, slideshow, navigator, the layout and
-tile-label keys (all deferred in production too) and Auto Tag (no AI tagger).
+tile-label keys (all deferred in production too).
 
 Measured once on the million-item synthetic library on a macOS development
 machine: every grid window read took 0.3–9 ms wherever it lay; the summary of
@@ -813,9 +826,10 @@ re-checked by reading the code; the rest were checked against it.
   zoomed: the pop-up's blur over colourful content, the input method's
   candidate window, a file dropped from Finder, a trackpad scroll, the
   resize edges on Linux, and anything on a Windows or Linux screen.
-- **Network work.** No subscription run, source run or gallery download has
-  been started from this app; their commands were checked with
-  `PICTO_GPUI_HOLD_RUNS`.
+- **Network work.** No subscription run, source run, gallery download or AI
+  model download has been started from this app; their commands were checked
+  with `PICTO_GPUI_HOLD_RUNS` and `PICTO_GPUI_HOLD_DOWNLOADS`. Optimize (a
+  Core ML compile, macOS only) has not been pressed.
 - **System dialogs with the pointer.** Paste Import, the file and folder
   choosers, the export and Picto Pack dialogs and the empty states' import
   buttons have been driven only off-screen with `answer`.
@@ -874,9 +888,6 @@ re-checked by reading the code; the rest were checked against it.
   installed).
 - Accessibility: the native window is exposed, the control tree is not (the
   vendored GPUI includes AccessKit; the app sets no roles or labels).
-- The AI tagger: Auto Tag in the item menu, the inspector and the Organize
-  menu is disabled, its shortcut unbound; every AI model shows as not
-  downloaded and download, optimise and delete do nothing.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
 - Site logins and the Accounts window: the Accounts button and a source's
@@ -1029,7 +1040,15 @@ radial gradients, masks or blend modes)
 
 Smaller differences by area†
 - Inspector: a selection's covers follow the order items were chosen in, not
-  the query order, for shift ranges; Auto Tag is drawn but disabled.
+  the query order, for shift ranges.
+- AI tagger review: the confidence cutoff filters the list while the slider
+  is dragged (production applies it on release); the side arrows step
+  through the items while the filter field is empty (production's
+  `view.prevImage`/`nextImage` scope does not act while the field has the
+  keyboard, which it has from the moment the panel opens, so there they
+  work only after a row or button took the keyboard, and `A`/`D` too); the
+  items' details are read one window at a time rather than the next window
+  prefetched during the run; the model progress fill does not slide.
 - Pickers and dialogs: with several items selected a picker starts from the
   tags or folders they share; the dialogs' fold chevron turns at once and row
   highlights do not fade; a folder with its own glyph shows the plain folder.
