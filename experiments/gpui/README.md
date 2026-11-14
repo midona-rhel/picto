@@ -1247,8 +1247,8 @@ re-checked by reading the code; the rest were checked against it.
   off-screen tool spends about 170 ms per input in the viewer, longer than
   the pause that ends a gesture, so it cannot play a flick, and no
   trackpad or wheel has tried it.
-- **Drops from a web browser.** No real browser drag has been dropped on
-  any platform. On macOS the pasteboard reading was checked on a pasteboard
+- **Drops from a web browser.** The owner has dropped from a real browser
+  on macOS; none has been dropped on Windows or Linux. On macOS the pasteboard reading was checked on a pasteboard
   of a test's own, and a drop of in-memory image data (played with
   `dropdata`) was imported into a real window with its addresses as
   sources, and a drop of links only was refused with its notification; on Windows and Linux only the parsing of virtual-file
@@ -1256,21 +1256,22 @@ re-checked by reading the code; the rest were checked against it.
   reading code is compiled in CI.
 - **macOS system integration.** Seen on a library copy: Reveal in Finder
   opened a Finder window with the copy's file selected; Open with Default
-  App opened the copy's file in Preview; Copy put the copy's file on the
-  real pasteboard as a file address; Open With Other listed the
+  App opened the copy's file in Preview; Open With Other listed the
   applications the system gives for the file's type, with their icons and
-  the default marked (choosing one was played off-screen only, where the
-  request is written down instead of sent). Not seen: dragging items out to
-  Finder (needs the real pointer); the Dock badge and the system
-  notification (which need the app to run from its bundle and a run to
-  finish); files arriving through `application:openURLs:` (the hand-over
-  between two launches and packs on the command line were seen working);
-  an application launched through Open With Other; the media player's
-  full-screen transition; restoring the window maximised or on a second
-  display (a kept place and size was seen restored and written back; only
-  the pure placement code is tested for the rest); moving or resizing a
-  window by its edge, so the detail window's aspect lock and the saving of
-  a changed place (input playback cannot move a window). The detail window's always-on-top was seen raising
+  the default marked, and choosing one (ColorSync Utility) started it with
+  the copy's file; Copy put the copy's file on the real pasteboard as a
+  file address; the Dock tile carried the Inbox count (read through the
+  Dock's accessibility label: "99+" for 955, as production's tile beside
+  it); the video player's F took the window to the system's full screen
+  with the video alone and back to its place and size. The owner has
+  resized windows by their edges and dropped from a real browser. Not
+  seen: dragging items out to Finder; the system notification (which needs
+  a run to finish); files arriving through `application:openURLs:` (the
+  hand-over between two launches and packs on the command line were seen
+  working); restoring the window maximised or on a second display (a kept
+  place and size was seen restored and written back; only the pure
+  placement code is tested for the rest); the detail window's aspect lock
+  while its edge is dragged. The detail window's always-on-top was seen raising
   and lowering its window level. Opened, a detail window takes the
   media's shape (3926×2474 opened at 1330×838); a very narrow picture
   (200×640) is grown to 400 wide as production grows it, which is taller
