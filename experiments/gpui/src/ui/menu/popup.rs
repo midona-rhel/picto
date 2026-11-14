@@ -181,6 +181,9 @@ impl Menu {
                 is_resizable: false,
                 is_minimizable: false,
                 window_background: WindowBackgroundAppearance::Transparent,
+                // Never the key window: without this its hover and fades
+                // would run at 30 frames a second.
+                inactive_frame_interval: None,
                 ..Default::default()
             };
             let view = menu.clone();

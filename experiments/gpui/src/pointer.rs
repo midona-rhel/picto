@@ -30,7 +30,8 @@
 //! Control elsewhere, so one script serves every platform) and `type` the text to enter in the focused
 //! field. `dragfiles` brings files from the system over the window at a
 //! point, as a drag from Finder does (the platform's file-drop entered and
-//! pending events), `drop` also lets them go there (submit, then exited),
+//! pending events), `drop` also lets them go there (a release, then
+//! exited; not the platform's drop, which would bring the app forward),
 //! and `dragexit` takes them out of the window again; the paths are
 //! separated by spaces, so a path cannot hold one. `dropdata` drops what a
 //! web browser drags, with no files: each `image=<path>` is an in-memory
@@ -163,7 +164,10 @@ fn interned(text: String) -> &'static str {
 }
 
 /// Files from the system over the window at a point (`dragfiles`), and let
-/// go there (`drop`): the events a drag from Finder makes.
+/// go there (`drop`): the events a drag from Finder makes, except that the
+/// files are let go with a release rather than the platform's drop, which
+/// GPUI answers by bringing the app forward over whatever the user is
+/// working in.
 fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
     let mut parts = rest.split_whitespace();
     let position = point(
@@ -179,7 +183,12 @@ fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
         PlatformInput::FileDrop(FileDropEvent::Pending { position }),
     ];
     if submit {
-        events.push(PlatformInput::FileDrop(FileDropEvent::Submit { position }));
+        events.push(PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        }));
         events.push(PlatformInput::FileDrop(FileDropEvent::Exited));
     }
     Some(events)
