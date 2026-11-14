@@ -646,7 +646,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
     if has_selection {
         if h.add_to_last_folder {
             let label = match &d.last_folder_name {
-                Some(name) => format!("Add to \u{201c}{name}\u{201d}"),
+                Some(name) => crate::tf!("Add to “{value0}”", name),
                 None => t("Add to Last Used Folder").to_owned(),
             };
             rows.push(

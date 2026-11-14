@@ -19,10 +19,14 @@
 //!   `.label`, `.tooltip`, `.placeholder`, a notification, a confirmation,
 //!   …) without `t`, `tf!` or `en`.
 //!
-//! What it does not catch: a text built with `format!` and then drawn, a
-//! literal kept in a variable or a table and drawn later (unless it is a
-//! key), a drawing call it does not list, and a key used where production
-//! itself leaves the text in English.
+//! - no `format!` rebuilds one of production's messages: a template that
+//!   is a key once its placeholders are set aside (`{name}` against
+//!   `{value0}`) goes through `tf!` instead.
+//!
+//! What it does not catch: a text of this app's own built with `format!` and
+//! then drawn, a literal kept in a variable or a table and drawn later
+//! (unless it is a key), a drawing call it does not list, and a key used
+//! where production itself leaves the text in English.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -479,10 +483,62 @@ struct Findings {
     untranslated: BTreeMap<String, Vec<String>>,
     /// Literals drawn without `t`, by file.
     drawn: BTreeMap<String, Vec<String>>,
+    /// `format!` templates that rebuild one of production's messages.
+    formatted: Vec<String>,
 }
 
 fn has_letters(text: &str) -> bool {
     text.chars().any(|c| c.is_alphabetic())
+}
+
+/// A message with each placeholder written `{}`, so that a `format!`
+/// template (`{name}`, `{}`, `{0:>3}`) compares with a key (`{value0}`).
+/// `{{` and `}}` stay the braces they write.
+fn template(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                out.push_str("{{");
+            }
+            '{' => {
+                for inside in chars.by_ref() {
+                    if inside == '}' {
+                        break;
+                    }
+                }
+                out.push_str("{}");
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                out.push_str("}}");
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Whether a template holds a word of its own besides its placeholders, so
+/// that joins such as `{}{}`, `{} · {}` or `{}x` are not taken for a
+/// message.
+fn worded(template: &str) -> bool {
+    let text: Vec<char> = template.replace("{}", " ").chars().collect();
+    text.windows(2)
+        .any(|pair| pair[0].is_alphabetic() && pair[1].is_alphabetic())
+}
+
+/// The templates of production's messages that hold a placeholder and a
+/// word.
+fn key_templates() -> BTreeSet<String> {
+    super::catalog(super::Locale::En)
+        .keys()
+        .filter(|key| key.contains('{'))
+        .map(|key| template(key))
+        .filter(|template| worded(template))
+        .collect()
 }
 
 fn scan() -> Findings {
@@ -490,6 +546,7 @@ fn scan() -> Findings {
     let files = sources();
     let tests = test_modules(&files);
     let listed = gpui_only();
+    let templates = key_templates();
     let mut used = BTreeSet::new();
     let mut findings = Findings::default();
     for file in &files {
@@ -520,6 +577,13 @@ fn scan() -> Findings {
                 }
                 Use::Plain => {
                     if literal.marked || identifier(&literal) {
+                        continue;
+                    }
+                    if literal.before.trim_end().ends_with("format!(")
+                        && has_letters(&literal.text)
+                        && templates.contains(&template(&literal.text))
+                    {
+                        findings.formatted.push(at);
                         continue;
                     }
                     let current = literal.before.rsplit('\n').next().unwrap_or("");
@@ -566,6 +630,10 @@ fn every_shown_text_goes_through_t() {
         &findings.unlisted,
     );
     section("gpui_only.txt lines no longer used", &findings.stale);
+    section(
+        "keys of en.json rebuilt with format! (use tf!)",
+        &findings.formatted,
+    );
     let by_file = |map: &BTreeMap<String, Vec<String>>| -> Vec<String> {
         map.values().flatten().cloned().collect()
     };
@@ -585,6 +653,21 @@ fn every_shown_text_goes_through_t() {
         }
     }
     assert!(report.is_empty(), "{report}");
+}
+
+#[test]
+fn a_format_template_is_compared_with_the_keys_by_its_placeholders() {
+    assert_eq!(
+        template("Delete \"{name}\" and {0:>3} of {}"),
+        "Delete \"{}\" and {} of {}"
+    );
+    assert_eq!(template("{{literal}} {value0}"), "{{literal}} {}");
+    let templates = key_templates();
+    assert!(templates.contains(&template("Add to \u{201c}{name}\u{201d}")));
+    assert!(!templates.contains(&template("Move {count} to Trash, at once")));
+    // A join of values is not a message.
+    assert!(!templates.contains(&template("{rate}x")));
+    assert!(!templates.contains(&template("{progress} · {left}")));
 }
 
 #[test]

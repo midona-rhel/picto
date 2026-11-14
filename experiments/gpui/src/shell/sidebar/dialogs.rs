@@ -61,8 +61,9 @@ pub enum WatchAnalysis {
 
 /// `singleFolderDeletionMessage`.
 pub fn folder_deletion(name: &str) -> String {
-    format!(
-        "Delete \"{name}\" and all its subfolders? Media inside these folders will remain untouched."
+    crate::tf!(
+        "Delete \"{value0}\" and all its subfolders? Media inside these folders will remain untouched.",
+        name
     )
 }
 
