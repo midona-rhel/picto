@@ -9,6 +9,7 @@ mod view;
 use crate::application;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::motion;
 use crate::session::{Change, Report, Reread, Session};
 use crate::tags::{Answer, Page, Preferences, TagPager, View as Browse};
@@ -144,7 +145,7 @@ impl TagsScreen {
     ) -> Self {
         let search = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder("Search tags")
+                .placeholder(t("Search tags"))
                 .submits()
         });
         let toolbar = cx.new(|cx| TagsToolbar {
@@ -508,7 +509,7 @@ impl TagsScreen {
                     app.starred_tags = starred.clone();
                     app.tag_group_colors = colors.clone();
                 },
-                Some("Unable to save tag preferences"),
+                Some(t("Unable to save tag preferences")),
                 cx,
             )
         });

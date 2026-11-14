@@ -1,6 +1,7 @@
 //! The Tags screen's rules apart from drawing them: what the group dialogs
 //! accept, and the browse list's sections and rows. Tag names, group colours
 //! and the tag preferences are in [`crate::tags`].
+use crate::i18n::t;
 use picto_library::TagRecord;
 use std::ops::Range;
 
@@ -82,7 +83,7 @@ impl Rows {
         let mut sections: Vec<(String, Vec<&TagRecord>)> = Vec::new();
         if searching {
             if !tags.is_empty() {
-                sections.push(("Matches".to_owned(), tags.iter().collect()));
+                sections.push((t("Matches").to_owned(), tags.iter().collect()));
             }
         } else {
             let mut sorted = tags.iter().collect::<Vec<_>>();

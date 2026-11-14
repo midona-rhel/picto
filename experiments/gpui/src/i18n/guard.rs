@@ -65,6 +65,7 @@ const CONVERTED: &[&str] = &[
     "ui/tag_token_input.rs",
     "tags.rs",
     "viewer/",
+    "screens/tags/",
 ];
 
 /// Calls whose literal argument is drawn.
