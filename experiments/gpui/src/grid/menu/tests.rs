@@ -448,14 +448,6 @@ fn a_mixed_selection_only_moves_to_trash_and_is_not_dangerous() {
 }
 
 #[test]
-fn folders_alone_open_the_folder() {
-    let mut d = single("folder:5");
-    d.folders_only = true;
-    d.handlers.open = true;
-    assert_eq!(labels(&tile(&d)), ["Open Folder"]);
-}
-
-#[test]
 fn inbox_accepts_and_rejects_several_items_first() {
     let mut d = several(3);
     d.status = Some(Status::Inbox);
@@ -635,7 +627,6 @@ fn a_group_is_a_library_item_not_its_cover_file() {
     d.contains_group = true;
     d.status = Some(Status::Active);
     d.handlers = Handlers {
-        open: true,
         open_new_window: true,
         edit_group: true,
         ungroup: true,

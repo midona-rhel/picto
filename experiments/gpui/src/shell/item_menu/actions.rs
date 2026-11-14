@@ -88,10 +88,6 @@ impl Shell {
             // disabled until then).
             Action::OpenWithOther => {}
             Action::LoadingApplications => {}
-            Action::OpenFolder => {
-                // TODO: open the folder tile's folder once the grid shows
-                // subfolder tiles.
-            }
             // ── Copying ──
             Action::CopyPath => {
                 if let Some(file) = file {

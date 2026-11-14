@@ -111,7 +111,6 @@ pub enum Panel {
 /// handler is missing is disabled or left out, as production decides.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Handlers {
-    pub open: bool,
     pub open_default: bool,
     pub open_with_application: bool,
     pub open_with_chooser: bool,
@@ -181,7 +180,6 @@ pub struct Description {
     /// `Some(None)` while they are being counted.
     pub collection_count: Option<Option<usize>>,
     pub mixed: bool,
-    pub folders_only: bool,
     pub scope: Option<ScopeKind>,
     pub status: Option<Status>,
     pub grayscale: bool,
@@ -199,7 +197,6 @@ pub struct Description {
 /// What a row does when chosen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
-    OpenFolder,
     OpenDefault,
     OpenWithOther,
     /// One of "Open With Other"'s applications, named by its row's value.
@@ -263,7 +260,6 @@ impl Action {
     pub fn key(self) -> &'static str {
         use Action::*;
         match self {
-            OpenFolder => "open-folder",
             OpenDefault => "open-default",
             OpenWithOther => "open-with-other",
             OpenWithApplication => "open-with-application",
@@ -573,22 +569,6 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
                     .icon("menu-trash")
                     .into(),
             );
-        }
-        return rows;
-    }
-
-    if d.folders_only {
-        if d.single
-            && d.single_hash
-                .as_deref()
-                .is_some_and(|hash| hash.starts_with("folder:"))
-        {
-            rows.push(
-                item(Action::OpenFolder, "Open Folder", h.open)
-                    .icon("menu-folder")
-                    .into(),
-            );
-            rows.push(Row::Separator);
         }
         return rows;
     }
