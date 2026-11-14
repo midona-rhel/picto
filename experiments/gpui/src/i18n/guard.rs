@@ -41,70 +41,6 @@ const NOT_SHOWN: [&str; 7] = [
     "settings/registry.rs",
 ];
 
-/// The files converted so far (path prefixes); the findings of the others
-/// are printed (`--nocapture`), not failed on.
-const CONVERTED: &[&str] = &[
-    "backend.rs",
-    "shell/mod.rs",
-    "shell/sidebar",
-    "shell/library",
-    "shell/rails.rs",
-    "ui/sidebar_row.rs",
-    "ui/window_chrome.rs",
-    "ui/section_header.rs",
-    "ui/menu",
-    "ui/select.rs",
-    "shell/toolbar.rs",
-    "shell/view_menu.rs",
-    "grid/filter",
-    "grid/prefs.rs",
-    "ui/date_picker.rs",
-    "ui/color_editor.rs",
-    "ui/filter_control.rs",
-    "ui/color_picker.rs",
-    "ui/zoom.rs",
-    "ui/segmented.rs",
-    "grid/",
-    "shell/item_menu",
-    "shell/review.rs",
-    "shell/shortcuts.rs",
-    "shell/menu_commands.rs",
-    "ui/empty_state.rs",
-    "inspector/",
-    "ui/property_row.rs",
-    "ui/chip.rs",
-    "ui/panel_section.rs",
-    "ui/tag_token_input.rs",
-    "tags.rs",
-    "viewer/",
-    "screens/tags/",
-    "screens/subscriptions/",
-    "ui/cover_dialog.rs",
-    "ui/status_badge.rs",
-    "ui/progress_bar.rs",
-    "screens/duplicates/",
-    "settings/",
-    "ui/",
-    "shell/delete.rs",
-    "shell/batch_rename.rs",
-    "shell/export.rs",
-    "shell/import.rs",
-    "history.rs",
-    "session/",
-    "export/",
-    "keymap.rs",
-    "state.rs",
-    "text.rs",
-    "i18n/",
-    "application.rs",
-    "screens/mod.rs",
-    "cover.rs",
-    "imports/",
-    "desktop/",
-    "platform/",
-    "main.rs",
-];
-
 /// Calls whose literal argument is drawn.
 const SINKS: [&str; 14] = [
     "tip(",
@@ -622,12 +558,8 @@ fn every_shown_text_goes_through_t() {
         &findings.unlisted,
     );
     section("gpui_only.txt lines no longer used", &findings.stale);
-    let pending = |file: &str| !CONVERTED.iter().any(|prefix| file.starts_with(prefix));
     let by_file = |map: &BTreeMap<String, Vec<String>>| -> Vec<String> {
-        map.iter()
-            .filter(|(file, _)| !pending(file))
-            .flat_map(|(_, items)| items.iter().cloned())
-            .collect()
+        map.values().flatten().cloned().collect()
     };
     section(
         "keys of en.json left outside t()",
@@ -638,14 +570,10 @@ fn every_shown_text_goes_through_t() {
     for (file, items) in findings.untranslated.iter().chain(&findings.drawn) {
         *counts.entry(file).or_default() += items.len();
     }
-    let waiting: Vec<_> = counts.iter().filter(|(file, _)| pending(file)).collect();
-    if !waiting.is_empty() {
-        eprintln!(
-            "not yet converted ({} texts):",
-            waiting.iter().map(|(_, count)| **count).sum::<usize>()
-        );
-        for (file, count) in waiting {
-            eprintln!("  {count:5} {file}");
+    if !counts.is_empty() {
+        report.push_str("\nby file:\n");
+        for (file, count) in &counts {
+            report.push_str(&format!("  {count:5} {file}\n"));
         }
     }
     assert!(report.is_empty(), "{report}");
