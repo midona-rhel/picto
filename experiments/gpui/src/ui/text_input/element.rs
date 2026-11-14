@@ -613,8 +613,13 @@ impl Element for TextElement {
                     if let Some(selection) = selection.take() {
                         window.paint_quad(selection)
                     }
-                    line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
-                        .unwrap();
+                    // A line the text system cannot draw is left out of this
+                    // frame rather than ending the app.
+                    if let Err(error) =
+                        line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+                    {
+                        eprintln!("text input: a line could not be painted: {error}");
+                    }
                     if let Some(cursor) = cursor.take().filter(|_| caret_on) {
                         window.paint_quad(cursor);
                     }
@@ -632,14 +637,16 @@ impl Element for TextElement {
                 }
                 for (_, line, top) in lines.iter() {
                     let origin = point(bounds.left(), bounds.top() + *top);
-                    let _ = line.paint(
+                    if let Err(error) = line.paint(
                         origin,
                         line_height,
                         gpui::TextAlign::Left,
                         Some(bounds),
                         window,
                         cx,
-                    );
+                    ) {
+                        eprintln!("text input: a line could not be painted: {error}");
+                    }
                 }
                 if let Some(cursor) = cursor.take().filter(|_| caret_on) {
                     window.paint_quad(cursor);
