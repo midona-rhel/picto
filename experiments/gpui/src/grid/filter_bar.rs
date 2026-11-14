@@ -68,7 +68,9 @@ impl MenuKind {
 }
 
 /// The editors of the open menu, kept so the rows can be rebuilt around
-/// them and so they follow filters changed elsewhere.
+/// them. The colour, date and save editors follow filters changed
+/// elsewhere; the range and resolution editors keep what they were opened
+/// with.
 #[derive(Default)]
 struct Editors {
     color: Option<Entity<ColorEditor>>,
@@ -308,7 +310,7 @@ impl FilterBar {
         self._menu.clear();
         let filters = self.filters(cx);
         self.create_editors(kind, &filters, cx);
-        let entries = self.entries(kind, &filters, cx);
+        let entries = self.entries(kind, &filters);
         // `{ x: rect.left, y: rect.bottom + 4 }`.
         let position = point(anchor.left(), anchor.bottom() + px(4.));
         let menu = cx.new(|cx| {
@@ -478,11 +480,11 @@ impl FilterBar {
                 cx.notify();
             });
         }
-        let entries = self.entries(kind, &filters, cx);
+        let entries = self.entries(kind, &filters);
         menu.update(cx, |menu, cx| menu.set_entries(entries, cx));
     }
 
-    fn entries(&self, kind: MenuKind, filters: &Filters, cx: &App) -> Vec<menu::Entry> {
+    fn entries(&self, kind: MenuKind, filters: &Filters) -> Vec<menu::Entry> {
         // The menu's width, which an editor fills.
         let width = kind.width().unwrap_or(270.);
         match kind {
@@ -605,7 +607,6 @@ impl FilterBar {
                         .context_action("saved-delete")
                         .into()
                 }));
-                let _ = cx;
                 entries
             }
         }
@@ -762,7 +763,11 @@ impl FilterBar {
             .on_open(move |bounds, window, cx| {
                 let _ = open.update(cx, |this, cx| match field {
                     Field::Tags | Field::Folders => this.open_picker(field, bounds, window, cx),
-                    field => this.open_menu(menu_kind(field), bounds, cx),
+                    field => {
+                        if let Some(kind) = menu_kind(field) {
+                            this.open_menu(kind, bounds, cx)
+                        }
+                    }
                 });
             })
             .on_clear(move |_, cx| {
@@ -775,8 +780,8 @@ impl FilterBar {
 }
 
 /// The menu a field's control opens.
-fn menu_kind(field: Field) -> MenuKind {
-    match field {
+fn menu_kind(field: Field) -> Option<MenuKind> {
+    Some(match field {
         Field::Color => MenuKind::Color,
         Field::Rating => MenuKind::Rating,
         Field::Type => MenuKind::Type,
@@ -786,8 +791,8 @@ fn menu_kind(field: Field) -> MenuKind {
         Field::Duration => MenuKind::Duration,
         Field::Size => MenuKind::Size,
         // Tags and folders open their pickers instead.
-        Field::Tags | Field::Folders => MenuKind::Pin,
-    }
+        Field::Tags | Field::Folders => return None,
+    })
 }
 
 /// A field's 16px glyph on the bar (`stroke={1.6}`).
