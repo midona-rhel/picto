@@ -13,6 +13,12 @@ exclude = ["vendor"]
 # Keep symbols/checks while optimizing the rendering and decoding hot paths.
 [profile.dev]
 opt-level = 1
+# Line numbers in backtraces are all the checks here need. Full debug
+# information and the incremental caches of this crate, the vendored GPUI
+# and the application core made every build cycle write several gigabytes
+# that nothing cleaned up.
+debug = "line-tables-only"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
