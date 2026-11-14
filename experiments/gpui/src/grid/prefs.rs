@@ -2,6 +2,7 @@
 //! the same fallbacks as `gridController.ts`: the scope's own row, then
 //! `grid:defaults`, then the built-in defaults.
 use super::layout::ViewMode;
+use crate::i18n::t;
 use picto_library::predicate::{ItemSort, SortDirection, SortField};
 use picto_library::query::ItemScope;
 use serde_json::Value;

@@ -8,6 +8,7 @@
 //! shell turns the rows into a [`menu::Entry`] list and performs the chosen
 //! [`Action`].
 use crate::grid::format::grouped;
+use crate::i18n::t;
 use crate::ui::menu;
 use picto_library::ContentSortField;
 
@@ -79,6 +80,7 @@ pub enum Engine {
     Bing,
 }
 
+// i18n: translated where drawn (menu rows)
 pub const ENGINES: [(Engine, &str); 5] = [
     (Engine::TinEye, "TinEye"),
     (Engine::SauceNao, "SauceNAO"),
@@ -88,6 +90,7 @@ pub const ENGINES: [(Engine, &str); 5] = [
 ];
 
 /// `CONTENT_SORT_OPTIONS`: a folder's own order, rewritten by one field.
+// i18n: translated where drawn (menu rows)
 pub const CONTENT_SORT: [(ContentSortField, &str); 6] = [
     (ContentSortField::Name, "Name"),
     (ContentSortField::ImportedAt, "Import Date"),
@@ -440,12 +443,12 @@ impl Builder<'_> {
         }
         match &d.open_with {
             OpenWith::Pending => rows.push(submenu(
-                "Open With Other",
+                t("Open With Other"),
                 Some("menu-apps"),
                 vec![
                     item(
                         Action::LoadingApplications,
-                        "Loading applications...",
+                        t("Loading applications..."),
                         false,
                     )
                     .into(),
@@ -455,7 +458,7 @@ impl Builder<'_> {
                 if !applications.is_empty() && h.open_with_application =>
             {
                 rows.push(submenu(
-                    "Open With Other",
+                    t("Open With Other"),
                     Some("menu-apps"),
                     applications.iter().map(application_row).collect(),
                 ))
@@ -463,7 +466,7 @@ impl Builder<'_> {
             OpenWith::Chooser if h.open_with_chooser => rows.push(
                 item(
                     Action::OpenWithOther,
-                    "Open With Other...",
+                    t("Open With Other..."),
                     OPEN_WITH_CHOOSER_BUILT,
                 )
                 .icon("menu-apps")
@@ -539,7 +542,7 @@ impl Builder<'_> {
         rows.push(Row::Panel(Panel::Layout));
         rows.push(Row::Separator);
         rows.push(submenu(
-            "Display",
+            t("Display"),
             Some("menu-adjustments-rotated"),
             vec![Row::Panel(Panel::Display)],
         ));
@@ -579,7 +582,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         rows.push(
             item(
                 Action::Accept,
-                several("Accept", format!("Accept {count} Items")),
+                several(t("Accept"), format!("Accept {count} Items")),
                 h.accept,
             )
             .icon("menu-arrow-back-up")
@@ -589,7 +592,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         rows.push(
             item(
                 Action::Reject,
-                several("Reject", format!("Reject {count} Items")),
+                several(t("Reject"), format!("Reject {count} Items")),
                 h.reject,
             )
             .icon("menu-trash")
@@ -647,7 +650,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         if h.add_to_last_folder {
             let label = match &d.last_folder_name {
                 Some(name) => format!("Add to \u{201c}{name}\u{201d}"),
-                None => "Add to Last Used Folder".to_owned(),
+                None => t("Add to Last Used Folder").to_owned(),
             };
             rows.push(
                 item(Action::AddToLastFolder, label, true)
@@ -666,7 +669,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             rows.push(
                 item(
                     Action::NewFolderWithSelection,
-                    "New Folder with Selection",
+                    t("New Folder with Selection"),
                     true,
                 )
                 .icon("menu-folder-new-selection")
@@ -720,7 +723,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         rows.push(
             item(
                 Action::BatchRename,
-                format!("Batch Rename {count} Items..."),
+                crate::tf!("Batch Rename {value0} Items...", count),
                 true,
             )
             .icon("menu-rename")
@@ -753,9 +756,9 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
                 item(
                     Action::CopySelectionNames,
                     if count == 1 {
-                        "Copy Name"
+                        t("Copy Name")
                     } else {
-                        "Copy Names"
+                        t("Copy Names")
                     },
                     true,
                 )
@@ -783,7 +786,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         rows.push(
             item(
                 Action::AutoTag,
-                several("Auto Tag", format!("Auto Tag {count} Images")),
+                several(t("Auto Tag"), crate::tf!("Auto Tag {value0} Images", count)),
                 h.ai_tagger,
             )
             .icon("menu-auto-tag")
@@ -795,9 +798,9 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             item(
                 Action::CopyTags,
                 if d.single {
-                    "Copy Tags"
+                    t("Copy Tags")
                 } else {
-                    "Copy Shared Tags"
+                    t("Copy Shared Tags")
                 },
                 h.copy_tags,
             )
@@ -817,12 +820,12 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
 
     if has_selection && h.set_rating {
         rows.push(submenu(
-            "Set Rating",
+            t("Set Rating"),
             Some("menu-star"),
             (0..=5u8)
                 .map(|stars| {
                     let label = match stars {
-                        0 => "No Rating".to_owned(),
+                        0 => t("No Rating").to_owned(),
                         _ => "\u{2605}".repeat(stars as usize),
                     };
                     item(Action::Rate(stars), label, true).into()
@@ -844,7 +847,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         && h.search_by_image
     {
         rows.push(submenu(
-            "Search by Image",
+            t("Search by Image"),
             Some("menu-search"),
             ENGINES
                 .iter()
@@ -866,7 +869,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             item(
                 Action::RegenerateThumbnails,
                 several(
-                    "Regenerate Thumbnail",
+                    t("Regenerate Thumbnail"),
                     format!("Regenerate {count} Thumbnails"),
                 ),
                 h.regenerate,
@@ -885,7 +888,10 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         rows.push(
             item(
                 Action::RemoveFromFolder,
-                several("Remove from Folder", format!("Remove {count} from Folder")),
+                several(
+                    t("Remove from Folder"),
+                    format!("Remove {count} from Folder"),
+                ),
                 h.remove_from_folder,
             )
             .icon("menu-folder-minus")
@@ -901,7 +907,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             rows.push(
                 item(
                     Action::Restore,
-                    several("Restore", format!("Restore {count} Items")),
+                    several(t("Restore"), format!("Restore {count} Items")),
                     h.restore,
                 )
                 .icon("menu-arrow-back-up")
@@ -911,7 +917,10 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             rows.push(
                 item(
                     Action::DeletePermanently,
-                    several("Delete Permanently", format!("Delete {count} Permanently")),
+                    several(
+                        t("Delete Permanently"),
+                        format!("Delete {count} Permanently"),
+                    ),
                     h.permanent_delete,
                 )
                 .icon("menu-trash")
@@ -923,7 +932,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             rows.push(
                 item(
                     Action::MoveToTrash,
-                    several("Move to Trash", format!("Move {count} to Trash")),
+                    several(t("Move to Trash"), format!("Move {count} to Trash")),
                     h.move_to_trash,
                 )
                 .icon("menu-trash")
@@ -1009,7 +1018,7 @@ pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec
 /// production's order.
 fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
     submenu(
-        "Sort by",
+        t("Sort by"),
         Some("menu-sort"),
         CONTENT_SORT
             .iter()
@@ -1027,9 +1036,9 @@ pub const COLLECTION_SORT: [ContentSortField; 2] = [ContentSortField::Name, Cont
 /// above the Trash row, or at the end when there is none.
 pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
     let label = if count > 1 {
-        format!("Remove {count} from Group")
+        crate::tf!("Remove {value0} from Group", count)
     } else {
-        "Remove from Group".to_owned()
+        t("Remove from Group").to_owned()
     };
     let remove: Row = item(Action::RemoveFromGroup, label, true)
         .icon("menu-group-remove")
@@ -1113,7 +1122,7 @@ pub fn viewer_menu(
         rows.push(
             item(
                 Action::FlashPlay,
-                if playing { "Pause" } else { "Play" },
+                if playing { t("Pause") } else { t("Play") },
                 true,
             )
             .icon(if playing {
@@ -1131,7 +1140,7 @@ pub fn viewer_menu(
         rows.push(
             item(
                 Action::FlashMute,
-                if muted { "Unmute" } else { "Mute" },
+                if muted { t("Unmute") } else { t("Mute") },
                 true,
             )
             .icon(if muted {
@@ -1178,7 +1187,7 @@ pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> V
 /// without one, and "(Default)" after the default's name.
 fn application_row(application: &crate::desktop::Application) -> Row {
     let label = if application.default {
-        format!("{} (Default)", application.name)
+        crate::tf!("{value0} (Default)", application.name)
     } else {
         application.name.clone()
     };
@@ -1220,9 +1229,9 @@ fn group_row(may_merge: bool) -> Row {
     item(
         Action::Group,
         if may_merge {
-            "Merge into One Group..."
+            t("Merge into One Group...")
         } else {
-            "Group..."
+            t("Group...")
         },
         true,
     )
@@ -1233,9 +1242,9 @@ fn group_row(may_merge: bool) -> Row {
 /// `ungroupMenuEntry`: `None` while the collections are being counted.
 fn ungroup_row(count: Option<usize>) -> Row {
     let label = match count {
-        None => "Ungroup Collections...".to_owned(),
-        Some(n) if n > 1 => format!("Ungroup {} Collections...", grouped(n as u64)),
-        Some(_) => "Ungroup...".to_owned(),
+        None => t("Ungroup Collections...").to_owned(),
+        Some(n) if n > 1 => crate::tf!("Ungroup {value0} Collections...", grouped(n as u64)),
+        Some(_) => t("Ungroup...").to_owned(),
     };
     item(Action::Ungroup, label, true)
         .icon("menu-group-remove")
@@ -1247,7 +1256,7 @@ fn export_row(h: &Handlers) -> Row {
     let mut children: Vec<Row> = vec![
         item(
             Action::ExportOriginals,
-            "Export Originals...",
+            t("Export Originals..."),
             h.export_originals,
         )
         .into(),

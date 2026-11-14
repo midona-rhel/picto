@@ -3,6 +3,7 @@
 use super::{File, Target, media_link};
 use crate::grid::format::grouped;
 use crate::grid::menu::Action;
+use crate::i18n::{en, t};
 use crate::session::{Report, Reread, edit_then, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
@@ -77,7 +78,7 @@ impl Shell {
                         file,
                         move |path, cx| {
                             if let Err(error) = crate::desktop::open_with(&application, &path, cx) {
-                                crate::ui::notify::error("Could not open file", error, cx);
+                                crate::ui::notify::error(t("Could not open file"), error, cx);
                             }
                         },
                         cx,
@@ -92,7 +93,7 @@ impl Shell {
                         file,
                         |path, cx| {
                             if let Err(error) = crate::desktop::open_with_chooser(&path, cx) {
-                                crate::ui::notify::error("Could not open file", error, cx);
+                                crate::ui::notify::error(t("Could not open file"), error, cx);
                             }
                         },
                         cx,
@@ -192,7 +193,7 @@ impl Shell {
                         file,
                         |path, cx| {
                             if let Err(error) = crate::desktop::copy_files(&[path], cx) {
-                                crate::ui::notify::error("Could not copy file", error, cx);
+                                crate::ui::notify::error(en("Could not copy file"), error, cx);
                             }
                         },
                         cx,
@@ -205,7 +206,7 @@ impl Shell {
                 let paths: Vec<PathBuf> =
                     self.member_media(&target, cx, |media| PathBuf::from(&media.file_path));
                 if let Err(error) = crate::desktop::copy_files(&paths, cx) {
-                    crate::ui::notify::error("Could not copy selection", error, cx);
+                    crate::ui::notify::error(t("Could not copy selection"), error, cx);
                 }
             }
             Action::CopySelection => self.copy_files(ids, cx),
@@ -250,7 +251,7 @@ impl Shell {
                         .unwrap_or_default();
                     edit_then(
                         &self.session,
-                        Report::failure(format!("Could not add to {name}")),
+                        Report::failure(crate::tf!("Could not add to {value0}", name)),
                         Reread::SELECTION,
                         move |library| library.add_to_folder(&selection, folder),
                         cx,
@@ -295,7 +296,7 @@ impl Shell {
                 if let (Some(folder), Some(id)) = (target.folder, ids.first().copied()) {
                     edit_then(
                         &self.session,
-                        Report::failure("Could not set folder cover"),
+                        Report::failure(t("Could not set folder cover")),
                         Reread::SELECTION,
                         move |library| library.set_folder_cover(folder, id),
                         cx,
@@ -539,7 +540,7 @@ impl Shell {
                     crate::desktop::copy_files(&paths, cx)
                 };
                 if let Err(error) = copied {
-                    crate::ui::notify::error("Could not copy selection", error, cx);
+                    crate::ui::notify::error(t("Could not copy selection"), error, cx);
                 }
             },
         );
@@ -737,7 +738,7 @@ impl Shell {
         let selection = target.selection(self.session.read(cx));
         edit_then(
             &self.session,
-            Report::failure("Could not create group").and_announce("collections.organize"),
+            Report::failure(t("Could not create group")).and_announce("collections.organize"),
             Reread::NOTHING,
             // The merged group, or what the organizer is to ask.
             move |library: &Library| -> picto_library::Result<
@@ -839,9 +840,9 @@ impl Shell {
         };
         let quick_look = target.quick_look;
         self.ask(
-            "Ungroup?",
-            "The media will return to the library as separate items. Files and metadata will not be deleted.",
-            "Ungroup",
+            t("Ungroup?"),
+            en("The media will return to the library as separate items. Files and metadata will not be deleted."),
+            t("Ungroup"),
             false,
             Rc::new(move |this, window, cx| {
                 edit_then_in(
@@ -873,20 +874,24 @@ impl Shell {
             .filter(|item| item.kind == RootKind::Collection)
             .count();
         let title = if collections == 1 {
-            "Ungroup?".to_owned()
+            t("Ungroup?").to_owned()
         } else {
-            format!("Ungroup {} collections?", grouped(collections as u64))
+            crate::tf!("Ungroup {value0} collections?", grouped(collections as u64))
         };
         let message = if collections == 1 && target.items.len() == 1 {
-            "Every member will return to the library as a separate item. Files and metadata will not be deleted."
+            t(
+                "Every member will return to the library as a separate item. Files and metadata will not be deleted.",
+            )
         } else {
-            "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted."
+            t(
+                "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.",
+            )
         };
         let selection = target.selection(self.session.read(cx));
         self.ask(
             title,
             message,
-            "Ungroup",
+            t("Ungroup"),
             false,
             Rc::new(move |this, _, cx| {
                 let selection = selection.clone();
@@ -894,7 +899,8 @@ impl Shell {
                     .update(cx, |session, cx| session.clear_selection(cx));
                 edit_then(
                     &this.session,
-                    Report::failure("Could not ungroup items").and_announce("collections.ungroup"),
+                    Report::failure(t("Could not ungroup items"))
+                        .and_announce("collections.ungroup"),
                     Reread::RESULTS,
                     move |library| library.ungroup_selection(&selection, crate::now_ms()),
                     cx,
@@ -923,7 +929,7 @@ fn write_text(text: String, cx: &mut App) {
 /// the library copy.
 fn copy_paths(paths: &[PathBuf], cx: &mut App) {
     if let Err(error) = crate::desktop::copy_paths(paths, cx) {
-        crate::ui::notify::error("Could not copy file path", error, cx);
+        crate::ui::notify::error(en("Could not copy file path"), error, cx);
     }
 }
 

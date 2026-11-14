@@ -7,6 +7,7 @@
 use super::GridView;
 use super::selection::Press;
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::theme::{self, Text as _};
 use crate::ui::{self, text_input::Kind, text_input::Renamed, text_input::TextInput};
 use gpui::prelude::FluentBuilder;
@@ -570,7 +571,7 @@ impl GridView {
                     let value = value.clone();
                     this.session.update(cx, |session, cx| {
                         let _ = session.edit_reporting(
-                            crate::session::Report::failure("Unable to rename folder"),
+                            crate::session::Report::failure(t("Unable to rename folder")),
                             move |library| library.rename_folder(folder, &value).map(|_| ()),
                             crate::session::Reread::NAVIGATION,
                             cx,
@@ -657,7 +658,7 @@ impl GridView {
                                 ))),
                         ),
                 )
-                .child(format!("Folders ({})", header.children.len())),
+                .child(format!("{}{})", t("Folders ("), header.children.len())),
         );
         if let Some(top) = geometry.content {
             root = root.child(
@@ -669,7 +670,7 @@ impl GridView {
                     .text(theme::TEXT_SM)
                     .line_height(px(LABEL_HEIGHT))
                     .text_color(theme.text_secondary())
-                    .child(format!("Content ({total})")),
+                    .child(format!("{}{total})", t("Content ("))),
             );
         }
         if !expanded {
@@ -856,7 +857,10 @@ impl GridView {
             }
         };
         let count = child.count;
-        let metas = format!("{count} {}", if count == 1 { "item" } else { "items" });
+        let metas = format!(
+            "{count} {}",
+            if count == 1 { t("item") } else { t("items") }
+        );
         let node = child.node.clone();
         let (menu_node, open_index) = (child.node.clone(), child.index);
         let mut tile = div()

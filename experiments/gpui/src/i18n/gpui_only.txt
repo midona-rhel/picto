@@ -30,3 +30,25 @@ Show Sidebar
 Show Subfolder Content
 T
 W
+All your images are already assigned to folders
+All your images have been tagged
+Choose the Group to Keep
+Could not copy file
+Could not copy file path
+Create Group
+Drag and drop files here, or click the button below to import
+Drag and drop files here, or import them below
+Inbox is empty
+Merge Groups
+No images
+No items use this media
+No matching images
+No results found
+No uncategorized images
+No untagged images
+Run subscriptions to add new images to your inbox
+The media will return to the library as separate items. Files and metadata will not be deleted.
+This folder is empty
+This media is no longer used by another library item
+Try adjusting the rules for this smart folder
+Try different search terms or clear filters

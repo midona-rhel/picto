@@ -4,6 +4,7 @@
 //! Keep"); with none, the new group's name ("Create Group"). Either way the
 //! notes the selection carries, which the group takes.
 use crate::grid::format::grouped;
+use crate::i18n::{en, t};
 use crate::session::{Report, Reread, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -68,12 +69,12 @@ impl Organizer {
     pub fn new(session: Entity<Session>, request: Request, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder("Group name")
+                .placeholder(t("Group name"))
                 .submits()
         });
         let notes = cx.new(|cx| {
             let mut input =
-                TextInput::new(Kind::Area, cx).placeholder("Optional notes for the collection");
+                TextInput::new(Kind::Area, cx).placeholder(t("Optional notes for the collection"));
             input.set_text(request.notes, cx);
             input
         });
@@ -112,17 +113,17 @@ impl Organizer {
 
     pub fn title(&self) -> &'static str {
         if self.choosing() {
-            "Choose the Group to Keep"
+            en("Choose the Group to Keep")
         } else {
-            "Create Group"
+            en("Create Group")
         }
     }
 
     pub fn submit_label(&self) -> &'static str {
         match (self.saving, self.choosing()) {
-            (true, _) => "Saving...",
-            (false, true) => "Merge Groups",
-            (false, false) => "Create Group",
+            (true, _) => t("Saving..."),
+            (false, true) => en("Merge Groups"),
+            (false, false) => en("Create Group"),
         }
     }
 
@@ -271,7 +272,7 @@ impl Render for Organizer {
                     .line_height(px(17.4))
                     .text_color(theme.text_secondary())
                     .child(
-                        "The selected group keeps its name, cover, order, folders, and lifecycle. Every other selected item is appended to it.",
+                        t("The selected group keeps its name, cover, order, folders, and lifecycle. Every other selected item is appended to it."),
                     ),
             );
             for group in self.groups.clone() {
@@ -299,7 +300,7 @@ impl Render for Organizer {
                     .flex()
                     .flex_col()
                     .gap(px(6.))
-                    .child(label("Name"))
+                    .child(label(t("Name")))
                     .child(ui::field("group-organizer-name", &self.name, Look::Modal)),
             );
         }
@@ -314,7 +315,7 @@ impl Render for Organizer {
             .flex()
             .flex_col()
             .gap(px(6.))
-            .child(label("Collection notes"))
+            .child(label(t("Collection notes")))
             .child(ui::field("group-organizer-notes", &self.notes, Look::TextArea).rows(8))
             .child(
                 div()
@@ -335,7 +336,7 @@ impl Render for Organizer {
                     .text(theme::TEXT_SM)
                     .line_height(px(20.))
                     .text_color(theme.negative())
-                    .child("Trim the collection notes before continuing."),
+                    .child(t("Trim the collection notes before continuing.")),
             );
         }
         body = body.child(notes);

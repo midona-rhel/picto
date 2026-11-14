@@ -52,10 +52,16 @@ const CONVERTED: &[&str] = &[
     "ui/color_picker.rs",
     "ui/zoom.rs",
     "ui/segmented.rs",
+    "grid/",
+    "shell/item_menu",
+    "shell/review.rs",
+    "shell/shortcuts.rs",
+    "shell/menu_commands.rs",
+    "ui/empty_state.rs",
 ];
 
 /// Calls whose literal argument is drawn.
-const SINKS: [&str; 15] = [
+const SINKS: [&str; 14] = [
     "tip(",
     ".child(",
     ".label(",
@@ -64,7 +70,6 @@ const SINKS: [&str; 15] = [
     ".title(",
     ".message(",
     ".description(",
-    ".hint(",
     "notify::error(cx, ",
     "notify::warning(cx, ",
     "notify::info(cx, ",
@@ -367,16 +372,21 @@ fn usage(before: &str) -> Use {
     // The shared menu's rows and a select's choices translate their labels
     // themselves, as production's `ContextMenu` and `CmSelect` do.
     let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-    let translating = ["item(\"\",", "submenu(", "choice(\"\","]
-        .iter()
-        .any(|callee| {
-            compact.strip_suffix(callee).is_some_and(|head| {
-                !head
-                    .chars()
-                    .last()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
-            })
-        });
+    // `item(<action>, "…"`: the label after an action that is a literal or
+    // a path (`Action::Rename`).
+    let translating = ["item(", "choice("].iter().any(|callee| {
+        compact.rfind(callee).is_some_and(|at| {
+            let head_ok = !compact[..at]
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let action = &compact[at + callee.len()..];
+            head_ok
+                && action.ends_with(',')
+                && action.len() > 1
+                && !action[..action.len() - 1].contains([',', '(', ')'])
+        })
+    }) || compact.ends_with("submenu(");
     if translating || called("t(") || called("tf!(") || called("t_with(") || called("i18n::t(") {
         Use::Translated
     } else if called("en(") || called("i18n::en(") {

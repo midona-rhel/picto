@@ -2,6 +2,7 @@
 //! most wanted first, as `thumbnailPlan.ts` orders them; this loads those a
 //! few at a time, drops loads the grid has scrolled away from, and keeps the
 //! rest for scrolling back until they take more memory than the budget.
+use crate::i18n::t;
 use gpui::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -224,7 +225,7 @@ pub fn regenerate(
             let made = regenerate_one(&session, &hash, &mime, &jpeg, cx).await;
             session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
             if let Err(error) = made {
-                cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
+                cx.update(|cx| crate::ui::notify::error(t("Menu action failed"), error, cx));
                 break;
             }
         }

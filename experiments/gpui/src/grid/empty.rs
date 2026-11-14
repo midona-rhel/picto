@@ -1,4 +1,5 @@
 //! What an empty grid says, as `GridScreen.tsx` words it for each scope.
+use crate::i18n::{en, t};
 use picto_library::query::ItemScope;
 
 #[derive(Debug, PartialEq)]
@@ -13,40 +14,43 @@ pub struct EmptyCopy {
 pub fn copy(scope: &ItemScope, searching: bool, filtered: bool) -> EmptyCopy {
     let (title, description) = if searching {
         (
-            "No results found",
-            "Try different search terms or clear filters",
+            en("No results found"),
+            en("Try different search terms or clear filters"),
         )
     } else if filtered {
         (
-            "No items match these filters",
-            "Try adjusting or clearing your filters",
+            t("No items match these filters"),
+            t("Try adjusting or clearing your filters"),
         )
     } else {
         match scope {
             ItemScope::Inbox => (
-                "Inbox is empty",
-                "Run subscriptions to add new images to your inbox",
+                en("Inbox is empty"),
+                en("Run subscriptions to add new images to your inbox"),
             ),
             ItemScope::Uncategorized => (
-                "No uncategorized images",
-                "All your images are already assigned to folders",
+                en("No uncategorized images"),
+                en("All your images are already assigned to folders"),
             ),
-            ItemScope::Untagged => ("No untagged images", "All your images have been tagged"),
+            ItemScope::Untagged => (
+                en("No untagged images"),
+                en("All your images have been tagged"),
+            ),
             ItemScope::SmartFolder { .. } => (
-                "No matching images",
-                "Try adjusting the rules for this smart folder",
+                en("No matching images"),
+                en("Try adjusting the rules for this smart folder"),
             ),
             ItemScope::MediaMatches { .. } => (
-                "No items use this media",
-                "This media is no longer used by another library item",
+                en("No items use this media"),
+                en("This media is no longer used by another library item"),
             ),
             ItemScope::Folder { .. } | ItemScope::FolderTree { .. } => (
-                "This folder is empty",
-                "Drag and drop files here, or import them below",
+                en("This folder is empty"),
+                en("Drag and drop files here, or import them below"),
             ),
             ItemScope::All | ItemScope::Trash | ItemScope::RecentlyViewed => (
-                "No images",
-                "Drag and drop files here, or click the button below to import",
+                en("No images"),
+                en("Drag and drop files here, or click the button below to import"),
             ),
         }
     };
