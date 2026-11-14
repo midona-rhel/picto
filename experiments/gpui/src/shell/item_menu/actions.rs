@@ -210,17 +210,19 @@ impl Shell {
             }
             Action::CopySelection => self.copy_files(ids, cx),
             // ── Lifecycle ──
-            Action::Accept | Action::Restore => self.set_lifecycle(&target, Lifecycle::Active, cx),
+            Action::Accept | Action::Restore => {
+                self.set_lifecycle(&target, Lifecycle::Active, window, cx)
+            }
             // A member leaves its collection into the Trash
             // (`detachMembers(selected, 'trash')`).
             Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
             Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
-            Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, cx),
+            Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, window, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
                     self.request_permanent_delete(target, true, window, cx);
                 } else {
-                    self.set_lifecycle(&target, Lifecycle::Trash, cx);
+                    self.set_lifecycle(&target, Lifecycle::Trash, window, cx);
                 }
             }
             Action::DeletePermanently => {
@@ -611,15 +613,67 @@ impl Shell {
     /// the Inbox (production's `setTargetLifecycle(target, …)`: the viewer's
     /// rows move the item it shows, not the grid's selection), closing the
     /// media view, and reads the grid again in place.
-    fn set_lifecycle(&mut self, target: &Target, lifecycle: Lifecycle, cx: &mut Context<Self>) {
+    /// Moves the items to the Trash, back out of it, or out of the Inbox.
+    /// From the media view or Quick Look, which show one item, the view
+    /// stays open (`useViewerEntityContextMenu` only sets the lifecycle) on
+    /// the item that takes its place: the next one, or the one before at
+    /// the end; with no other item it closes. Should the edit fail, the
+    /// view goes back to the item.
+    fn set_lifecycle(
+        &mut self,
+        target: &Target,
+        lifecycle: Lifecycle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if target.items.is_empty() {
             return;
         }
-        self.session.update(cx, |session, cx| {
-            let selection = target.selection(session);
-            session.close_viewer(cx);
-            let _ = session.set_lifecycle(selection, lifecycle, cx);
+        let quick_look = self.quick_look.read(cx).is_open();
+        let (selection, shown) = {
+            let session = self.session.read(cx);
+            let viewing = session.viewer || quick_look;
+            let shown = session
+                .focus_ordinal()
+                .zip(session.selected_item().map(|item| item.root_id))
+                .filter(|(_, id)| viewing && target.ids() == [*id]);
+            (target.selection(session), shown)
+        };
+        let Some((ordinal, id)) = shown else {
+            self.session.update(cx, |session, cx| {
+                session.close_viewer(cx);
+                let _ = session.set_lifecycle(selection, lifecycle, cx);
+            });
+            return;
+        };
+        let next = {
+            let session = self.session.read(cx);
+            [ordinal + 1, ordinal.wrapping_sub(1)]
+                .into_iter()
+                .find(|neighbour| session.item_at(*neighbour).is_some())
+        };
+        let answer = self.session.update(cx, |session, cx| {
+            match next {
+                Some(next) => session.select(next, cx),
+                None => session.close_viewer(cx),
+            }
+            session.set_lifecycle(selection, lifecycle, cx)
         });
+        if next.is_none() && quick_look {
+            self.quick_look
+                .update(cx, |quick_look, cx| quick_look.close(window, cx));
+        }
+        let session = self.session.downgrade();
+        cx.spawn(async move |_, cx| {
+            if let Ok(Err(_)) = answer.await {
+                let _ = session.update(cx, |session, cx| {
+                    if let Some(back) = session.position_of(id) {
+                        session.select(back, cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
