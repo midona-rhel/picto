@@ -1,3 +1,13 @@
 # Texts only this app shows, with no key in production's en.json: they
 # stay English in every language. One per line, as written in the code
 # (a line break as \n). The guard (guard.rs) keeps this list exact.
+
+# Production shows these in English too (no key in its catalogs).
+Edit Rules
+Edit Smart Folder
+New Smart Folder or Group
+No library is open.
+Pause all subscriptions
+Resume all subscriptions
+Select a media item from this library, then adjust its position and zoom.
+This library has no media available for a cover.

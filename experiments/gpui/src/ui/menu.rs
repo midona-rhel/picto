@@ -213,7 +213,8 @@ impl Menu {
             .count();
         let search = (searchable >= SEARCH_THRESHOLD).then(|| {
             cx.new(|cx| {
-                TextInput::new(crate::ui::text_input::Kind::Menu, cx).placeholder("Search...")
+                TextInput::new(crate::ui::text_input::Kind::Menu, cx)
+                    .placeholder(crate::i18n::t("Search..."))
             })
         });
         let mut subscriptions = Vec::new();

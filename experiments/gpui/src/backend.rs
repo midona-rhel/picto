@@ -1,3 +1,4 @@
+use crate::i18n::t;
 use picto_library::RootId;
 use picto_library::predicate::{FilterClause, FilterExpr, TextField};
 use picto_library::query::{ItemScope, RootQuery, RootWindow, WindowRequest};
@@ -178,39 +179,40 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     };
     // The order of the Electron sidebar's system rows.
     let mut nav = vec![
-        system("All", "photo", Some(counts.all), ItemScope::All),
-        system("Inbox", "inbox", Some(counts.inbox), ItemScope::Inbox),
+        system(t("All"), "photo", Some(counts.all), ItemScope::All),
+        system(t("Inbox"), "inbox", Some(counts.inbox), ItemScope::Inbox),
         system(
-            "Recently Viewed",
+            t("Recently Viewed"),
             "clock",
             Some(counts.recently_viewed),
             ItemScope::RecentlyViewed,
         ),
         system(
-            "Uncategorized",
+            t("Uncategorized"),
             "folder-question",
             Some(counts.uncategorized),
             ItemScope::Uncategorized,
         ),
         system(
-            "Untagged",
+            t("Untagged"),
             "bookmark-question",
             Some(counts.untagged),
             ItemScope::Untagged,
         ),
-        screen(Screen::Tags, "Tags", "bookmark", Some(tags.len() as u64)),
+        screen(Screen::Tags, t("Tags"), "bookmark", Some(tags.len() as u64)),
         Navigation {
             random: true,
-            ..system("Random", "arrows-shuffle", None, ItemScope::All)
+            ..system(t("Random"), "arrows-shuffle", None, ItemScope::All)
         },
-        screen(Screen::Subscriptions, "Subscriptions", "download", None),
+        // i18n: an icon's name
+        screen(Screen::Subscriptions, t("Subscriptions"), "download", None),
         screen(
             Screen::Duplicates,
-            "Duplicates",
+            t("Duplicates"),
             "copy",
             Some(counts.duplicates),
         ),
-        system("Trash", "trash", Some(counts.trash), ItemScope::Trash),
+        system(t("Trash"), "trash", Some(counts.trash), ItemScope::Trash),
     ];
     let folders = library
         .folders()?

@@ -348,7 +348,7 @@ impl Menu {
                     .justify_center()
                     .text(theme::TEXT_SM)
                     .text_color(theme.text_tertiary())
-                    .child("No results"),
+                    .child(crate::i18n::t("No results")),
             );
         }
         let mut panel = div();

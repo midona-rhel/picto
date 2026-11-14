@@ -4,6 +4,7 @@ use super::{
     ALWAYS_SHOWN, Preferences, SYSTEM_ROWS, Section, ShowMenu, Sidebar, Target, expandable, tree,
 };
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::ui;
 use crate::ui::menu::{self, Menu};
 use gpui::*;
@@ -80,7 +81,7 @@ fn quick_access_row(quick: bool) -> menu::Entry {
 /// "Change Icon": the compact icon picker in a submenu of its own.
 fn change_icon(picker: AnyView) -> menu::Entry {
     menu::submenu(
-        "Change Icon",
+        t("Change Icon"),
         vec![
             menu::view(
                 picker,
@@ -97,7 +98,7 @@ fn change_icon(picker: AnyView) -> menu::Entry {
 /// `contentSortSubmenu`: the field a folder's items are sorted by.
 fn content_sort() -> menu::Entry {
     menu::submenu(
-        "Sort by",
+        t("Sort by"),
         CONTENT_SORT
             .iter()
             .map(|(value, label, _)| menu::item("sort-contents", *label).value(*value).into())
@@ -108,6 +109,7 @@ fn content_sort() -> menu::Entry {
 }
 
 /// The content sort fields, with the value a menu row carries.
+// i18n: translated where drawn (menu rows)
 const CONTENT_SORT: [(&str, &str, ContentSortField); 6] = [
     ("name", "Name", ContentSortField::Name),
     ("imported_at", "Import Date", ContentSortField::ImportedAt),
@@ -128,7 +130,7 @@ pub(super) fn content_sort_field(value: &str) -> Option<ContentSortField> {
 /// folder.
 fn export_submenu() -> menu::Entry {
     menu::submenu(
-        "Export",
+        t("Export"),
         vec![
             menu::item("export-originals", "Export Originals...").into(),
             menu::item("export-as", "Export As...").into(),
@@ -189,8 +191,8 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
         menu::Entry::Separator,
         sort_folders(),
         content_sort(),
-        expand_row("Folder", node.expanded, node.has_children),
-        expand_all_row("Folders", node.any_expanded, node.any_expandable),
+        expand_row(false, node.expanded, node.has_children),
+        expand_all_row(false, node.any_expanded, node.any_expandable),
         menu::Entry::Separator,
         change_icon(node.icon_picker),
         ui::color_picker::menu_row("color", node.color.as_deref()).into(),
@@ -208,7 +210,7 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
 /// "Sort Folders": a folder's children, or its whole tree, by name.
 fn sort_folders() -> menu::Entry {
     menu::submenu(
-        "Sort Folders",
+        t("Sort Folders"),
         vec![
             menu::item("sort-tree", "This Level A–Z").value("az").into(),
             menu::item("sort-tree", "This Level Z–A").value("za").into(),
@@ -303,7 +305,7 @@ fn tile_bulk_menu(count: usize, all_quick: bool) -> Vec<menu::Entry> {
                 .icon("menu-star")
                 .into()
         },
-        menu::item("duplicate", format!("Duplicate {count} Folders"))
+        menu::item("duplicate", crate::tf!("Duplicate {value0} Folders", count))
             .icon("menu-copy")
             .into(),
         menu::item("move-to", "Move to...")
@@ -314,7 +316,7 @@ fn tile_bulk_menu(count: usize, all_quick: bool) -> Vec<menu::Entry> {
             .into(),
         content_sort(),
         menu::Entry::Separator,
-        menu::item("delete", format!("Delete {count} Folders"))
+        menu::item("delete", crate::tf!("Delete {value0} Folders", count))
             .icon("menu-trash")
             .danger(true)
             .into(),
@@ -380,8 +382,8 @@ fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
         ]);
     }
     entries.extend([
-        expand_row("Smart Folder", node.expanded, node.has_children),
-        expand_all_row("Smart Folders", node.any_expanded, node.any_expandable),
+        expand_row(true, node.expanded, node.has_children),
+        expand_all_row(true, node.any_expanded, node.any_expandable),
         menu::Entry::Separator,
         change_icon(node.icon_picker),
         ui::color_picker::menu_row("color", node.color.as_deref()).into(),
@@ -400,11 +402,13 @@ fn smart_folder_menu(group: bool, node: NodeMenu) -> Vec<menu::Entry> {
     entries
 }
 
-fn expand_row(noun: &str, expanded: bool, has_children: bool) -> menu::Entry {
-    let (label, icon) = if expanded {
-        (format!("Collapse {noun}"), "menu-collapse")
-    } else {
-        (format!("Expand {noun}"), "menu-expand")
+/// Collapse or Expand a folder (`smart`: a smart folder).
+fn expand_row(smart: bool, expanded: bool, has_children: bool) -> menu::Entry {
+    let (label, icon) = match (smart, expanded) {
+        (false, true) => (t("Collapse Folder"), "menu-collapse"),
+        (false, false) => (t("Expand Folder"), "menu-expand"),
+        (true, true) => (t("Collapse Smart Folder"), "menu-collapse"),
+        (true, false) => (t("Expand Smart Folder"), "menu-expand"),
     };
     menu::item("toggle-expand", label)
         .icon(icon)
@@ -412,11 +416,13 @@ fn expand_row(noun: &str, expanded: bool, has_children: bool) -> menu::Entry {
         .into()
 }
 
-fn expand_all_row(noun: &str, any_expanded: bool, any_expandable: bool) -> menu::Entry {
-    let (label, icon) = if any_expanded {
-        (format!("Collapse All {noun}"), "menu-collapse-all")
-    } else {
-        (format!("Expand All {noun}"), "menu-expand-all")
+/// Collapse or Expand every folder of a section (`smart`: Smart Folders).
+fn expand_all_row(smart: bool, any_expanded: bool, any_expandable: bool) -> menu::Entry {
+    let (label, icon) = match (smart, any_expanded) {
+        (false, true) => (t("Collapse All Folders"), "menu-collapse-all"),
+        (false, false) => (t("Expand All Folders"), "menu-expand-all"),
+        (true, true) => (t("Collapse All Smart Folders"), "menu-collapse-all"),
+        (true, false) => (t("Expand All Smart Folders"), "menu-expand-all"),
     };
     menu::item("toggle-expand-all", label)
         .icon(icon)
@@ -458,9 +464,10 @@ fn bulk_menu(nodes: &[String], bulk: BulkMenu, cx: &App) -> Vec<menu::Entry> {
     entries.push(
         menu::item(
             "duplicate",
-            format!(
-                "Duplicate {count} item{}",
-                if count == 1 { "" } else { "s" }
+            crate::tf!(
+                "Duplicate {value0} item{value1}",
+                count,
+                crate::i18n::plural_s(count as i128)
             ),
         )
         .icon("menu-copy")
@@ -506,7 +513,7 @@ fn bulk_menu(nodes: &[String], bulk: BulkMenu, cx: &App) -> Vec<menu::Entry> {
         ]);
     }
     entries.push(
-        menu::item("delete", format!("Delete {count} items"))
+        menu::item("delete", crate::tf!("Delete {value0} items", count))
             .icon("menu-trash")
             .danger(true)
             .into(),

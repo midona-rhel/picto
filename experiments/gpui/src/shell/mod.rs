@@ -25,6 +25,7 @@ use crate::grid::{
     nav,
     thumbnails::Thumbnails,
 };
+use crate::i18n::t;
 use crate::inspector::Inspector;
 use crate::session::{Change, Session, Transition};
 use crate::theme::Text as _;
@@ -673,20 +674,20 @@ impl Shell {
                             .h(px(15.))
                             .text_color(theme.text_secondary()),
                     )
-                    .tip(ui::tip("Application menu"))
+                    .tip(ui::tip(t("Application menu")))
                     .on_click(cx.listener(|this, _, window, cx| this.open_app_menu(window, cx)))
                     .into_any_element()
             }))
             .children(crate::app_menu::in_window().then(|| div().flex_1()))
             .child(
                 ui::icon_button("open-settings", "settings")
-                    .tip(ui::tip("Settings").shortcut("file.settings", cx))
+                    .tip(ui::tip(t("Settings")).shortcut("file.settings", cx))
                     .on_click(|_, _, cx| crate::settings::open(cx)),
             )
             .child(
                 ui::icon_button("toggle-panels", "toolbar-panel")
                     .glyph(14.)
-                    .tip(ui::tip("Toggle Panels").shortcut("view.toggleBothPanels", cx))
+                    .tip(ui::tip(t("Toggle Panels")).shortcut("view.toggleBothPanels", cx))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
             )
     }
@@ -900,9 +901,9 @@ impl Render for Shell {
                             .glyph(14.)
                             .toggled(self.inspector_pinned)
                             .tip(ui::tip(if self.inspector_pinned {
-                                "Unpin"
+                                t("Unpin")
                             } else {
-                                "Pin"
+                                t("Pin")
                             }))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.inspector_pinned = !this.inspector_pinned;

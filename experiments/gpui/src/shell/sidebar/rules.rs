@@ -31,6 +31,7 @@ pub struct FieldDef {
     pub unit: Option<&'static str>,
 }
 
+// i18n: translated where drawn (the editor's selects translate them)
 const TAG_OPERATORS: &[(&str, &str)] = &[
     ("include_all", "include all"),
     ("include_any", "include any"),
@@ -60,6 +61,7 @@ const DATE_OPERATORS: &[(&str, &str)] = &[
 ];
 
 /// `FIELD_DEFS`, in the editor's order.
+// i18n: translated where drawn
 pub const FIELDS: &[FieldDef] = &[
     FieldDef {
         key: "tags",
@@ -162,6 +164,7 @@ pub const FIELDS: &[FieldDef] = &[
 ];
 
 /// The file-type choices (`selectOptions`).
+// i18n: translated where drawn (select choices)
 pub const FILE_TYPES: &[(&str, &str)] = &[
     ("image", "Image"),
     ("video", "Video"),
@@ -172,6 +175,7 @@ pub const FILE_TYPES: &[(&str, &str)] = &[
 ];
 
 /// `FILESIZE_UNITS`.
+// i18n: translated where drawn (select choices)
 pub const FILE_SIZE_UNITS: &[(&str, &str)] = &[
     ("B", "Bytes"),
     ("KB", "Kilobytes"),
@@ -180,6 +184,7 @@ pub const FILE_SIZE_UNITS: &[(&str, &str)] = &[
 ];
 
 /// `RATING_OPTIONS`.
+// i18n: translated where drawn (select choices)
 pub const RATING_OPTIONS: &[(&str, &str)] = &[
     ("0", "Unrated"),
     ("1", "★☆☆☆☆"),
@@ -237,6 +242,7 @@ impl Rule {
             value: default_value(field.key, today),
             value2: None,
             values: Vec::new(),
+            // i18n: a rule's value, not shown
             unit: (field.key == "file_size").then_some("MB"),
         }
     }
@@ -289,6 +295,7 @@ fn normalize_rule(mut rule: Rule) -> Rule {
         .map(|(op, _)| *op)
         .unwrap_or(def.operators[0].0);
     if def.key == "file_size" && rule.unit.is_none() {
+        // i18n: a rule's value, not shown
         rule.unit = Some("MB");
     }
     if def.key != "file_size" {
@@ -474,6 +481,7 @@ fn compile_rule(
             }
         }
         "file_size" => {
+            // i18n: a rule's value, not shown
             let scale = match rule.unit.unwrap_or("MB") {
                 "B" => 1.,
                 "KB" => 1024.,
@@ -623,6 +631,7 @@ fn range_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>, s
         (Some(minimum), Some(maximum)) if minimum == maximum => rule(field, "eq", text(minimum)),
         (Some(minimum), Some(maximum)) => Rule {
             value2: Some(text(maximum)),
+            // i18n: a rule's value, not shown
             ..rule(field, "between", text(minimum))
         },
         (Some(minimum), None) => rule(field, "gte", text(minimum)),
@@ -639,6 +648,7 @@ fn date_rule(field: &'static str, minimum: Option<u64>, maximum: Option<u64>) ->
         }
         (Some(minimum), Some(maximum)) => Rule {
             value2: Some(date(maximum)),
+            // i18n: a rule's value, not shown
             ..rule(field, "between", date(minimum))
         },
         (Some(minimum), None) => rule(field, "gte", date(minimum)),
@@ -669,6 +679,7 @@ fn rule_from_clause(
         },
         FilterClause::Mime { values, families } => rule(
             "file_type",
+            // i18n: a rule's value, not shown
             "is",
             values
                 .first()
@@ -712,6 +723,7 @@ fn rule_from_clause(
             minimum_bytes,
             maximum_bytes,
         } => Rule {
+            // i18n: a rule's value, not shown
             unit: Some("MB"),
             ..range_rule("file_size", *minimum_bytes, *maximum_bytes, 1024. * 1024.)
         },
@@ -727,14 +739,18 @@ fn rule_from_clause(
         ),
         FilterClause::Color { color, .. } => Rule {
             values: vec![lab_to_hex(color)],
+            // i18n: a rule's value, not shown
             ..rule("color", "contains", String::new())
         },
         FilterClause::Text { field, query } => match field {
             TextField::Global => {
                 return Err("Global text rules are not exposed by the smart-folder editor.".into());
             }
+            // i18n: a rule's value, not shown
             TextField::Name => rule("name", "contains", query.clone()),
+            // i18n: a rule's value, not shown
             TextField::Notes => rule("notes", "contains", query.clone()),
+            // i18n: a rule's value, not shown
             TextField::SourceUrl => rule("source_url", "contains", query.clone()),
         },
         FilterClause::Folders { .. } => {

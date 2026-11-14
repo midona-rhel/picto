@@ -1,6 +1,7 @@
 //! The sidebar's dialogs: the confirmations (`ConfirmModal`) before deleting
 //! folders and smart folders and before removing a watched folder.
 use super::{Sidebar, folder_id, tree};
+use crate::i18n::t;
 use crate::session::{Reread, edit_then_in};
 use crate::theme;
 use crate::theme::Text as _;
@@ -68,10 +69,11 @@ pub fn folder_deletion(name: &str) -> String {
 /// `bulkFolderDeletionMessage`.
 pub fn bulk_deletion(count: usize) -> String {
     if count == 1 {
-        "Delete the selected item? Its folder and subfolders will be deleted. Media inside these folders will remain untouched.".into()
+        t("Delete the selected item? Its folder and subfolders will be deleted. Media inside these folders will remain untouched.").into()
     } else {
-        format!(
-            "Delete {count} selected items? All selected folders and their subfolders will be deleted. Media inside these folders will remain untouched."
+        crate::tf!(
+            "Delete {value0} selected items? All selected folders and their subfolders will be deleted. Media inside these folders will remain untouched.",
+            count
         )
     }
 }
@@ -119,18 +121,21 @@ impl Sidebar {
                         .unwrap_or_default()
                 };
                 if folder_id(node).is_some() {
-                    ("Delete Folder", folder_deletion(&name))
+                    (t("Delete Folder"), folder_deletion(&name))
                 } else {
-                    ("Delete Smart Folder", smart_folder_deletion(&name, group))
+                    (
+                        t("Delete Smart Folder"),
+                        smart_folder_deletion(&name, group),
+                    )
                 }
             }
-            _ => ("Delete Selected", bulk_deletion(nodes.len())),
+            _ => (t("Delete Selected"), bulk_deletion(nodes.len())),
         };
         self.open_dialog(
             Dialog::Confirm {
                 title,
                 message,
-                label: "Delete",
+                label: t("Delete"),
                 then: Confirmed::Delete(nodes),
             },
             cx,
@@ -166,7 +171,7 @@ impl Sidebar {
                 Ok(Err(error)) => {
                     let _ = cx.update(|_, cx| {
                         crate::ui::notify::error(
-                            "Could not load folder auto tags",
+                            t("Could not load folder auto tags"),
                             error.to_string(),
                             cx,
                         )
@@ -330,7 +335,7 @@ impl Sidebar {
                 .text(theme::TEXT_MD)
                 .line_height(px(26.))
                 .child(glyph())
-                .child("Add tags")
+                .child(t("Add tags"))
         } else {
             add.w(px(26.)).child(glyph())
         };
@@ -347,7 +352,7 @@ impl Sidebar {
             .text(theme::TEXT_MD)
             .line_height(px(theme::LINE_HEIGHT_MD))
             .text_color(theme.text())
-            .child("Automatically add tags")
+            .child(t("Automatically add tags"))
             .child(values.child(add))
     }
 
@@ -372,7 +377,7 @@ impl Sidebar {
         };
         self.session.update(cx, |session, cx| {
             let _ = session.edit_reporting(
-                crate::session::Report::failure("Could not set folder auto tags"),
+                crate::session::Report::failure(t("Could not set folder auto tags")),
                 work,
                 Reread::NOTHING,
                 cx,
@@ -429,7 +434,7 @@ impl Sidebar {
 
     /// Browse: the system's folder chooser.
     fn browse_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = crate::prompt::folder("Select folder to watch", cx);
+        let chosen = crate::prompt::folder(t("Select folder to watch"), cx);
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Some(chosen)) = chosen.await else {
                 return;
@@ -558,14 +563,14 @@ impl Sidebar {
                 )
         };
         let cancel = ui::action_button("sidebar-dialog-cancel", ButtonLook::Standard)
-            .label("Cancel")
+            .label(t("Cancel"))
             .on_click(cx.listener(|this, _, _, cx| this.close_dialog(cx)));
         let element = match &layer.content {
             Dialog::AutoTags {
                 tags, add_button, ..
             } => {
                 let control = Self::tag_assignment(tags, add_button.clone(), cx);
-                frame("Set Auto Tags", Size::Small, cx).child(control)
+                frame(t("Set Auto Tags"), Size::Small, cx).child(control)
             }
             Dialog::Watch {
                 path,
@@ -608,7 +613,7 @@ impl Sidebar {
                         .child(control)
                 };
                 let (enabled, subfolders, status) = (*enabled, *subfolders, *status);
-                frame("Auto-Import Folder", Size::Medium, cx)
+                frame(t("Auto-Import Folder"), Size::Medium, cx)
                     .child(
                         div()
                             .flex()
@@ -619,7 +624,7 @@ impl Sidebar {
                                     .flex()
                                     .flex_col()
                                     .gap(px(6.))
-                                    .child(field_label("Watch Folder"))
+                                    .child(field_label(t("Watch Folder")))
                                     .child(
                                         div()
                                             .flex()
@@ -628,7 +633,7 @@ impl Sidebar {
                                             .child(ui::field::read_only_modal(
                                                 "watch-folder",
                                                 path.clone().map(SharedString::from),
-                                                "Select a folder...",
+                                                t("Select a folder..."),
                                                 cx,
                                             ))
                                             .child(
@@ -636,7 +641,7 @@ impl Sidebar {
                                                     "watch-browse",
                                                     ButtonLook::Standard,
                                                 )
-                                                .label("Browse")
+                                                .label(t("Browse"))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.browse_watch(window, cx)
                                                 })),
@@ -644,7 +649,7 @@ impl Sidebar {
                                     ),
                             )
                             .child(spread(
-                                "Enable Watch",
+                                t("Enable Watch"),
                                 ui::toggle("watch-enabled", enabled)
                                     .on_toggle(cx.listener(move |this, _: &(), _, cx| {
                                         if let Some(Dialog::Watch { enabled, .. }) = this.dialog.content_mut()
@@ -656,7 +661,7 @@ impl Sidebar {
                                     .into_any_element(),
                             ))
                             .child(spread(
-                                "Watch Subfolders",
+                                t("Watch Subfolders"),
                                 ui::toggle("watch-subfolders", subfolders)
                                     .on_toggle(cx.listener(move |this, _: &(), _, cx| {
                                         if let Some(Dialog::Watch { subfolders, .. }) = this.dialog.content_mut()
@@ -669,7 +674,7 @@ impl Sidebar {
                                     .into_any_element(),
                             ))
                             .when(analyzing, |stack| {
-                                stack.child(help("Checking the folder structure...".into()))
+                                stack.child(help(t("Checking the folder structure...").into()))
                             })
                             .when_some(consolidation, |stack, message| {
                                 stack.child(ui::form::warning_box(theme, message))
@@ -677,7 +682,7 @@ impl Sidebar {
                             .when(failed, |stack| {
                                 stack.child(ui::form::warning_box(
                                     theme,
-                                    "Picto could not inspect this folder. Choose it again or check that it is still available.",
+                                    t("Picto could not inspect this folder. Choose it again or check that it is still available."),
                                 ))
                             })
                             .child(
@@ -685,7 +690,7 @@ impl Sidebar {
                                     .flex()
                                     .flex_col()
                                     .gap(px(6.))
-                                    .child(field_label("Import Status"))
+                                    .child(field_label(t("Import Status")))
                                     .child({
                                         let sidebar = cx.entity().downgrade();
                                         ui::select(
@@ -717,7 +722,7 @@ impl Sidebar {
                                     }),
                             )
                             .child(help(
-                                "New files added to this folder will be automatically imported into the library.".into(),
+                                t("New files added to this folder will be automatically imported into the library.").into(),
                             )),
                     )
                     .footer(
@@ -725,7 +730,7 @@ impl Sidebar {
                             .mr_auto()
                             .child(
                                 ui::action_button("watch-remove", ButtonLook::Danger)
-                                    .label("Remove Watch")
+                                    .label(t("Remove Watch"))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(Dialog::Watch { folder, .. }) = this.dialog.content()
                                         {
@@ -739,7 +744,7 @@ impl Sidebar {
                     .footer(cancel)
                     .footer(
                         ui::action_button("watch-save", ButtonLook::Primary)
-                            .label("Save")
+                            .label(t("Save"))
                             .disabled(path.is_none() || analyzing || failed)
                             .on_click(cx.listener(|this, _, _, cx| this.save_watch(cx))),
                     )

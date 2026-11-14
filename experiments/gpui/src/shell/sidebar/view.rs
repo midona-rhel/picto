@@ -5,6 +5,7 @@ use super::{
     Switcher, keyboard, section_of,
 };
 use crate::backend::{Navigation, Screen};
+use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::{self, field::Look, sidebar_row::Branch};
 use crate::{motion, theme};
@@ -22,7 +23,7 @@ impl Sidebar {
             let session = self.session.read(cx);
             let name = session
                 .library_name()
-                .unwrap_or_else(|| "No library".into());
+                .unwrap_or_else(|| t("No library").into());
             (session.library_cover.clone(), name)
         };
         let open = self.library_popover.read(cx).is_open();
@@ -142,7 +143,7 @@ impl Sidebar {
                 .flex_none()
                 .opacity(0.7 + 0.3 * lit),
             )
-            .children(hint.read(cx).layer(&ui::tip("Switch Library"), 48., cx))
+            .children(hint.read(cx).layer(&ui::tip(t("Switch Library")), 48., cx))
     }
 }
 
@@ -280,9 +281,9 @@ impl Render for Sidebar {
                         paused: activity.paused,
                         busy: activity.busy,
                         label: if activity.paused {
-                            "Resume all subscriptions".into()
+                            en("Resume all subscriptions").into()
                         } else {
-                            "Pause all subscriptions".into()
+                            en("Pause all subscriptions").into()
                         },
                         on_click: Box::new(move |_, _, cx| {
                             session.update(cx, |session, cx| session.toggle_all_subscriptions(cx))
@@ -325,7 +326,7 @@ impl Render for Sidebar {
         if prefs.show_quick_access && !quick.is_empty() {
             let expanded = !self.collapsed.contains(QUICK_ACCESS);
             list = list.child(
-                ui::section_header("quick-access", "Quick Access")
+                ui::section_header("quick-access", t("Quick Access"))
                     .count(if prefs.show_counts { quick.len() } else { 0 })
                     .expanded(expanded)
                     .on_toggle(
@@ -356,10 +357,12 @@ impl Render for Sidebar {
             let expanded = filtering || !self.collapsed.contains(which.id());
             let (tip, element) = match which {
                 Section::Folders => (
-                    ui::tip("New Folder").shortcut("file.newFolder", cx),
+                    ui::tip(t("New Folder")).shortcut("file.newFolder", cx),
                     "folders",
                 ),
-                Section::SmartFolders => (ui::tip("New Smart Folder or Group"), "smart-folders"),
+                Section::SmartFolders => {
+                    (ui::tip(en("New Smart Folder or Group")), "smart-folders")
+                }
             };
             list = list.child(
                 ui::section_header(element, which.label())
@@ -455,7 +458,7 @@ impl Render for Sidebar {
                     .ml(px(theme::SIDEBAR_INSET))
                     .text(theme::TEXT_SM)
                     .text_color(theme.text_tertiary())
-                    .child("No matching folders"),
+                    .child(t("No matching folders")),
             );
         }
         let tree_filter = prefs.show_folders || prefs.show_smart_folders;

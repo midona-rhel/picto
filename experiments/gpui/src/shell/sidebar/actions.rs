@@ -6,6 +6,7 @@ use super::{
     EmptyTrash, Section, Sidebar, Target, dialogs, expandable, folder_id, smart_folder_id,
 };
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::session::{Report, Reread, edit_then_in};
 use gpui::*;
 use picto_library::query::{ItemScope, RootQuery};
@@ -239,6 +240,7 @@ impl Sidebar {
                     &self.session,
                     Report::folder_depth(),
                     Reread::NAVIGATION,
+                    // i18n: production names a new folder in English
                     move |library| library.create_folder("New Folder", parent),
                     window,
                     cx,
@@ -322,7 +324,7 @@ impl Sidebar {
                 let node = node.to_owned();
                 edit_then_in(
                     &self.session,
-                    Report::failure("Could not refresh smart folder"),
+                    Report::failure(t("Could not refresh smart folder")),
                     Reread::NOTHING,
                     |_| Ok::<_, picto_library::LibraryError>(()),
                     window,
@@ -406,9 +408,9 @@ impl Sidebar {
                     let name = entries[index].label.clone();
                     self.open_dialog(
                         dialogs::Dialog::Confirm {
-                            title: "Remove Watch",
+                            title: t("Remove Watch"),
                             message: format!("Stop watching the folder for \"{name}\"?"),
-                            label: "Remove",
+                            label: t("Remove"),
                             then: dialogs::Confirmed::RemoveWatch(id),
                         },
                         cx,

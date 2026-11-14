@@ -8,8 +8,11 @@
 //!   is not a key (it would be translatable) and is listed in
 //!   `gpui_only.txt`, and every line there is still used;
 //! - no literal that is one of production's keys is left outside `t`,
-//!   unless it is marked as not shown (`// i18n: not shown` on its line or
-//!   the line above) or its file is listed below as one that shows none;
+//!   unless a comment says why (`// i18n: <reason>` on its line or the line
+//!   above, such as "not shown" or "production keeps it in English";
+//!   `// i18n: translated where drawn` covers the lines after it up to a
+//!   blank line, for a table whose labels go through `t` when drawn) or
+//!   its file is listed below as one that shows none;
 //! - no literal with letters is handed straight to a drawing call (`.child`,
 //!   `.label`, `.tooltip`, `.placeholder`, a notification, a confirmation,
 //!   …) without `t`, `tf!` or `en`.
@@ -26,12 +29,24 @@ use std::path::{Path, PathBuf};
 /// (`electron/windows/menu.mjs` is not localized).
 const NOT_SHOWN: [&str; 3] = ["offscreen.rs", "i18n/tests.rs", "app_menu.rs"];
 
-/// Files not converted yet: their findings are printed (`--nocapture`),
-/// not failed on.
-const PENDING: &[&str] = &[""];
+/// The files converted so far (path prefixes); the findings of the others
+/// are printed (`--nocapture`), not failed on.
+const CONVERTED: &[&str] = &[
+    "backend.rs",
+    "shell/mod.rs",
+    "shell/sidebar",
+    "shell/library",
+    "shell/rails.rs",
+    "ui/sidebar_row.rs",
+    "ui/window_chrome.rs",
+    "ui/section_header.rs",
+    "ui/menu",
+    "ui/select.rs",
+];
 
 /// Calls whose literal argument is drawn.
-const SINKS: [&str; 14] = [
+const SINKS: [&str; 15] = [
+    "tip(",
     ".child(",
     ".label(",
     ".tooltip(",
@@ -55,8 +70,12 @@ struct Literal {
     /// The code before it on its line and the line before, without
     /// comments or other literals.
     before: String,
-    /// Marked `// i18n: not shown` on its line or the line above.
+    /// Marked `// i18n: <reason>` on its line or the line above.
     marked: bool,
+    /// The code after it on its line.
+    after: String,
+    /// Where `after` starts in the file's code.
+    code_end: usize,
 }
 
 /// The literals of a Rust file outside `#[cfg(test)]` items, and the lines
@@ -72,6 +91,8 @@ fn literals(source: &str) -> Vec<Literal> {
     let mut skip_from: Option<(usize, bool)> = None;
     let mut depth = 0usize;
     let mut markers = BTreeSet::new();
+    // A block marker covers the lines after it up to the next blank line.
+    let mut block_from: Option<usize> = None;
     let starts = |at: usize, text: &str| {
         text.chars()
             .enumerate()
@@ -80,6 +101,16 @@ fn literals(source: &str) -> Vec<Literal> {
     while index < chars.len() {
         let c = chars[index];
         if c == '\n' {
+            if let Some(from) = block_from {
+                markers.insert(line);
+                let blank = chars[index + 1..]
+                    .iter()
+                    .take_while(|ch| **ch != '\n')
+                    .all(|ch| ch.is_whitespace());
+                if blank && line > from {
+                    block_from = None;
+                }
+            }
             line += 1;
             code.push('\n');
             index += 1;
@@ -92,7 +123,9 @@ fn literals(source: &str) -> Vec<Literal> {
                 index += 1;
             }
             let comment: String = chars[start..index].iter().collect();
-            if comment.contains("i18n: not shown") {
+            if comment.contains("i18n: translated where drawn") {
+                block_from = Some(line);
+            } else if comment.contains("i18n: ") {
                 markers.insert(line);
             }
             continue;
@@ -151,6 +184,11 @@ fn literals(source: &str) -> Vec<Literal> {
                     found.push(literal(text, start_line, &code));
                 }
                 code.push_str("\"\"");
+                if let Some(last) = found.last_mut()
+                    && last.code_end == usize::MAX
+                {
+                    last.code_end = code.len();
+                }
                 index = i;
                 continue;
             }
@@ -220,6 +258,11 @@ fn literals(source: &str) -> Vec<Literal> {
                 found.push(literal(text, start_line, &code));
             }
             code.push_str("\"\"");
+            if let Some(last) = found.last_mut()
+                && last.code_end == usize::MAX
+            {
+                last.code_end = code.len();
+            }
             index = i + 1;
             continue;
         }
@@ -269,6 +312,8 @@ fn literals(source: &str) -> Vec<Literal> {
         index += 1;
     }
     for literal in &mut found {
+        let rest = &code[literal.code_end.min(code.len())..];
+        literal.after = rest.split('\n').next().unwrap_or("").to_owned();
         literal.marked =
             markers.contains(&literal.line) || markers.contains(&(literal.line.saturating_sub(1)));
     }
@@ -286,6 +331,8 @@ fn literal(text: String, line: usize, code: &str) -> Literal {
         line,
         before: format!("{previous}\n{current}"),
         marked: false,
+        after: String::new(),
+        code_end: usize::MAX,
     }
 }
 
@@ -327,6 +374,22 @@ fn usage(before: &str) -> Use {
     } else {
         Use::Plain
     }
+}
+
+/// A literal in a place where it names something rather than being shown:
+/// a match pattern, one side of a comparison, an icon's name.
+fn identifier(literal: &Literal) -> bool {
+    let before = literal.before.trim_end();
+    let after = literal.after.trim_start();
+    after.starts_with("=>")
+        || (after.starts_with('|') && !after.starts_with("||"))
+        || (before.ends_with('|') && !before.ends_with("||"))
+        || after.starts_with("==")
+        || after.starts_with("!=")
+        || before.ends_with("==")
+        || before.ends_with("!=")
+        || before.ends_with("icon(")
+        || before.ends_with("Some(") && (after.starts_with(") =>") || after.starts_with(") |"))
 }
 
 fn sources() -> Vec<PathBuf> {
@@ -442,7 +505,7 @@ fn scan() -> Findings {
                     }
                 }
                 Use::Plain => {
-                    if literal.marked {
+                    if literal.marked || identifier(&literal) {
                         continue;
                     }
                     let current = literal.before.rsplit('\n').next().unwrap_or("");
@@ -489,7 +552,7 @@ fn every_shown_text_goes_through_t() {
         &findings.unlisted,
     );
     section("gpui_only.txt lines no longer used", &findings.stale);
-    let pending = |file: &str| PENDING.iter().any(|prefix| file.starts_with(prefix));
+    let pending = |file: &str| !CONVERTED.iter().any(|prefix| file.starts_with(prefix));
     let by_file = |map: &BTreeMap<String, Vec<String>>| -> Vec<String> {
         map.iter()
             .filter(|(file, _)| !pending(file))

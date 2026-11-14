@@ -7,6 +7,7 @@
 //! view only reads that file and the covers beside each library; it writes
 //! the cropped covers into the session's scratch folder and nowhere else.
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::popover::{self, Opening, Placement, Side};
@@ -213,7 +214,7 @@ impl LibraryPopover {
         cx: &mut Context<Self>,
     ) -> Self {
         let search =
-            cx.new(|cx| TextInput::new(Kind::Popover, cx).placeholder("Search libraries…"));
+            cx.new(|cx| TextInput::new(Kind::Popover, cx).placeholder(t("Search libraries…")));
         let subscriptions = vec![cx.observe(&search, |_, _, cx| cx.notify())];
         let mut this = Self {
             session,
@@ -548,7 +549,7 @@ impl Render for LibraryPopover {
                     .text_color(theme.text_tertiary())
                     .flex()
                     .justify_center()
-                    .child("No Result"),
+                    .child(t("No Result")),
             );
         }
         for index in shown {
@@ -597,7 +598,7 @@ impl Render for LibraryPopover {
                 // library (`open_library_manager`).
                 ui::focus::stop(
                     "create-library",
-                    self.action("create-library", "plus", "Create Library…", cx)
+                    self.action("create-library", "plus", t("Create Library…"), cx)
                         .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
                     cx.listener(|this, _, window, cx| this.close(window, cx)),
                 ),
@@ -607,8 +608,13 @@ impl Render for LibraryPopover {
                 // `picto.library.open` does.
                 ui::focus::stop(
                     "open-library",
-                    self.action("open-library", "library-folder-open", "Open Library…", cx)
-                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    self.action(
+                        "open-library",
+                        "library-folder-open",
+                        t("Open Library…"),
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
                     cx.listener(|this, _, window, cx| this.close(window, cx)),
                 ),
             )
@@ -616,7 +622,7 @@ impl Render for LibraryPopover {
                 // TODO: open the Library Manager (`open_library_manager`).
                 ui::focus::stop(
                     "library-manager",
-                    self.action("library-manager", "adjustments", "Library Manager…", cx)
+                    self.action("library-manager", "adjustments", t("Library Manager…"), cx)
                         .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
                     cx.listener(|this, _, window, cx| this.close(window, cx)),
                 ),
