@@ -115,7 +115,7 @@ impl TextInput {
             return (0, false);
         };
         if let Some(lines) = self.last_lines.as_ref() {
-            let line_height = px(self.kind.line_height());
+            let line_height = px(self.line_height());
             let rows = rows_of(lines, line_height);
             let y = position.y - bounds.top();
             let bottom = rows.last().map_or(line_height, |row| row.top + line_height);
@@ -156,7 +156,7 @@ impl TextInput {
             return self.content.len();
         }
         if let Some(lines) = self.last_lines.as_ref() {
-            let line_height = px(self.kind.line_height());
+            let line_height = px(self.line_height());
             let rows = rows_of(lines, line_height);
             let y = position.y - bounds.top();
             let row = &rows[rows.iter().rposition(|row| row.top <= y).unwrap_or(0)];
@@ -298,6 +298,11 @@ impl TextElement {
         let marked_range = input.marked_range.clone();
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
+        let caret: gpui::Hsla = if input.caret_in_text_color() {
+            style.color
+        } else {
+            theme.text().into()
+        };
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
         let (lines, _) = wrap(
@@ -335,7 +340,7 @@ impl TextElement {
                         ),
                         size(px(1.), glyphs),
                     ),
-                    theme.text(),
+                    caret,
                 )
             });
             (quad, Vec::new())
@@ -476,6 +481,7 @@ impl Element for TextElement {
         let kind = input.kind;
         let multiline = input.multiline;
         let previous_scroll = input.scroll;
+        let caret_in_text_color = input.caret_in_text_color();
         let style = window.text_style();
         let theme = crate::theme::theme(cx);
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -514,8 +520,10 @@ impl Element for TextElement {
         }
 
         // A field that is not being edited shows its start and an ellipsis,
-        // as `text-overflow: ellipsis` does.
-        if !focused && line.width > bounds.size.width && !content.is_empty() {
+        // as `text-overflow: ellipsis` does; text edited in its own face
+        // (`contentEditable`) is cut off instead.
+        if !focused && !caret_in_text_color && line.width > bounds.size.width && !content.is_empty()
+        {
             let ellipsis = shape("…".into(), text_color, window).width;
             let fits = display_text
                 .grapheme_indices(true)
@@ -559,7 +567,11 @@ impl Element for TextElement {
                 None,
                 Some(fill(
                     Bounds::new(point(left + cursor_x, caret_top), size(px(1.), glyphs)),
-                    theme.text(),
+                    if caret_in_text_color {
+                        style.color
+                    } else {
+                        theme.text().into()
+                    },
                 )),
             )
         } else {

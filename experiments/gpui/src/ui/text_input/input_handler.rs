@@ -143,7 +143,7 @@ impl EntityInputHandler for TextInput {
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
         if let Some(lines) = self.last_lines.as_ref() {
-            let line_height = px(self.kind.line_height());
+            let line_height = px(self.line_height());
             let rows = rows_of(lines, line_height);
             let (start_x, top) = caret_in(lines, &rows, range.start, false)?;
             let (end_x, end_top) = caret_in(lines, &rows, range.end, true)?;

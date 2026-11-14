@@ -719,7 +719,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Item menus | tile, empty space, viewer and inspector preview menus with production's rows, order, labels and enabled rules; copy, open with, batch rename, regenerate thumbnails, grouping, export, Set as Library Cover, Set as Thumbnail | pictures (grid menu); values (production's menu test cases) |
 | Application menu | production's menus and rows, keys from the registry, enabled by production's rules; in-window button off macOS | values (model tests); pictures of the in-window menu off-screen (CI) |
 | Viewer | media view, zoom and pan, navigator, Quick Look, detail windows, Inbox review, collections (reader and editor), Recently Viewed recording | pictures (Quick Look, detail window, JPEG, GIF, JPEG XL, a PDF collection); values (camera arithmetic, detail window size) |
-| Documents | PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, fonts, JPEG XL, SVG; others show the unsupported view | tests (format matrix decodes every fixture and draws every viewer off-screen; real PDFs, a JPEG XL, a text file, a GIF and a WebP from a library) |
+| Documents | PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, fonts, JPEG XL, SVG; others show the unsupported view; a font's sample and waterfall edited in place, its preview sized by ⌘= / ⌘+ (⌘⇧=) / ⌘− and Control with them on the Mac | tests (format matrix decodes every fixture and draws every viewer off-screen; real PDFs, a JPEG XL, a text file, a GIF and a WebP from a library); pictures of the font viewer (preview, an edit, the waterfall: 3% of the page differing) |
 | Document thumbnails | the first page of a text, Markdown, JSON or RTF file, and an EPUB's first chapter when the book has no cover, drawn as the viewer lays the page out, at production's size (the 816-point page at two pixels a point, as the hidden window shows it), through the same queue as PDF and Flash; the application's own thumbnail work finds the picture and stops retrying | pictures of the thumbnails against production's (0.1–0.9% of pixels differing for text, JSON, RTF and a short Markdown file; 2.5% for a Markdown file with code, quotes and a table, where the viewers differ) |
 | Video and audio | the media player, its controls, speeds, loop, volume, visualizer; AVFoundation and `ffmpeg` paths on macOS | pictures (`.mov`, `.webm`, MP3); seen playing in a real window on macOS |
 | Flash | Ruffle playback, controls, Set as Thumbnail | tests (GPU tests: frames, mouse, Stop) |
@@ -832,7 +832,9 @@ re-checked by reading the code; the rest were checked against it.
   login chip do nothing, and a login problem's Fix login shows disabled.
   (Production derives no Retry now or Review source action for a problem,
   so neither button shows in either app.)
-- Search by Image (disabled in every menu).
+- Search by Image (it uploads the file to a search engine): its engines are
+  drawn in every menu as production draws a disabled row (40%, no hover, no
+  tooltip).
 - Single instance, opening files and `.picto-pack` packs from the file
   manager, and drops from a browser (GPUI delivers only file paths, so
   in-memory files and links do not arrive).
@@ -842,7 +844,7 @@ re-checked by reading the code; the rest were checked against it.
   hidden window, and this app has no Word or PowerPoint viewer to draw with,
   so they show the torn page.
 - Document viewers: PDF text selection, text selection on text and book
-  pages, the editable font sample, WOFF2 fonts, RTF character formatting,
+  pages, WOFF2 fonts, RTF character formatting,
   Markdown images and raw HTML (shown as text)†, an EPUB chapter's own
   stylesheet†.
 - Detail windows: per-image zoom memory, "Loading..." placeholder†, a menu on
@@ -1013,6 +1015,10 @@ Smaller differences by area†
   list's marker); a text page taller than the window is drawn from its top,
   where production's capture starts wherever its viewer had scrolled and
   takes the page buttons in.
+- Font viewer: the sample is edited block by block (its heading, paragraph
+  and alphabet each a field), not as one region as production's
+  `contentEditable` article; a waterfall line wider than the page is cut
+  off rather than scrolled sideways.
 - Documents: a page larger than the view starts at its top-left; only the
   vertical scrollbar is drawn; text files over 4 MB show their first 4 MB and
   say so; a PDF page is drawn at most 8,192 px on its longest side;

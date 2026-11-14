@@ -1616,6 +1616,12 @@ pub fn host_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSur
         MediaSurface::has_preview_size,
         |this, cx| this.preview_size(true, cx),
     );
+    let element = forward_if::<PreviewReset, _>(
+        element,
+        surface,
+        MediaSurface::has_preview_size,
+        |this, cx| this.actual_size(cx),
+    );
     let element = forward_if::<PreviewSmaller, _>(
         element,
         surface,

@@ -200,7 +200,7 @@ impl TextInput {
     fn row_at(&self, offset: usize) -> (Range<usize>, bool) {
         match self.last_lines.as_ref() {
             Some(lines) => {
-                let rows = rows_of(lines, px(self.kind.line_height()));
+                let rows = rows_of(lines, px(self.line_height()));
                 let row = &rows[row_index(&rows, offset, self.upstream)];
                 (row.start..row.end, !row.last)
             }
@@ -492,7 +492,7 @@ impl TextInput {
             self.go(end, false, extend, cx);
             return;
         };
-        let rows = rows_of(lines, px(self.kind.line_height()));
+        let rows = rows_of(lines, px(self.line_height()));
         let row = row_index(&rows, from, self.upstream);
         let x = self.goal_x.unwrap_or_else(|| x_in(lines, &rows[row], from));
         let (target, upstream) = if !down && row == 0 {
