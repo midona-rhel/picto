@@ -9,6 +9,7 @@
 //! [`Document`].
 use super::camera::{self, Camera, Glide, Size};
 use super::document::{self, Document, kind::RendererKind};
+use super::scaled;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -163,6 +164,11 @@ pub struct MediaSurface {
     /// Pictures replaced since the last frame, let go of GPUI's sprite
     /// atlas once nothing draws them.
     retired: Vec<Arc<RenderImage>>,
+    /// The original whose whole decode is still owed: `full` holds it at
+    /// the size the pane first showed it.
+    whole: Option<PathBuf>,
+    /// The window's pixels per point, as last drawn.
+    scale_factor: f32,
 }
 
 impl EventEmitter<Event> for MediaSurface {}
@@ -785,7 +791,7 @@ impl MediaSurface {
             RendererKind::Video | RendererKind::Audio if media.is_some() => Mode::Media,
             _ => Mode::Document,
         };
-        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
+        self.show(key.clone(), thumbnail.clone(), natural, cx);
         self.opened = key.clone();
         self.error = None;
         // What `show` kept of the previous item stays over this one.
@@ -840,7 +846,7 @@ impl MediaSurface {
                 }));
             }
             Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
-            Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
+            Mode::Image => self.load_full(key, path, mime == "image/jpeg", cx),
             Mode::Document => {
                 let document = Document::open(
                     kind,
@@ -904,7 +910,6 @@ impl MediaSurface {
         key: String,
         thumbnail: PathBuf,
         natural: Option<Size>,
-        full: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
         if self.key != key {
@@ -912,6 +917,7 @@ impl MediaSurface {
             self.key = key.clone();
             self.natural = natural;
             self.full_task = None;
+            self.whole = None;
             self.stop();
             if held.is_some() {
                 self.held = held;
@@ -949,28 +955,47 @@ impl MediaSurface {
                 });
             }));
         }
-        if let Some(full) = full {
-            let load = ImageAssetLoader::load(Resource::Path(full.into()), cx);
-            let load = cx.background_executor().spawn(load);
-            self.full_task = Some(cx.spawn(async move |entity, cx| {
-                let result = load.await;
-                let _ = entity.update(cx, |this, cx| {
-                    if this.key == key {
-                        let old = std::mem::replace(&mut this.full, result.ok());
-                        this.retire(old);
-                        this.full_key = key.clone();
-                        // Without the library's size the camera was fitted to
-                        // the thumbnail's pixels; the original's differ.
-                        if this.shown == key && this.shown_natural.is_none() {
-                            this.refit();
-                        }
-                        this.present_key();
-                        cx.emit(Event::Progressed);
-                        cx.notify();
+    }
+
+    /// Decodes the original of `key`. A JPEG the pane shows at under half
+    /// its size is decoded at that size first ([`scaled`]), and whole only
+    /// once the view needs more of its pixels.
+    fn load_full(&mut self, key: String, path: PathBuf, reduce: bool, cx: &mut Context<Self>) {
+        let reduced = self
+            .natural
+            .filter(|_| reduce)
+            .and_then(|natural| scaled::fitted_pixels(natural, self.pane(), self.scale_factor));
+        self.whole = reduced.map(|_| path.clone());
+        let load = match reduced {
+            Some(size) => cx.background_executor().spawn(async move {
+                document::guarded(|| Ok(scaled::decode(&path, size, true)?.into_rgba8()))
+                    .map(document::render_image)
+                    .ok()
+            }),
+            None => {
+                let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
+                cx.background_executor()
+                    .spawn(async move { load.await.ok() })
+            }
+        };
+        self.full_task = Some(cx.spawn(async move |entity, cx| {
+            let result = load.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.key == key {
+                    let old = std::mem::replace(&mut this.full, result);
+                    this.retire(old);
+                    this.full_key = key.clone();
+                    // Without the library's size the camera was fitted to
+                    // the thumbnail's pixels; the original's differ.
+                    if this.shown == key && this.shown_natural.is_none() {
+                        this.refit();
                     }
-                });
-            }));
-        }
+                    this.present_key();
+                    cx.emit(Event::Progressed);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     /// `JpegXlViewer.tsx`: the original decoded off the drawing thread
@@ -1006,6 +1031,25 @@ impl MediaSurface {
             self.shown = self.key.clone();
             self.shown_natural = self.natural;
             self.refit();
+        }
+    }
+
+    /// Starts the whole decode of an original shown from a reduced one, once
+    /// the view shows it larger than the reduced one's pixels.
+    fn decode_whole_when_needed(&mut self, image: Option<Size>, cx: &mut Context<Self>) {
+        let (Some(image), Some(decoded)) = (image, self.full.as_ref().map(|full| full.size(0)))
+        else {
+            return;
+        };
+        if self.whole.is_none() || self.full_key != self.key || self.shown != self.key {
+            return;
+        }
+        let (_, _, width, height) = self.camera.image_rect(image, self.pane());
+        let short = |shown: f32, pixels: i32| shown * self.scale_factor > pixels as f32 * 1.01;
+        if (short(width, decoded.width.0) || short(height, decoded.height.0))
+            && let Some(path) = self.whole.take()
+        {
+            self.load_full(self.key.clone(), path, false, cx);
         }
     }
 
@@ -1195,6 +1239,8 @@ impl Render for MediaSurface {
             let opening = self.opening(image, pane);
             self.set_camera(opening, cx);
         }
+        self.scale_factor = window.scale_factor();
+        self.decode_whole_when_needed(image, cx);
         // A camera moved while drawing notifies no one (the detail window
         // observes the surface for its zoom percentage, read before this
         // ran): another frame tells them, also after a glide's last step.
@@ -1664,5 +1710,62 @@ mod tests {
         let (earlier, last) = in_atlas.split_at(in_atlas.len() - 2);
         assert_eq!(last, [true, true]);
         assert!(earlier.iter().all(|kept| !kept), "{in_atlas:?}");
+    }
+
+    /// A JPEG shown at under half its size decodes at the size shown; at
+    /// 100% the whole decode follows.
+    #[test]
+    fn a_large_jpeg_decodes_at_the_size_shown_until_the_view_needs_more() {
+        let folder = tempfile::tempdir().unwrap();
+        let photo = folder.path().join("photo.jpg");
+        image::RgbImage::from_fn(8000, 6000, |x, y| image::Rgb([x as u8, y as u8, 7]))
+            .save(&photo)
+            .unwrap();
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, cx| MediaSurface::new(Options::default(), cx));
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            for _ in 0..2 {
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            }
+            cx.run_until_parked();
+        };
+        // The pane is measured first, as it is once a viewer has shown: the
+        // test display's 1920 × 1080 at 2×, which shows the photo at
+        // 2880 × 2160 pixels, so it decodes at half its size.
+        draw(&mut cx);
+        let decoded = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |surface, _| {
+                    let size = surface.full.as_ref().unwrap().size(0);
+                    (size.width.0, size.height.0)
+                })
+                .unwrap()
+        };
+        window
+            .update(&mut cx, |surface, _, cx| {
+                surface.open(
+                    "photo".into(),
+                    photo.clone(),
+                    Some((8000., 6000.)),
+                    photo.clone(),
+                    "image/jpeg",
+                    cx,
+                )
+            })
+            .unwrap();
+        draw(&mut cx);
+        let reduced = decoded(&mut cx);
+        assert_eq!(reduced, (4000, 3000));
+        window
+            .update(&mut cx, |surface, _, cx| surface.actual_size(cx))
+            .unwrap();
+        draw(&mut cx);
+        assert_eq!(decoded(&mut cx), (8000, 6000));
     }
 }

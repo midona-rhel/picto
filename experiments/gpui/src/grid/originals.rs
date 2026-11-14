@@ -179,7 +179,8 @@ impl Originals {
             loading += 1;
             let (hash, path, size) = (want.hash, want.path, want.size);
             let decode = cx.background_executor().spawn(async move {
-                let image = image::open(&path).ok()?;
+                // A JPEG decodes at the tile's size, not its own.
+                let image = crate::viewer::scaled::decode(&path, size, false).ok()?;
                 let mut pixels = image
                     .resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom)
                     .into_rgba8();

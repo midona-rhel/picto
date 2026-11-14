@@ -300,7 +300,7 @@ impl DetailWindow {
                 crate::grid::thumbnails::existing(self.session.read(cx).thumbnail(&entry.hash));
             let natural = size_of(entry.width, entry.height);
             self.surface.update(cx, |surface, cx| {
-                surface.show(entry.hash.clone(), thumbnail, natural, None, cx)
+                surface.show(entry.hash.clone(), thumbnail, natural, cx)
             });
         }
         let root = entry.root;

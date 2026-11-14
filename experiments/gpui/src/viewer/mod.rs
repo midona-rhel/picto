@@ -15,6 +15,7 @@ pub mod group_editor;
 pub mod quick_look;
 pub mod review;
 mod review_art;
+pub mod scaled;
 mod strip;
 pub mod surface;
 pub mod toolbar;
@@ -280,9 +281,7 @@ fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx:
         })
     };
     if let Some((key, thumbnail, natural)) = shown {
-        surface.update(cx, |surface, cx| {
-            surface.show(key, thumbnail, natural, None, cx)
-        });
+        surface.update(cx, |surface, cx| surface.show(key, thumbnail, natural, cx));
     }
 }
 
