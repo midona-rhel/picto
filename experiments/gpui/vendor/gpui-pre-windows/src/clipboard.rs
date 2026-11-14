@@ -275,7 +275,7 @@ fn read_files() -> Option<ClipboardEntry> {
 }
 
 /// DIB is BMP without the 14-byte BITMAPFILEHEADER. Prepend one.
-fn convert_dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn convert_dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     if dib.len() < 40 {
         return None;
     }
@@ -362,14 +362,14 @@ impl Drop for ClipboardGuard {
     }
 }
 
-struct LockedGlobal {
+pub(crate) struct LockedGlobal {
     global: HGLOBAL,
     ptr: *const u8,
     size: usize,
 }
 
 impl LockedGlobal {
-    fn lock(global: HGLOBAL) -> Option<Self> {
+    pub(crate) fn lock(global: HGLOBAL) -> Option<Self> {
         let size = unsafe { GlobalSize(global) };
         let ptr = unsafe { GlobalLock(global) };
         if ptr.is_null() {
@@ -382,7 +382,7 @@ impl LockedGlobal {
         })
     }
 
-    fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.size) }
     }
 }

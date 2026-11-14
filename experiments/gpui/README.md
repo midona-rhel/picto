@@ -185,14 +185,17 @@ cargo test --locked
 GPUI is taken from `gpui-pre` and `gpui-pre-platform` `=0.3.12`, a crates.io
 snapshot of upstream GPUI (zed-industries/zed); the official `gpui` crate has
 not been published since 0.2.2 and GPUI promises no API stability between
-snapshots, so the version is pinned exactly and upgraded deliberately. Four
+snapshots, so the version is pinned exactly and upgraded deliberately. Six
 of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
-`gpui-pre-windows`) are vendored under `vendor/` and substituted with
+`gpui-pre-windows`, `gpui-pre-macos`, `gpui-pre-linux`) are vendored under
+`vendor/` and substituted with
 `[patch.crates-io]`. The patches add a backdrop-blur primitive (drawn by the
 Metal and wgpu renderers, ignored by the DirectX one), drop shadows that cut
 their element out as CSS does, nearest-neighbour image sampling for the
 "Pixelated" preview setting, a native file drag the app can start itself
-(`Window::start_platform_drag`), and test-only hooks for the off-screen
+(`Window::start_platform_drag`), what a drop from another application
+carries besides files (`ExternalDropData`: a browser's image data, its
+addresses, HTML and text, read by each platform), and test-only hooks for the off-screen
 checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
 that keep client decorations). `vendor/README.md` explains each change and
 holds the full diff against 0.3.12, so it can be re-applied to a newer
@@ -555,6 +558,7 @@ show a restart. Script lines (blank lines and `#` comments are skipped):
 | `key <keystroke>` | a keystroke as GPUI writes them (`space`, `cmd-shift-j`), held modifiers reported around it |
 | `type <text>` | text typed into the focused field |
 | `dragfiles X Y PATH…`, `drop X Y PATH…`, `dragexit` | files from the system over the window, dropped there (imports into the copy), or taken away; paths cannot hold spaces |
+| `dropdata X Y KIND=VALUE…` | what a web browser drags, dropped with no files: `image=PATH` (that file's bytes, in memory), `uri=`, `text=`, `download=` (a `DownloadURL`), `html=PATH` (that file's text); released without the platform's drop, so the app is not brought forward |
 | `wait <ms>` | let the app run |
 | `pace <ms>` | how long the app runs after each input line (default 200) |
 | `shot <name>` | save `<name>.png` |
@@ -705,7 +709,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Tags screen | rail, groups, sections, paging, search, every edit | pictures |
 | Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables, every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
 | Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
-| Imports and exports | drops, choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
+| Imports and exports | drops (files, and a browser's image data with its addresses as sources), choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
 | Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
 | Keyboard | every registry shortcut bound or listed in `NOT_YET`; Tab order and focus rings in dialogs, popovers and Settings | values (keymap test); read |
 | Text fields | Chromium's editing on each platform: words (with Chinese, Japanese and Thai dictionaries), rows, paragraphs, Emacs keys, the field's own undo, input method | tests |
@@ -743,6 +747,13 @@ re-checked by reading the code; the rest were checked against it.
   rows of its own (Edit's Dictation and Emoji & Symbols, Enter Full Screen,
   the Window menu's tiling rows) and titles the application menu with the
   process's name.
+- **Drops from a web browser.** No real browser drag has been dropped on
+  any platform. On macOS the pasteboard reading was checked on a pasteboard
+  of a test's own, and a drop of in-memory image data (played with
+  `dropdata`) was imported into a real window with its addresses as
+  sources; on Windows and Linux only the parsing of virtual-file
+  descriptors, `HTML Format` and the media types read is tested, and the
+  reading code is compiled in CI.
 - **macOS system integration.** Dragging items out to Finder; the Dock
   badge and the system notification (which need the app to run from its
   bundle); a real pasteboard copy of files; files arriving through
@@ -796,8 +807,9 @@ re-checked by reading the code; the rest were checked against it.
   detail tooltip; a subscription run's own pop-ups ("Subscription paused",
   "Query completed", "Subscription completed").
 - Search by Image (disabled in every menu).
-- Drops from a browser (GPUI delivers only file paths, so in-memory files
-  and links do not arrive).
+- Files a source promises on macOS (`NSFilePromiseReceiver`, which some
+  browsers drag an image as without its data): such a drag shows as links
+  only and is refused.
 - Opening another library from the file manager or the command line of a
   running instance (production's `switchLibrary`): it is refused with a
   notification.
@@ -976,6 +988,7 @@ Smaller differences by area†
 | Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
 | Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
 | Drag items out of the window | not built (needs OLE `DoDragDrop` outside GPUI's event dispatch) | not built (needs an XDND source) | GPUI's native drag |
+| Drops from a browser (in-memory image, addresses, HTML) | virtual files (`FileGroupDescriptorW`/`FileContents`), else `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
 | Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
 | Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |
 | Detail window aspect lock | not built | not built | not built |

@@ -1204,6 +1204,24 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
                     paths: ExternalPaths(paths),
                 });
                 self.handle_drag_drop(input);
+            } else if crate::drop_data::offers_drop_data(idata_obj) {
+                // What a web browser drags (an image, its address): it
+                // enters with no paths and is read when it is dropped.
+                *pdweffect = DROPEFFECT_COPY;
+                let mut cursor_position = cursor_position;
+                ScreenToClient(self.0.hwnd, &mut cursor_position)
+                    .ok()
+                    .log_err();
+                let scale_factor = self.0.state.scale_factor.get();
+                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
+                    position: logical_point(
+                        cursor_position.x as f32,
+                        cursor_position.y as f32,
+                        scale_factor,
+                    ),
+                    paths: ExternalPaths(SmallVec::new()),
+                });
+                self.handle_drag_drop(input);
             } else {
                 *pdweffect = DROPEFFECT_NONE;
             }
@@ -1274,6 +1292,7 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
                 .ok()
                 .log_err();
         }
+        gpui::set_external_drop_data(crate::drop_data::read(idata_obj));
         let scale_factor = self.0.state.scale_factor.get();
         let input = PlatformInput::FileDrop(FileDropEvent::Submit {
             position: logical_point(

@@ -10,6 +10,7 @@ mod directx_devices;
 mod directx_renderer;
 mod dispatcher;
 mod display;
+mod drop_data;
 mod events;
 mod keyboard;
 mod platform;
@@ -38,6 +39,7 @@ pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
+pub use drop_data::{file_group_names, html_fragment};
 pub use platform::WindowsPlatform;
 
 pub(crate) use windows::Win32::Foundation::HWND;

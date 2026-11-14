@@ -97,10 +97,22 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features =
 # thread, for the off-screen checks.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_apple = { package = "gpui-pre-apple", version = "=0.3.12" }
+# The drop reading of the macOS platform, checked on a pasteboard of a
+# test's own.
+gpui_macos = { package = "gpui-pre-macos", version = "=0.3.12" }
 
 # Elsewhere the off-screen checks draw with GPUI's wgpu renderer and its
 # portable text system (on Windows too, where GPUI's own DirectX platform has
 # no headless renderer).
+# The drop reading of the Windows platform, checked on data of a test's own.
+[target.'cfg(windows)'.dev-dependencies]
+gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
+
+# The drop reading of the X11 and Wayland platforms, checked on data of a
+# test's own.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.12" }
+
 [target.'cfg(not(target_os = "macos"))'.dev-dependencies]
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12", features = ["test-support"] }
 
@@ -120,7 +132,7 @@ core-foundation-sys = "0.8"
 # Video playback through AVFoundation, presented as CoreVideo pixel buffers
 # by GPUI's `surface` element; the same versions GPUI builds.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry", "NSData"] }
 objc2-core-foundation = "0.3"
 objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
 objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
@@ -134,5 +146,7 @@ objc2-quartz-core = { version = "0.3", features = ["CABase"] }
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

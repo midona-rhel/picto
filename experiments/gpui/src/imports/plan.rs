@@ -118,6 +118,12 @@ pub enum Dropped {
     Nothing,
 }
 
+/// A Picto Pack, by its extension (`/\.picto-pack$/i`).
+pub fn is_pack(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("picto-pack"))
+}
+
 /// The drop handler's rules, in its order: a Picto Pack alone, then one
 /// folder, then everything as files. Production takes one path without a
 /// known media extension for a folder, which sends a single Flash, EPUB or
@@ -125,10 +131,6 @@ pub enum Dropped {
 /// path is a folder when `is_dir` says it is, and the extension decides only
 /// when it cannot say.
 pub fn classify(paths: Vec<PathBuf>, is_dir: impl Fn(&Path) -> Option<bool>) -> Dropped {
-    let is_pack = |path: &PathBuf| {
-        path.extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("picto-pack"))
-    };
     let packs = paths.iter().filter(|path| is_pack(path)).count();
     if packs > 0 {
         return if paths.len() == 1 {

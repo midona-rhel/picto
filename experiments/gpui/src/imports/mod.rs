@@ -6,6 +6,7 @@
 //!
 //! One `Imports` view serves the window; the shell draws it over everything
 //! and anything else reaches it through [`get`].
+pub mod drop;
 pub mod plan;
 pub mod task;
 mod view;
@@ -185,6 +186,70 @@ impl Imports {
                 }
             }
             Dropped::Files(paths) => self.request(paths, Params::to(destination), window, cx),
+        }
+    }
+
+    /// A drop that also carried what is not a file on disk (what a web
+    /// browser drags): `data` is what the platform read from it. Its
+    /// in-memory images are written to the session's scratch folder and
+    /// imported apart from its files, deleted once imported, with the
+    /// drop's web addresses as their sources; a drop with no file at all is
+    /// refused (`onDragDropEvent`'s drop with `temporaryPaths`).
+    pub fn drop_with_data(
+        &mut self,
+        paths: Vec<PathBuf>,
+        data: Option<gpui::ExternalDropData>,
+        destination: Destination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if data.as_ref().is_none_or(|data| data.files.is_empty()) && !paths.is_empty() {
+            self.drop_paths(paths, destination, window, cx);
+            return;
+        }
+        // Asked before anything is written: production writes the data
+        // first and leaves it behind when the import is refused.
+        if (!paths.is_empty() || data.as_ref().is_some_and(|data| !data.files.is_empty()))
+            && !self.allow(cx)
+        {
+            return;
+        }
+        let directory = self.session.read(cx).scratch().join("drops");
+        match drop::stage(paths, data.as_ref(), &directory) {
+            drop::Staged::Refused(message) => {
+                self.report("Could not import dropped media", &message, cx);
+            }
+            drop::Staged::Paths(paths) => self.drop_paths(paths, destination, window, cx),
+            drop::Staged::Browser {
+                paths,
+                staged,
+                sources,
+            } => {
+                // `pictoPackPathFromDrop` over every path: a pack with
+                // anything else is refused.
+                if paths.iter().any(|path| plan::is_pack(path)) {
+                    for path in &staged {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    self.report(
+                        "Could not import Picto Pack",
+                        "Drop one Picto Pack at a time without other files.",
+                        cx,
+                    );
+                    return;
+                }
+                if !paths.is_empty() {
+                    self.request(paths, Params::to(destination), window, cx);
+                }
+                if !staged.is_empty() {
+                    let params = Params {
+                        delete_after_ingest: true,
+                        source_urls: sources,
+                        ..Params::to(destination)
+                    };
+                    self.request(staged, params, window, cx);
+                }
+            }
         }
     }
 
