@@ -199,12 +199,21 @@ impl Application {
     }
 
     /// Detaches the copy and opens it as the Electron app opens a library,
-    /// starting the application's workers. Blocks the calling thread (the
-    /// library thread) until it is open, and hands back its `Library`.
-    pub fn open(&self) -> Result<Arc<Library>, String> {
+    /// starting the application's workers. Blocks the calling thread until
+    /// it is open, and hands back its `Library`. `readable` is handed that
+    /// `Library` as soon as the database is open, before the application's
+    /// recovery passes run (on a library of a million items they take many
+    /// seconds), so results can be read meanwhile.
+    pub fn open(
+        &self,
+        readable: impl FnOnce(Arc<Library>) + Send + 'static,
+    ) -> Result<Arc<Library>, String> {
         let opened = detach(&self.root).and_then(|()| {
             self.runtime
-                .block_on(picto_core::state::open_library(self.root.clone()))
+                .block_on(picto_core::state::open_library_reporting(
+                    self.root.clone(),
+                    readable,
+                ))
         });
         let result = opened.map(|state| Arc::clone(state.application().library()));
         let _ = self
@@ -348,7 +357,7 @@ mod tests {
         // Sent before the library has opened: it waits for the open.
         let early = application.dispatch("sidebar.counts", serde_json::json!({}));
         let started = std::time::Instant::now();
-        let library = application.open().unwrap();
+        let library = application.open(|_| {}).unwrap();
         eprintln!("opened in {:?}", started.elapsed());
         let counts = block_on(early).unwrap().unwrap();
         assert_eq!(
@@ -495,5 +504,77 @@ mod tests {
             one("SELECT group_concat(status) FROM subscription_run ORDER BY run_id"),
             "cancelled,succeeded"
         );
+    }
+}
+
+#[cfg(test)]
+mod open_stages {
+    use std::time::Instant;
+
+    /// Times each stage of opening a library in the order `open_library`
+    /// runs them, and the parts of the media recovery pass, printing one
+    /// line each. The recovery passes write to the copy, as an open does.
+    ///
+    /// ```sh
+    /// PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline time_each_stage \
+    ///     -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy"]
+    fn time_each_stage() {
+        fn timed<T>(stage: &str, work: impl FnOnce() -> T) -> T {
+            let started = Instant::now();
+            let done = work();
+            eprintln!("{stage}: {:?}", started.elapsed());
+            done
+        }
+        let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
+        let root = super::guard(std::path::Path::new(&root)).unwrap();
+        timed("detach", || super::detach(&root).unwrap());
+        let opening = Instant::now();
+        let application = timed("open the database and its resident indexes", || {
+            picto_core::library_application::LibraryApplication::open_with(
+                &root,
+                &picto_library::OpenCancellation::default(),
+                &mut |stage| eprintln!("  {stage:?} from {:?}", opening.elapsed()),
+            )
+            .unwrap()
+        });
+        let library = application.library();
+        timed("navigation, as the grid first reads it", || {
+            crate::backend::navigation(library).unwrap()
+        });
+        timed("subscription recovery", || {
+            picto_core::library_subscription_state::recover(&application, "2026-01-01T00:00:00Z")
+                .unwrap()
+        });
+        timed("ingest recovery", || {
+            picto_core::library_ingest_runtime::recover(&application).unwrap()
+        });
+        let originals = timed("media recovery, its parts: list the originals", || {
+            application.blobs().list_originals()
+        });
+        timed("  look for each one's thumbnail", || {
+            originals
+                .iter()
+                .filter(|(hash, _)| {
+                    application
+                        .blobs()
+                        .find_thumbnail_path(hash)
+                        .unwrap()
+                        .is_none()
+                })
+                .count()
+        });
+        timed("  list the thumbnails instead", || {
+            application.blobs().list_thumbnails().len()
+        });
+        eprintln!("  ({} originals)", originals.len());
+        timed("media recovery, whole", || {
+            picto_core::library_media_runtime::recover(&application).unwrap()
+        });
+        timed("cloud retention", || {
+            picto_core::cloud::normalize_retention_library(&application).unwrap()
+        });
     }
 }

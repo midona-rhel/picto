@@ -108,7 +108,8 @@ impl SubscriptionActivity {
 /// `subscriptionsSettle.ts`: progress is read again this often while a run
 /// is going.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
-/// How often the session takes in what the library's thread has sent.
+/// How often the session looks for the application's events (replies from
+/// the library's thread wake it at once).
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 /// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
 /// this long.
@@ -335,10 +336,24 @@ impl Session {
                 .unwrap_or_default();
             (folders, kept.recent_tags.clone())
         };
-        let (sender, receiver) = backend::start(application.clone());
+        let (sender, receiver, woken) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
+            use futures::{StreamExt as _, future::Either};
+            let mut woken = Some(woken);
             loop {
-                cx.background_executor().timer(RECEIVE_INTERVAL).await;
+                // A reply is taken in as soon as it is sent; the application's
+                // events at the next look.
+                let tick = std::pin::pin!(cx.background_executor().timer(RECEIVE_INTERVAL));
+                match &mut woken {
+                    Some(wake) => {
+                        let first = futures::future::select(tick, wake.next());
+                        // The library's thread has stopped: looks alone.
+                        if let Either::Right((None, _)) = first.await {
+                            woken = None;
+                        }
+                    }
+                    None => tick.await,
+                }
                 if session
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()

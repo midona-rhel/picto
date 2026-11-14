@@ -77,6 +77,17 @@ pub enum Request {
     /// Another window of results already shown, read with the query they
     /// were read with: its generation, the query, the window, and why.
     Window(u64, Box<RootQuery>, WindowRequest, Fetch),
+    /// The application finished opening (its recovery passes ran and its
+    /// workers started), or failed to.
+    Opened(Result<(), String>),
+}
+
+/// How the open of the library is going, as the library thread waits for it.
+enum Opening {
+    /// The database is open and can be read.
+    Readable(Arc<Library>),
+    /// The open failed before that.
+    Failed(String),
 }
 
 /// Why a window of results is read.
@@ -256,25 +267,71 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     append_tree(&smart, None, None, &mut nav);
     Ok((nav, tags))
 }
+/// The first ordinal a window asks for.
+fn first(window: &WindowRequest) -> usize {
+    match window.position {
+        picto_library::query::WindowPosition::Ordinal(start) => start,
+        picto_library::query::WindowPosition::Fraction(_) => 0,
+    }
+}
+
 /// Starts the library's thread, which opens the application on the copy and
 /// then answers requests with the application's own `Library`.
+///
+/// The destinations and their results are read as soon as the database is
+/// open, while the application still runs its recovery passes; the screens'
+/// own reads and edits (`Request::Job`) wait for the whole open, as the
+/// application's commands do.
 pub fn start(
     application: Arc<crate::application::Application>,
-) -> (Sender<Request>, Receiver<Reply>) {
+) -> (Sender<Request>, Receiver<Reply>, Wake) {
     let (tx, requests) = mpsc::channel();
-    let (replies, rx) = mpsc::channel();
+    let (sender, rx) = mpsc::channel();
+    let (wake, woken) = futures::channel::mpsc::unbounded();
+    let replies = Replies { sender, wake };
+    let finished = tx.clone();
     std::thread::spawn(move || {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
-            let library = application.open()?;
+            let (readable, opening) = mpsc::channel();
+            let failed = readable.clone();
+            std::thread::Builder::new()
+                .name("picto-open".into())
+                .spawn(move || {
+                    let opened = application.open(move |library| {
+                        crate::stats::opening("readable");
+                        let _ = readable.send(Opening::Readable(library));
+                    });
+                    crate::stats::opening("finished");
+                    if let Err(error) = &opened {
+                        let _ = failed.send(Opening::Failed(error.clone()));
+                    }
+                    let _ = finished.send(Request::Opened(opened.map(|_| ())));
+                })?;
+            let library = match opening.recv()? {
+                Opening::Readable(library) => library,
+                Opening::Failed(error) => return Err(error.as_str().into()),
+            };
             let library: &Library = &library;
             let (nav, tags) = navigation(library)?;
+            crate::stats::opening("navigation-read");
             replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
             let seed = crate::now_ms().to_string();
+            let mut held: Option<Vec<Job>> = Some(Vec::new());
             for request in requests {
                 let result = match request {
+                    Request::Opened(Ok(())) => {
+                        for job in held.take().into_iter().flatten() {
+                            job(library);
+                        }
+                        continue;
+                    }
+                    Request::Opened(Err(error)) => return Err(error.as_str().into()),
                     Request::Job(job) => {
-                        job(library);
+                        match &mut held {
+                            Some(held) => held.push(job),
+                            None => job(library),
+                        }
                         continue;
                     }
                     Request::Query(generation, scope, filter, shuffle, window) => {
@@ -333,7 +390,14 @@ pub fn start(
                                         sort: prefs.sort.clone(),
                                     },
                                 };
-                                library.query_window(&query, &window).map(|window| {
+                                let started = std::time::Instant::now();
+                                let read = library.query_window(&query, &window);
+                                crate::stats::window_read(
+                                    "open",
+                                    first(&window),
+                                    started.elapsed(),
+                                );
+                                read.map(|window| {
                                     Reply::Arrived(Box::new(Arrived {
                                         generation,
                                         fetch: Fetch::Open,
@@ -347,6 +411,7 @@ pub fn start(
                             .map_err(|error| (generation, Fetch::Open, error))
                     }
                     Request::Window(generation, query, window, fetch) => {
+                        let started = std::time::Instant::now();
                         let read = library.query_window(&query, &window).and_then(|window| {
                             // A refresh learns where the selection's items
                             // are now in the same visit, from the order the
@@ -359,6 +424,15 @@ pub fn start(
                             };
                             Ok((window, places))
                         });
+                        crate::stats::window_read(
+                            match fetch {
+                                Fetch::Open => "open",
+                                Fetch::Move(_) => "move",
+                                Fetch::Refresh(_) => "refresh",
+                            },
+                            first(&window),
+                            started.elapsed(),
+                        );
                         match read {
                             Ok((window, places)) => Ok(Reply::Arrived(Box::new(Arrived {
                                 generation,
@@ -382,7 +456,25 @@ pub fn start(
             let _ = replies.send(Reply::Error(error.to_string()));
         }
     });
-    (tx, rx)
+    (tx, rx, woken)
+}
+
+/// Told each time the library's thread has sent a reply, so the session
+/// takes it in at once rather than at its next look.
+pub type Wake = futures::channel::mpsc::UnboundedReceiver<()>;
+
+/// Where the library's thread sends its replies, waking the session.
+struct Replies {
+    sender: Sender<Reply>,
+    wake: futures::channel::mpsc::UnboundedSender<()>,
+}
+
+impl Replies {
+    fn send(&self, reply: Reply) -> Result<(), mpsc::SendError<Reply>> {
+        self.sender.send(reply)?;
+        let _ = self.wake.unbounded_send(());
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {
