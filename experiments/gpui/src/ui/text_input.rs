@@ -1480,12 +1480,19 @@ impl TextElement {
                 .collect();
             (None, quads)
         };
-        self.input.update(cx, |input, cx| {
-            if input.overflowing != overflowing {
+        // A notification made while a frame is drawn schedules no frame of
+        // its own, so the owner's expansion is asked for explicitly.
+        let changed = self.input.update(cx, |input, cx| {
+            let changed = input.overflowing != overflowing;
+            if changed {
                 input.overflowing = overflowing;
                 cx.notify();
             }
+            changed
         });
+        if changed {
+            window.request_animation_frame();
+        }
         PrepaintState::Wrapped {
             lines,
             cursor,
@@ -1604,6 +1611,8 @@ impl Element for TextElement {
                 input.overflowing = overflowing;
                 cx.notify();
             });
+            // Made while a frame is drawn: ask for the next one.
+            window.request_animation_frame();
         }
 
         // A field that is not being edited shows its start and an ellipsis,
@@ -1788,6 +1797,10 @@ impl Element for TextElement {
                         if scroll != input.area.offset() {
                             input.area.set_offset(scroll);
                             cx.notify();
+                            // Made while a frame is drawn: ask for the
+                            // next one, or the caret stays out of view
+                            // until something else redraws the field.
+                            window.request_animation_frame();
                         }
                     }
                 }
