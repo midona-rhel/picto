@@ -396,6 +396,16 @@ impl DetailWindow {
         }
     }
 
+    /// `edit.copy` and the menu's Copy (`copyFileForHash`): the shown file
+    /// itself on the clipboard.
+    fn copy_file(&mut self, cx: &mut Context<Self>) {
+        if let Some((path, ..)) = self.shown_file()
+            && let Err(error) = crate::desktop::copy_files(&[path.into()], cx)
+        {
+            crate::ui::notify::error("Could not copy file", error, cx);
+        }
+    }
+
     /// The shown file: its path, content hash, type and name.
     fn shown_file(&self) -> Option<(String, String, String, String)> {
         let entry = self.entry()?;
@@ -472,14 +482,15 @@ impl DetailWindow {
             return;
         };
         match action {
-            Action::OpenDefault => cx.open_with_system(std::path::Path::new(&path)),
-            Action::Reveal => cx.reveal_path(std::path::Path::new(&path)),
+            Action::OpenDefault => crate::desktop::open_default(std::path::Path::new(&path), cx),
+            Action::Reveal => crate::desktop::reveal(std::path::Path::new(&path), cx),
             Action::OpenInNewWindow => {
                 // One window per file: this one, brought forward.
                 if let Some(entry) = self.entry().cloned() {
                     open(self.session.clone(), vec![entry], 0, cx);
                 }
             }
+            Action::CopyFile => self.copy_file(cx),
             Action::CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(path)),
             Action::CopyName => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             Action::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(
@@ -658,8 +669,7 @@ impl Render for DetailWindow {
                     }
                 }),
             )
-            // TODO: Copy (the file to the clipboard) and the per-image zoom
-            // memory (`zoomCache`).
+            // TODO: the per-image zoom memory (`zoomCache`).
             .child(if self.group {
                 self.reader.clone().into_any_element()
             } else {
@@ -696,6 +706,7 @@ impl Render for DetailWindow {
             cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| this.toggle_on_top(window, cx)),
         )
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
+        .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
         .child(pane)
         .children(self.menu.layer(window, cx))
     }

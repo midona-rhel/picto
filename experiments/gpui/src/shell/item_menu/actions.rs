@@ -6,7 +6,7 @@ use crate::grid::menu::Action;
 use crate::session::{Report, Reread};
 use crate::shell::Shell;
 use gpui::*;
-use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootKind};
+use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -28,12 +28,22 @@ impl Shell {
             // ── Opening ──
             Action::OpenDefault => {
                 if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.open_with_system(&path), window, cx);
+                    self.with_path(
+                        file,
+                        |path, cx| crate::desktop::open_default(&path, cx),
+                        window,
+                        cx,
+                    );
                 }
             }
             Action::Reveal => {
                 if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.reveal_path(&path), window, cx);
+                    self.with_path(
+                        file,
+                        |path, cx| crate::desktop::reveal(&path, cx),
+                        window,
+                        cx,
+                    );
                 }
             }
             Action::OpenInNewWindow => {
@@ -47,12 +57,28 @@ impl Shell {
                     self.open_in_window(vec![ordinal], ordinal, cx);
                 }
             }
-            Action::OpenWithOther => {
-                // TODO: list the applications that open this type (macOS
-                // shows them as a submenu, Windows opens its chooser) and
-                // open the file with the one chosen.
+            Action::OpenWithApplication => {
+                let application = self.items.chosen.take().map(PathBuf::from);
+                if let (Some(file), Some(application)) = (file, application) {
+                    self.with_path(
+                        file,
+                        move |path, cx| {
+                            if let Err(error) = crate::desktop::open_with(&application, &path, cx) {
+                                crate::ui::notify::error("Could not open file", error, cx);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
-            Action::OpenFolder | Action::LoadingApplications => {
+            Action::OpenWithOther => {
+                // TODO: open Windows' own application chooser on the file
+                // (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), which
+                // is the only system that offers this row.
+            }
+            Action::LoadingApplications => {}
+            Action::OpenFolder => {
                 // TODO: open the folder tile's folder once the grid shows
                 // subfolder tiles.
             }
@@ -96,28 +122,12 @@ impl Shell {
                 // collection members included, in order.
                 let links = action == Action::CopySelectionLinks;
                 self.library(
-                    Box::new(move |library| {
-                        let mut lines = Vec::new();
-                        for id in ids {
-                            for media in library.details(id)?.media {
-                                lines.push(if links {
-                                    let extension = std::path::Path::new(&media.file_path)
-                                        .extension()
-                                        .map_or("bin".into(), |extension| {
-                                            extension.to_string_lossy().into_owned()
-                                        });
-                                    format!(
-                                        "media://localhost/file/{}.{extension}",
-                                        media.facts.content_hash
-                                    )
-                                } else {
-                                    media.file_path
-                                });
-                            }
-                        }
-                        Ok(lines)
-                    }),
-                    |_, lines, _, cx| {
+                    files_of(ids),
+                    move |_, files, _, cx| {
+                        let lines = files
+                            .into_iter()
+                            .map(|(hash, path)| if links { link(&hash, &path) } else { path })
+                            .collect::<Vec<_>>();
                         if !lines.is_empty() {
                             write_text(lines.join("\n"), cx);
                         }
@@ -126,11 +136,22 @@ impl Shell {
                     cx,
                 );
             }
-            Action::CopyFile | Action::CopySelection => {
-                // TODO: put the files themselves on the clipboard. GPUI's
-                // macOS pasteboard writes text and images only; a file list
-                // (`ClipboardEntry::ExternalPaths`) is dropped.
+            Action::CopyFile => {
+                // `copyFileForHash`: the one file the row is about.
+                if let Some(file) = file {
+                    self.with_path(
+                        file,
+                        |path, cx| {
+                            if let Err(error) = crate::desktop::copy_files(&[path], cx) {
+                                crate::ui::notify::error("Could not copy file", error, cx);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
+            Action::CopySelection => self.copy_files(ids, window, cx),
             // ── Lifecycle ──
             Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
             Action::MoveToTrash if target.member => {
@@ -230,9 +251,7 @@ impl Shell {
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
             }
-            Action::BatchRename => {
-                // TODO: open the batch rename dialog for these items.
-            }
+            Action::BatchRename => self.batch_rename(target.items, cx),
             Action::AddTags => {
                 self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
@@ -298,15 +317,38 @@ impl Shell {
                 // the cover is written beside the library's database.
             }
             Action::FindMediaMatches => {
-                // TODO: open the media-matches destination
-                // (`ItemScope::MediaMatches`) for this item.
+                if let Some(item) = ids.first().copied() {
+                    self.session
+                        .update(cx, |session, cx| session.open_media_matches(item, cx));
+                }
             }
             Action::RegenerateThumbnails => {
-                // TODO: regenerate the thumbnails of these files.
+                // The selection's own files, a collection's never (the row
+                // is not offered for one); the viewer's, the file shown.
+                let files = match &file {
+                    Some(file) if target.member || target.items.len() == 1 => {
+                        vec![(file.hash.clone(), file.mime.clone())]
+                    }
+                    _ => target
+                        .items
+                        .iter()
+                        .filter(|item| !item.content_hash.is_empty())
+                        .map(|item| (item.content_hash.clone(), item.mime.clone()))
+                        .collect(),
+                };
+                self.regenerate_thumbnails(files, cx);
             }
             Action::Grayscale => {
-                // TODO: draw the grid's thumbnails in grayscale and check
-                // the row while it is on.
+                // The row stays open and follows the change.
+                self.session
+                    .update(cx, |session, cx| session.toggle_grayscale(cx));
+                let on = self.session.read(cx).grayscale;
+                if let Some(menu) = &self.items.open {
+                    let _ = menu.update(cx, |menu, cx| {
+                        menu.set_checked(Action::Grayscale.key(), on, cx)
+                    });
+                }
+                return;
             }
             Action::NewSmartFolder => {
                 self.dispatch(Box::new(crate::keymap::NewSmartFolder), window, cx);
@@ -335,6 +377,96 @@ impl Shell {
         }
     }
 
+    /// `copyTarget`: the files of these items, collection members
+    /// included, on the clipboard, or a notification saying why not.
+    pub(in crate::shell) fn copy_files(
+        &mut self,
+        ids: Vec<RootId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.library(
+            files_of(ids),
+            |_, files, _, cx| {
+                let paths: Vec<PathBuf> = files.into_iter().map(|(_, path)| path.into()).collect();
+                let copied = if paths.is_empty() {
+                    Err("The selection has no physical files to copy.".to_owned())
+                } else {
+                    crate::desktop::copy_files(&paths, cx)
+                };
+                if let Err(error) = copied {
+                    crate::ui::notify::error("Could not copy selection", error, cx);
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// `media.regenerate_thumbnails` as the Electron main process performs
+    /// it (`regenerateThumbnail`), one file after another: the thumbnail is
+    /// kept aside, made again by the application (or drawn here for Flash
+    /// and paged documents), and the old one restored if no new one could
+    /// be made. Every view showing it reads it again. The first failure
+    /// stops the rest and is shown as production's menu shows it.
+    pub(in crate::shell) fn regenerate_thumbnails(
+        &mut self,
+        files: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        if files.is_empty() {
+            return;
+        }
+        let session = self.session.clone();
+        // Thumbnails are rewritten only in a marked disposable copy, as
+        // every write of this app's own.
+        if !session.read(cx).disposable() {
+            return;
+        }
+        let files: Vec<_> = files
+            .into_iter()
+            .map(|(hash, mime)| {
+                let session = session.read(cx);
+                let (jpeg, original) = (session.thumbnail(&hash), session.original(&hash, &mime));
+                (hash, mime, jpeg, original)
+            })
+            .collect();
+        cx.spawn(async move |_, cx| {
+            for (hash, mime, jpeg, original) in files {
+                let made = regenerate_one(&session, &hash, &mime, &jpeg, &original, cx).await;
+                session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
+                if let Err(error) = made {
+                    let _ =
+                        cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// `batchRenameModalAtom`: the dialog on these items, as the grid shows
+    /// them (an unnamed one as "Untitled").
+    pub(in crate::shell) fn batch_rename(
+        &mut self,
+        items: Vec<picto_library::query::RootSummary>,
+        cx: &mut Context<Self>,
+    ) {
+        let items = items
+            .into_iter()
+            .map(|item| crate::shell::batch_rename::Item {
+                id: item.root_id,
+                name: if item.name.is_empty() {
+                    "Untitled".to_owned()
+                } else {
+                    item.name
+                },
+            })
+            .collect();
+        self.batch_rename
+            .update(cx, |dialog, cx| dialog.open(items, cx));
+    }
+
     /// Sends an action for another part of the app from the shell, which
     /// has the keyboard once the menu has closed.
     fn dispatch(&mut self, action: Box<dyn gpui::Action>, window: &mut Window, cx: &mut App) {
@@ -353,14 +485,7 @@ impl Shell {
     ) {
         let File { root, hash, .. } = file;
         self.library(
-            Box::new(move |library| {
-                Ok(library
-                    .details(root)?
-                    .media
-                    .into_iter()
-                    .find(|media| media.facts.content_hash == hash)
-                    .map(|media| PathBuf::from(media.file_path)))
-            }),
+            Box::new(move |library| super::file_path(library, root, &hash)),
             |_, path, _, cx| {
                 if let Some(path) = path {
                     then(path, cx);
@@ -544,6 +669,80 @@ impl Shell {
     }
 }
 
+/// One file of [`Shell::regenerate_thumbnails`].
+async fn regenerate_one(
+    session: &Entity<crate::session::Session>,
+    hash: &str,
+    mime: &str,
+    jpeg: &std::path::Path,
+    original: &std::path::Path,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    use crate::grid::{rendered, thumbnails};
+    let previous = thumbnails::present(jpeg);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let backup = previous
+        .as_ref()
+        .map(|previous| thumbnails::backup_for(previous, std::process::id(), stamp));
+    if let (Some(previous), Some(backup)) = (&previous, &backup) {
+        std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
+    }
+    let answer = session.update(cx, |session, _| {
+        session.dispatch(
+            "media.render_thumbnail_now",
+            serde_json::json!({ "file_hash": hash }),
+        )
+    });
+    let _ = answer.await;
+    let png = thumbnails::png_for(jpeg);
+    if thumbnails::present(jpeg).is_none() && rendered::draws(mime) {
+        // A thread of its own: a movie plays for seconds first.
+        let (sent, drawn) = futures::channel::oneshot::channel();
+        let (mime, original) = (mime.to_owned(), original.to_path_buf());
+        std::thread::spawn(move || {
+            let _ = sent.send(rendered::render(&mime, &original, &png));
+        });
+        let _ = drawn.await;
+    }
+    if thumbnails::present(jpeg).is_some() {
+        if let Some(backup) = backup {
+            let _ = std::fs::remove_file(backup);
+        }
+        Ok(())
+    } else {
+        if let (Some(previous), Some(backup)) = (previous, backup) {
+            let _ = std::fs::rename(backup, previous);
+        }
+        Err("No thumbnail renderer supports this file.".into())
+    }
+}
+
 fn write_text(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
+}
+
+/// `resolveTargetFilePaths`: the content hash and path of every file of
+/// these items, collection members included, in order.
+fn files_of(ids: Vec<RootId>) -> Work<Vec<(String, String)>> {
+    Box::new(move |library| {
+        let mut files = Vec::new();
+        for id in ids {
+            for media in library.details(id)?.media {
+                files.push((media.facts.content_hash, media.file_path));
+            }
+        }
+        Ok(files)
+    })
+}
+
+/// `copyTargetLinks`: a file's link, with the extension its path has.
+fn link(hash: &str, path: &str) -> String {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .map_or("bin".into(), |extension| {
+            extension.to_string_lossy().into_owned()
+        });
+    format!("media://localhost/file/{hash}.{extension}")
 }

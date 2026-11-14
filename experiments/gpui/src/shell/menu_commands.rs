@@ -114,6 +114,37 @@ impl Shell {
         });
     }
 
+    /// Batch Rename… and its keys: the dialog on the selected items, every
+    /// one loaded and chosen one by one.
+    pub(super) fn rename_selected(&mut self, cx: &mut Context<Self>) {
+        let items = self
+            .session
+            .read(cx)
+            .selected_loaded()
+            .into_iter()
+            .cloned()
+            .collect();
+        self.batch_rename(items, cx);
+    }
+
+    /// Regenerate Thumbnail(s) and its keys: the selected media's files,
+    /// while the menu's rule allows it (every selected item a loaded media
+    /// item, chosen one by one).
+    pub(super) fn regenerate_selected(&mut self, cx: &mut Context<Self>) {
+        if !self.menu_context(cx).thumbnails {
+            cx.propagate();
+            return;
+        }
+        let files = self
+            .session
+            .read(cx)
+            .selected_loaded()
+            .into_iter()
+            .map(|item| (item.content_hash.clone(), item.mime.clone()))
+            .collect();
+        self.regenerate_thumbnails(files, cx);
+    }
+
     /// Wires the menu's rows on the window's root, each while its rule holds.
     pub(super) fn menu_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
         let menu = app_menu::context(cx);
@@ -166,6 +197,12 @@ impl Shell {
         );
         root = when(
             root,
+            menu.names && menu.selection > 1,
+            cx,
+            |this, _: &app_menu::BatchRename, _, cx| this.rename_selected(cx),
+        );
+        root = when(
+            root,
             has,
             cx,
             |this, _: &app_menu::CopyPaths, window, cx| {
@@ -187,6 +224,12 @@ impl Shell {
             |this, _: &app_menu::CopyLinks, window, cx| {
                 this.act_on_selection(Row::CopySelectionLinks, window, cx)
             },
+        );
+        root = when(
+            root,
+            menu.thumbnails,
+            cx,
+            |this, _: &app_menu::RegenerateThumbnails, _, cx| this.regenerate_selected(cx),
         );
         root = when(root, has, cx, |this, _: &app_menu::DeselectAll, _, cx| {
             this.session

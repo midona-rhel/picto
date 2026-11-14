@@ -32,6 +32,13 @@ pub(super) struct ItemMenus {
     /// The media surface the open viewer menu was opened on (the media
     /// view's or Quick Look's), whose Flash movie its rows control.
     surface: Option<WeakEntity<MediaSurface>>,
+    /// The value of the row last chosen (an application's path).
+    chosen: Option<String>,
+    /// The menu open now, for rows that change it while it stays open.
+    open: Option<WeakEntity<Menu>>,
+    /// The applications that open each type, looked up once per extension
+    /// as production caches them (`openWithOptionsByExtension`).
+    applications: std::collections::HashMap<String, Vec<crate::desktop::Application>>,
 }
 
 /// The items a menu acts on.
@@ -219,19 +226,12 @@ impl Shell {
             ),
             scope: Some(scope_kind),
             status,
-            grayscale: false,
+            grayscale: self.session.read(cx).grayscale,
             clipboard_tags: !self.items.tag_clipboard.is_empty(),
-            // TODO: on macOS, look up the applications that open this type
-            // (`OpenWith::Pending` while that runs) and list them, as
-            // production does; until then this offers the system chooser's
-            // one row.
-            open_with: if media {
-                OpenWith::Chooser
-            } else {
-                OpenWith::None
-            },
+            open_with: self.open_with_for(media.then_some(single).flatten()),
             handlers: Handlers {
                 open_default: true,
+                open_with_application: true,
                 open_with_chooser: true,
                 reveal: true,
                 open_new_window: single.is_some(),
@@ -277,15 +277,82 @@ impl Shell {
             last_folder_name,
             ..Default::default()
         };
+        let pending = description.open_with == OpenWith::Pending;
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::tile_menu(&description, &hints);
         let target = Target {
             items,
-            file,
+            file: file.clone(),
             folder,
             member: false,
         };
-        self.show_item_menu(built, target, true, position, window, cx);
+        let menu = self.show_item_menu(built, target, true, position, window, cx);
+        if pending && let Some(file) = file {
+            self.look_up_applications(file, menu.downgrade(), window, cx);
+        }
+    }
+
+    /// How "Open With Other" is offered for a media item: on macOS its
+    /// applications, once looked up for its type, and pending until then;
+    /// on Windows the system's chooser; nothing elsewhere.
+    fn open_with_for(&self, media: Option<&RootSummary>) -> OpenWith {
+        let Some(item) = media.filter(|item| !item.content_hash.is_empty()) else {
+            return OpenWith::None;
+        };
+        if cfg!(target_os = "macos") {
+            match self.items.applications.get(&type_key(&item.mime)) {
+                Some(applications) => OpenWith::Applications(applications.clone()),
+                None => OpenWith::Pending,
+            }
+        } else if cfg!(target_os = "windows") {
+            OpenWith::Chooser
+        } else {
+            OpenWith::None
+        }
+    }
+
+    /// Looks up the applications that open `file`'s type off the thread
+    /// that draws, keeps them for the type, and puts them in place of the
+    /// pending row if the menu is still open (no row when there are none,
+    /// or when the lookup failed).
+    fn look_up_applications(
+        &mut self,
+        file: File,
+        menu: WeakEntity<Menu>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = type_key(&file.mime);
+        let File { root, hash, .. } = file;
+        self.library(
+            Box::new(move |library| file_path(library, root, &hash)),
+            move |_, path, _, cx| {
+                let Some(path) = path else {
+                    let _ = menu.update(cx, |menu, cx| {
+                        menu.replace_entry("Open With Other", Vec::new(), cx)
+                    });
+                    return;
+                };
+                let found = cx
+                    .background_executor()
+                    .spawn(async move { crate::desktop::applications(&path) });
+                cx.spawn(async move |this, cx| {
+                    let applications = found.await;
+                    let _ = this.update(cx, |this, cx| {
+                        this.items.applications.insert(key, applications.clone());
+                        let rows = rows::open_with_rows(applications);
+                        this.items.actions.extend(rows::actions(&rows));
+                        let _ = menu.update(cx, |menu, cx| {
+                            let entries = rows::entries(rows, &mut |_| ui::menu::Entry::Separator);
+                            menu.replace_entry("Open With Other", entries, cx);
+                        });
+                    });
+                })
+                .detach();
+            },
+            window,
+            cx,
+        );
     }
 
     /// Empty grid space was right-clicked (`openEmptyGridContextMenu`).
@@ -487,7 +554,7 @@ impl Shell {
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Entity<Menu> {
         self.items.actions = rows::actions(&built);
         self.items.target = Some(target);
         // The grid's menus hold the view panels. In pop-up windows their
@@ -516,11 +583,12 @@ impl Shell {
             ui::menu::Return::To(self.focus.clone())
         });
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(search));
+        self.items.open = Some(menu.downgrade());
         if let Some(panels) = panels {
             self.watch_view_panels(&menu, panels, cx);
         }
         self.menu
-            .open(menu, window, cx, |this, _, key, window, cx| {
+            .open(menu.clone(), window, cx, |this, menu, key, window, cx| {
                 let action = this
                     .items
                     .actions
@@ -528,9 +596,11 @@ impl Shell {
                     .copied()
                     .find(|action| action.key() == key);
                 if let Some(action) = action {
+                    this.items.chosen = menu.read(cx).chosen_value().map(String::from);
                     this.run_item_action(action, window, cx);
                 }
             });
+        menu
     }
 
     fn last_folder_name(&self, cx: &App) -> Option<String> {
@@ -649,6 +719,26 @@ impl Shell {
             .into_any_element(),
         )
     }
+}
+
+/// What production caches applications by: the file's extension.
+fn type_key(mime: &str) -> String {
+    crate::grid::format::extension(mime)
+}
+
+/// `resolveFilePath`: where the library keeps the item's file with this
+/// content.
+fn file_path(
+    library: &picto_library::Library,
+    root: RootId,
+    hash: &str,
+) -> picto_library::Result<Option<std::path::PathBuf>> {
+    Ok(library
+        .details(root)?
+        .media
+        .into_iter()
+        .find(|media| media.facts.content_hash == hash)
+        .map(|media| std::path::PathBuf::from(media.file_path)))
 }
 
 fn kind(kind: RootKind) -> Kind {

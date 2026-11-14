@@ -237,6 +237,13 @@ impl Inspector {
                 window,
                 |this, _, cx| this.save_source(cx),
             ),
+            // A thumbnail written again (regenerated, or a captured frame)
+            // is drawn again in the preview.
+            cx.subscribe(&session, |_, _, event: &crate::application::Event, cx| {
+                if matches!(event, crate::application::Event::Thumbnail(_)) {
+                    cx.notify();
+                }
+            }),
             // The pickers close when the destination changes. It is told by
             // its id, which stays when the destination list is rebuilt.
             cx.subscribe_in(

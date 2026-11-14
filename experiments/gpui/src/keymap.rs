@@ -61,7 +61,10 @@ actions!(
         ExportOriginals,
         ExportAs,
         ExportPictoPack,
-        ImportPictoPack
+        ImportPictoPack,
+        CopyFiles,
+        RegenerateThumbnails,
+        ToggleGrayscale
     ]
 );
 
@@ -176,6 +179,8 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.import" => vec![to!(App, ImportFiles)],
         // Application menu accelerators too.
         "file.export" => vec![to!(App, ExportOriginals)],
+        // The Edit menu's row, enabled by the menu's rule.
+        "file.regenerateThumbnail" => vec![to!(App, RegenerateThumbnails)],
         "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
@@ -194,6 +199,13 @@ pub fn targets(id: &str) -> Vec<Target> {
         "edit.deselectAll" => vec![to!(App, shell::ClosePreview)],
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
+        // The files themselves: the grid's selection, the item the viewer
+        // or Quick Look shows, a detail window's file.
+        "edit.copy" => vec![
+            to!(Grid, CopyFiles),
+            to!(Viewer, CopyFiles),
+            to!(DetailWindow, CopyFiles),
+        ],
         "edit.pasteImport" => vec![to!(Grid, PasteImport)],
         // Inbox. The viewer's review the item it shows.
         "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
@@ -253,6 +265,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "view.toggleSidebar" => vec![to!(App, shell::ToggleSidebar)],
         "view.toggleInspector" => vec![to!(App, shell::ToggleInspector)],
         "view.toggleBothPanels" => vec![to!(App, shell::TogglePanels)],
+        "view.grayscale" => vec![to!(Grid, ToggleGrayscale)],
         // Duplicates.
         "dup.keepBoth" => vec![to!(Duplicates, duplicates::KeepBoth)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
@@ -289,16 +302,10 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",
     ),
-    ("file.regenerateThumbnail", "no thumbnail generator linked"),
     ("organize.autoTag", "no AI tagger"),
-    (
-        "edit.copy",
-        "GPUI's macOS clipboard cannot hold files, which this copies",
-    ),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
     ("group.removeMembers", "no group surface"),
-    ("view.grayscale", "the grid has no grayscale mode"),
     ("view.slideshow", "deferred in production"),
     ("view.navigator", "deferred in production"),
     ("view.layoutGrid", "deferred in production"),

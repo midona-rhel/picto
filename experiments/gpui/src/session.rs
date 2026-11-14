@@ -278,6 +278,8 @@ pub struct Session {
     /// The disposable copy the application opened.
     root: PathBuf,
     pub library_cover: Option<PathBuf>,
+    /// The grid draws its thumbnails without colour.
+    pub grayscale: bool,
     /// A disposable folder that holds the demo media and is the scratch
     /// space the library cover's crops are written to.
     pub scratch: tempfile::TempDir,
@@ -415,6 +417,7 @@ impl Session {
             blobs,
             root,
             library_cover,
+            grayscale: false,
             scratch,
             place_label: None,
             refreshing: false,
@@ -604,6 +607,20 @@ impl Session {
     }
 
     // ── The application's events ────────────────────────────────
+
+    /// Grayscale on or off for the grid's thumbnails (`gridGrayscaleAtom`,
+    /// kept for the session only).
+    pub fn toggle_grayscale(&mut self, cx: &mut Context<Self>) {
+        self.grayscale = !self.grayscale;
+        cx.emit(Change::Results);
+    }
+
+    /// Tells the views that the thumbnail of `hash` was written again by
+    /// this app (regenerated, or a captured frame), as the application's
+    /// `picto:thumbnail-changed` does for what it writes.
+    pub fn thumbnail_written(&mut self, hash: String, cx: &mut Context<Self>) {
+        cx.emit(Event::Thumbnail(hash));
+    }
 
     /// Takes what the application reported since the last look, merged into
     /// one invalidation, does what the Electron runtime stores do with it,
@@ -879,6 +896,20 @@ impl Session {
         tags: Vec<TagRecord>,
         cx: &mut Context<Self>,
     ) {
+        // A media-matches destination has no row of its own: it stays while
+        // it is open or in the history.
+        let mut nav = nav;
+        nav.extend(
+            self.nav
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.scope,
+                        picto_library::query::ItemScope::MediaMatches { .. }
+                    )
+                })
+                .cloned(),
+        );
         let old = std::mem::replace(&mut self.nav, nav);
         let positions = self
             .nav
@@ -1425,6 +1456,37 @@ impl Session {
     /// Opens a sidebar destination and records it for Back and Forward.
     /// Choosing the destination already showing does nothing, unless the
     /// viewer is over it, which this closes.
+    /// `navigateToNode('media-matches:<id>')`: every item that uses the
+    /// media of `item` (Find Items with This Media), a destination with no
+    /// sidebar row, titled "Items with This Media".
+    pub fn open_media_matches(&mut self, item: RootId, cx: &mut Context<Self>) {
+        let scope = picto_library::query::ItemScope::MediaMatches { item_id: item.0 };
+        let index = match self
+            .nav
+            .iter()
+            .position(|entry| entry.screen.is_none() && entry.scope == scope)
+        {
+            Some(index) => index,
+            None => {
+                self.nav.push(Navigation {
+                    label: "Items with This Media".into(),
+                    count: None,
+                    scope,
+                    screen: None,
+                    random: false,
+                    icon: None,
+                    tint: None,
+                    group: false,
+                    watched: false,
+                    depth: 0,
+                    parent: None,
+                });
+                self.nav.len() - 1
+            }
+        };
+        self.navigate(index, cx);
+    }
+
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
             // Choosing a screen from inside one of its places goes to its top.

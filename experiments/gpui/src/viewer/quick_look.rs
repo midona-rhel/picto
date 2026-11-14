@@ -309,8 +309,6 @@ impl Render for QuickLook {
                 });
             }),
         )
-        // TODO: the copy shortcut (`edit.copy`) puts the file on the
-        // clipboard.
         .child(frame.child(if collection {
             self.group.clone().into_any_element()
         } else {

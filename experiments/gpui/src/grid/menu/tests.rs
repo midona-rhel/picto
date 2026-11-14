@@ -376,6 +376,47 @@ fn open_with_other_while_applications_are_looked_up() {
     assert!(find(pending, "Loading applications...").unwrap().disabled);
 }
 
+fn application(name: &str, default: bool) -> crate::desktop::Application {
+    crate::desktop::Application {
+        name: name.into(),
+        path: format!("/Applications/{name}.app").into(),
+        icon: None,
+        default,
+    }
+}
+
+#[test]
+fn open_with_other_lists_the_applications_with_the_default_marked() {
+    let mut d = single("hash");
+    d.open_with = OpenWith::Applications(vec![
+        application("Preview", true),
+        application("Safari", false),
+    ]);
+    d.handlers.open_with_application = true;
+    let rows = tile(&d);
+    let listed = children(&rows, "Open With Other");
+    assert_eq!(labels(listed), ["Preview (Default)", "Safari"]);
+    let safari = find(listed, "Safari").unwrap();
+    assert_eq!(safari.action, Action::OpenWithApplication);
+    assert_eq!(safari.value.as_deref(), Some("/Applications/Safari.app"));
+    // Without an icon of its own, a row shows the apps glyph.
+    assert_eq!(safari.icon, Some("menu-apps"));
+}
+
+#[test]
+fn open_with_other_is_left_out_when_nothing_opens_the_file() {
+    let mut d = single("hash");
+    d.open_with = OpenWith::Applications(Vec::new());
+    d.handlers.open_with_application = true;
+    assert!(!labels(&tile(&d)).contains(&"Open With Other".to_owned()));
+    // The looked-up row that replaces the pending one is then none.
+    assert!(super::open_with_rows(Vec::new()).is_empty());
+    assert_eq!(
+        super::open_with_rows(vec![application("Preview", true)]).len(),
+        1
+    );
+}
+
 #[test]
 fn open_with_other_through_the_system_chooser() {
     let mut d = single("hash");

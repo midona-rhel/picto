@@ -129,9 +129,28 @@ pub fn truncate_to(text: &str, max: f32, measure: impl Fn(&str) -> f32) -> Strin
     cut(end)
 }
 
+/// CSS `grayscale(1)` of an sRGB colour (`0xRRGGBB`): each channel the
+/// colour's luminance, by the filter's coefficients.
+pub fn grayscale(color: u32) -> u32 {
+    let channel = |shift: u32| ((color >> shift) & 0xff) as f32;
+    let gray = (0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0))
+        .round()
+        .clamp(0., 255.) as u32;
+    (gray << 16) | (gray << 8) | gray
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grayscale_keeps_the_luminance_of_a_colour() {
+        assert_eq!(grayscale(0xffffff), 0xffffff);
+        assert_eq!(grayscale(0x000000), 0x000000);
+        // Pure green is mostly light; pure blue barely.
+        assert_eq!(grayscale(0x00ff00), 0xb6b6b6);
+        assert_eq!(grayscale(0x0000ff), 0x121212);
+    }
 
     #[test]
     fn names_truncate_with_an_ellipsis_to_what_fits() {

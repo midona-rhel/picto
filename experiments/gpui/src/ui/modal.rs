@@ -151,6 +151,40 @@ pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
+/// `.fieldLabel`: 13px on 20px, the primary text colour, regular weight.
+pub fn form_label(theme: &theme::Theme, text: impl Into<SharedString>) -> Div {
+    div()
+        .text(theme::TEXT_MD)
+        .line_height(px(theme::LINE_HEIGHT_MD))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(theme.text())
+        .child(text.into())
+}
+
+/// `.field`: a label over its control, 6px apart.
+pub fn form_field(
+    theme: &theme::Theme,
+    text: impl Into<SharedString>,
+    control: impl IntoElement,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(form_label(theme, text))
+        .child(control)
+}
+
+/// `.fieldRow` and `.row`: controls in a row, 8px apart.
+pub fn form_row() -> Div {
+    div().flex().items_center().gap(px(8.))
+}
+
+/// `.stack`: a column 16px apart.
+pub fn form_stack() -> Div {
+    div().flex().flex_col().gap(px(16.))
+}
+
 /// `.error`: an edit or search that failed, as a dialog or screen shows it
 /// above its content. Each place adds its own margins.
 pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Div {

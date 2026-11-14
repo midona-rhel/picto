@@ -296,6 +296,27 @@ impl Menu {
         cx.notify();
     }
 
+    /// Replaces the top-level row labelled `label` with `replacement`
+    /// (none, to take it away) while the menu is open (`replaceEntry`), for
+    /// a row whose contents arrive after the menu opened. A submenu open at
+    /// or below it closes, since its rows have moved.
+    pub fn replace_entry(&mut self, label: &str, replacement: Vec<Entry>, cx: &mut Context<Self>) {
+        let found = self.entries.iter().position(|entry| match entry {
+            Entry::Item(item) => item.label.as_ref() == label,
+            Entry::Submenu(submenu) => submenu.label.as_ref() == label,
+            Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
+        });
+        let Some(index) = found else {
+            return;
+        };
+        if self.submenu.as_ref().is_some_and(|open| open.top >= index) {
+            self.close_submenu(cx);
+        }
+        self.entries.splice(index..=index, replacement);
+        self.current = None;
+        cx.notify();
+    }
+
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
         if self.closing.is_some() {
             return;
@@ -405,7 +426,7 @@ impl Menu {
     fn has_icons(&self, rows: &[Row]) -> bool {
         rows.iter().any(|row| match row {
             Row::Entry(path) => match self.entry(*path) {
-                Entry::Item(item) => item.icon.is_some(),
+                Entry::Item(item) => item.icon.is_some() || item.image.is_some(),
                 Entry::Submenu(submenu) => submenu.icon.is_some(),
                 Entry::Separator | Entry::Swatches(_) | Entry::View(_) => false,
             },

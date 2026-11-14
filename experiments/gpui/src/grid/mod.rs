@@ -779,10 +779,20 @@ impl GridView {
         let (contain, (x, y, w, h)) = media_rect(&tile, &item, prefs);
         // The image fades in over its dominant colour, then that colour fades
         // away beneath it, which matters for images with transparency.
+        // Grayscale (`gridGrayscaleAtom`) draws the whole tile without
+        // colour, its placeholder included.
+        let grayscale = self.session.read(cx).grayscale;
         let placeholder = item
             .palette
             .first()
-            .map(|color| rgb(format::lab_to_rgb(color.l, color.a, color.b)))
+            .map(|color| {
+                let color = format::lab_to_rgb(color.l, color.a, color.b);
+                rgb(if grayscale {
+                    format::grayscale(color)
+                } else {
+                    color
+                })
+            })
             .unwrap_or(theme.surface_2());
         let (image_alpha, placeholder_alpha) =
             reveal::alphas(self.reveal.progress(item.root_id.0, now));
@@ -895,7 +905,7 @@ impl GridView {
                             .opacity(image_alpha * 0.5),
                     )
             } else {
-                media.child(image.opacity(image_alpha))
+                media.child(image.grayscale(grayscale).opacity(image_alpha))
             };
             // A picture that fills a tile of another shape (the grid mode
             // with Fit Thumbnails on) is drawn larger than the tile: cut it

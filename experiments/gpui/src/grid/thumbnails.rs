@@ -63,6 +63,22 @@ pub fn existing(jpeg: PathBuf) -> PathBuf {
     if png.exists() { png } else { jpeg }
 }
 
+/// The thumbnail file there is for this `.jpg` path, if any: the `.jpg`,
+/// else the `.png`.
+pub fn present(jpeg: &Path) -> Option<PathBuf> {
+    [jpeg.to_path_buf(), png_for(jpeg)]
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+/// Where `regenerateThumbnail` keeps a thumbnail aside while it is made
+/// again: beside it, named for this process and the moment.
+pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
+    let mut name = thumbnail.as_os_str().to_owned();
+    name.push(format!(".{process}.{stamp}.regenerate-backup"));
+    PathBuf::from(name)
+}
+
 /// The `.png` a `.jpg` thumbnail resource falls back to.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {
@@ -276,6 +292,15 @@ impl ImageCache for Thumbnails {
 mod tests {
     use super::{fallback, load_order, primary};
     use gpui::Resource;
+    use std::path::Path;
+
+    #[test]
+    fn a_thumbnail_is_kept_aside_beside_itself() {
+        assert_eq!(
+            super::backup_for(Path::new("/l/blobs/t/ab/cd/abcd.jpg"), 42, 1700),
+            Path::new("/l/blobs/t/ab/cd/abcd.jpg.42.1700.regenerate-backup")
+        );
+    }
 
     #[test]
     fn a_jpg_thumbnail_falls_back_to_png_and_back() {
