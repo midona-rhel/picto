@@ -84,6 +84,9 @@ pub struct AiTagger {
     opening: Option<ui::popover::Opening>,
     pub(super) geometry: Geometry,
     pub(super) pinned: bool,
+    /// Opened centred over the window, as a dialog is (from a menu or the
+    /// shortcut over the grid), rather than docked beside the inspector.
+    pub(super) centred: bool,
     pub(super) sidebar: bool,
     /// The panel's width (200ms) and the rail's fade.
     pub(super) width_fade: motion::Fade,
@@ -157,6 +160,7 @@ impl AiTagger {
                 top: 0.,
             },
             pinned: false,
+            centred: false,
             sidebar: true,
             width_fade: motion::Fade::at(true),
             rail_shown: motion::Fade::at(true),
@@ -208,6 +212,7 @@ impl AiTagger {
         }
         let view = window.viewport_size();
         let width = if self.sidebar { WIDE } else { NARROW };
+        self.centred = anchor.is_none();
         self.geometry =
             overlay_shell::place(overlay_shell::Opens::beside(anchor), view, width, HEIGHT);
         self.explicit = target;

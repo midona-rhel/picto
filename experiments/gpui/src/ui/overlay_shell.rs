@@ -172,6 +172,7 @@ pub struct OverlayShell {
     width: f32,
     height: f32,
     pinned: bool,
+    dimmed: bool,
     focus: FocusHandle,
     header: Vec<AnyElement>,
     body: Vec<AnyElement>,
@@ -198,6 +199,7 @@ pub fn overlay_shell(
         width,
         height,
         pinned: false,
+        dimmed: false,
         focus: focus.clone(),
         header: Vec::new(),
         body: Vec::new(),
@@ -222,6 +224,13 @@ impl OverlayShell {
         self.pinned = pinned;
         self
     }
+    /// Opened as a dialog is: its backdrop dims the window until the panel
+    /// is pinned.
+    pub fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
+        self
+    }
+
     pub fn header(mut self, child: impl IntoElement) -> Self {
         self.header.push(child.into_any_element());
         self
@@ -456,9 +465,11 @@ impl RenderOnce for OverlayShell {
         // Pinned, the backdrop goes and only Escape closes the panel.
         if !self.pinned {
             let close = self.on_close;
-            layer = layer.dismiss(Dismissal::Backdrop { right: true }, move |window, cx| {
-                close(window, cx)
-            });
+            layer = layer
+                .dimmed(self.dimmed)
+                .dismiss(Dismissal::Backdrop { right: true }, move |window, cx| {
+                    close(window, cx)
+                });
         }
         layer.child(panel.child(tracker))
     }

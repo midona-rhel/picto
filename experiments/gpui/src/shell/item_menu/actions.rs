@@ -368,9 +368,14 @@ impl Shell {
                 let named = target.member || target.group || session.viewer;
                 let selection = target.selection(session);
                 let explicit = named.then_some(selection);
-                let visible = !self.inspector_collapsed;
+                // Over the grid it opens centred over the window, as Add
+                // Tags and Add to Folder open their dialogs there (the
+                // owner's choice; production docks it beside the inspector
+                // from every menu). The viewer's menu docks it, as it docks
+                // its pickers.
+                let docked = session.viewer && !self.inspector_collapsed;
                 self.inspector.update(cx, |inspector, cx| {
-                    inspector.open_auto_tag(explicit, visible, window, cx)
+                    inspector.open_auto_tag(explicit, docked, window, cx)
                 });
                 return;
             }

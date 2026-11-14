@@ -847,6 +847,7 @@ impl Render for AiTagger {
             },
         )
         .pinned(self.pinned)
+        .dimmed(self.centred)
         .on_move(move |geometry, _, cx| {
             let _ = moved.update(cx, |this, cx| {
                 this.geometry = geometry;

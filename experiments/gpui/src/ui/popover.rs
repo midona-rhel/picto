@@ -197,6 +197,7 @@ pub struct Floating {
     dismiss: Dismissal,
     on_dismiss: Option<Handler>,
     keyboard: Option<FocusHandle>,
+    dimmed: bool,
     children: Vec<AnyElement>,
 }
 
@@ -208,6 +209,7 @@ pub fn floating(id: impl Into<ElementId>, layer: usize) -> Floating {
         dismiss: Dismissal::Never,
         on_dismiss: None,
         keyboard: None,
+        dimmed: false,
         children: Vec::new(),
     }
 }
@@ -222,6 +224,13 @@ impl Floating {
     /// out: GPUI moves it back inside the window should it leave it.
     pub fn anchored(mut self, corner: Point<f32>) -> Self {
         self.position = Position::Anchored(corner);
+        self
+    }
+    /// The [`Dismissal::Backdrop`] is a dialog's dimmed one
+    /// (`--modal-backdrop`) rather than clear: for a panel opened centred
+    /// over the window as a dialog is.
+    pub fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
         self
     }
     /// What closes the panel from outside it, and what closing does.
@@ -306,6 +315,9 @@ impl RenderOnce for Floating {
                     (self.dismiss, self.on_dismiss)
                 {
                     let click = handler.clone();
+                    if self.dimmed {
+                        layer = layer.bg(rgba(crate::theme::MODAL_BACKDROP));
+                    }
                     layer = layer
                         .occlude()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {

@@ -1472,6 +1472,16 @@ re-checked by reading the code; the rest were checked against it.
   open_library_reporting, which hands over the library before recovery
   runs" (the app depends on it) and "Make the open's media recovery pass
   list thumbnails once instead of looking for each".
+- Auto Tag from a menu or its shortcut over the grid opens its review
+  centred over a dimmed window, as Add Tags and Add to Folder open their
+  dialogs there; the inspector's Auto Tag button still docks it beside the
+  inspector at the button, and the viewer's menu beside the inspector as it
+  docks its pickers. (Production docks it beside the inspector from every
+  menu.) Its footer names what the models it ran ran on, each once, where
+  production names the first loaded session's.
+- A window in full screen draws no rim, and looping indicators (the
+  Subscriptions row's dot, a running badge, an indeterminate progress bar)
+  are drawn thirty times a second rather than at the display's rate.
 - A release build keeps the AI models where production keeps them, so both
   apps share them; a debug build keeps them beside the copy (or, for a
   library the user keeps, in this app's own folder).
