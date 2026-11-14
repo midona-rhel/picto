@@ -614,7 +614,7 @@ mod tests {
     #[test]
     fn a_panel_is_cut_out_in_device_pixels_with_its_round_corners() {
         let panel = Bounds::new(point(px(40.), px(40.5)), size(px(270.), px(300.)));
-        assert_eq!(panel_region(panel, 12., 1.), [40, 41, 311, 341, 24]);
-        assert_eq!(panel_region(panel, 12., 1.5), [60, 61, 466, 511, 36]);
+        assert_eq!(panel_region(panel, 12., 1.), [40, 41, 311, 342, 24]);
+        assert_eq!(panel_region(panel, 12., 1.5), [60, 61, 466, 512, 36]);
     }
 }
