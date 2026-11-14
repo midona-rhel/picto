@@ -27,9 +27,13 @@ ordinary library root, the way the Electron app opens one:
 On Windows and Linux (and on macOS too), the app makes the copy itself:
 
 ```sh
-picto-gpui-spike --make-copy /path/to/Main.library   # prints the copy's path
-picto-gpui-spike <that path>
+cargo run --locked -- --make-copy /path/to/Main.library   # prints the copy's path
+cargo run --locked -- <that path>
 ```
+
+(Through `cargo run`: on Linux the binary links the application core's ONNX
+Runtime libraries, `libwebgpu_dawn.so` among them, which cargo puts on the
+loader's path and a bare `target/debug/picto-gpui-spike` does not find.)
 
 It makes the same copy in a new `picto-gpui-library.*` folder of the
 system's temporary folder (`%TEMP%` on Windows): the database by SQLite's
