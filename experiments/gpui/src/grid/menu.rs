@@ -461,10 +461,11 @@ impl Builder<'_> {
             _ => {}
         }
         if h.reveal {
-            let (label, icon) = if cfg!(target_os = "macos") {
-                ("Reveal in Finder", "menu-brand-finder")
+            let label = crate::app_menu::Platform::CURRENT.reveal_title();
+            let icon = if cfg!(target_os = "macos") {
+                "menu-brand-finder"
             } else {
-                ("Show in Explorer", "menu-folder-search")
+                "menu-folder-search"
             };
             rows.push(
                 item(Action::Reveal, label, true)

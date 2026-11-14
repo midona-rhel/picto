@@ -668,6 +668,23 @@ impl Shell {
             .children(
                 (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
             )
+            // Off the Mac the application menu is a button at the left
+            // (`ApplicationMenuButton`), the actions kept at the right.
+            .children(crate::app_menu::in_window().then(|| {
+                ui::icon_button("application-menu", "app-menu")
+                    .size(theme::CONTROL_MD)
+                    .glyph_element(
+                        svg()
+                            .path("app-menu")
+                            .w(px(16.))
+                            .h(px(15.))
+                            .text_color(theme.text_secondary()),
+                    )
+                    .tip(ui::tip("Application menu"))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_app_menu(window, cx)))
+                    .into_any_element()
+            }))
+            .children(crate::app_menu::in_window().then(|| div().flex_1()))
             .child(
                 ui::icon_button("open-settings", "settings")
                     .tip(ui::tip("Settings").shortcut("file.settings", cx))

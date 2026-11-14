@@ -7,11 +7,7 @@ use super::{
 };
 
 /// The row that shows the file in the system's file manager.
-const REVEAL: &str = if cfg!(target_os = "macos") {
-    "Reveal in Finder"
-} else {
-    "Show in Explorer"
-};
+const REVEAL: &str = crate::app_menu::Platform::CURRENT.reveal_title();
 use crate::settings::registry::{self, display};
 use picto_library::ContentSortField;
 
