@@ -412,8 +412,8 @@ pub fn location() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("Picto GPUI"))
 }
 
-/// The platform's per-user configuration folder.
-fn config_folder() -> Option<PathBuf> {
+/// The platform's per-user configuration folder (`app.getPath('appData')`).
+pub fn config_folder() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         home().map(|home| home.join("Library").join("Application Support"))

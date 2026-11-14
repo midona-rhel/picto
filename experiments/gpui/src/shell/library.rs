@@ -118,17 +118,7 @@ pub fn info_widths(name: f32, available: f32) -> (f32, f32) {
 /// Where the Electron app keeps `config.json` (`app.getPath('appData')`
 /// joined with `picto`).
 fn config_path() -> Option<PathBuf> {
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-    let base = if cfg!(target_os = "macos") {
-        home()?.join("Library").join("Application Support")
-    } else if cfg!(target_os = "windows") {
-        PathBuf::from(std::env::var_os("APPDATA")?)
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| Some(home()?.join(".config")))?
-    };
-    Some(base.join("picto").join("config.json"))
+    Some(crate::state::config_folder()?.join("picto").join("config.json"))
 }
 
 /// Reads the known libraries and prepares their covers. Blocking: run it
