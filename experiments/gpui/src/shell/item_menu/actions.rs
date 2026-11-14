@@ -215,17 +215,17 @@ impl Shell {
             }
             Action::CopySelection => self.copy_files(ids, window, cx),
             // ── Lifecycle ──
-            Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
+            Action::Accept | Action::Restore => self.set_lifecycle(&target, Lifecycle::Active, cx),
             // A member leaves its collection into the Trash
             // (`detachMembers(selected, 'trash')`).
             Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
             Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
-            Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
+            Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
                     self.request_permanent_delete(target, true, window, cx);
                 } else {
-                    self.set_lifecycle(Lifecycle::Trash, cx);
+                    self.set_lifecycle(&target, Lifecycle::Trash, cx);
                 }
             }
             Action::DeletePermanently => {
@@ -649,11 +649,19 @@ impl Shell {
         });
     }
 
-    /// Moves the selected items into or out of the Trash or the Inbox
-    /// through the session, which reads the grid again in place.
-    fn set_lifecycle(&mut self, lifecycle: Lifecycle, cx: &mut Context<Self>) {
-        self.session
-            .update(cx, |session, cx| session.move_selection_to(lifecycle, cx));
+    /// Moves the items the menu was opened for into or out of the Trash or
+    /// the Inbox (production's `setTargetLifecycle(target, …)`: the viewer's
+    /// rows move the item it shows, not the grid's selection), closing the
+    /// media view, and reads the grid again in place.
+    fn set_lifecycle(&mut self, target: &Target, lifecycle: Lifecycle, cx: &mut Context<Self>) {
+        if target.items.is_empty() {
+            return;
+        }
+        self.session.update(cx, |session, cx| {
+            let selection = target.selection(session);
+            session.close_viewer(cx);
+            let _ = session.set_lifecycle(selection, lifecycle, cx);
+        });
     }
 
     fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
