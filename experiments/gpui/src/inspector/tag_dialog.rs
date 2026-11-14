@@ -59,7 +59,7 @@ pub fn display_tags(
     recent: &[String],
 ) -> Vec<TagRecord> {
     match view {
-        View::Selected => crate::tags::records_by_group(entity),
+        View::Selected => crate::tags::records_by_group(entity, true),
         View::Recent => recent
             .iter()
             .filter_map(|wanted| tags.iter().find(|tag| name(tag) == *wanted).cloned())
