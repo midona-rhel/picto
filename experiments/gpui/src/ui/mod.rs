@@ -12,6 +12,7 @@ pub mod date_picker;
 mod empty_state;
 pub mod field;
 pub mod filter_control;
+pub mod focus;
 mod glass;
 pub mod icon_button;
 pub mod icon_picker;

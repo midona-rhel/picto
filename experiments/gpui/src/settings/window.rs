@@ -36,6 +36,10 @@ pub struct SettingsWindow {
     pub(super) shortcut_search: Entity<TextInput>,
     nav_scroll: ScrollHandle,
     body_scroll: ScrollHandle,
+    /// What the two scrollers hold, so Tab can scroll what it reaches into
+    /// view.
+    nav_focus: FocusHandle,
+    body_focus: FocusHandle,
     pub(super) shortcuts_scroll: ScrollHandle,
     pub(super) statistics: Option<LibraryStatistics>,
     pub(super) cloud: Option<CloudInfo>,
@@ -139,6 +143,8 @@ impl SettingsWindow {
             shortcut_search,
             nav_scroll: ScrollHandle::new(),
             body_scroll: ScrollHandle::new(),
+            nav_focus: cx.focus_handle(),
+            body_focus: cx.focus_handle(),
             shortcuts_scroll: ScrollHandle::new(),
             statistics: None,
             cloud: None,
@@ -213,8 +219,10 @@ impl SettingsWindow {
                 hover.read(cx).value_with(motion::EASE),
             )
         };
-        div()
-            .id(("settings-nav", index))
+        let id = ElementId::from(("settings-nav", index));
+        let focus = ui::focus::control(&id, window, cx);
+        let item = div()
+            .id(id)
             .h(px(32.))
             .flex_none()
             .px(px(6.))
@@ -235,15 +243,41 @@ impl SettingsWindow {
                     cx.notify();
                 })
             })
-            .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
+        // A `<button>`: Enter and Space choose it. It draws no ring.
+        focus.attach(
+            item,
+            ui::focus::Kind::Button,
+            cx.listener(move |this, _, _, cx| this.choose(index, cx)),
+        )
     }
 
     /// A section found by the search (`.searchResult`).
-    fn result(&self, index: usize, first: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn result(
+        &self,
+        index: usize,
+        first: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = theme::theme(cx);
         let panel = &PANELS[index];
-        div()
-            .id(("settings-result", index))
+        let id = ElementId::from(("settings-result", index));
+        let focus = ui::focus::control(&id, window, cx);
+        // `.searchResult:focus-visible`: 1px of `--color-primary-60`, 2px out.
+        let ring = focus.ring(
+            ui::focus::Ring {
+                width: 1.,
+                offset: 2.,
+                color: theme.border_focus(),
+            },
+            theme::RADIUS_LG,
+            1.,
+        );
+        let card = div()
+            .id(id)
+            .relative()
+            .children(ring)
             .w_full()
             .when(!first, |card| card.mt(px(8.)))
             .flex()
@@ -280,7 +314,12 @@ impl SettingsWindow {
                             .child(panel.description),
                     ),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
+        focus.attach(
+            card,
+            ui::focus::Kind::Button,
+            cx.listener(move |this, _, _, cx| this.choose(index, cx)),
+        )
     }
 }
 
@@ -368,6 +407,7 @@ impl Render for SettingsWindow {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.nav_scroll)
+                    .track_focus(&self.nav_focus)
                     .pt(px(8.))
                     .pl(px(12.))
                     .pr(px(ui::scrollbar::GUTTER))
@@ -407,6 +447,9 @@ impl Render for SettingsWindow {
                 window,
                 cx,
             ));
+
+        ui::focus::follow(&self.nav_scroll, &self.nav_focus, window, cx);
+        ui::focus::follow(&self.body_scroll, &self.body_focus, window, cx);
 
         // ── The chosen section, or what the search found ──
         let panel = &PANELS[self.selected];
@@ -469,7 +512,7 @@ impl Render for SettingsWindow {
                         .child("CATEGORIES"),
                 );
                 for (at, index) in matched.iter().enumerate() {
-                    group = group.child(self.result(*index, at == 0, cx));
+                    group = group.child(self.result(*index, at == 0, window, cx));
                 }
                 vec![group.into_any_element()]
             };
@@ -483,6 +526,7 @@ impl Render for SettingsWindow {
                         .size_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.body_scroll)
+                        .track_focus(&self.body_focus)
                         .child(
                             div()
                                 .w_full()
@@ -555,7 +599,9 @@ impl Render for SettingsWindow {
             .child(body)
             .child(footer);
 
-        let mut root = div()
+        // Tab and Shift-Tab go round the window's controls, as the browser
+        // takes them through the page.
+        let mut root = ui::focus::scope(div(), &self.focus)
             .relative()
             .size_full()
             .flex()

@@ -211,6 +211,11 @@ pub(super) fn swatch(
         bottom: Some(px(1.5).into()),
         left: Some(px(1.5).into()),
     };
+    // A `<button>`: a stop that Enter and Space choose; its outline does not
+    // change with the keyboard.
+    let focus = ui::focus::control(&id, window, cx);
+    let on_click = std::rc::Rc::new(on_click);
+    let pressed = on_click.clone();
     let mut cell = div()
         .id(id)
         .relative()
@@ -236,6 +241,9 @@ pub(super) fn swatch(
             });
         })
         .on_click(move |_, window, cx| on_click(window, cx));
+    cell = focus.attach(cell, ui::focus::Kind::Button, move |_, window, cx| {
+        pressed(window, cx)
+    });
     if shown > 0. {
         // Centred 6px above the swatch, growing from 95% as it fades in.
         let bubble = ui::GlassPanel::new(

@@ -1074,7 +1074,7 @@ impl SmartFolderEditor {
             .clone()
             .filter(|icon| crate::assets::has_icon(icon))
             .unwrap_or("folder".into());
-        div()
+        let trigger = div()
             .id("icon-trigger")
             .relative()
             .w_full()
@@ -1104,22 +1104,30 @@ impl SmartFolderEditor {
                     .absolute()
                     .inset_0(),
             )
-            .on_click(cx.listener(|this, _, _, cx| {
-                if this.icon_picker.take().is_none() {
-                    let editor = cx.entity().downgrade();
-                    let current = this.icon.clone();
-                    this.icon_picker = Some(cx.new(move |_| {
-                        ui::icon_picker::IconPicker::new(current, move |icon, _, cx| {
-                            let _ = editor.update(cx, |this, cx| {
-                                this.icon = icon;
-                                this.icon_picker = None;
-                                cx.notify();
-                            });
-                        })
-                    }));
-                }
-                cx.notify();
-            }))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx)));
+        // `.iconTrigger` is a `<button>`.
+        ui::focus::stop(
+            "icon-trigger",
+            trigger,
+            cx.listener(|this, _, _, cx| this.toggle_icon_picker(cx)),
+        )
+    }
+
+    fn toggle_icon_picker(&mut self, cx: &mut Context<Self>) {
+        if self.icon_picker.take().is_none() {
+            let editor = cx.entity().downgrade();
+            let current = self.icon.clone();
+            self.icon_picker = Some(cx.new(move |_| {
+                ui::icon_picker::IconPicker::new(current, move |icon, _, cx| {
+                    let _ = editor.update(cx, |this, cx| {
+                        this.icon = icon;
+                        this.icon_picker = None;
+                        cx.notify();
+                    });
+                })
+            }));
+        }
+        cx.notify();
     }
 
     /// `ColorRuleInput`'s trigger (`.colorTrigger`): the swatch and the code
@@ -1136,7 +1144,7 @@ impl SmartFolderEditor {
         let swatch = theme::parse_hex_code(&row.color)
             .map(rgb)
             .unwrap_or(theme.text_tertiary());
-        div()
+        let trigger = div()
             .id(SharedString::from(format!("rule-{group}-{index}-color")))
             .relative()
             .w_full()
@@ -1183,7 +1191,13 @@ impl SmartFolderEditor {
                     .absolute()
                     .inset_0(),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_color(group, index, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_color(group, index, cx)));
+        // `.colorTrigger` is a `<button>`.
+        ui::focus::stop(
+            SharedString::from(format!("rule-{group}-{index}-color")),
+            trigger,
+            cx.listener(move |this, _, _, cx| this.toggle_color(group, index, cx)),
+        )
     }
 
     /// `.colorPickerPopover`: the colour editor, 230px wide below the

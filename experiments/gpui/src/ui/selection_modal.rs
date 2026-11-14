@@ -19,6 +19,8 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("up", Up, context),
         KeyBinding::new("down", Down, context),
         KeyBinding::new("tab", NextView, context),
+        // Production reads only the key, so Shift-Tab turns the same way.
+        KeyBinding::new("shift-tab", NextView, context),
     ]);
 }
 
@@ -43,9 +45,13 @@ pub enum Key {
 type KeyHandler = Rc<dyn Fn(Key, &mut Window, &mut App) + 'static>;
 
 /// `.searchBar` with its `IconSearch` and the field, which takes the
-/// keyboard. `on_key` hears the keys typed in the field.
+/// keyboard. `on_key` hears the keys typed in the field. With `views`, Tab
+/// (and Shift-Tab) turn the rail's views, as `TagSelectModal`'s field does;
+/// without, they go on to the dialog's next control, as
+/// `FolderPickerModal`'s field lets the browser do.
 pub fn search_bar(
     input: &Entity<TextInput>,
+    views: bool,
     on_key: impl Fn(Key, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Div {
@@ -74,7 +80,13 @@ pub fn search_bar(
         .key_context("SelectionModal")
         .on_action(move |_: &Up, window, cx| up(window, cx))
         .on_action(move |_: &Down, window, cx| down(window, cx))
-        .on_action(move |_: &NextView, window, cx| next(window, cx))
+        .on_action(move |_: &NextView, window, cx| {
+            if views {
+                next(window, cx);
+            } else {
+                cx.propagate();
+            }
+        })
         // Enter and Escape reach the dialog, not the field.
         .capture_action(move |_: &text_input::Commit, window, cx| {
             cx.stop_propagation();

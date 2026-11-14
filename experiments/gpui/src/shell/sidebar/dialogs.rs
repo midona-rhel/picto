@@ -336,6 +336,12 @@ impl Sidebar {
         } else {
             add.w(px(26.)).child(glyph())
         };
+        // The add control is a `<button>`.
+        let add = ui::focus::stop(
+            "auto-tags-add",
+            add,
+            cx.listener(|this, _, window, cx| this.open_auto_tag_picker(window, cx)),
+        );
         div()
             .flex()
             .flex_col()
@@ -626,6 +632,7 @@ impl Sidebar {
                                             .items_center()
                                             .gap(px(8.))
                                             .child(ui::field::read_only_modal(
+                                                "watch-folder",
                                                 path.clone().map(SharedString::from),
                                                 "Select a folder...",
                                                 cx,

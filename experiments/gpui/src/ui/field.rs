@@ -263,19 +263,25 @@ pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
 /// A dialog field that cannot be typed in (`GlassInput readOnly`): the
 /// dialog field's frame at 80% strength, showing a value that something
 /// else chose (a folder from a dialog) or the placeholder until it has one,
-/// ending in an ellipsis when it does not fit.
+/// ending in an ellipsis when it does not fit. It is still a stop for Tab,
+/// as a read-only `<input>` is, and with the keyboard its border turns
+/// `--color-primary-50` (`.input:focus`).
 pub fn read_only_modal(
+    id: impl Into<ElementId>,
     value: Option<SharedString>,
     placeholder: impl Into<SharedString>,
     cx: &App,
-) -> Div {
+) -> super::focus::Stop {
     let theme = theme::theme(cx);
     let frame = Look::Modal.frame(theme);
     let (text, color) = match value {
         Some(value) => (value, theme.text()),
         None => (placeholder.into(), theme.text_tertiary()),
     };
-    div()
+    let id = id.into();
+    let field = div()
+        .id(id.clone())
+        .relative()
         .flex_1()
         .min_w_0()
         .h(px(frame.height))
@@ -291,7 +297,14 @@ pub fn read_only_modal(
         .font_family(theme::FONT_UI)
         .text(theme::TEXT_MD)
         .text_color(color)
-        .child(div().min_w_0().truncate().child(text))
+        .child(div().min_w_0().truncate().child(text));
+    // The focus colour drawn over the border, where the border would turn.
+    let ring = super::focus::Ring {
+        width: 1.,
+        offset: -1.,
+        color: theme.primary_at(50.),
+    };
+    super::focus::stop(id, field, |_, _, _| {}).ring(ring, frame.radius, 1.)
 }
 
 /// The frame around a text input: its fill and border, how they change on

@@ -1,5 +1,6 @@
 use crate::{motion, theme};
 use gpui::*;
+use std::rc::Rc;
 
 type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -50,6 +51,7 @@ impl RenderOnce for Toggle {
         }
         // `rgba(128, 128, 128, 0.25)`, then `--color-primary`.
         let track = theme::blend(rgba(theme::TOGGLE_TRACK_OFF), theme.primary(), amount);
+        let focus = super::focus::control(&self.id, window, cx);
         let mut toggle = div()
             .id(self.id)
             .occlude()
@@ -87,12 +89,19 @@ impl RenderOnce for Toggle {
             return toggle.opacity(0.35);
         }
         toggle = toggle.cursor_pointer();
-        if let Some(handler) = self.on_toggle {
+        // `role="switch"` with `tabIndex={0}`: Enter and Space switch it. It
+        // draws no ring.
+        let handler: Option<Rc<dyn Fn(&mut Window, &mut App)>> = self.on_toggle.map(Rc::from);
+        if let Some(handler) = handler.clone() {
             toggle = toggle.on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 handler(window, cx);
             });
         }
-        toggle
+        focus.attach(toggle, super::focus::Kind::Button, move |_, window, cx| {
+            if let Some(handler) = &handler {
+                handler(window, cx);
+            }
+        })
     }
 }

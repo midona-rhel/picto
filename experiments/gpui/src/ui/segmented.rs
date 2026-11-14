@@ -104,11 +104,15 @@ impl RenderOnce for Segmented {
             .bg(theme.control_surface());
         for (index, segment) in self.segments.into_iter().enumerate() {
             let chosen = self.selected == Some(index);
+            let id = ElementId::NamedChild(
+                std::sync::Arc::new(self.id.clone()),
+                format!("segment-{index}").into(),
+            );
+            // Each segment is a `<button>`: its own stop, Enter and Space
+            // choose it, and it draws no ring.
+            let focus = super::focus::control(&id, window, cx);
             let mut button = div()
-                .id(ElementId::NamedChild(
-                    std::sync::Arc::new(self.id.clone()),
-                    format!("segment-{index}").into(),
-                ))
+                .id(id)
                 .w(px(width))
                 .h(px(height))
                 .flex()
@@ -144,9 +148,13 @@ impl RenderOnce for Segmented {
                 }
             };
             if let Some(handler) = self.on_select.clone() {
+                let pressed = handler.clone();
                 button = button.on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     handler(index, window, cx)
+                });
+                button = focus.attach(button, super::focus::Kind::Button, move |_, window, cx| {
+                    pressed(index, window, cx)
                 });
             }
             if self.tips {

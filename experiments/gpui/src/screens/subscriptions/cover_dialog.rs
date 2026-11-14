@@ -595,35 +595,56 @@ pub fn cover_layer<V: CoverHost>(
                             let mut line = div().h(px(row)).flex().gap(px(GAP));
                             for candidate in candidates.iter().skip(index * count).take(count) {
                                 let chosen = candidate.clone();
+                                let pressed = (candidate.clone(), pick.clone());
                                 let pick = pick.clone();
+                                let id = ElementId::from((
+                                    "media-cover-candidate",
+                                    candidate.media_item as usize,
+                                ));
+                                // `.candidate` is a `<button>`; with the
+                                // keyboard its border turns the primary
+                                // colour, as under the pointer.
+                                let ring = ui::focus::Ring {
+                                    width: 1.,
+                                    offset: -1.,
+                                    color: theme.primary(),
+                                };
+                                let tile = div()
+                                    .id(id.clone())
+                                    .relative()
+                                    .size(px(cell))
+                                    .flex_none()
+                                    .rounded(px(theme::RADIUS_MD))
+                                    .border_1()
+                                    .border_color(theme.border_secondary())
+                                    .bg(theme.surface_1())
+                                    .cursor_pointer()
+                                    .hover(move |style| style.border_color(theme.primary()))
+                                    .children(candidate.thumbnail.clone().map(|path| {
+                                        img(path)
+                                            .image_cache(&cache)
+                                            .size_full()
+                                            .rounded(px(theme::RADIUS_MD - 1.))
+                                            .object_fit(ObjectFit::Cover)
+                                    }))
+                                    .on_click(move |_, _, cx| {
+                                        let chosen = chosen.clone();
+                                        let _ = pick.update(cx, |this, cx| {
+                                            this.choose_candidate(chosen, cx)
+                                        });
+                                    });
                                 line = line.child(
-                                    div()
-                                        .id((
-                                            "media-cover-candidate",
-                                            candidate.media_item as usize,
-                                        ))
-                                        .relative()
-                                        .size(px(cell))
-                                        .flex_none()
-                                        .rounded(px(theme::RADIUS_MD))
-                                        .border_1()
-                                        .border_color(theme.border_secondary())
-                                        .bg(theme.surface_1())
-                                        .cursor_pointer()
-                                        .hover(move |style| style.border_color(theme.primary()))
-                                        .children(candidate.thumbnail.clone().map(|path| {
-                                            img(path)
-                                                .image_cache(&cache)
-                                                .size_full()
-                                                .rounded(px(theme::RADIUS_MD - 1.))
-                                                .object_fit(ObjectFit::Cover)
-                                        }))
-                                        .on_click(move |_, _, cx| {
-                                            let chosen = chosen.clone();
-                                            let _ = pick.update(cx, |this, cx| {
-                                                this.choose_candidate(chosen, cx)
-                                            });
-                                        }),
+                                    ui::focus::stop(id, tile, move |_, _, cx| {
+                                        let (chosen, pick) = pressed.clone();
+                                        let _ = pick.update(cx, |this, cx| {
+                                            this.choose_candidate(chosen, cx)
+                                        });
+                                    })
+                                    .ring(
+                                        ring,
+                                        theme::RADIUS_MD,
+                                        1.,
+                                    ),
                                 );
                             }
                             line

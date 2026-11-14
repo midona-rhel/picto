@@ -98,7 +98,29 @@ fn stepper(
     if disabled {
         return arrow.opacity(0.2).into_any_element();
     }
-    let opacity = 0.5 + 0.5 * hover.read(cx).value_with(motion::EASE);
+    // `.stepper button`: a stop, fully shown with a 1px outline in the
+    // primary border colour while it has the keyboard.
+    let focus = super::focus::control(&ElementId::from((id, state.entity_id())), window, cx);
+    let ring = focus.ring(
+        super::focus::Ring {
+            width: 1.,
+            offset: 0.,
+            color: theme.border(),
+        },
+        2.,
+        0.,
+    );
+    let opacity = if ring.is_some() {
+        1.
+    } else {
+        0.5 + 0.5 * hover.read(cx).value_with(motion::EASE)
+    };
+    let step = {
+        let state = state.clone();
+        move |cx: &mut App| step_by(&state, delta, cx)
+    };
+    let arrow = arrow.relative().children(ring);
+    let arrow = focus.attach(arrow, super::focus::Kind::Button, move |_, _, cx| step(cx));
     arrow
         .opacity(opacity)
         .cursor_pointer()
@@ -110,28 +132,31 @@ fn stepper(
         })
         // The field keeps the keyboard; the arrow only steps.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .on_click(move |_, _, cx| {
-            let (input, value, min, max, handler) = {
-                let state = state.read(cx);
-                (
-                    state.input.clone(),
-                    state.value,
-                    state.min,
-                    state.max,
-                    state.handler.borrow().clone(),
-                )
-            };
-            let typed = parse(&input.read(cx).value(), min, max).unwrap_or(value);
-            let next = (typed + delta).clamp(min, max);
-            input.update(cx, |input, cx| input.set_text(next.to_string(), cx));
-            state.update(cx, |state, _| state.seen = next.to_string());
-            if next != value
-                && let Some(handler) = handler
-            {
-                handler(next, cx);
-            }
-        })
+        .on_click(move |_, _, cx| step_by(&state, delta, cx))
         .into_any_element()
+}
+
+/// One step up or down from what the field holds.
+fn step_by(state: &Entity<State>, delta: i64, cx: &mut App) {
+    let (input, value, min, max, handler) = {
+        let state = state.read(cx);
+        (
+            state.input.clone(),
+            state.value,
+            state.min,
+            state.max,
+            state.handler.borrow().clone(),
+        )
+    };
+    let typed = parse(&input.read(cx).value(), min, max).unwrap_or(value);
+    let next = (typed + delta).clamp(min, max);
+    input.update(cx, |input, cx| input.set_text(next.to_string(), cx));
+    state.update(cx, |state, _| state.seen = next.to_string());
+    if next != value
+        && let Some(handler) = handler
+    {
+        handler(next, cx);
+    }
 }
 
 impl RenderOnce for NumberInput {

@@ -522,6 +522,7 @@ impl Render for FolderDialog {
         let keys = entity.clone();
         let search = shell::search_bar(
             &self.search,
+            false,
             move |key, _, cx| {
                 let _ = keys.update(cx, |this, cx| this.key(key, cx));
             },
