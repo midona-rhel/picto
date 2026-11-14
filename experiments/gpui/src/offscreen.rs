@@ -80,6 +80,11 @@ fn renderer() -> anyhow::Result<Option<Box<dyn gpui::PlatformHeadlessRenderer>>>
 /// One frame's worth of time.
 const TICK: Duration = Duration::from_millis(16);
 
+thread_local! {
+    /// How long each eager frame took to draw, for `PICTO_GPUI_STATS`.
+    static DRAWS: std::cell::RefCell<Vec<Duration>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Lets the app work for a while: draws, runs what became ready, and moves
 /// its timers along with the real clock that its animations read.
 ///
@@ -106,7 +111,9 @@ fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle, time: Duration, 
                 }
             } else {
                 window.refresh();
+                let started = std::time::Instant::now();
                 window.draw(cx).clear(cx);
+                DRAWS.with(|draws| draws.borrow_mut().push(started.elapsed()));
             }
         });
         if drawn.is_err() {
@@ -215,6 +222,9 @@ fn plays_a_script() {
                 .unwrap();
             let tree = crate::ui::a11y::tree::Tree::new(update.expect("a tree"));
             let mut text = tree.dump();
+            if std::env::var_os("PICTO_GPUI_STATS").is_some() {
+                eprintln!("a11y {}: {} nodes", name.trim(), tree.all().len());
+            }
             for (at, bounds) in unexposed {
                 text.push_str(&format!("unexposed click: {at} {bounds:?}\n"));
             }
@@ -282,6 +292,25 @@ fn plays_a_script() {
     // What the script arranged is kept, as when the app quits, so a second
     // run with the same `PICTO_GPUI_STATE` starts from it.
     cx.update(crate::state::flush);
+    if std::env::var_os("PICTO_GPUI_STATS").is_some() {
+        // The eager frames' drawing times: layout, prepaint (and the
+        // accessibility tree, when it is built) and paint.
+        DRAWS.with(|draws| {
+            let mut draws = draws.borrow().clone();
+            draws.sort();
+            if let (Some(max), false) = (draws.last(), draws.is_empty()) {
+                let total: Duration = draws.iter().sum();
+                eprintln!(
+                    "offscreen draws={} avg={:.2}ms median={:.2}ms p95={:.2}ms max={:.2}ms",
+                    draws.len(),
+                    total.as_secs_f64() * 1000. / draws.len() as f64,
+                    draws[draws.len() / 2].as_secs_f64() * 1000.,
+                    draws[draws.len() * 95 / 100].as_secs_f64() * 1000.,
+                    max.as_secs_f64() * 1000.,
+                );
+            }
+        });
+    }
     closing.close();
 }
 
