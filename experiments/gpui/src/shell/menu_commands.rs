@@ -653,4 +653,35 @@ impl Shell {
                 window.dispatch_action(action, cx);
             });
     }
+
+    /// `buildPanelVisibilityContextEntries`: the panel toggle button's menu,
+    /// each row with its shortcut, kept open so several can be toggled.
+    pub(super) fn open_panels_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::menu;
+        let row = |action: &'static str, label: &'static str, shortcut: &str| {
+            menu::item(action, label)
+                .shortcut_for(shortcut, cx)
+                .keep_open(true)
+                .into()
+        };
+        // i18n: translated where drawn
+        let entries = vec![
+            row("all", "Toggle All Panels", "view.toggleBothPanels"),
+            row("sidebar", "Toggle Sidebar", "view.toggleSidebar"),
+            row("inspector", "Toggle Inspector", "view.toggleInspector"),
+        ];
+        let menu = cx.new(|cx| menu::Menu::new(entries, position, cx).search(false));
+        self.menu
+            .open(menu, window, cx, |this, _, action, _, cx| match action {
+                "all" => this.toggle_rails(true, true, cx),
+                "sidebar" => this.toggle_rails(true, false, cx),
+                "inspector" => this.toggle_rails(false, true, cx),
+                _ => {}
+            });
+    }
 }

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
+type PressHandler = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 /// Which of Picto's glyph buttons this is. Each look ports one production
 /// class: its size, its colours at rest, under the pointer and pressed, and
@@ -352,6 +353,7 @@ pub struct IconButton {
     pressed: Option<bool>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
+    on_secondary: Option<PressHandler>,
     /// The part of the window's frame the button stands for, which the
     /// system then handles (Windows' caption buttons).
     window_control: Option<WindowControlArea>,
@@ -374,6 +376,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: &'static str) -> IconButton {
         pressed: None,
         on_click: None,
         on_hover: None,
+        on_secondary: None,
         window_control: None,
         children: Vec::new(),
     }
@@ -471,6 +474,15 @@ impl IconButton {
     /// maximise), so such a button takes no click handler there.
     pub fn window_control(mut self, area: WindowControlArea) -> Self {
         self.window_control = Some(area);
+        self
+    }
+
+    /// A right-button press: the button's context menu.
+    pub fn on_secondary(
+        mut self,
+        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_secondary = Some(Box::new(handler));
         self
     }
 
@@ -604,6 +616,14 @@ impl RenderOnce for IconButton {
         }
         if let Some(area) = self.window_control {
             button = button.window_control_area(area);
+        }
+        if let Some(handler) = self.on_secondary
+            && !disabled
+        {
+            button = button.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                cx.stop_propagation();
+                handler(event, window, cx);
+            });
         }
         if let Some(count) = self.badge {
             button = button.child(

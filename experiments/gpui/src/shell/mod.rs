@@ -696,7 +696,10 @@ impl Shell {
                 ui::icon_button("toggle-panels", "toolbar-panel")
                     .glyph(14.)
                     .tip(ui::tip(t("Toggle Panels")).shortcut("view.toggleBothPanels", cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx)))
+                    .on_secondary(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        this.open_panels_menu(event.position, window, cx)
+                    })),
             )
     }
 }
