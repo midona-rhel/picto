@@ -34,9 +34,12 @@ const FILE: &str = "state.json";
 /// How long after the last change the file is written.
 const SAVE_DELAY: Duration = Duration::from_millis(250);
 
-/// `MAIN_WINDOW_MIN_WIDTH`, `MAIN_WINDOW_MIN_HEIGHT` in `windowManager.mjs`.
-pub const WINDOW_MIN_WIDTH: f32 = 700.;
-pub const WINDOW_MIN_HEIGHT: f32 = 500.;
+/// The main window's smallest size: the `minWidth` and `minHeight` its
+/// `BrowserWindow` is made with in `windowManager.mjs`. Production restores a
+/// kept size down to 700×500 (`MAIN_WINDOW_MIN_WIDTH`, `_HEIGHT`), but the
+/// window's own minimum then raises it to this, so this is the one limit.
+pub const WINDOW_MIN_WIDTH: f32 = 1000.;
+pub const WINDOW_MIN_HEIGHT: f32 = 600.;
 
 /// A rectangle in global screen points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -766,7 +769,7 @@ mod tests {
         assert_eq!((gone.x, gone.y), (None, None));
         // Too small: the minimum size.
         let small = place(10., 10., 300., 200.4).on_displays(&displays);
-        assert_eq!((small.width, small.height), (700., 500.));
+        assert_eq!((small.width, small.height), (1000., 600.));
         // No displays known: centred.
         assert_eq!(place(10., 10., 900., 600.).on_displays(&[]).x, None::<f32>);
     }

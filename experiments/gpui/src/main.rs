@@ -252,7 +252,10 @@ fn main() {
             .open_window(
                 WindowOptions {
                     window_bounds: Some(window_bounds),
-                    window_min_size: Some(size(px(1000.), px(600.))),
+                    window_min_size: Some(size(
+                        px(state::WINDOW_MIN_WIDTH),
+                        px(state::WINDOW_MIN_HEIGHT),
+                    )),
                     focus: !background,
                     // The toolbar sits in the titlebar. AppKit would drag the
                     // window from anywhere in that zone, controls included, so
