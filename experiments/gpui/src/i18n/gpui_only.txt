@@ -1,7 +1,8 @@
 # Texts with no key in production's en.json: they stay English in every
 # language. Nearly all are texts production also writes in English without
-# t(); this app's own are Could not copy file, Could not copy file path,
-# This font cannot be previewed and This is not the library open here. One per line, as written in the code
+# t(); this app's own include Could not copy file, Could not copy file path,
+# This font cannot be previewed, This is not the library open here and the
+# Cloud section's two notes on what is not available. One per line, as written in the code
 # (a line break as \n). The guard (guard.rs) keeps this list exact.
 
 Edit Rules
@@ -126,3 +127,5 @@ queries
 Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.
 Sign in with your E-Hentai account. Picto verifies ExHentai access before saving the browser session.
 Waiting for the site…
+Sync now, Pause and Create snapshot are not available in this version.
+Recovery snapshots are not listed in this version.

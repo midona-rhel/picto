@@ -1,6 +1,6 @@
 //! The Cloud section: the library's sync state, its pending work and
 //! recovery, and the reading of that state from the library.
-use crate::i18n::t;
+use crate::i18n::{en, t};
 use crate::settings::pieces::{block, card, hint, row, separator, title, value};
 use crate::settings::window::{CloudInfo, SettingsWindow};
 use crate::theme;
@@ -61,7 +61,11 @@ impl SettingsWindow {
             ))
             .child(separator(theme))
             .child(
-                // TODO: sync, pause and snapshot through the cloud service.
+                // TODO: sync (`cloud.reconcile`), pause or resume
+                // (`cloud.pause`) and create a snapshot
+                // (`cloud.snapshot.create`) through the cloud service, and
+                // enable the buttons for a library with a provider; until
+                // then they are disabled and the hint below says why.
                 // `.cloudActions`' 10px top margin collapses into the
                 // separator's 12px, as the card is a block.
                 div()
@@ -71,7 +75,7 @@ impl SettingsWindow {
                     .child(
                         ui::action_button("cloud-sync", Look::Settings)
                             .label(t("Sync now"))
-                            .disabled(!configured),
+                            .disabled(true),
                     )
                     .child(
                         ui::action_button("cloud-pause", Look::Settings)
@@ -80,20 +84,22 @@ impl SettingsWindow {
                             } else {
                                 t("Pause")
                             })
-                            .disabled(!configured),
+                            .disabled(true),
                     )
                     .child(
                         ui::action_button("cloud-snapshot", Look::Settings)
                             .label(t("Create snapshot"))
-                            .disabled(!configured),
+                            .disabled(true),
                     ),
             );
-        if !configured {
-            sync = sync.child(hint(
-                theme,
-                t("Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device."),
-            ));
-        }
+        sync = sync.child(hint(
+            theme,
+            if configured {
+                en("Sync now, Pause and Create snapshot are not available in this version.")
+            } else {
+                t("Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device.")
+            },
+        ));
         let retention = info.retention;
         // TODO: write retention through `cloud.retention.update` and enable
         // the fields; until then they show the stored values, disabled.
@@ -173,8 +179,17 @@ impl SettingsWindow {
                         .child(title(theme, t("Restore History")))
                         // TODO: list the recovery snapshots of a configured
                         // provider (`cloud.restore.list`) with their Restore
-                        // buttons. An unconfigured library has none.
-                        .child(hint(theme, t("No recovery snapshots are available yet."))),
+                        // buttons (`cloud.restore.start`). An unconfigured
+                        // library has none; a configured one's are not
+                        // looked up, so the hint does not say there are none.
+                        .child(hint(
+                            theme,
+                            if configured {
+                                en("Recovery snapshots are not listed in this version.")
+                            } else {
+                                t("No recovery snapshots are available yet.")
+                            },
+                        )),
                 )
                 .into_any_element(),
         ]
