@@ -1,12 +1,233 @@
-//! What every Picto window draws around its content: the macOS rim, and the
-//! close button of a window that hides the system's.
+//! What every Picto window draws around its content: the macOS rim, the
+//! close button of a window that hides the system's, and on Windows and
+//! Linux, where production's windows are frameless, the minimise, maximise
+//! and close buttons and (Linux) the edges that resize the window.
 use crate::theme;
 use gpui::*;
 
+/// The frame every Picto window asks the system for: no system titlebar
+/// (the app draws its own; on macOS the traffic lights stay, at
+/// `traffic_lights` if given), with the app deciding where the window is
+/// dragged from; and on Linux the client's decorations, as production's
+/// windows are frameless there (`frame: false`).
+pub fn frameless(
+    title: impl Into<SharedString>,
+    traffic_lights: Option<Point<Pixels>>,
+) -> WindowOptions {
+    WindowOptions {
+        titlebar: Some(TitlebarOptions {
+            title: Some(title.into()),
+            appears_transparent: true,
+            traffic_light_position: traffic_lights,
+        }),
+        app_owns_titlebar_drag: true,
+        window_decorations: DECORATIONS,
+        ..Default::default()
+    }
+}
+
+/// The decorations [`frameless`] asks for: the client's on Linux, the
+/// system's default elsewhere.
+pub const DECORATIONS: Option<WindowDecorations> =
+    if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        Some(WindowDecorations::Client)
+    } else {
+        None
+    };
+
+/// How far a titlebar's left block keeps its controls from the window's
+/// left edge: clear of the traffic lights on macOS (`.titlebarLeftMac`),
+/// its 8px padding elsewhere (`.titlebarLeft`).
+pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 74. } else { 8. };
+
 /// `.shellMac::after`: the window's rim, over everything, in the glass
-/// edges.
-pub fn rim(cx: &App) -> impl IntoElement {
-    deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(100)
+/// edges. Production draws it on macOS only.
+pub fn rim(cx: &App) -> Option<impl IntoElement + use<>> {
+    cfg!(target_os = "macos")
+        .then(|| deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(100))
+}
+
+/// Whether the app draws the window's minimise, maximise and close buttons
+/// (`WindowControls`, shown on Windows and Linux): always on Windows, whose
+/// system titlebar these windows hide; on Linux while the window's
+/// decorations are the client's (an X11 desktop without a compositor keeps
+/// the window manager's frame, buttons and all). Never on macOS.
+pub fn draws_caption_buttons(window: &Window) -> bool {
+    if cfg!(target_os = "macos") {
+        false
+    } else if cfg!(target_os = "windows") {
+        true
+    } else {
+        matches!(window.window_decorations(), Decorations::Client { .. })
+    }
+}
+
+/// `WindowControls`: minimise, maximise and close, 28px each with no gap,
+/// for the main window's titlebar. On Windows they are the system's caption
+/// buttons (`WindowControlArea`), so the system performs them, with its
+/// snap layouts over maximise; on Linux they ask the window manager.
+pub fn caption_buttons(id: &str, window: &Window) -> Option<Div> {
+    if !draws_caption_buttons(window) {
+        return None;
+    }
+    let button = |part: &str, glyph: &'static str, glyph_size: f32, area: WindowControlArea| {
+        let button = super::icon_button(SharedString::from(format!("{id}-{part}")), glyph)
+            .look(if area == WindowControlArea::Close {
+                super::icon_button::Look::CaptionClose
+            } else {
+                super::icon_button::Look::WindowClose
+            })
+            .glyph(glyph_size)
+            .tip(super::tip(match area {
+                WindowControlArea::Min => "Minimize",
+                WindowControlArea::Max => "Maximize",
+                _ => "Close",
+            }))
+            .window_control(area);
+        if cfg!(target_os = "windows") {
+            button
+        } else {
+            button.on_click(move |_, window, _| match area {
+                WindowControlArea::Min => window.minimize_window(),
+                WindowControlArea::Max => window.zoom_window(),
+                _ => window.remove_window(),
+            })
+        }
+    };
+    Some(
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .child(button(
+                "minimize",
+                "window-minimize",
+                16.,
+                WindowControlArea::Min,
+            ))
+            .child(button(
+                "maximize",
+                "window-maximize",
+                12.,
+                WindowControlArea::Max,
+            ))
+            .child(button(
+                "close",
+                "window-close",
+                16.,
+                WindowControlArea::Close,
+            )),
+    )
+}
+
+/// How far into the window its edges resize it, and how far along an edge
+/// a corner reaches.
+const RESIZE_EDGE: f32 = 5.;
+const RESIZE_CORNER: f32 = 10.;
+
+/// The strips along a window of `size` that resize it, and which edge or
+/// corner each moves. A side tiled against the screen's edge (or every
+/// side of a maximised window) has none.
+fn resize_zones(size: Size<Pixels>, tiling: Tiling) -> Vec<(ResizeEdge, Bounds<Pixels>)> {
+    let (width, height) = (f32::from(size.width), f32::from(size.height));
+    let (edge, corner) = (RESIZE_EDGE, RESIZE_CORNER);
+    let rect = |x: f32, y: f32, w: f32, h: f32| Bounds::new(point(px(x), px(y)), size_of(w, h));
+    fn size_of(w: f32, h: f32) -> Size<Pixels> {
+        gpui::size(px(w.max(0.)), px(h.max(0.)))
+    }
+    let mut zones = Vec::new();
+    if !tiling.top {
+        zones.push((ResizeEdge::Top, rect(corner, 0., width - 2. * corner, edge)));
+    }
+    if !tiling.bottom {
+        zones.push((
+            ResizeEdge::Bottom,
+            rect(corner, height - edge, width - 2. * corner, edge),
+        ));
+    }
+    if !tiling.left {
+        zones.push((
+            ResizeEdge::Left,
+            rect(0., corner, edge, height - 2. * corner),
+        ));
+    }
+    if !tiling.right {
+        zones.push((
+            ResizeEdge::Right,
+            rect(width - edge, corner, edge, height - 2. * corner),
+        ));
+    }
+    let corners = [
+        (ResizeEdge::TopLeft, tiling.top || tiling.left, 0., 0.),
+        (
+            ResizeEdge::TopRight,
+            tiling.top || tiling.right,
+            width - corner,
+            0.,
+        ),
+        (
+            ResizeEdge::BottomLeft,
+            tiling.bottom || tiling.left,
+            0.,
+            height - corner,
+        ),
+        (
+            ResizeEdge::BottomRight,
+            tiling.bottom || tiling.right,
+            width - corner,
+            height - corner,
+        ),
+    ];
+    for (which, tiled, x, y) in corners {
+        if !tiled {
+            zones.push((which, rect(x, y, corner, corner)));
+        }
+    }
+    zones
+}
+
+/// The pointer over a resizing edge or corner.
+fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
+    match edge {
+        ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
+        ResizeEdge::Left | ResizeEdge::Right => CursorStyle::ResizeLeftRight,
+        ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorStyle::ResizeUpLeftDownRight,
+        ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
+    }
+}
+
+/// The edges that resize a window whose decorations are the client's (a
+/// frameless window on Linux): a press on one hands the resize to the
+/// window manager. Drawn last, over the window's content, by each window's
+/// root; nothing while the system draws the frame.
+pub fn resize_edges(window: &Window) -> Option<impl IntoElement + use<>> {
+    let Decorations::Client { tiling } = window.window_decorations() else {
+        return None;
+    };
+    if !window.is_resizable() {
+        return None;
+    }
+    let zones = resize_zones(window.viewport_size(), tiling);
+    Some(
+        div()
+            .absolute()
+            .inset_0()
+            .children(zones.into_iter().enumerate().map(|(index, (edge, at))| {
+                div()
+                    .id(("resize-edge", index))
+                    .absolute()
+                    .left(at.origin.x)
+                    .top(at.origin.y)
+                    .w(at.size.width)
+                    .h(at.size.height)
+                    .occlude()
+                    .cursor(resize_cursor(edge))
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        window.start_window_resize(edge);
+                    })
+            })),
+    )
 }
 
 /// Hides the traffic lights of a window that draws its own close button.
@@ -608,8 +829,42 @@ pub fn close_button(
 
 #[cfg(test)]
 mod tests {
-    use super::panel_region;
-    use gpui::{Bounds, point, px, size};
+    use super::{RESIZE_CORNER, RESIZE_EDGE, panel_region, resize_zones};
+    use gpui::{Bounds, ResizeEdge, Tiling, point, px, size};
+
+    #[test]
+    fn a_floating_window_resizes_from_every_edge_and_corner() {
+        let zones = resize_zones(size(px(800.), px(600.)), Tiling::default());
+        assert_eq!(zones.len(), 8);
+        let at = |edge| zones.iter().find(|(which, _)| *which == edge).unwrap().1;
+        assert_eq!(
+            at(ResizeEdge::Right),
+            Bounds::new(
+                point(px(800. - RESIZE_EDGE), px(RESIZE_CORNER)),
+                size(px(RESIZE_EDGE), px(600. - 2. * RESIZE_CORNER))
+            )
+        );
+        assert_eq!(
+            at(ResizeEdge::BottomLeft).origin,
+            point(px(0.), px(600. - RESIZE_CORNER))
+        );
+    }
+
+    #[test]
+    fn tiled_sides_and_their_corners_do_not_resize() {
+        let left_half = Tiling {
+            top: true,
+            bottom: true,
+            left: true,
+            right: false,
+        };
+        let edges: Vec<ResizeEdge> = resize_zones(size(px(800.), px(600.)), left_half)
+            .into_iter()
+            .map(|(edge, _)| edge)
+            .collect();
+        assert_eq!(edges, [ResizeEdge::Right]);
+        assert!(resize_zones(size(px(800.), px(600.)), Tiling::tiled()).is_empty());
+    }
 
     #[test]
     fn a_panel_is_cut_out_in_device_pixels_with_its_round_corners() {

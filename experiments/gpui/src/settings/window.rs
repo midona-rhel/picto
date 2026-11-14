@@ -65,15 +65,9 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(900.), px(650.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Settings".into()),
-                    appears_transparent: true,
-                    traffic_light_position: None,
-                }),
                 // The section list's title and the panel's header move the
                 // window; the controls in them do not.
-                app_owns_titlebar_drag: true,
-                ..Default::default()
+                ..ui::window_chrome::frameless("Settings", None)
             },
             move |window, cx| cx.new(|cx| SettingsWindow::new(model, window, cx)),
         )
@@ -601,7 +595,7 @@ impl Render for SettingsWindow {
 
         // Tab and Shift-Tab go round the window's controls, as the browser
         // takes them through the page.
-        let mut root = ui::focus::scope(div(), &self.focus)
+        let root = ui::focus::scope(div(), &self.focus)
             .relative()
             .size_full()
             .flex()
@@ -618,9 +612,7 @@ impl Render for SettingsWindow {
             .key_context("Settings")
             .child(sidebar)
             .child(content);
-        if cfg!(target_os = "macos") {
-            root = root.child(ui::window_chrome::rim(cx));
-        }
-        root
+        root.children(ui::window_chrome::resize_edges(window))
+            .children(ui::window_chrome::rim(cx))
     }
 }

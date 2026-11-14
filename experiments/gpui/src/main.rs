@@ -236,17 +236,14 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(window_bounds),
                     window_min_size: Some(size(px(1000.), px(600.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Picto GPUI · Library copy".into()),
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(12.), px(15.))),
-                    }),
+                    focus: !background,
                     // The toolbar sits in the titlebar. AppKit would drag the
                     // window from anywhere in that zone, controls included, so
                     // the drag regions are declared by the shell instead.
-                    app_owns_titlebar_drag: true,
-                    focus: !background,
-                    ..Default::default()
+                    ..ui::window_chrome::frameless(
+                        "Picto GPUI · Library copy",
+                        Some(point(px(12.), px(15.))),
+                    )
                 },
                 move |window, cx| {
                     covered::keep_painting(window);

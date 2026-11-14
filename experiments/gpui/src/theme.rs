@@ -735,6 +735,11 @@ pub fn sheet_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(4.), rgba(0x00000052).into()).blur_radius(px(18.))]
 }
 
+/// `WindowControls.module.css` `.btn.destructiveClose:hover` and `:active`:
+/// the system's red behind the close cross.
+pub const CAPTION_CLOSE_HOVER: u32 = 0xe81123ff;
+pub const CAPTION_CLOSE_PRESS: u32 = 0xc50f1fff;
+
 // ── Typography ──────────────────────────────────────────────────
 /// `--font-family-ui`. Its first name, SF Pro Text, is not an installed
 /// family, so Chromium draws the system font; this is the same face.

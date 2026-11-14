@@ -48,6 +48,11 @@ does not need: lens, dispersion, tint and rim light).
   windows) for a view that follows the pointer itself: the grid's item drag
   leaving the window. GPUI otherwise does this only for drags started with
   `on_drag` and `external_drag_payload`.
+- `src/platform/test/window.rs`: the test window keeps the decorations the
+  window asked for and reports them (`Decorations::Client` with nothing
+  tiled when the client's were asked for), as a Linux desktop that grants
+  them does, so the off-screen checks draw a frameless window's own chrome
+  (its buttons and resize edges) as on Linux.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -422,6 +427,58 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
  }
  
  /// The style of a border.
+diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/platform/test/window.rs
+--- a/gpui-pre/src/platform/test/window.rs
++++ b/gpui-pre/src/platform/test/window.rs
+@@ -3,8 +3,8 @@
+     Pixels, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
+     PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
+     TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
+-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
+-    WindowVisibility,
++    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowInsets,
++    WindowParams, WindowVisibility,
+ };
+ use gpui_util::ResultExt as _;
+ #[cfg(any(test, feature = "test-support"))]
+@@ -59,6 +59,7 @@
+     appearance: WindowAppearance,
+     external_drag_files: Vec<(PathBuf, bool)>,
+     start_external_drag_result: bool,
++    decorations: WindowDecorations,
+ }
+ 
+ #[derive(Clone)]
+@@ -124,6 +125,7 @@
+             appearance_change_callback: None,
+             request_frame_callback: None,
+             frame_wake_count: Rc::new(Cell::new(0)),
++            decorations: WindowDecorations::Server,
+             frame_scheduled: false,
+             frame_callback_pending: false,
+             input_handler: None,
+@@ -354,6 +356,21 @@
+         false
+     }
+ 
++    // The decorations the window asked for, as a desktop that grants them
++    // reports them, so a test sees a frameless window's own chrome.
++    fn request_decorations(&self, decorations: WindowDecorations) {
++        self.0.lock().decorations = decorations;
++    }
++
++    fn window_decorations(&self) -> crate::Decorations {
++        match self.0.lock().decorations {
++            WindowDecorations::Server => crate::Decorations::Server,
++            WindowDecorations::Client => crate::Decorations::Client {
++                tiling: crate::Tiling::default(),
++            },
++        }
++    }
++
+     fn content_size(&self) -> Size<Pixels> {
+         self.bounds().size
+     }
 diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 --- a/gpui-pre/src/window.rs	2006-07-24 03:21:28
 +++ b/gpui-pre/src/window.rs	2026-11-13 20:28:46

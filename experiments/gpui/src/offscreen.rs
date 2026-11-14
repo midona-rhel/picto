@@ -152,6 +152,12 @@ fn plays_a_script() {
         })
         .unwrap();
     let main: AnyWindowHandle = window.into();
+    // The frame the app's main window asks for, so its own chrome shows as
+    // on the platform (the window's buttons and edges on Linux).
+    if let Some(decorations) = crate::ui::window_chrome::DECORATIONS {
+        cx.update_window(main, |_, window, _| window.request_decorations(decorations))
+            .unwrap();
+    }
     // A window on screen is the active one, which is what makes focus
     // changes report blurs to the views that lose it.
     cx.update_window(main, |_, window, _| window.activate_window())

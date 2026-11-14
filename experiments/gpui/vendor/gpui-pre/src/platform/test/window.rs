@@ -3,8 +3,8 @@ use crate::{
     Pixels, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
     TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
-    WindowVisibility,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowInsets,
+    WindowParams, WindowVisibility,
 };
 use gpui_util::ResultExt as _;
 #[cfg(any(test, feature = "test-support"))]
@@ -59,6 +59,7 @@ pub(crate) struct TestWindowState {
     appearance: WindowAppearance,
     external_drag_files: Vec<(PathBuf, bool)>,
     start_external_drag_result: bool,
+    decorations: WindowDecorations,
 }
 
 #[derive(Clone)]
@@ -124,6 +125,7 @@ impl TestWindow {
             appearance_change_callback: None,
             request_frame_callback: None,
             frame_wake_count: Rc::new(Cell::new(0)),
+            decorations: WindowDecorations::Server,
             frame_scheduled: false,
             frame_callback_pending: false,
             input_handler: None,
@@ -352,6 +354,21 @@ impl PlatformWindow for TestWindow {
 
     fn is_maximized(&self) -> bool {
         false
+    }
+
+    // The decorations the window asked for, as a desktop that grants them
+    // reports them, so a test sees a frameless window's own chrome.
+    fn request_decorations(&self, decorations: WindowDecorations) {
+        self.0.lock().decorations = decorations;
+    }
+
+    fn window_decorations(&self) -> crate::Decorations {
+        match self.0.lock().decorations {
+            WindowDecorations::Server => crate::Decorations::Server,
+            WindowDecorations::Client => crate::Decorations::Client {
+                tiling: crate::Tiling::default(),
+            },
+        }
     }
 
     fn content_size(&self) -> Size<Pixels> {

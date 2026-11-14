@@ -162,13 +162,7 @@ pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx:
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             // `frame: false`: no titlebar and no traffic lights; the toolbar
             // moves the window.
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
-                appears_transparent: true,
-                traffic_light_position: None,
-            }),
-            app_owns_titlebar_drag: true,
-            ..Default::default()
+            ..ui::window_chrome::frameless(title, None)
         },
         move |window, cx| cx.new(|cx| DetailWindow::new(session, entries, start, window, cx)),
     ) else {
@@ -798,7 +792,9 @@ impl Render for DetailWindow {
         )
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
+        .relative()
         .child(pane)
+        .children(ui::window_chrome::resize_edges(window))
         .children(self.menu.layer(window, cx))
     }
 }
