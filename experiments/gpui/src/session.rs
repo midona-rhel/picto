@@ -2324,6 +2324,63 @@ impl Session {
     }
 }
 
+/// A view's library edit and what the view does once it is done: `work`
+/// runs as [`Session::edit_reporting`] runs it (a failure reported under
+/// `report`'s title, a broad change announced with Undo, `reread` read
+/// again), then `then` has its answer on the view, if the view and the
+/// session are still there. A view that needs its window afterwards uses
+/// [`edit_then_in`]; an edit nothing follows calls `edit_reporting` itself.
+pub fn edit_then<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 'static>(
+    session: &Entity<Session>,
+    report: Report,
+    reread: Reread,
+    work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Result<T, E>, &mut Context<V>) + 'static,
+) {
+    let answer = session.update(cx, |session, cx| {
+        session.edit_reporting(report, work, reread, cx)
+    });
+    then_on(answer, cx, then);
+}
+
+/// Hands `answer` to `then` on the view once it arrives, if the view is
+/// still there; nothing happens when no answer comes.
+fn then_on<V: 'static, R: 'static>(
+    answer: futures::channel::oneshot::Receiver<R>,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, R, &mut Context<V>) + 'static,
+) {
+    cx.spawn(async move |view, cx| {
+        if let Ok(result) = answer.await {
+            let _ = view.update(cx, move |view, cx| then(view, result, cx));
+        }
+    })
+    .detach();
+}
+
+/// [`edit_then`] for a follow-up that needs the view's window (a field to
+/// focus, a dialog to open).
+pub fn edit_then_in<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 'static>(
+    session: &Entity<Session>,
+    report: Report,
+    reread: Reread,
+    work: impl FnOnce(&picto_library::Library) -> Result<T, E> + Send + 'static,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Result<T, E>, &mut Window, &mut Context<V>) + 'static,
+) {
+    let answer = session.update(cx, |session, cx| {
+        session.edit_reporting(report, work, reread, cx)
+    });
+    cx.spawn_in(window, async move |view, cx| {
+        if let Ok(result) = answer.await {
+            let _ = view.update_in(cx, move |view, window, cx| then(view, result, window, cx));
+        }
+    })
+    .detach();
+}
+
 /// What [`Session::edit_reporting`] tells the user about an edit, as the
 /// production call it stands for does.
 #[derive(Clone, Default)]
@@ -2520,7 +2577,7 @@ fn refresh_delay(took: Duration, since: Duration) -> Duration {
 mod tests {
     use super::{
         SubscriptionActivity, Visit, record_recent, refresh_delay, remap_history, same_items,
-        target_of,
+        target_of, then_on,
     };
     use picto_library::RootId;
     use std::time::Duration;
@@ -2548,6 +2605,43 @@ mod tests {
         // One item acted on by itself while everything is selected.
         assert!(!same_items(&ids(3..4), &ids(0..500)));
         assert!(!same_items(&[], &[]));
+    }
+
+    #[test]
+    fn an_answer_reaches_the_view_only_while_it_is_there() {
+        use futures::channel::oneshot;
+        use gpui::AppContext as _;
+        struct View(Vec<u32>);
+        let mut cx = gpui::TestAppContext::single();
+        let view = cx.new(|_| View(Vec::new()));
+        // The answer arrives: the view has it.
+        let (send, answer) = oneshot::channel();
+        view.update(&mut cx, |_, cx| {
+            then_on(answer, cx, |view: &mut View, value, _| view.0.push(value))
+        });
+        send.send(1).unwrap();
+        cx.run_until_parked();
+        assert_eq!(view.read_with(&cx, |view, _| view.0.clone()), [1]);
+        // No answer comes (the session is gone): nothing happens.
+        let (send, answer) = oneshot::channel::<u32>();
+        view.update(&mut cx, |_, cx| {
+            then_on(answer, cx, |view: &mut View, value, _| view.0.push(value))
+        });
+        drop(send);
+        cx.run_until_parked();
+        assert_eq!(view.read_with(&cx, |view, _| view.0.clone()), [1]);
+        // The view is gone by the time the answer comes.
+        let (send, answer) = oneshot::channel::<u32>();
+        let gone = cx.new(|_| View(Vec::new()));
+        let weak = gone.downgrade();
+        gone.update(&mut cx, |_, cx| {
+            then_on(answer, cx, |_: &mut View, _, _| panic!("the view is gone"))
+        });
+        drop(gone);
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none());
+        let _ = send.send(2);
+        cx.run_until_parked();
     }
 
     #[test]

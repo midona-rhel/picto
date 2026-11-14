@@ -298,7 +298,7 @@ impl Shell {
         };
         let menu = self.show_item_menu(built, target, true, position, window, cx);
         if pending && let Some(file) = file {
-            self.look_up_applications(file, menu.downgrade(), window, cx);
+            self.look_up_applications(file, menu.downgrade(), cx);
         }
     }
 
@@ -325,19 +325,17 @@ impl Shell {
     /// that draws, keeps them for the type, and puts them in place of the
     /// pending row if the menu is still open (no row when there are none,
     /// or when the lookup failed).
-    fn look_up_applications(
-        &mut self,
-        file: File,
-        menu: WeakEntity<Menu>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn look_up_applications(&mut self, file: File, menu: WeakEntity<Menu>, cx: &mut Context<Self>) {
         let key = type_key(&file.mime);
         let File { root, hash, .. } = file;
-        self.library(
-            Box::new(move |library| file_path(library, root, &hash)),
-            move |_, path, _, cx| {
-                let Some(path) = path else {
+        crate::session::edit_then(
+            &self.session,
+            crate::session::Report::default(),
+            crate::session::Reread::NOTHING,
+            move |library| file_path(library, root, &hash),
+            cx,
+            move |_, path, cx| {
+                let Ok(Some(path)) = path else {
                     let _ = menu.update(cx, |menu, cx| {
                         menu.replace_entry("Open With Other", Vec::new(), cx)
                     });
@@ -360,8 +358,6 @@ impl Shell {
                 })
                 .detach();
             },
-            window,
-            cx,
         );
     }
 

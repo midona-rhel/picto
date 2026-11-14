@@ -3,14 +3,12 @@
 use super::{File, Target, media_link};
 use crate::grid::format::grouped;
 use crate::grid::menu::Action;
-use crate::session::{Report, Reread};
+use crate::session::{Report, Reread, edit_then, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
 use std::path::PathBuf;
 use std::rc::Rc;
-
-type Work<T> = Box<dyn FnOnce(&Library) -> picto_library::Result<T> + Send>;
 
 impl Shell {
     pub(super) fn run_item_action(
@@ -28,22 +26,12 @@ impl Shell {
             // ── Opening ──
             Action::OpenDefault => {
                 if let Some(file) = file {
-                    self.with_path(
-                        file,
-                        |path, cx| crate::desktop::open_default(&path, cx),
-                        window,
-                        cx,
-                    );
+                    self.with_path(file, |path, cx| crate::desktop::open_default(&path, cx), cx);
                 }
             }
             Action::Reveal => {
                 if let Some(file) = file {
-                    self.with_path(
-                        file,
-                        |path, cx| crate::desktop::reveal(&path, cx),
-                        window,
-                        cx,
-                    );
+                    self.with_path(file, |path, cx| crate::desktop::reveal(&path, cx), cx);
                 }
             }
             Action::OpenInNewWindow if target.member => {
@@ -92,7 +80,6 @@ impl Shell {
                                 crate::ui::notify::error("Could not open file", error, cx);
                             }
                         },
-                        window,
                         cx,
                     );
                 }
@@ -113,7 +100,6 @@ impl Shell {
                     self.with_path(
                         file,
                         |path, cx| write_text(path.to_string_lossy().into_owned(), cx),
-                        window,
                         cx,
                     );
                 }
@@ -174,19 +160,23 @@ impl Shell {
                 // `resolveTargetFilePaths`: every file of the selection,
                 // collection members included, in order.
                 let links = action == Action::CopySelectionLinks;
-                self.library(
+                let report = Report::default();
+                edit_then(
+                    &self.session,
+                    report,
+                    Reread::NOTHING,
                     files_of(ids),
-                    move |_, files, _, cx| {
+                    cx,
+                    move |_, files, cx| {
                         let lines = files
                             .into_iter()
+                            .flatten()
                             .map(|(hash, path)| if links { link(&hash, &path) } else { path })
                             .collect::<Vec<_>>();
                         if !lines.is_empty() {
                             write_text(lines.join("\n"), cx);
                         }
                     },
-                    window,
-                    cx,
                 );
             }
             Action::CopyFile => {
@@ -199,7 +189,6 @@ impl Shell {
                                 crate::ui::notify::error("Could not copy file", error, cx);
                             }
                         },
-                        window,
                         cx,
                     );
                 }
@@ -213,7 +202,7 @@ impl Shell {
                     crate::ui::notify::error("Could not copy selection", error, cx);
                 }
             }
-            Action::CopySelection => self.copy_files(ids, window, cx),
+            Action::CopySelection => self.copy_files(ids, cx),
             // ── Lifecycle ──
             Action::Accept | Action::Restore => self.set_lifecycle(&target, Lifecycle::Active, cx),
             // A member leaves its collection into the Trash
@@ -251,11 +240,13 @@ impl Shell {
                         .find(|entry| entry.id() == node)
                         .map(|entry| entry.label.clone())
                         .unwrap_or_default();
-                    self.edit_as(
+                    edit_then(
+                        &self.session,
                         Report::failure(format!("Could not add to {name}")),
-                        Box::new(move |library| library.add_to_folder(&selection, folder)),
                         Reread::SELECTION,
+                        move |library| library.add_to_folder(&selection, folder),
                         cx,
+                        |_, _, _| {},
                     );
                 }
             }
@@ -276,20 +267,25 @@ impl Shell {
             Action::RemoveFromFolder => {
                 if let Some(folder) = target.folder {
                     let selection = target.selection(self.session.read(cx));
-                    self.edit(
-                        Box::new(move |library| library.remove_from_folder(&selection, folder)),
+                    edit_then(
+                        &self.session,
+                        Report::default(),
                         Reread::RESULTS,
+                        move |library| library.remove_from_folder(&selection, folder),
                         cx,
+                        |_, _, _| {},
                     );
                 }
             }
             Action::SetFolderCover => {
                 if let (Some(folder), Some(id)) = (target.folder, ids.first().copied()) {
-                    self.edit_as(
+                    edit_then(
+                        &self.session,
                         Report::failure("Could not set folder cover"),
-                        Box::new(move |library| library.set_folder_cover(folder, id)),
                         Reread::SELECTION,
+                        move |library| library.set_folder_cover(folder, id),
                         cx,
+                        |_, _, _| {},
                     );
                 }
             }
@@ -315,7 +311,7 @@ impl Shell {
                 }
             }
             // ── Groups ──
-            Action::Group => self.group(target, window, cx),
+            Action::Group => self.group(target, cx),
             Action::Ungroup if target.group => self.confirm_ungroup_shown(target, cx),
             Action::Ungroup => self.confirm_ungroup(target, cx),
             Action::EditGroup => {
@@ -345,28 +341,33 @@ impl Shell {
                 // TODO: open the AI tagger on the selection, beside the
                 // inspector.
             }
-            Action::CopyTags => self.copy_tags(target, window, cx),
+            Action::CopyTags => self.copy_tags(target, cx),
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();
                 if !tags.is_empty() && !ids.is_empty() {
                     let selection = target.selection(self.session.read(cx));
-                    self.edit(
-                        Box::new(move |library| library.apply_tags(&selection, &tags, true)),
+                    edit_then(
+                        &self.session,
+                        Report::default(),
                         Reread::SELECTION,
+                        move |library| library.apply_tags(&selection, &tags, true),
                         cx,
+                        |_, _, _| {},
                     );
                 }
             }
             Action::Rate(stars) => {
                 let rating = picto_library::Rating::ALL[usize::from(stars).min(5)];
                 let selection = target.selection(self.session.read(cx));
-                self.edit(
-                    Box::new(move |library| library.set_rating(&selection, rating)),
+                edit_then(
+                    &self.session,
+                    Report::default(),
                     Reread::SELECTION,
+                    move |library| library.set_rating(&selection, rating),
                     cx,
+                    |_, _, _| {},
                 );
             }
-            // ── Waiting on other parts of the app ──
             // ── Exporting ──
             Action::ExportOriginals | Action::ExportAs | Action::ExportPictoPack => {
                 // The whole selection, loaded or not, when these are it.
@@ -502,15 +503,18 @@ impl Shell {
 
     /// `copyTarget`: the files of these items, collection members
     /// included, on the clipboard, or a notification saying why not.
-    pub(in crate::shell) fn copy_files(
-        &mut self,
-        ids: Vec<RootId>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.library(
+    pub(in crate::shell) fn copy_files(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
+        let report = Report::default();
+        edit_then(
+            &self.session,
+            report,
+            Reread::NOTHING,
             files_of(ids),
-            |_, files, _, cx| {
+            cx,
+            |_, files, cx| {
+                let Ok(files) = files else {
+                    return;
+                };
                 let paths: Vec<PathBuf> = files.into_iter().map(|(_, path)| path.into()).collect();
                 let copied = if paths.is_empty() {
                     Err("The selection has no physical files to copy.".to_owned())
@@ -521,8 +525,6 @@ impl Shell {
                     crate::ui::notify::error("Could not copy selection", error, cx);
                 }
             },
-            window,
-            cx,
         );
     }
 
@@ -582,71 +584,22 @@ impl Shell {
         &mut self,
         file: File,
         then: impl FnOnce(PathBuf, &mut App) + 'static,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let File { root, hash, .. } = file;
-        self.library(
-            Box::new(move |library| super::file_path(library, root, &hash)),
-            |_, path, _, cx| {
-                if let Some(path) = path {
+        let work = move |library: &Library| super::file_path(library, root, &hash);
+        edit_then(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            work,
+            cx,
+            |_, path, cx| {
+                if let Ok(Some(path)) = path {
                     then(path, cx);
                 }
             },
-            window,
-            cx,
         );
-    }
-
-    /// Runs `work` on the library's thread and hands its answer to `then`.
-    /// A failure is reported as the session's edits report one.
-    pub(in crate::shell) fn library<T: Send + 'static>(
-        &mut self,
-        work: Work<T>,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.library_as(Report::default(), work, then, window, cx);
-    }
-
-    /// [`Shell::library`], telling the user what `report` says.
-    pub(in crate::shell) fn library_as<T: Send + 'static>(
-        &mut self,
-        report: Report,
-        work: Work<T>,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(report, work, Reread::NOTHING, cx)
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(value)) = answer.await {
-                let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
-            }
-        })
-        .detach();
-    }
-
-    /// An edit of the selected items, and what to read again afterwards.
-    fn edit<T: Send + 'static>(&mut self, work: Work<T>, reread: Reread, cx: &mut Context<Self>) {
-        self.edit_as(Report::default(), work, reread, cx);
-    }
-
-    /// [`Shell::edit`], telling the user what `report` says, as the
-    /// production menu row does.
-    fn edit_as<T: Send + 'static>(
-        &mut self,
-        report: Report,
-        work: Work<T>,
-        reread: Reread,
-        cx: &mut Context<Self>,
-    ) {
-        self.session.update(cx, |session, cx| {
-            let _ = session.edit_reporting(report, work, reread, cx);
-        });
     }
 
     /// Moves the items the menu was opened for into or out of the Trash or
@@ -665,51 +618,63 @@ impl Shell {
     }
 
     fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
-        self.edit(
-            Box::new(move |library| library.sort_folder_items(folder, field)),
+        edit_then(
+            &self.session,
+            Report::default(),
             Reread::RESULTS,
+            move |library| library.sort_folder_items(folder, field),
             cx,
+            |_, _, _| {},
         );
     }
 
     /// `onCopyTags`: one item's tags, or the tags every selected item
     /// shares, as JSON on the clipboard and kept for "Paste Tags".
-    fn copy_tags(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_tags(&mut self, target: Target, cx: &mut Context<Self>) {
         let single = target.items.len() == 1;
         let ids = target.ids();
         let selection = target.selection(self.session.read(cx));
-        self.library(
-            Box::new(move |library| {
-                let tag_ids = if single {
-                    library.details(ids[0])?.tag_ids
-                } else {
-                    library.selection_summary(&selection)?.shared_tags
-                };
-                Ok(library
+        let work = move |library: &Library| {
+            let tag_ids = if single {
+                library.details(ids[0])?.tag_ids
+            } else {
+                library.selection_summary(&selection)?.shared_tags
+            };
+            Ok::<_, picto_library::LibraryError>(
+                library
                     .tags_by_id(&tag_ids)?
                     .iter()
                     .map(crate::tags::record_name)
-                    .collect::<Vec<_>>())
-            }),
-            |this, tags, _, cx| {
-                write_text(serde_json::to_string(&tags).unwrap_or_default(), cx);
-                this.items.tag_clipboard = tags;
-            },
-            window,
+                    .collect::<Vec<_>>(),
+            )
+        };
+        edit_then(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            work,
             cx,
+            |this, tags, cx| {
+                if let Ok(tags) = tags {
+                    write_text(serde_json::to_string(&tags).unwrap_or_default(), cx);
+                    this.items.tag_clipboard = tags;
+                }
+            },
         );
     }
 
     /// `organizeSelection`: one selected group and no notes to merge groups
     /// at once; anything else needs the group organizer.
-    fn group(&mut self, target: Target, window: &mut Window, cx: &mut Context<Self>) {
+    fn group(&mut self, target: Target, cx: &mut Context<Self>) {
         let Some(cover) = target.items.first().map(|item| item.root_id) else {
             return;
         };
         let selection = target.selection(self.session.read(cx));
-        self.library_as(
+        edit_then(
+            &self.session,
             Report::failure("Could not create group").and_announce("collections.organize"),
-            Box::new(move |library| {
+            Reread::NOTHING,
+            move |library: &Library| -> picto_library::Result<Option<super::organizer::Request>> {
                 let summary = library.selection_summary(&selection)?;
                 let notes = library.collection_note_draft(&selection)?;
                 if let ([group], 0) = (summary.collection_candidates.as_slice(), notes.source_count)
@@ -733,9 +698,10 @@ impl Shell {
                         maximum_bytes: notes.maximum_bytes,
                     }))
                 }
-            }),
-            |this, decide, _, cx| match decide {
-                None => {
+            },
+            cx,
+            |this, decide, cx| match decide {
+                Ok(None) => {
                     // `clearSelection`, then the merged group's results.
                     // TODO: select the merged group once the results hold
                     // it, as production does.
@@ -744,10 +710,9 @@ impl Shell {
                         session.reread(Reread::RESULTS, cx)
                     });
                 }
-                Some(request) => this.open_organizer(request, cx),
+                Ok(Some(request)) => this.open_organizer(request, cx),
+                Err(_) => {}
             },
-            window,
-            cx,
         );
     }
 
@@ -807,28 +772,23 @@ impl Shell {
             "Ungroup",
             false,
             Rc::new(move |this, window, cx| {
-                let answer = this.session.update(cx, |session, cx| {
-                    session.edit_reporting(
-                        Report::announce("collections.ungroup"),
-                        move |library| library.ungroup_collection(root, crate::now_ms()),
-                        Reread::RESULTS,
-                        cx,
-                    )
-                });
-                cx.spawn_in(window, async move |this, cx| {
-                    if let Ok(Ok(_)) = answer.await {
-                        let _ = this.update_in(cx, |this, window, cx| {
-                            if quick_look {
-                                this.quick_look
-                                    .update(cx, |quick_look, cx| quick_look.close(window, cx));
-                            } else {
-                                this.session
-                                    .update(cx, |session, cx| session.close_viewer(cx));
-                            }
-                        });
-                    }
-                })
-                .detach();
+                edit_then_in(
+                    &this.session,
+                    Report::announce("collections.ungroup"),
+                    Reread::RESULTS,
+                    move |library| library.ungroup_collection(root, crate::now_ms()),
+                    window,
+                    cx,
+                    move |this, ungrouped, window, cx| match ungrouped {
+                        Ok(_) if quick_look => this
+                            .quick_look
+                            .update(cx, |quick_look, cx| quick_look.close(window, cx)),
+                        Ok(_) => this
+                            .session
+                            .update(cx, |session, cx| session.close_viewer(cx)),
+                        Err(_) => {}
+                    },
+                );
             }),
             cx,
         );
@@ -860,11 +820,13 @@ impl Shell {
                 let selection = selection.clone();
                 this.session
                     .update(cx, |session, cx| session.clear_selection(cx));
-                this.edit_as(
+                edit_then(
+                    &this.session,
                     Report::failure("Could not ungroup items").and_announce("collections.ungroup"),
-                    Box::new(move |library| library.ungroup_selection(&selection, crate::now_ms())),
                     Reread::RESULTS,
+                    move |library| library.ungroup_selection(&selection, crate::now_ms()),
                     cx,
+                    |_, _, _| {},
                 );
             }),
             cx,
@@ -878,8 +840,10 @@ fn write_text(text: String, cx: &mut App) {
 
 /// `resolveTargetFilePaths`: the content hash and path of every file of
 /// these items, collection members included, in order.
-fn files_of(ids: Vec<RootId>) -> Work<Vec<(String, String)>> {
-    Box::new(move |library| {
+fn files_of(
+    ids: Vec<RootId>,
+) -> impl FnOnce(&Library) -> picto_library::Result<Vec<(String, String)>> + Send + 'static {
+    move |library| {
         let mut files = Vec::new();
         for id in ids {
             for media in library.details(id)?.media {
@@ -887,7 +851,7 @@ fn files_of(ids: Vec<RootId>) -> Work<Vec<(String, String)>> {
             }
         }
         Ok(files)
-    })
+    }
 }
 
 /// `copyTargetLinks`: a file's link, with the extension its path has.

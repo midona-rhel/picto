@@ -6,7 +6,7 @@ use super::{
     EmptyTrash, Section, Sidebar, Target, dialogs, expandable, folder_id, smart_folder_id,
 };
 use crate::backend::Navigation;
-use crate::session::Reread;
+use crate::session::{Report, Reread, edit_then_in};
 use gpui::*;
 use picto_library::query::{ItemScope, RootQuery};
 
@@ -51,14 +51,19 @@ impl Sidebar {
         }
         match target {
             Target::System => match action {
-                "clear-recent" => self.edit_reading(
-                    |library| library.clear_recent_views().map(|_| ()),
+                "clear-recent" => edit_then_in(
+                    &self.session,
+                    Report::default(),
                     Reread::RESULTS_ONLY,
-                    |_, (), _, _| {},
+                    |library| library.clear_recent_views().map(|_| ()),
                     window,
                     cx,
+                    |_, _, _, _| {},
                 ),
-                "restore-all" => self.edit_reading(
+                "restore-all" => edit_then_in(
+                    &self.session,
+                    Report::default(),
+                    Reread::RESULTS_ONLY,
                     |library| {
                         library
                             .set_lifecycle(
@@ -73,10 +78,9 @@ impl Sidebar {
                             )
                             .map(|_| ())
                     },
-                    Reread::RESULTS_ONLY,
-                    |_, (), _, _| {},
                     window,
                     cx,
+                    |_, _, _, _| {},
                 ),
                 // The shell asks and deletes, as it does for the grid's
                 // Delete Permanently.
@@ -156,8 +160,11 @@ impl Sidebar {
                     .iter()
                     .filter_map(|node| smart_folder_id(node))
                     .collect::<Vec<_>>();
-                self.edit(
-                    move |library| {
+                edit_then_in(
+                    &self.session,
+                    Report::default(),
+                    Reread::NOTHING,
+                    move |library| -> picto_library::Result<_> {
                         for id in ids {
                             library.update_smart_folder(
                                 id,
@@ -166,9 +173,13 @@ impl Sidebar {
                         }
                         Ok(())
                     },
-                    |this, (), _, cx| this.reload_if_showing(None, cx),
                     window,
                     cx,
+                    |this, result, _, cx| {
+                        if result.is_ok() {
+                            this.reload_if_showing(None, cx)
+                        }
+                    },
                 );
             }
             "sort-contents" => {
@@ -224,26 +235,36 @@ impl Sidebar {
             // new tile renamed.
             "new-subfolder" => {
                 let parent = folder_id(node);
-                self.edit_reporting(
-                    crate::session::Report::folder_depth(),
-                    move |library| library.create_folder("New Folder", parent),
+                edit_then_in(
+                    &self.session,
+                    Report::folder_depth(),
                     Reread::NAVIGATION,
-                    move |_, (id, _), _, cx| rename_later(format!("folder:{}", id.0), cx),
+                    move |library| library.create_folder("New Folder", parent),
                     window,
                     cx,
+                    move |_, result, _, cx| {
+                        if let Ok((id, _)) = result {
+                            rename_later(format!("folder:{}", id.0), cx)
+                        }
+                    },
                 );
             }
             "duplicate" => {
                 let Some(id) = folder_id(node) else {
                     return;
                 };
-                self.edit_reporting(
-                    crate::session::Report::folder_depth(),
-                    move |library| library.duplicate_folder(id),
+                edit_then_in(
+                    &self.session,
+                    Report::folder_depth(),
                     Reread::NAVIGATION,
-                    move |_, (copy, _), _, cx| rename_later(format!("folder:{}", copy.0), cx),
+                    move |library| library.duplicate_folder(id),
                     window,
                     cx,
+                    move |_, result, _, cx| {
+                        if let Ok((copy, _)) = result {
+                            rename_later(format!("folder:{}", copy.0), cx)
+                        }
+                    },
                 );
             }
             _ => self.choose_for_node(node, action, value, window, cx),
@@ -299,27 +320,40 @@ impl Sidebar {
             }
             "refresh" => {
                 let node = node.to_owned();
-                self.edit_as(
-                    crate::session::Report::failure("Could not refresh smart folder"),
-                    |_| Ok(()),
-                    move |this, (), _, cx| this.reload_if_showing(Some(&node), cx),
+                edit_then_in(
+                    &self.session,
+                    Report::failure("Could not refresh smart folder"),
+                    Reread::NOTHING,
+                    |_| Ok::<_, picto_library::LibraryError>(()),
                     window,
                     cx,
+                    move |this, result, _, cx| {
+                        if result.is_ok() {
+                            this.reload_if_showing(Some(&node), cx)
+                        }
+                    },
                 );
             }
             "sort-by-name" => {
                 let (Some(id), node) = (smart_folder_id(node), node.to_owned()) else {
                     return;
                 };
-                self.edit(
+                edit_then_in(
+                    &self.session,
+                    Report::default(),
+                    Reread::NOTHING,
                     move |library| {
                         library
                             .update_smart_folder(id, sorted_by_name(smart_input(library, id)?))
                             .map(|_| ())
                     },
-                    move |this, (), _, cx| this.reload_if_showing(Some(&node), cx),
                     window,
                     cx,
+                    move |this, result, _, cx| {
+                        if result.is_ok() {
+                            this.reload_if_showing(Some(&node), cx)
+                        }
+                    },
                 );
             }
             "sort-tree" => {
@@ -328,15 +362,18 @@ impl Sidebar {
                 };
                 let descending = order.starts_with("za");
                 let recursive = order.ends_with("-all");
-                self.edit(
+                edit_then_in(
+                    &self.session,
+                    Report::default(),
+                    Reread::NOTHING,
                     move |library| {
                         library
                             .sort_folder_tree(id, descending, recursive)
                             .map(|_| ())
                     },
-                    |_, (), _, _| {},
                     window,
                     cx,
+                    |_, _, _, _| {},
                 );
             }
             "sort-contents" => {

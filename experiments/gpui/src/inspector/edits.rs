@@ -130,19 +130,17 @@ impl Inspector {
             navigation,
             ..Reread::NOTHING
         };
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit(move |library| work(library, &selection), reread, cx)
-        });
-        cx.spawn(async move |this, cx| {
-            if answer.await.is_err() {
-                return;
-            }
-            let _ = this.update(cx, |this, cx| {
+        crate::session::edit_then(
+            &self.session,
+            crate::session::Report::default(),
+            reread,
+            move |library| work(library, &selection),
+            cx,
+            |this, _, cx| {
                 this.reread_rail(cx);
                 then(this, cx);
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     /// One item's name, as its field commits it.

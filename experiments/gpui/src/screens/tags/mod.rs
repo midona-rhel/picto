@@ -441,22 +441,11 @@ impl TagsScreen {
 
     // ── Edits ───────────────────────────────────────────────────
 
-    /// `runMutation`: runs an edit on the library's thread, then reloads.
-    /// On success the editor closes if `close_editor`, or else returns from
-    /// a merge or delete step; `then` follows.
+    /// `runMutation`: runs an edit on the library's thread, telling the user
+    /// what `report` says (a delete is announced with an Undo button), then
+    /// reloads. On success the editor closes if `close_editor`, or else
+    /// returns from a merge or delete step; `then` follows.
     fn mutate(
-        &mut self,
-        work: impl FnOnce(&Library) -> Result<(), String> + Send + 'static,
-        close_editor: bool,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.mutate_reporting(Report::default(), work, close_editor, then, cx);
-    }
-
-    /// [`TagsScreen::mutate`] for a change production announces with an
-    /// Undo button (`tagsController`'s deletes).
-    fn mutate_reporting(
         &mut self,
         report: Report,
         work: impl FnOnce(&Library) -> Result<(), String> + Send + 'static,
@@ -466,14 +455,13 @@ impl TagsScreen {
     ) {
         self.busy = true;
         self.error = None;
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(report, work, Reread::NOTHING, cx)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = answer
-                .await
-                .unwrap_or_else(|_| Err("The library stopped".into()));
-            let _ = this.update(cx, |this: &mut Self, cx| {
+        crate::session::edit_then(
+            &self.session,
+            report,
+            Reread::NOTHING,
+            work,
+            cx,
+            move |this, result, cx| {
                 this.busy = false;
                 match result {
                     Ok(()) => {
@@ -488,9 +476,8 @@ impl TagsScreen {
                     Err(error) => this.error = Some(error),
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     /// The tag preferences changed, here or in the Settings window.
@@ -551,6 +538,7 @@ impl TagsScreen {
         let next_name = name.trim().to_owned();
         let star_name = next_name.clone();
         self.mutate(
+            Report::default(),
             move |library| rename_or_merge(library, id, &next_name),
             close,
             move |this, cx| this.rename_star(&previous, &star_name, cx),
@@ -561,6 +549,7 @@ impl TagsScreen {
     fn merge_tag(&mut self, tag: &TagRecord, target: &TagRecord, cx: &mut Context<Self>) {
         let (source, destination) = (tag.tag_id, target.tag_id);
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .merge_tags(source, destination, crate::now_ms())
@@ -574,7 +563,7 @@ impl TagsScreen {
     }
 
     fn delete_tag(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.delete"),
             move |library| {
                 library
@@ -592,6 +581,7 @@ impl TagsScreen {
         let id = group.namespace_id;
         let target = name.clone();
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .rename_or_merge_tag_namespace(id, &target)
@@ -616,7 +606,7 @@ impl TagsScreen {
 
     fn delete_group(&mut self, group: TagNamespaceRecord, cx: &mut Context<Self>) {
         let id = group.namespace_id;
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.group.delete"),
             move |library| {
                 library
@@ -641,6 +631,7 @@ impl TagsScreen {
     fn create_group(&mut self, name: String, cx: &mut Context<Self>) {
         let target = name.clone();
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .create_tag_namespace(&target)
@@ -657,7 +648,7 @@ impl TagsScreen {
     }
 
     fn delete_unused(&mut self, cx: &mut Context<Self>) {
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.delete_unused"),
             |library| {
                 library

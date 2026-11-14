@@ -279,7 +279,7 @@ impl Shell {
             return;
         }
         let ids = self.selected_ids(cx);
-        self.copy_files(ids, window, cx);
+        self.copy_files(ids, cx);
     }
 
     /// `edit.rename`: the inspector's name field for one item.

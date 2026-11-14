@@ -226,20 +226,14 @@ impl Inspector {
         };
         let target = self.session.read(cx).target_for(ids);
         // The focused item was edited with the rest.
-        let job = self.session.update(cx, |session, cx| {
-            session.edit_reporting(
-                report,
-                move |library| work(library, &target),
-                Reread::DETAILS,
-                cx,
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            if job.await.is_ok() {
-                let _ = this.update(cx, |this, cx| this.reread_summary(cx));
-            }
-        })
-        .detach();
+        crate::session::edit_then(
+            &self.session,
+            report,
+            Reread::DETAILS,
+            move |library| work(library, &target),
+            cx,
+            |this, _, cx| this.reread_summary(cx),
+        );
     }
 
     pub(super) fn rate_selection(&mut self, rating: Rating, cx: &mut Context<Self>) {

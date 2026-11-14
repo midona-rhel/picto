@@ -293,22 +293,16 @@ impl Shell {
             }
             Decision::Reject => Lifecycle::Trash,
         };
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(
-                crate::session::Report::failure(review_failure(decision)),
-                move |library| library.set_lifecycle(&target, lifecycle).map(|_| ()),
-                crate::session::Reread::RESULTS,
-                cx,
-            )
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            // The session reports a failure.
-            let committed = matches!(answer.await, Ok(Ok(())));
-            let _ = this.update_in(cx, move |this, window, cx| {
-                this.review_saved(ticket, id, committed, window, cx)
-            });
-        })
-        .detach();
+        // The session reports a failure.
+        crate::session::edit_then_in(
+            &self.session,
+            crate::session::Report::failure(review_failure(decision)),
+            crate::session::Reread::RESULTS,
+            move |library| library.set_lifecycle(&target, lifecycle).map(|_| ()),
+            window,
+            cx,
+            move |this, saved, window, cx| this.review_saved(ticket, id, saved.is_ok(), window, cx),
+        );
     }
 
     /// The save is over: a review that did not happen takes the view back

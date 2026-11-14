@@ -2,7 +2,7 @@
 //! be undone, Empty Trash, and the delete through the library.
 use super::item_menu::{Run, Target};
 use crate::grid::format::grouped;
-use crate::session::Reread;
+use crate::session::{Report, Reread, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -113,9 +113,17 @@ impl Shell {
     ) {
         let undo_limit = crate::settings::current(cx).undo_delete_limit;
         let read = selection.clone();
-        self.library(
-            Box::new(move |library| library.selection_summary(&read)),
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            move |library| library.selection_summary(&read),
+            window,
+            cx,
             move |this, summary, window, cx| {
+                let Ok(summary) = summary else {
+                    return;
+                };
                 let count = summary.selected_count;
                 if count == 0 {
                     if let Some(done) = &done {
@@ -158,8 +166,6 @@ impl Shell {
                     cx,
                 );
             },
-            window,
-            cx,
         );
     }
 
