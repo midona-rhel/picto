@@ -346,6 +346,92 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
     }
 }
 
+/// At start, with no library named: the library this app had open last,
+/// if this process may open it at all (`listed`); when it is no longer
+/// there, production's "Library Not Found" question (`handleMissingLibrary`)
+/// with Locate…, Remove from List and Cancel. Production first falls back
+/// to the first library of its history that is still there; this app opens
+/// at start only the library it had open last, and otherwise asks.
+pub fn start_last(cx: &mut App) {
+    let last = crate::state::get(cx).last_library.clone();
+    let Some(last) = last.filter(|last| super::listed(last, &super::facts())) else {
+        return;
+    };
+    let path = PathBuf::from(&last);
+    if path.join("library.sqlite").is_file() {
+        request(&path, Origin::LastOpened, cx);
+        return;
+    }
+    let main = host(cx).read(cx).main;
+    if let Some(main) = main {
+        let _ = main.update(cx, |main, _, cx| {
+            main.missing = Some((path, ui::modal::Presence::new()));
+            cx.notify();
+        });
+    }
+}
+
+/// Locate… for a library that is missing (`handleMissingLibrary`,
+/// `relocateLibrary`): a folder chosen in the system's dialog, the library
+/// found there or inside it under the same name, the list made to name it
+/// there, and (`open`) the library opened through the same rules as any
+/// other the user chose. The user's consent does not follow it: a library
+/// found at a new place is asked about again.
+pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
+    let basename = missing.file_name().unwrap_or_default().to_owned();
+    // Production's dialog says this as its message; the system's dialog
+    // here shows it as its button's prompt.
+    let chosen = crate::prompt::folder(
+        &format!(
+            "Select the folder containing {}",
+            basename.to_string_lossy()
+        ),
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        let Ok(Some(folder)) = chosen.await else {
+            return;
+        };
+        cx.update(|cx| {
+            let Some(found) = super::located(&folder, &basename) else {
+                return fail(
+                    en("Library Not Found").to_owned(),
+                    // Production's main process writes it in English,
+                    // without a key.
+                    format!(
+                        "\"{}\" was not found in the selected folder.",
+                        basename.to_string_lossy()
+                    ),
+                    cx,
+                );
+            };
+            let found = found.canonicalize().unwrap_or(found);
+            if found == missing {
+                return;
+            }
+            let (from, to) = (
+                missing.to_string_lossy().into_owned(),
+                found.to_string_lossy().into_owned(),
+            );
+            crate::state::update(cx, |state| {
+                history::rename(
+                    &mut state.library_history,
+                    &mut state.pinned_libraries,
+                    &mut state.last_library,
+                    &from,
+                    &to,
+                );
+            });
+            crate::set_app_menus(cx);
+            host(cx).update(cx, |_, cx| cx.notify());
+            if open {
+                request(&found, Origin::OpenDialog, cx);
+            }
+        });
+    })
+    .detach();
+}
+
 /// Tells the user why a library was not opened: a notification in the main
 /// window, and the Library Manager's error box.
 fn refuse(refusal: &Refusal, cx: &mut App) {
@@ -635,6 +721,9 @@ pub struct Main {
     shell: Option<Entity<Shell>>,
     gate: Gate,
     asking: Option<Asking>,
+    /// The library this app had open last, missing at start: the "Library
+    /// Not Found" question.
+    missing: Option<(PathBuf, ui::modal::Presence)>,
     /// The Electron app's process while it runs beside a library the user
     /// keeps.
     blocked: Option<String>,
@@ -650,6 +739,7 @@ impl Main {
             shell: None,
             gate: Gate::Closed,
             asking: None,
+            missing: None,
             blocked: None,
             focus: cx.focus_handle(),
             notifications: cx.new(ui::notify::Host::new),
@@ -672,8 +762,10 @@ impl Main {
             .children(ui::window_chrome::caption_buttons("library-gate", window));
         let content = match &self.gate {
             Gate::Closed => {
-                // `LibraryGate` opens the Library Manager once by itself.
-                if !self.offered {
+                // `LibraryGate` opens the Library Manager once by itself,
+                // after the question about a missing library (production
+                // asks it before the window opens).
+                if !self.offered && self.missing.is_none() {
                     self.offered = true;
                     cx.defer(|cx| super::manager::open(cx));
                 }
@@ -792,6 +884,83 @@ impl Main {
         )
     }
 
+    /// `handleMissingLibrary`'s message box: Locate…, Remove from List,
+    /// Cancel.
+    fn missing(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (path, presence) = self.missing.as_ref()?;
+        let theme = theme::theme(cx);
+        let name = super::name(&path.to_string_lossy());
+        let dismiss = |this: &mut Self, cx: &mut Context<Self>| {
+            this.missing = None;
+            cx.notify();
+        };
+        let close = cx.listener(move |this: &mut Self, _: &(), _, cx| dismiss(this, cx));
+        let cancel = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| dismiss(this, cx));
+        let located = path.clone();
+        let locate = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+            dismiss(this, cx);
+            let located = located.clone();
+            cx.defer(move |cx| locate(located, true, cx));
+        });
+        let removed = path.to_string_lossy().into_owned();
+        let remove = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+            dismiss(this, cx);
+            let removed = removed.clone();
+            crate::state::update(cx, |state| {
+                history::remove(
+                    &mut state.library_history,
+                    &mut state.pinned_libraries,
+                    &mut state.last_library,
+                    &removed,
+                )
+            });
+            cx.defer(crate::set_app_menus);
+        });
+        // Production's main process writes these in English, without keys.
+        let message = format!(
+            "Library \"{name}\" could not be found.\n\nPath: {}",
+            path.display()
+        );
+        Some(
+            ui::modal::modal("library-missing", en("Library Not Found"), *presence)
+                .size(ui::modal::Size::Small)
+                .layer(ui::layer::OVER_DIALOG)
+                .on_close(move |window, cx| close(&(), window, cx))
+                .child(
+                    div()
+                        .text(theme::TEXT_MD)
+                        .line_height(px(19.5))
+                        .text_color(theme.text_secondary())
+                        .child(message),
+                )
+                .footer(
+                    ui::action_button::action_button(
+                        "library-missing-cancel",
+                        ui::action_button::Look::Standard,
+                    )
+                    .label(t("Cancel"))
+                    .on_click(cancel),
+                )
+                .footer(
+                    ui::action_button::action_button(
+                        "library-missing-remove",
+                        ui::action_button::Look::Standard,
+                    )
+                    .label(t("Remove from List"))
+                    .on_click(remove),
+                )
+                .footer(
+                    ui::action_button::action_button(
+                        "library-missing-locate",
+                        ui::action_button::Look::Primary,
+                    )
+                    .label(t("Locate…"))
+                    .on_click(locate),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn notice(&self) -> Option<AnyElement> {
         self.blocked.as_ref()?;
         Some(
@@ -825,6 +994,7 @@ impl Render for Main {
             .size_full()
             .relative()
             .child(content)
+            .children(self.missing(cx))
             .children(self.consent(cx))
             .children(self.notice());
         // The shell draws its own notifications; the gate needs these.

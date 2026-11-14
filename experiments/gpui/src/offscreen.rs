@@ -163,8 +163,12 @@ fn plays_a_script() {
     cx.update(|cx| {
         crate::app_menu::set_main_window(main, cx);
         crate::libraries::host::attach(window, incoming, cx);
-        if let Some(root) = root {
-            crate::libraries::host::start(root, crate::libraries::Kind::Copy, None, window, cx);
+        match root {
+            Some(root) => {
+                crate::libraries::host::start(root, crate::libraries::Kind::Copy, None, window, cx)
+            }
+            // As a launch with no library named: the one last open, if any.
+            None => crate::libraries::host::start_last(cx),
         }
     });
     // The frame the app's main window asks for, so its own chrome shows as

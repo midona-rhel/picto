@@ -429,19 +429,8 @@ fn run(
             Initial::Named(path) => {
                 libraries::host::request(&path, libraries::Origin::CommandLine { flag: true }, cx)
             }
-            Initial::Last => {
-                // Only a library this process may open is even looked at.
-                let last = state::get(cx).last_library.clone();
-                if let Some(last) = last
-                    && libraries::listed(&last, &libraries::facts())
-                {
-                    libraries::host::request(
-                        std::path::Path::new(&last),
-                        libraries::Origin::LastOpened,
-                        cx,
-                    );
-                }
-            }
+            // Only a library this process may open is even looked at.
+            Initial::Last => libraries::host::start_last(cx),
         }
         // Stop the workers and checkpoint the library before the process
         // ends, as the Electron app closes its library before quitting.

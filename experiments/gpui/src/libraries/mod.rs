@@ -350,6 +350,15 @@ pub fn new_library_path(name: &str, parent: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// `locatedLibraryPath`: the library a Locate… folder dialog found, the
+/// chosen folder itself or the library of the same name inside it, if it
+/// holds `library.sqlite`.
+pub fn located(chosen: &Path, name: &std::ffi::OsStr) -> Option<PathBuf> {
+    [chosen.to_path_buf(), chosen.join(name)]
+        .into_iter()
+        .find(|candidate| candidate.join("library.sqlite").is_file())
+}
+
 /// `renameLibrary`'s checks: the renamed folder beside the old one.
 pub fn renamed_path(path: &Path, name: &str) -> Result<PathBuf, String> {
     use crate::i18n::en;
@@ -604,6 +613,28 @@ mod tests {
         );
         assert_eq!(std::fs::read(outside.join("old.jpg")).unwrap(), b"kept");
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+    }
+
+    /// Locate… finds the library in the folder chosen, or the library of
+    /// the same name inside it, as `locatedLibraryPath` does; anything else
+    /// is not found.
+    #[test]
+    fn locate_finds_the_library_chosen_or_the_one_inside_the_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let kept = admission::tests::real_library(folder.path(), "Kept");
+        let name = std::ffi::OsStr::new("Kept.library");
+        assert_eq!(located(&kept, name), Some(kept.clone()));
+        assert_eq!(
+            located(&folder.path().canonicalize().unwrap(), name),
+            Some(kept.clone())
+        );
+        assert_eq!(
+            located(folder.path(), std::ffi::OsStr::new("Other.library")),
+            None
+        );
+        let empty = folder.path().join("Empty.library");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(located(&empty, name), None);
     }
 
     #[test]

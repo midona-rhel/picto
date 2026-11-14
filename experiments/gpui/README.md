@@ -117,7 +117,16 @@ is named, and proven by the test named.
    Library), Open Library…, File › Recent Libraries, the sidebar's library
    switcher, the library this app last had open (`lastLibrary` in this
    app's own `state.json`, looked at only when this process may open it),
-   or the command line with the flag. A file the system hands over (a
+   a library found with Locate…, or the command line with the flag. When
+   the library last open is missing at start, production's "Library Not
+   Found" question is asked (`handleMissingLibrary`: Locate…, Remove from
+   List, Cancel; `host::start_last`); a library Locate… finds (the chosen
+   folder, or the library of the same name in it,
+   `locate_finds_the_library_chosen_or_the_one_inside_the_folder`) takes
+   the old one's place in the list and is opened through every rule here,
+   its consent asked again. Production first falls back to the first
+   library of its history still on disk; this app opens at start only the
+   library it had open last. A file the system hands over (a
    launch with files, Open With, a drop on the Dock icon, a second launch)
    never opens a library; `opening::accept` refuses it as before
    (`only_a_library_the_user_chose_is_opened`).
