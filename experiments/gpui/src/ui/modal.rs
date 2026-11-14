@@ -282,6 +282,16 @@ impl RenderOnce for Modal {
             )
             .read(cx)
             .clone();
+        // The body's own focus, so Tab can tell what it holds.
+        let body_focus = window
+            .use_keyed_state(
+                ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "body-focus".into()),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        super::focus::follow(&scroll, &body_focus, window, cx);
 
         // `modalIn` / `modalOut`: `scale(0.97) translateY(4px)` about the
         // centre, with the opacity. GPUI cannot scale the contents, so while
@@ -362,6 +372,7 @@ impl RenderOnce for Modal {
                             .max_h(px(body_height.max(0.)))
                             .overflow_y_scroll()
                             .track_scroll(&scroll)
+                            .track_focus(&body_focus)
                             .pt(px(padding))
                             .pb(px(padding))
                             .pl(px(padding))
@@ -435,8 +446,9 @@ impl RenderOnce for Modal {
             .key_context("Modal")
             // Nothing beneath the dialog scrolls while it is up.
             .on_scroll(|_, _, cx| cx.stop_propagation());
+        // The dialog keeps Tab and Shift-Tab among its own controls.
         if let Some(focus) = &self.focus {
-            layer = layer.track_focus(focus);
+            layer = super::focus::scope(layer.track_focus(focus), focus);
         }
         if let Some(handler) = self.on_close.filter(|_| !self.presence.closing()) {
             let escape = handler.clone();

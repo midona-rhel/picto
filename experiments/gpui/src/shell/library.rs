@@ -342,7 +342,9 @@ impl LibraryPopover {
                     })
                     .child(self.search.clone()),
             )
-            .child(
+            // `.closeButton` is a `<button>`.
+            .child(ui::focus::stop(
+                "close-library-switcher",
                 div()
                     .id("close-library-switcher")
                     .size(px(24.))
@@ -361,7 +363,18 @@ impl LibraryPopover {
                             }),
                     )
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-            )
+                cx.listener(|this, _, window, cx| this.close(window, cx)),
+            ))
+    }
+
+    /// A known library chosen: the popover closes.
+    fn pick(&mut self, current: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !current {
+            // TODO: switch the app to this library, as
+            // `picto.library.switch` does: close this library's
+            // session and open that one's database and blobs.
+        }
+        self.close(window, cx);
     }
 
     /// One known library (`.item`).
@@ -412,7 +425,7 @@ impl LibraryPopover {
             }
         };
         let current = library.current;
-        div()
+        let row = div()
             .id(("known-library", index))
             .w_full()
             .min_h(px(48.))
@@ -432,14 +445,7 @@ impl LibraryPopover {
                 }
                 cx.notify();
             }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if !current {
-                    // TODO: switch the app to this library, as
-                    // `picto.library.switch` does: close this library's
-                    // session and open that one's database and blobs.
-                }
-                this.close(window, cx);
-            }))
+            .on_click(cx.listener(move |this, _, window, cx| this.pick(current, window, cx)))
             .child({
                 let avatar = ui::library_avatar(
                     ("known-library-avatar", index),
@@ -484,7 +490,10 @@ impl LibraryPopover {
                     .flex()
                     .flex_none()
                     .child(ui::icon("check", CHECK, theme.text()))
-            }))
+            }));
+        // `.item` is a `<button>`: Enter and Space choose it.
+        let press = cx.listener(move |this, _, window, cx| this.pick(current, window, cx));
+        ui::focus::button(row, &ElementId::from(("known-library", index)), window, cx, press)
     }
 
     /// The actions at the foot (`.functionItem`).
@@ -597,19 +606,31 @@ impl Render for LibraryPopover {
             .child(
                 // TODO: open the Library Manager on its form for a new
                 // library (`open_library_manager`).
-                self.action("create-library", "plus", "Create Library…", cx)
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                ui::focus::stop(
+                    "create-library",
+                    self.action("create-library", "plus", "Create Library…", cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                ),
             )
             .child(
                 // TODO: choose a library folder and switch to it, as
                 // `picto.library.open` does.
-                self.action("open-library", "library-folder-open", "Open Library…", cx)
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                ui::focus::stop(
+                    "open-library",
+                    self.action("open-library", "library-folder-open", "Open Library…", cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                ),
             )
             .child(
                 // TODO: open the Library Manager (`open_library_manager`).
-                self.action("library-manager", "adjustments", "Library Manager…", cx)
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                ui::focus::stop(
+                    "library-manager",
+                    self.action("library-manager", "adjustments", "Library Manager…", cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                ),
             );
         let this = cx.entity().downgrade();
         popover::popover(

@@ -1,6 +1,7 @@
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
+use std::rc::Rc;
 
 type ToggleHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 
@@ -166,7 +167,24 @@ impl RenderOnce for Check {
         if hover.read(cx).animating() {
             window.request_animation_frame();
         }
-        let indicator = div().flex_none().mr(px(6.)).child(
+        // A radio group is one stop, at its chosen button, as the browser
+        // makes it; a disabled row is none.
+        let focus = (!self.disabled && (!self.radio || self.checked))
+            .then(|| super::focus::control(&self.id, window, cx));
+        // `.checkboxItem > input:focus-visible + .checkboxIndicator`: 1px of
+        // the primary colour, 2px out from the indicator.
+        let ring = focus.as_ref().and_then(|focus| {
+            focus.ring(
+                super::focus::Ring {
+                    width: 1.,
+                    offset: 2.,
+                    color: theme.primary(),
+                },
+                if self.radio { 8. } else { theme::RADIUS_SM },
+                0.,
+            )
+        });
+        let indicator = div().relative().flex_none().mr(px(6.)).children(ring).child(
             check_box(
                 if self.checked {
                     Mark::Selected
@@ -211,8 +229,16 @@ impl RenderOnce for Check {
                 cx.notify();
             })
         });
-        if let Some(handler) = self.on_toggle {
+        let handler: Option<Rc<dyn Fn(&mut Window, &mut App)>> = self.on_toggle.map(Rc::from);
+        if let Some(handler) = handler.clone() {
             row = row.on_click(move |_, window, cx| handler(window, cx));
+        }
+        if let Some(focus) = focus {
+            row = focus.attach(row, super::focus::Kind::Check, move |_, window, cx| {
+                if let Some(handler) = &handler {
+                    handler(window, cx);
+                }
+            });
         }
         row
     }

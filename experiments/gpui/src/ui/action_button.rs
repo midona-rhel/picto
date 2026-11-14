@@ -2,6 +2,7 @@ use super::tooltip::{self, Tip};
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
+use std::rc::Rc;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
@@ -211,7 +212,7 @@ impl RenderOnce for ActionButton {
             ),
         };
         let mut button = div()
-            .id(self.id)
+            .id(self.id.clone())
             .occlude()
             .relative()
             .h(px(self.height))
@@ -259,6 +260,13 @@ impl RenderOnce for ActionButton {
         if let Some(tip) = &self.tip {
             button = button.children(hint.read(cx).layer(tip, self.height, cx));
         }
+        // `.btn:focus-visible`; the Settings buttons draw no ring.
+        let focus = super::focus::control(&self.id, window, cx);
+        if !self.look.settings() {
+            button = button.children(
+                focus.ring(super::focus::Ring::button(&theme), theme::RADIUS_MD, 1.),
+            );
+        }
         let duration = motion::BUTTON_HOVER;
         let on_hover = self.on_hover;
         button = button
@@ -274,7 +282,14 @@ impl RenderOnce for ActionButton {
                 }
             });
         if let Some(handler) = self.on_click {
-            button = button.on_click(handler);
+            let handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> = Rc::from(handler);
+            let pressed = handler.clone();
+            button = button.on_click(move |event, window, cx| handler(event, window, cx));
+            button = focus.attach(button, super::focus::Kind::Button, move |event, window, cx| {
+                pressed(event, window, cx)
+            });
+        } else {
+            button = focus.attach(button, super::focus::Kind::Button, |_, _, _| {});
         }
         button
     }

@@ -703,6 +703,7 @@ impl Render for TagDialog {
         let keys = entity.clone();
         let search = shell::search_bar(
             &self.search,
+            true,
             move |key, _, cx| {
                 let _ = keys.update(cx, |this, cx| this.key(key, cx));
             },

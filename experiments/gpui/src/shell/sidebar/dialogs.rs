@@ -550,6 +550,7 @@ impl Sidebar {
                                             .items_center()
                                             .gap(px(8.))
                                             .child(ui::field::read_only_modal(
+                                                "watch-folder",
                                                 path.clone().map(SharedString::from),
                                                 "Select a folder...",
                                                 cx,

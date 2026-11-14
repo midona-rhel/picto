@@ -1824,6 +1824,11 @@ impl Render for TextInput {
         } else {
             div().size_full().flex().items_center()
         };
+        #[cfg(test)]
+        {
+            let name = format!("field \"{}\"", self.placeholder);
+            crate::ui::focus::names::name_text(&self.focus_handle(cx), name, cx);
+        }
         root.key_context(if self.multiline {
             "TextInput TextArea"
         } else {
@@ -1960,7 +1965,8 @@ impl Focusable for TextInput {
 impl TextInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            // A field is a stop for Tab, as an `<input>` is.
+            focus_handle: cx.focus_handle().tab_stop(true),
             content: "".into(),
             placeholder: "Search".into(),
             selected_range: 0..0,

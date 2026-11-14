@@ -108,6 +108,7 @@ impl Exports {
         let format = convert.format;
         let destination = row()
             .child(ui::field::read_only_modal(
+                "export-folder",
                 convert
                     .output_dir
                     .as_ref()

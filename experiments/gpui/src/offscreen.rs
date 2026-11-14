@@ -17,7 +17,8 @@
 //! `notify <tone> <title> | <message>`, which shows a notification
 //! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button), or
 //! `action <name>` (`action app_menu::Accept`, `action app_menu::SetRating
-//! 3`), which chooses an application menu row.
+//! 3`), which chooses an application menu row, or `focused`, which prints
+//! the control with the keyboard and whether it shows its focus ring.
 //! `PICTO_GPUI_LAZY=1` starts a script lazy. `PICTO_GPUI_WINDOW=1213x865`
 //! sets the main window's size. `PICTO_GPUI_STATE=<folder>` keeps what the
 //! script arranges (rail widths, folds, filters, shortcuts…) in that folder
@@ -149,6 +150,15 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200), lazy);
+        } else if line == "focused" {
+            // Prints the control with the keyboard, the off-screen side of
+            // the reference's `js document.activeElement`.
+            let focused = cx
+                .update_window(window, |_, window, cx| {
+                    crate::ui::focus::names::focused(window, cx)
+                })
+                .unwrap();
+            println!("focused: {focused}");
         } else if line == "lazy" || line == "eager" {
             lazy = line == "lazy";
         } else if let Some(rest) = line.strip_prefix("notify ") {

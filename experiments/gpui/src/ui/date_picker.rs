@@ -104,6 +104,17 @@ pub fn place_sized(
 
 /// `.navButton` and `.footerButton`: 26px, a faint border and fill that
 /// deepen under the pointer.
+/// Opens or closes the calendar, at the chosen day's month (today's
+/// without one).
+fn toggle_open(state: &Entity<State>, selected: Option<NaiveDate>, cx: &mut App) {
+    state.update(cx, |state, cx| {
+        state.open = !state.open;
+        let shown = selected.unwrap_or_else(|| Local::now().date_naive());
+        state.month = shown.with_day(1).unwrap_or(shown);
+        cx.notify();
+    });
+}
+
 fn frame_button(id: impl Into<ElementId>, theme: theme::Theme) -> Stateful<Div> {
     div()
         .id(id)
@@ -116,6 +127,36 @@ fn frame_button(id: impl Into<ElementId>, theme: theme::Theme) -> Stateful<Div> 
         .border_color(theme.contrast(14.))
         .bg(theme.contrast(5.))
         .cursor_pointer()
+}
+
+/// `.trigger`, `.navButton`, `.day` and `.footerButton` `:focus-visible`:
+/// 1px of the primary text colour, 1px out.
+fn ring(theme: &theme::Theme) -> super::focus::Ring {
+    super::focus::Ring {
+        width: 1.,
+        offset: 1.,
+        color: theme.text(),
+    }
+}
+
+/// A button of the calendar: a stop that Enter and Space press, with its
+/// ring. `border` is how thick the button's own border is.
+fn calendar_button(
+    button: Stateful<Div>,
+    id: ElementId,
+    border: f32,
+    window: &mut Window,
+    cx: &mut App,
+    press: impl Fn(&mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let theme = theme::theme(cx);
+    let focus = super::focus::control(&id, window, cx);
+    let button = button
+        .relative()
+        .children(focus.ring(ring(&theme), theme::RADIUS_MD, border));
+    focus.attach(button, super::focus::Kind::Button, move |_, window, cx| {
+        press(window, cx)
+    })
 }
 
 impl RenderOnce for DatePicker {
@@ -179,20 +220,29 @@ impl RenderOnce for DatePicker {
                     .absolute()
                     .inset_0()
             })
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                toggle.update(cx, |state, cx| {
-                    state.open = !state.open;
-                    let shown = selected.unwrap_or_else(|| Local::now().date_naive());
-                    state.month = shown.with_day(1).unwrap_or(shown);
-                    cx.notify();
-                });
+            .on_click({
+                let toggle = toggle.clone();
+                move |_, _, cx| {
+                    cx.stop_propagation();
+                    toggle_open(&toggle, selected, cx);
+                }
             });
         if selected.is_none() {
             trigger = trigger.text_color(theme.text_tertiary());
         }
+        // The trigger clips its label, so its ring is drawn beside it.
+        let focus = super::focus::control(&self.id, window, cx);
+        let trigger_ring = focus.ring(ring(&theme), theme::RADIUS_MD, 0.);
+        let trigger = focus.attach(trigger, super::focus::Kind::Button, move |_, _, cx| {
+            toggle_open(&toggle, selected, cx)
+        });
+        let trigger = div()
+            .relative()
+            .w_full()
+            .child(trigger)
+            .children(trigger_ring);
         if !open {
-            return div().w_full().child(trigger);
+            return trigger;
         }
 
         let today = Local::now().date_naive();
@@ -223,9 +273,19 @@ impl RenderOnce for DatePicker {
                 },
             )
         };
-        let step = |delta: i32, label: &'static str, icon: &'static str| {
+        let named = |name: &str| {
+            ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), name.to_owned().into())
+        };
+        let mut step = |delta: i32, label: &'static str, icon: &'static str| {
             let state = state.clone();
-            frame_button(label, theme)
+            let turn = move |cx: &mut App| {
+                state.update(cx, |state, cx| {
+                    state.month = add_months(state.month, delta);
+                    cx.notify();
+                })
+            };
+            let pressed = turn.clone();
+            let button = frame_button(label, theme)
                 .w(px(theme::CONTROL_SM))
                 .hover(move |style| {
                     style
@@ -235,11 +295,11 @@ impl RenderOnce for DatePicker {
                 .child(super::icon(icon, 15., theme.text()))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    state.update(cx, |state, cx| {
-                        state.month = add_months(state.month, delta);
-                        cx.notify();
-                    });
-                })
+                    turn(cx);
+                });
+            calendar_button(button, named(label), 1., window, cx, move |_, cx| {
+                pressed(cx)
+            })
         };
         let header = div()
             .flex()
@@ -286,6 +346,7 @@ impl RenderOnce for DatePicker {
                 let is_selected = selected == Some(day);
                 let is_today = day == today;
                 let pick = choose.clone();
+                let pressed = choose.clone();
                 let mut cell = div()
                     .id(SharedString::from(format!("date-{day}")))
                     .relative()
@@ -337,12 +398,72 @@ impl RenderOnce for DatePicker {
                             }),
                     );
                 }
+                let cell = calendar_button(
+                    cell,
+                    named(&format!("day-{day}")),
+                    0.,
+                    window,
+                    cx,
+                    move |window, cx| pressed(Some(day), window, cx),
+                );
                 row = row.child(cell);
             }
             grid = grid.child(row);
         }
         let today_pick = choose.clone();
+        let today_press = choose.clone();
+        let clear_press = choose.clone();
         let clear_pick = choose;
+        let today_button = calendar_button(
+            frame_button("date-today", theme)
+                .min_w(px(54.))
+                .px(px(9.))
+                .hover(move |style| {
+                    style
+                        .border_color(theme.contrast(22.))
+                        .bg(theme.contrast(11.))
+                })
+                .child("Today")
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    today_pick(Some(today), window, cx)
+                }),
+            named("today"),
+            1.,
+            window,
+            cx,
+            move |window, cx| today_press(Some(today), window, cx),
+        );
+        let mut clear_button = frame_button("date-clear", theme)
+            .min_w(px(54.))
+            .px(px(9.))
+            .when(selected.is_none(), |button| {
+                button.opacity(0.35).cursor_default()
+            })
+            .when(selected.is_some(), |button| {
+                button
+                    .hover(move |style| {
+                        style
+                            .border_color(theme.contrast(22.))
+                            .bg(theme.contrast(11.))
+                    })
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        clear_pick(None, window, cx)
+                    })
+            })
+            .child("Clear");
+        // Disabled with no day, and then no stop.
+        if selected.is_some() {
+            clear_button = calendar_button(
+                clear_button,
+                named("clear"),
+                1.,
+                window,
+                cx,
+                move |window, cx| clear_press(None, window, cx),
+            );
+        }
         let footer = div()
             .flex()
             .justify_end()
@@ -351,42 +472,8 @@ impl RenderOnce for DatePicker {
             .pt(px(8.))
             .border_t_1()
             .border_color(theme.border_secondary())
-            .child(
-                frame_button("date-today", theme)
-                    .min_w(px(54.))
-                    .px(px(9.))
-                    .hover(move |style| {
-                        style
-                            .border_color(theme.contrast(22.))
-                            .bg(theme.contrast(11.))
-                    })
-                    .child("Today")
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        today_pick(Some(today), window, cx)
-                    }),
-            )
-            .child(
-                frame_button("date-clear", theme)
-                    .min_w(px(54.))
-                    .px(px(9.))
-                    .when(selected.is_none(), |button| {
-                        button.opacity(0.35).cursor_default()
-                    })
-                    .when(selected.is_some(), |button| {
-                        button
-                            .hover(move |style| {
-                                style
-                                    .border_color(theme.contrast(22.))
-                                    .bg(theme.contrast(11.))
-                            })
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                clear_pick(None, window, cx)
-                            })
-                    })
-                    .child("Clear"),
-            );
+            .child(today_button)
+            .child(clear_button);
         let (x, y) = place(bounds.get(), window.viewport_size());
         let popover = super::glass_panel(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "calendar".into()),
