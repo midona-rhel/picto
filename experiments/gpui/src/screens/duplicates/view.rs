@@ -213,35 +213,36 @@ impl DuplicatesScreen {
         let built = rows::open_menu(&description, &hints);
         let entries = rows::entries(built, &mut |_| ui::menu::Entry::Separator);
         let menu = cx.new(|cx| ui::menu::Menu::new(entries, position, cx).search(false));
-        self.menu.open(menu, window, cx, move |this, _, key, _, cx| {
-            let Some(side) = this.shown.as_ref().map(|shown| &shown.sides[index]) else {
-                return;
-            };
-            if key == rows::Action::OpenDefault.key() {
-                // `openDefaultAppForHash`: where the library keeps the file.
-                if let Some(media) = &side.media {
-                    crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
-                }
-            } else if key == rows::Action::OpenInNewWindow.key() {
-                // `openDetailWindow({ hash, width, height })`: the file alone.
-                let Some(details) = &side.details else {
+        self.menu
+            .open(menu, window, cx, move |this, _, key, _, cx| {
+                let Some(side) = this.shown.as_ref().map(|shown| &shown.sides[index]) else {
                     return;
                 };
-                let entry = crate::viewer::detail::Entry {
-                    root: details.root.root_id,
-                    hash: side.file.file_hash.clone(),
-                    name: side
-                        .media
-                        .as_ref()
-                        .map(|media| media.media_name.clone())
-                        .unwrap_or_else(|| side.file.file_hash.clone()),
-                    width: side.file.pixel_width,
-                    height: side.file.pixel_height,
-                    collection: false,
-                };
-                crate::viewer::detail::open(this.session.clone(), vec![entry], 0, cx);
-            }
-        });
+                if key == rows::Action::OpenDefault.key() {
+                    // `openDefaultAppForHash`: where the library keeps the file.
+                    if let Some(media) = &side.media {
+                        crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
+                    }
+                } else if key == rows::Action::OpenInNewWindow.key() {
+                    // `openDetailWindow({ hash, width, height })`: the file alone.
+                    let Some(details) = &side.details else {
+                        return;
+                    };
+                    let entry = crate::viewer::detail::Entry {
+                        root: details.root.root_id,
+                        hash: side.file.file_hash.clone(),
+                        name: side
+                            .media
+                            .as_ref()
+                            .map(|media| media.media_name.clone())
+                            .unwrap_or_else(|| side.file.file_hash.clone()),
+                        width: side.file.pixel_width,
+                        height: side.file.pixel_height,
+                        collection: false,
+                    };
+                    crate::viewer::detail::open(this.session.clone(), vec![entry], 0, cx);
+                }
+            });
     }
 
     /// The preview pane: the image in its frame, zoomed and panned with the

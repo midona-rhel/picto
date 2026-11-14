@@ -21,6 +21,9 @@ pub enum Look {
     /// `.input` at the small control height, as a smart-folder rule's
     /// value field is (`.rule input`).
     ModalSmall,
+    /// `FolderRenameInput`: a grid subfolder tile's name in a `GlassInput`
+    /// 24px tall with 6px sides.
+    TileRename,
     /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
     /// the text with no frame of their own.
     ModalSearch,
@@ -120,6 +123,12 @@ impl Look {
             },
             Look::ModalSmall => Frame {
                 height: theme::CONTROL_SM,
+                ..Look::Modal.frame(theme)
+            },
+            Look::TileRename => Frame {
+                height: 24.,
+                left: 6.,
+                right: 6.,
                 ..Look::Modal.frame(theme)
             },
             Look::TextArea => Frame {
@@ -416,7 +425,7 @@ impl RenderOnce for Field {
             .child(measure);
         if matches!(
             self.look,
-            Look::Modal | Look::ModalSmall | Look::TextArea | Look::FormRow
+            Look::Modal | Look::ModalSmall | Look::TileRename | Look::TextArea | Look::FormRow
         ) {
             // `GlassInput`'s and the form rows' `color: var(--color-text-primary)`,
             // whatever colour the dialog's body gives its text.

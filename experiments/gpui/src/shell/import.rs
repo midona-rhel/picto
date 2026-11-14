@@ -86,6 +86,11 @@ impl Shell {
         .size_0();
         root.on_drag_move::<ExternalPaths>(cx.listener(
             |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                // The grid's own items, dragged out a moment ago, are not
+                // files to import (`isInternalDragOrigin`).
+                if crate::grid::drag::model(cx).read(cx).dragging_out() {
+                    return;
+                }
                 if this.file_drag.is_none() {
                     this.file_drag = Some(event.drag(cx).paths().to_vec());
                     cx.notify();

@@ -208,6 +208,20 @@ impl Shell {
                     this.open_tile_menu(event.0, window, cx)
                 },
             ),
+            // A subfolder tile's menu is the folder's: the sidebar builds it
+            // and acts on it.
+            cx.subscribe_in(
+                &grid,
+                window,
+                |this, grid, event: &grid::subfolders::FolderMenuRequested, window, cx| {
+                    let (node, selected, position) =
+                        (event.node.clone(), event.selected.clone(), event.position);
+                    let grid = grid.downgrade();
+                    this.sidebar.update(cx, |sidebar, cx| {
+                        sidebar.tile_menu(node, selected, position, grid, window, cx)
+                    });
+                },
+            ),
             cx.subscribe_in(
                 &grid,
                 window,

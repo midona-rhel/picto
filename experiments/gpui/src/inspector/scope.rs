@@ -99,6 +99,33 @@ pub(super) struct ScopeState {
     asked: Option<usize>,
     /// Whether the card's covers are pinned in the thumbnail cache.
     pinned: bool,
+    /// What a subfolder selected in the grid holds of its own: its size and
+    /// first items, by folder; `None` while being read.
+    subfolders: HashMap<FolderId, Option<Holding>>,
+    /// The selected subfolder whose record is being read.
+    reading: Option<Kind>,
+}
+
+/// A folder's own items, as the scope view of a selected subfolder shows
+/// them.
+#[derive(Clone)]
+struct Holding {
+    size: u128,
+    head: Vec<picto_library::query::RootSummary>,
+}
+
+/// What the scope view describes: a subfolder tile selected in the grid
+/// alone (`selectedSubfolderNodeIdAtom`), else the destination showing.
+/// Its place in the destination list, and the subfolder when it is one.
+fn described(session: &Session) -> (usize, Option<FolderId>) {
+    session
+        .selected_folder()
+        .and_then(|node| {
+            let index = session.nav.iter().position(|entry| entry.id() == node)?;
+            let folder = crate::grid::subfolders::folder_of(node)?;
+            Some((index, Some(folder)))
+        })
+        .unwrap_or((session.displayed, None))
 }
 
 impl ScopeState {
@@ -110,6 +137,8 @@ impl ScopeState {
             records: HashMap::new(),
             asked: None,
             pinned: false,
+            subfolders: HashMap::new(),
+            reading: None,
         }
     }
 
@@ -117,7 +146,7 @@ impl ScopeState {
     pub(super) fn ready(&self, session: &Session) -> bool {
         self.view
             .as_ref()
-            .is_some_and(|view| view.index == session.displayed)
+            .is_some_and(|view| view.index == described(session).0)
     }
 }
 
@@ -141,13 +170,25 @@ impl Inspector {
             }
         }
 
+        // A subfolder selected in the grid: its record, and what it holds.
+        let (index, subfolder) = described(self.session.read(cx));
+        if let Some(folder) = subfolder {
+            let kind = Kind::Folder(folder);
+            if !self.scope.records.contains_key(&kind) && self.scope.reading != Some(kind) {
+                self.scope.reading = Some(kind);
+                self.read_record(kind, cx);
+            }
+            if !self.scope.subfolders.contains_key(&folder) {
+                self.read_holding(folder, cx);
+            }
+        }
         let view = {
             let session = self.session.read(cx);
             // Before the first page there is nothing to describe.
             if session.results_epoch == 0 {
                 return;
             }
-            let Some(entry) = session.nav.get(session.displayed) else {
+            let Some(entry) = session.nav.get(index) else {
                 return;
             };
             if entry.screen.is_some() {
@@ -169,17 +210,33 @@ impl Inspector {
                 Some(Record::Smart(record)) => (record.notes.clone(), None),
                 None => (None, None),
             };
+            // A subfolder shows what it holds of its own: its count in the
+            // sidebar, and the size and first items of those.
+            let (total, size, head) = match subfolder {
+                Some(folder) => match self.scope.subfolders.get(&folder) {
+                    Some(Some(holding)) => (
+                        entry.count.unwrap_or(0),
+                        holding.size,
+                        holding.head.as_slice(),
+                    ),
+                    _ => return,
+                },
+                None => (
+                    session.total,
+                    session.total_size_bytes,
+                    session.head.as_slice(),
+                ),
+            };
             ScopeView {
-                index: session.displayed,
+                index,
                 kind,
                 name: entry.label.clone(),
                 notes: notes.unwrap_or_default(),
-                total: session.total,
-                size: session.total_size_bytes,
+                total,
+                size,
                 // The destination's first items, wherever the grid's window
                 // is (`queryHeadItems`).
-                covers: session
-                    .head
+                covers: head
                     .iter()
                     .take(COVERS)
                     .map(|item| Cover {
@@ -192,7 +249,11 @@ impl Inspector {
                             .map(|color| format::lab_to_rgb(color.l, color.a, color.b)),
                     })
                     .collect(),
-                search: session.search_text().trim().to_owned(),
+                search: if subfolder.is_some() {
+                    String::new()
+                } else {
+                    session.search_text().trim().to_owned()
+                },
                 folder,
             }
         };
@@ -211,6 +272,64 @@ impl Inspector {
         }
         self.scope.view = Some(view);
         cx.notify();
+    }
+
+    /// Reads the size and first items of what a subfolder holds of its own,
+    /// in the order production opens a folder in (newest first).
+    fn read_holding(&mut self, folder: FolderId, cx: &mut Context<Self>) {
+        self.scope.subfolders.insert(folder, None);
+        let job = self.session.read(cx).run(move |library| {
+            library.query(
+                &picto_library::query::RootQuery {
+                    scope: ItemScope::Folder { folder_id: folder },
+                    view: Default::default(),
+                },
+                &picto_library::query::PageRequest {
+                    limit: COVERS,
+                    cursor: None,
+                },
+            )
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = job.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(page) => {
+                    this.scope.subfolders.insert(
+                        folder,
+                        Some(Holding {
+                            size: page.total_size_bytes,
+                            head: page.items,
+                        }),
+                    );
+                    this.refresh_scope(cx);
+                }
+                Err(error) => {
+                    eprintln!("inspector: reading folder {folder} failed: {error}");
+                    this.scope.subfolders.remove(&folder);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Forgets what subfolders hold, after an edit, so the next one
+    /// selected is read afresh.
+    pub(super) fn forget_holdings(&mut self, cx: &App) {
+        self.scope.subfolders.clear();
+        // The selected subfolder's record is read again too; the
+        // destination's own is read again when it is opened.
+        let displayed = {
+            let session = self.session.read(cx);
+            session
+                .nav
+                .get(session.displayed)
+                .map(|entry| Kind::of(&entry.scope))
+        };
+        self.scope
+            .records
+            .retain(|kind, _| Some(*kind) == displayed || *kind == Kind::System);
     }
 
     /// Reads a folder's or smart folder's record on the library's thread.
@@ -244,6 +363,9 @@ impl Inspector {
                     eprintln!("inspector: reading {kind:?} failed: {error}");
                 }
                 this.scope.records.insert(kind, result.ok());
+                if this.scope.reading == Some(kind) {
+                    this.scope.reading = None;
+                }
                 this.refresh_scope(cx);
             });
         })

@@ -893,42 +893,7 @@ impl Render for GroupEditor {
         if let Some((target, side)) = self.dragging.as_ref().and_then(|d| d.target)
             && let Some(tile) = self.layout.tiles.get(target)
         {
-            let x = match side {
-                drag::Side::Left => tile.x - prefs.gap / 2.,
-                drag::Side::Right => tile.x + tile.w + prefs.gap / 2.,
-            };
-            let height = tile.h - text_height;
-            let color = rgb(theme::REORDER_INDICATOR);
-            content = content.child(
-                div()
-                    .absolute()
-                    .left(px(x - 1.))
-                    .top(px(tile.y))
-                    .w(px(2.))
-                    .h(px(height))
-                    .bg(color),
-            );
-            content = content.child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        let origin = bounds.origin;
-                        let mut path = PathBuilder::fill();
-                        path.move_to(origin);
-                        path.line_to(origin + point(px(10.), px(0.)));
-                        path.line_to(origin + point(px(5.), px(7.)));
-                        path.close();
-                        if let Ok(path) = path.build() {
-                            window.paint_path(path, color);
-                        }
-                    },
-                )
-                .absolute()
-                .left(px(x - 5.))
-                .top(px(tile.y))
-                .w(px(10.))
-                .h(px(7.)),
-            );
+            content = content.child(drag::reorder_marker(tile, side, prefs.gap, text_height));
         }
         if let Some(rect) = self.marquee.as_ref().and_then(|marquee| marquee.rect) {
             content = content.child(

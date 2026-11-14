@@ -619,6 +619,37 @@ pub const BLACK_25: u32 = 0x00000040;
 /// rgba(255, 255, 255, 0.7).
 pub const GRID_MAGNIFIER_BACKGROUND: u32 = 0x00000066;
 pub const GRID_MAGNIFIER_GLYPH: u32 = 0xffffffb3;
+
+/// A subfolder tile's card (`SubfolderGrid.module.css` `--folder-card*`):
+/// its fill from top to bottom, its top edge, its sides, and the two edges
+/// stacked behind it.
+#[derive(Clone, Copy)]
+pub struct FolderCard {
+    pub fill: (u32, u32),
+    pub top: u32,
+    pub side: u32,
+    pub middle: u32,
+    pub back: u32,
+}
+
+/// The dark themes: `radial-gradient(… rgb(255 255 255 / 15%), … / 5%)`,
+/// drawn as a linear one from the top (GPUI draws no radial gradients).
+pub const FOLDER_CARD_DARK: FolderCard = FolderCard {
+    fill: (0xffffff26, 0xffffff0d),
+    top: 0xffffff26,
+    side: 0xffffff0d,
+    middle: 0xffffff26,
+    back: 0xffffff1a,
+};
+
+/// `[data-mantine-color-scheme="light"]`: black washes.
+pub const FOLDER_CARD_LIGHT: FolderCard = FolderCard {
+    fill: (0x0000001a, 0x0000001a),
+    top: 0x00000033,
+    side: 0x0000001a,
+    middle: 0x00000033,
+    back: 0x0000001a,
+};
 /// The grid's selected name pill and the inspector preview's format badge:
 /// white text, the same in every theme.
 pub const BADGE_STRONG_TEXT: u32 = 0xffffff;

@@ -273,8 +273,32 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   picker above it, over the dialog; each change is saved at once through
   `set_folder_auto_tags`. Auto-Import Folder
   (`FolderWatchModal`): the directory from the system's folder chooser,
-  Enable Watch, Watch Subfolders, Import Status, Remove Watch, stored with
-  `set_folder_watch` or `clear_folder_watch`.
+  Enable Watch, Watch Subfolders, Import Status, Remove Watch, the folder's
+  structure checked as it is chosen (`imports.folder.analyze`: "Checking
+  the folder structure...", the depth warning, or the warning that it could
+  not be inspected, which hold Save), sent as `folders.watch.set` or
+  `folders.watch.clear`; the application's watcher imports what arrives
+  there every 30 s while Settings' Auto-Import is on. A copy cut loose at
+  launch has no watch until one is set in it.
+- Items dragged from the grid onto a subfolder tile go into that folder.
+  In a folder that shows only its own items, a drag among them puts them in
+  an order of their own (`computeReorderTarget`, the blue marker, then
+  `folders.items.reorder` and the folder's manual order, the items kept
+  selected); a folder showing its subfolders' items has no reorder marker
+  (production shows one and then fails). Items dragged out of the window go
+  to the system as their files (`media.resolve_target_paths`), and are not
+  imported again if they come back over it within 3 s.
+- The subfolder tiles (`SubfolderGrid.tsx`) above a folder's items: "Folders
+  (n)" with its disclosure, a card per child (or per descendant when the
+  folder shows its subfolders' items) with its cover, glyph, name on up to
+  two lines and count, then "Content (n)"; click selects (Cmd toggles), a
+  rubber band over them selects them, double-click opens the folder, the
+  right-click menu is `buildFolderContextMenu` (or the bulk one), and
+  Rename, New Subfolder and Duplicate from it rename the tile in place. One
+  tile selected shows that folder in the inspector: its own count, size and
+  first items, name, notes and details (production keeps the parent's
+  scope there unless an item was selected before, and then shows no covers
+  or size).
 - The sidebar's keyboard: from the tree filter, Down or Tab enters the
   rows; Up, Down, Tab and Shift-Tab move with the focus look, scrolling the
   row into view; Enter or Space opens it as a click does; Escape gives the
@@ -1229,18 +1253,20 @@ element (`shell/rails.rs`).
   ready, and while it enters it grows and fades but keeps its resting turn
   instead of turning from 10 to 5 degrees. The folder card's radial light is
   a vertical gradient. Auto Tag is drawn (dimmed when nothing in it is an
-  image) but the AI tagger it opens is a `TODO`. The subfolder scope, the
+  image) but the AI tagger it opens is a `TODO`. The
   summary spinners and the 250 ms switch to the loading skeleton are not
   ported, and a selection's covers follow the order items were chosen in this
   session, not the Electron query order, for shift ranges.
-- Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
-  folder shows above its items (an empty folder with subfolders shows the
-  empty state). The audio tile's
+- The subfolder tiles' cover is a vertical gradient rather than a radial
+  one, a cover that cannot be read shows the folder glyph rather than the
+  broken-file art, and the rename field's text is not centred. Items
+  dragged out of the window show the system's file-type icons rather than
+  production's composite ghost, and are only handed to the system on macOS
+  and Wayland (`Window::start_platform_drag`); elsewhere the drag ends at
+  the window's edge. Escape does not cancel an item drag. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: watching a directory (the
-  watch is stored, the watcher is a `TODO`, and the dialog does not check the
-  folder's structure). The activity
+- The activity
   button's tooltip opens below it, not to its right as `position="right"`
   puts it. Tab from the grid
   toggles the panels as in production, so the rows are entered from the
@@ -1254,8 +1280,7 @@ element (`shell/rails.rs`).
   the resize grip, the file types are the
   six built-in choices rather than the accepted formats. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
-  tiles light at once rather than over 50 ms. Dragging items out of the
-  window and reordering a folder's items by dragging are not built. The sidebar's
+  tiles light at once rather than over 50 ms. The sidebar's
   preferences (which system rows and sections show, counts, guides, the
   double-click action, Quick Access) come from the settings model and are
   written through it.
@@ -1566,6 +1591,10 @@ folder, file or save dialog the app asks for answer with that path without
 opening (`answer` alone cancels it); put it before the line that opens the
 dialog. Only the off-screen test reads it (`prompt.rs`). The reference's
 dialogs are the system's own and cannot be answered from a script.
+
+`invoke <command> <json>` sends an application command (`folders.create`,
+`items.set_folder`, …) and prints its answer, in both tools, so one script
+sets a copy up as it sets up the reference's.
 
 It redraws the whole window every tick, which hides a view that changes its
 state while a frame is drawn and waits for a frame nothing asks for (on

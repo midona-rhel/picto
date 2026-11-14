@@ -45,11 +45,30 @@ pub enum DragEvent {
     Moved,
     /// The button came up; whoever is under the pointer takes them.
     Dropped(ItemDrag),
+    /// The drag ended without a drop: it left the window and the system
+    /// carries the files on (`cancelDrag` after `startNativeDrag`).
+    Cancelled,
 }
+
+/// How long files dragged out of the window are not taken back as an import
+/// when they come over it again (`startNativeDrag`'s 3 s
+/// `internalDragOrigin`).
+pub const OUT_GUARD: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Drags {
     pub items: Option<ItemDrag>,
+    /// When the grid last handed its items to the system as files.
+    pub out_since: Option<std::time::Instant>,
+}
+
+impl Drags {
+    /// Whether files over the window are the grid's own, dragged out just
+    /// now (`isInternalDragOrigin`), which a drop must not import again.
+    pub fn dragging_out(&self) -> bool {
+        self.out_since
+            .is_some_and(|since| since.elapsed() < OUT_GUARD)
+    }
 }
 
 impl EventEmitter<DragEvent> for Drags {}
@@ -65,6 +84,15 @@ pub fn model(cx: &mut App) -> Entity<Drags> {
         cx.set_global(DragsGlobal(drags));
     }
     cx.global::<DragsGlobal>().0.clone()
+}
+
+/// Whether the pointer has left the window's viewport, where the system
+/// takes a drag over (`clientX <= 0 || … >= innerWidth`).
+pub fn left_window(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
+    position.x <= px(0.)
+        || position.y <= px(0.)
+        || position.x >= viewport.width
+        || position.y >= viewport.height
 }
 
 /// Whether the pointer has gone far enough from the press to drag.
@@ -205,6 +233,51 @@ pub fn reorder_target(
     best.map(|(_, index, side)| (index, side))
 }
 
+/// `CanvasGrid`'s reorder drop indicator: a 2px line in the gap at `side`
+/// of the tile's image, with a triangle at its top, in the coordinates the
+/// tile is laid out in.
+pub fn reorder_marker(tile: &super::layout::Tile, side: Side, gap: f32, text_height: f32) -> Div {
+    let x = match side {
+        Side::Left => tile.x - gap / 2.,
+        Side::Right => tile.x + tile.w + gap / 2.,
+    };
+    let color = rgb(theme::REORDER_INDICATOR);
+    div()
+        .absolute()
+        .left_0()
+        .top_0()
+        .child(
+            div()
+                .absolute()
+                .left(px(x - 1.))
+                .top(px(tile.y))
+                .w(px(2.))
+                .h(px(tile.h - text_height))
+                .bg(color),
+        )
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let origin = bounds.origin;
+                    let mut path = PathBuilder::fill();
+                    path.move_to(origin);
+                    path.line_to(origin + point(px(10.), px(0.)));
+                    path.line_to(origin + point(px(5.), px(7.)));
+                    path.close();
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                },
+            )
+            .absolute()
+            .left(px(x - 5.))
+            .top(px(tile.y))
+            .w(px(10.))
+            .h(px(7.)),
+        )
+}
+
 /// `planFolderReorder`: the order with the dragged items moved, as one block
 /// in their own order, to `side` of the item at `target`. Empty when nothing
 /// moves.
@@ -245,10 +318,20 @@ pub fn plan_reorder<T: Copy + PartialEq>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Side, past_threshold, plan_reorder, reorder_target};
+    use super::{Side, left_window, past_threshold, plan_reorder, reorder_target};
     use crate::grid::layout::Tile;
-    use gpui::{point, px};
+    use gpui::{point, px, size};
     use std::collections::HashSet;
+
+    #[test]
+    fn a_drag_leaves_the_window_at_its_edges() {
+        let viewport = size(px(1213.), px(865.));
+        assert!(!left_window(point(px(600.), px(400.)), viewport));
+        assert!(left_window(point(px(0.), px(400.)), viewport));
+        assert!(left_window(point(px(600.), px(-3.)), viewport));
+        assert!(left_window(point(px(1213.), px(400.)), viewport));
+        assert!(left_window(point(px(600.), px(900.)), viewport));
+    }
 
     #[test]
     fn a_dragged_block_moves_whole_and_in_order() {
