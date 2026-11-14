@@ -800,6 +800,8 @@ impl Render for DetailWindow {
         .child(pane)
         .children(ui::window_chrome::resize_edges(window))
         .children(self.menu.layer(window, cx))
+        // A video player that has the window to itself, over everything.
+        .children(super::video::fullscreen_layer(window, cx))
     }
 }
 

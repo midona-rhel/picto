@@ -306,6 +306,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "video.rateIncrease" => vec![to!(Media, viewer::video::RateIncrease)],
         "video.rateDecrease" => vec![to!(Media, viewer::video::RateDecrease)],
         "video.rateReset" => vec![to!(Media, viewer::video::RateReset)],
+        "video.fullscreen" => vec![to!(Media, viewer::video::ToggleFullscreen)],
         _ => Vec::new(),
     }
 }
@@ -333,10 +334,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("view.toggleTileName", "deferred in production"),
     ("view.toggleTileMetadata", "deferred in production"),
     ("view.toggleLogs", "no log window"),
-    (
-        "video.fullscreen",
-        "the shell cannot yet give the player the whole window",
-    ),
 ];
 
 /// Binds keys written as the registry writes them (`Mod+Q`), spelled for
@@ -782,7 +779,10 @@ mod tests {
             bound(KeyboardPreset::Us, &none, "video.togglePlay"),
             [("k".to_owned(), Scope::Media)]
         );
-        assert!(bound(KeyboardPreset::Us, &none, "video.fullscreen").is_empty());
+        assert_eq!(
+            bound(KeyboardPreset::Us, &none, "video.fullscreen"),
+            [("f".to_owned(), Scope::Media)]
+        );
     }
 
     #[test]

@@ -100,6 +100,7 @@ fn prepare(cx: &mut App) {
     app_menu::bind(cx);
     imports::bind(cx);
     viewer::document::bind(cx);
+    viewer::video::bind(cx);
     // The registry's shortcuts, with the preset and the bindings the user
     // changed.
     let (preset, overrides) = settings::keyboard(cx);

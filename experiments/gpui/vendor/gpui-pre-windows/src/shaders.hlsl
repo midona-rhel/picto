@@ -1217,7 +1217,7 @@ SubpixelSpriteFragmentOutput subpixel_sprite_fragment(MonochromeSpriteFragmentIn
 
 struct PolychromeSprite {
     uint order;
-    uint pad;
+    uint nearest;
     AtlasTile tile;
     uint grayscale;
     float opacity;
@@ -1260,7 +1260,16 @@ PolychromeSpriteVertexOutput polychrome_sprite_vertex(uint vertex_id: SV_VertexI
 
 float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
     PolychromeSprite sprite = poly_sprites[input.sprite_id];
-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
+    // Nearest-neighbour: the linear sampler read at the centre of the texel
+    // the position falls in returns that texel alone.
+    float2 tile_position = input.tile_position;
+    if (sprite.nearest != 0u) {
+        float atlas_width, atlas_height;
+        t_sprite.GetDimensions(atlas_width, atlas_height);
+        float2 atlas_size = float2(atlas_width, atlas_height);
+        tile_position = (floor(tile_position * atlas_size) + 0.5) / atlas_size;
+    }
+    float4 sample = t_sprite.Sample(s_sprite, tile_position);
     float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
 
     float4 color = sample;

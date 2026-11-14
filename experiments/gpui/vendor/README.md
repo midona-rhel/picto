@@ -8,7 +8,8 @@ the changes described here.
 These are the crates.io sources of `gpui-pre`, `gpui-pre-apple`,
 `gpui-pre-wgpu` and `gpui-pre-windows` version 0.3.12 (snapshot of
 zed-industries/zed at d2a4fb6), Apache-2.0 (each keeps its `LICENSE-APACHE`),
-with a backdrop-blur primitive added. `../Cargo.toml` substitutes them for the
+with a backdrop-blur primitive and nearest-neighbour image sampling added.
+`../Cargo.toml` substitutes them for the
 published crates with `[patch.crates-io]`; every other GPUI crate still comes
 from crates.io. Everything else in them is byte-for-byte the published
 package, so the diff at the end of this file is the whole change.
@@ -53,6 +54,16 @@ does not need: lens, dispersion, tint and rim light).
   tiled when the client's were asked for), as a Linux desktop that grants
   them does, so the off-screen checks draw a frameless window's own chrome
   (its buttons and resize edges) as on Linux.
+- Nearest-neighbour images (CSS `image-rendering: pixelated`, the Preview
+  setting "Scaling: Pixelated"): `PolychromeSprite`'s padding word after
+  `order` becomes `nearest` (a `PaddedBool32`, so the layout every shader
+  reads is unchanged; `src/scene.rs`); `Window::paint_image_sampled` takes
+  the choice and `Window::paint_image` calls it with `false`
+  (`src/window.rs`); `ImageStyle::pixelated` and `StyledImage::pixelated`
+  pass it from the `img` element (`src/elements/img.rs`). Each renderer's
+  sprite fragment shader then reads its linear sampler at the centre of the
+  texel the position falls in, which returns that texel alone; no sampler,
+  binding or pipeline is added.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -67,6 +78,9 @@ does not need: lens, dispersion, tint and rim light).
   drawable from a framebuffer-only layer cannot be read, so the window's
   layer is made readable the first time a frame has a blur (and stays so);
   a frame whose drawable is still framebuffer-only skips its blurs.
+- `src/shaders.metal`, `polychrome_sprite_fragment`: the nearest-neighbour
+  read. `vendor/gpui/src/scene.rs` (the copy the Metal header is generated
+  from) has the same `nearest` field.
 
 `gpui-pre-wgpu` (Linux; also the web)
 - `src/backdrop_blur.rs`, `src/backdrop_blur.wgsl`: the same passes. A
@@ -76,7 +90,10 @@ does not need: lens, dispersion, tint and rim light).
 - `src/wgpu_renderer.rs`: holds the blur renderer with the other device
   resources (dropped on device loss) and interleaves blurs in `record_frame`
   as the Metal renderer does. `src/gpui_wgpu.rs` declares the module.
-- `src/shaders.wgsl`: the shadow shader takes `inset == 2`.
+- `src/shaders.wgsl`: the shadow shader takes `inset == 2`; the
+  `PolychromeSprite` struct names its second word `nearest`, and
+  `fs_poly_sprite` does the nearest-neighbour read (by `select`, so the
+  texture sample stays in uniform control flow).
 - `src/wgpu_context.rs`: on Windows the instance also offers Direct3D 12.
   This crate is used there only by the off-screen checks (GPUI's Windows
   platform draws with DirectX itself), and a machine without a GPU, such as
@@ -84,7 +101,10 @@ does not need: lens, dispersion, tint and rim light).
   neither Vulkan nor a usable OpenGL.
 
 `gpui-pre-windows` (DirectX)
-- `src/shaders.hlsl`: the shadow shader takes `inset == 2`. The DirectX
+- `src/shaders.hlsl`: the shadow shader takes `inset == 2`; the
+  `PolychromeSprite` struct names its second word `nearest`, and
+  `polychrome_sprite_fragment` does the nearest-neighbour read
+  (`GetDimensions` for the atlas size). The DirectX
   renderer ignores `Scene::backdrop_blurs`, so on Windows a glass panel shows
   its translucent fill over an unblurred backdrop.
 
@@ -96,14 +116,18 @@ Metal header is generated from the `vendor/gpui` copy inside
 `gpui-pre-apple`; the blur parameters are a struct of floats declared on both
 sides by hand, so no generated type changes. Check: `cargo test` in
 `experiments/gpui` (the blur arithmetic and batching tests are in
-`src/ui/glass.rs`) and an off-screen picture of a menu over the grid.
+`src/ui/glass.rs`) and an off-screen picture of a menu over the grid; for
+nearest sampling, an off-screen picture of a small image zoomed in the
+viewer with Settings > Preview > Scaling set to Pixelated. The WGSL was
+validated with naga 30.0.1 (the version `wgpu` 30 uses) in all three of its
+variants; the HLSL was not compiled here.
 
 ## The diff against 0.3.12
 
 ```diff
 diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
---- a/gpui-pre/src/scene.rs	2006-07-24 03:21:28
-+++ b/gpui-pre/src/scene.rs	2026-11-13 20:28:30
+--- a/gpui-pre/src/scene.rs
++++ b/gpui-pre/src/scene.rs
 @@ -5,8 +5,8 @@
  use serde::{Deserialize, Serialize};
  
@@ -135,10 +159,12 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
      }
  
      pub fn len(&self) -> usize {
-@@ -138,10 +144,50 @@
+@@ -136,12 +142,52 @@
+         }
+         self.paint_operations
              .push(PaintOperation::Primitive(primitive));
-     }
- 
++    }
++
 +    /// Add a backdrop blur at the next draw order over its bounds, so that it
 +    /// blurs what was painted beneath it and what is painted over it later
 +    /// lands on top.
@@ -176,8 +202,8 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 +            }
 +            PrimitiveBatch::Surfaces(range) => self.surfaces[range.start].order,
 +        }
-+    }
-+
+     }
+ 
      pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
          for operation in &prev_scene.paint_operations[range] {
              match operation {
@@ -253,10 +279,11 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
      pub inset: u32,
      pub pad: u32, // align to 8 bytes
  }
-@@ -589,6 +651,173 @@
+@@ -588,9 +650,176 @@
+ impl From<Shadow> for Primitive {
      fn from(shadow: Shadow) -> Self {
          Primitive::Shadow(shadow)
-     }
++    }
 +}
 +
 +/// A region whose backdrop, everything drawn beneath it so far, is shown
@@ -401,14 +428,14 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 +            i += 2;
 +        }
 +        kernel
-+    }
+     }
 +
 +    /// How many texels from the centre the furthest tap reads.
 +    pub fn reach(&self) -> i32 {
 +        self.offsets[self.tap_count as usize - 1].ceil() as i32
 +    }
-+}
-+
+ }
+ 
 +/// Where a renderer reads and writes for one [`BackdropBlur`], in device
 +/// pixels of the frame.
 +#[derive(Debug, Clone, Copy, PartialEq)]
@@ -424,9 +451,23 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 +    pub reduced_size: Size<DevicePixels>,
 +    /// The gaussian run over the reduced backdrop, once across and once down.
 +    pub kernel: BackdropBlurKernel,
- }
- 
++}
++
  /// The style of a border.
+ #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+ #[repr(C)]
+@@ -748,7 +977,10 @@
+ #[expect(missing_docs)]
+ pub struct PolychromeSprite {
+     pub order: DrawOrder,
+-    pub pad: u32,
++    /// Sampled nearest-neighbour (CSS `image-rendering: pixelated`) rather
++    /// than linearly. Takes the place of the struct's former padding word,
++    /// so the layout the shaders read is unchanged.
++    pub nearest: PaddedBool32,
+     pub tile: AtlasTile,
+     pub grayscale: PaddedBool32,
+     pub opacity: f32,
 diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/platform/test/window.rs
 --- a/gpui-pre/src/platform/test/window.rs
 +++ b/gpui-pre/src/platform/test/window.rs
@@ -480,8 +521,8 @@ diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/pla
          self.bounds().size
      }
 diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
---- a/gpui-pre/src/window.rs	2006-07-24 03:21:28
-+++ b/gpui-pre/src/window.rs	2026-11-13 20:28:46
+--- a/gpui-pre/src/window.rs
++++ b/gpui-pre/src/window.rs
 @@ -8,7 +8,7 @@
  use crate::taffy::TaffyLayoutEngine;
  use crate::{
@@ -491,12 +532,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -1632,6 +1632,33 @@
-         (false, false) => display_bounds.origin,
-     };
+@@ -1634,6 +1634,33 @@
      window_bounds_ctor(Bounds::new(final_origin, base_size))
-+}
-+
+ }
+ 
 +/// What [`Window::paint_backdrop_blur`] does to the backdrop: CSS
 +/// `backdrop-filter: blur(blur_radius) saturate(saturation)
 +/// brightness(brightness)`.
@@ -522,33 +561,30 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            opacity: 1.,
 +        }
 +    }
- }
- 
- impl Window {
-@@ -2956,6 +2983,14 @@
-             callback(self, cx);
-         }
-         count
-+    }
++}
 +
+ impl Window {
+     pub(crate) fn new(
+         handle: AnyWindowHandle,
+@@ -2958,6 +2985,14 @@
+         count
+     }
+ 
 +    /// Whether the window has been invalidated since it was last drawn: what
 +    /// the platform's frame loop asks before drawing a frame. Tests use it to
 +    /// draw only the frames a real window would.
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn is_dirty(&self) -> bool {
 +        self.invalidator.is_dirty()
-     }
- 
++    }
++
      /// Spawn the future returned by the given closure on the application thread pool.
-@@ -4806,10 +4841,35 @@
-     ///
-     /// This method should only be called as part of the paint phase of element drawing.
-     pub fn paint_drop_shadows(
-+        &mut self,
-+        bounds: Bounds<Pixels>,
-+        corner_radii: Corners<Pixels>,
-+        shadows: &[BoxShadow],
-+    ) {
+     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
+     /// use within your future.
+@@ -4811,6 +4846,31 @@
+         corner_radii: Corners<Pixels>,
+         shadows: &[BoxShadow],
+     ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, false);
 +    }
 +
@@ -568,14 +604,15 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    }
 +
 +    fn paint_drop_shadows_cut(
-         &mut self,
-         bounds: Bounds<Pixels>,
-         corner_radii: Corners<Pixels>,
-         shadows: &[BoxShadow],
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
 +        outside: bool,
-     ) {
++    ) {
          self.invalidator.debug_assert_paint();
  
+         let scale_factor = self.scale_factor();
 @@ -4832,12 +4892,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
@@ -630,7 +667,57 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
      /// be called after the element's background so the shadow layers on top of the fill.
      /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
-@@ -6037,6 +6137,16 @@
+@@ -5215,7 +5315,7 @@
+ 
+             self.next_frame.scene.insert_primitive(PolychromeSprite {
+                 order: 0,
+-                pad: 0,
++                nearest: false.into(),
+                 grayscale: false.into(),
+                 bounds,
+                 corner_radii: Default::default(),
+@@ -5309,6 +5409,31 @@
+         frame_index: usize,
+         grayscale: bool,
+     ) -> Result<()> {
++        self.paint_image_sampled(
++            bounds,
++            image_bounds,
++            corner_radii,
++            data,
++            frame_index,
++            grayscale,
++            false,
++        )
++    }
++
++    /// [`Window::paint_image`], sampling the image nearest-neighbour when
++    /// `nearest` is set (CSS `image-rendering: pixelated`) instead of
++    /// linearly.
++    #[allow(clippy::too_many_arguments)]
++    pub fn paint_image_sampled(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        image_bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        data: Arc<RenderImage>,
++        frame_index: usize,
++        grayscale: bool,
++        nearest: bool,
++    ) -> Result<()> {
+         self.invalidator.debug_assert_paint();
+ 
+         let visible_bounds = bounds.intersect(&image_bounds);
+@@ -5387,7 +5512,7 @@
+ 
+         self.next_frame.scene.insert_primitive(PolychromeSprite {
+             order: 0,
+-            pad: 0,
++            nearest: nearest.into(),
+             grayscale: grayscale.into(),
+             bounds: visible_bounds_snapped,
+             content_mask,
+@@ -6037,6 +6162,16 @@
          }
      }
  
@@ -647,9 +734,58 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
          let PlatformInput::MouseMove(mouse_move) = event else {
              return;
+diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/img.rs
+--- a/gpui-pre/src/elements/img.rs
++++ b/gpui-pre/src/elements/img.rs
+@@ -124,6 +124,7 @@
+ /// The style of an image element.
+ pub struct ImageStyle {
+     grayscale: bool,
++    pixelated: bool,
+     object_fit: ObjectFit,
+     loading: Option<Box<dyn Fn() -> AnyElement>>,
+     fallback: Option<Box<dyn Fn() -> AnyElement>>,
+@@ -133,6 +134,7 @@
+     fn default() -> Self {
+         Self {
+             grayscale: false,
++            pixelated: false,
+             object_fit: ObjectFit::Contain,
+             loading: None,
+             fallback: None,
+@@ -148,6 +150,13 @@
+     /// Set the image to be displayed in grayscale.
+     fn grayscale(mut self, grayscale: bool) -> Self {
+         self.image_style().grayscale = grayscale;
++        self
++    }
++
++    /// Sample the image nearest-neighbour, as CSS `image-rendering:
++    /// pixelated` draws it, rather than linearly.
++    fn pixelated(mut self, pixelated: bool) -> Self {
++        self.image_style().pixelated = pixelated;
+         self
+     }
+ 
+@@ -489,13 +498,14 @@
+                         .get_bounds(bounds, data.size(layout_state.frame_index));
+                     let corner_radii = style.corner_radii.to_pixels(window.rem_size());
+                     window
+-                        .paint_image(
++                        .paint_image_sampled(
+                             bounds,
+                             new_bounds,
+                             corner_radii,
+                             data,
+                             layout_state.frame_index,
+                             self.style.grayscale,
++                            self.style.pixelated,
+                         )
+                         .log_err();
+                 } else if let Some(replacement) = &mut layout_state.replacement {
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/src/metal_renderer.rs
---- a/gpui-pre-apple/src/metal_renderer.rs	2006-07-24 03:21:28
-+++ b/gpui-pre-apple/src/metal_renderer.rs	2026-11-13 20:30:54
+--- a/gpui-pre-apple/src/metal_renderer.rs
++++ b/gpui-pre-apple/src/metal_renderer.rs
 @@ -2,8 +2,9 @@
  use anyhow::{Context as _, Result};
  use block2::RcBlock;
@@ -774,10 +910,12 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
              match batch {
                  PrimitiveBatch::Shadows(range) => {
                      self.draw_shadows(range, instance_bindings, viewport_size, &command_encoder)
-@@ -947,6 +1023,128 @@
-         Ok(command_buffer)
-     }
+@@ -945,6 +1021,128 @@
+         command_encoder.endEncoding();
  
+         Ok(command_buffer)
++    }
++
 +    /// Blur the frame drawn so far around `blur` and draw it back inside the
 +    /// region, in passes of their own between the frame's.
 +    fn draw_backdrop_blur(
@@ -898,15 +1036,17 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +        let textures = [new_texture()?, new_texture()?];
 +        self.backdrop_blur_textures = Some(textures.clone());
 +        Ok(textures)
-+    }
-+
+     }
+ 
      fn draw_paths_to_intermediate(
-         &self,
-         paths: &[Path<ScaledPixels>],
-@@ -1583,6 +1781,118 @@
-     device
-         .newRenderPipelineStateWithDescriptor_error(&descriptor)
-         .with_context(|| format!("creating {label} render pipeline"))
+@@ -1579,12 +1777,124 @@
+     color_attachment.setSourceAlphaBlendFactor(MTLBlendFactor::One);
+     color_attachment.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
+     color_attachment.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
++
++    device
++        .newRenderPipelineStateWithDescriptor_error(&descriptor)
++        .with_context(|| format!("creating {label} render pipeline"))
 +}
 +
 +/// A pipeline that writes its output as it is, without blending.
@@ -923,7 +1063,7 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +    let fragment_fn = library
 +        .newFunctionWithName(&NSString::from_str(fragment_fn_name))
 +        .with_context(|| format!("locating fragment function {fragment_fn_name}"))?;
-+
+ 
 +    let descriptor = MTLRenderPipelineDescriptor::new();
 +    descriptor.setLabel(Some(&NSString::from_str(label)));
 +    descriptor.setVertexFunction(Some(vertex_fn.as_ref()));
@@ -933,11 +1073,11 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +    color_attachment.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
 +    color_attachment.setBlendingEnabled(false);
 +
-+    device
-+        .newRenderPipelineStateWithDescriptor_error(&descriptor)
-+        .with_context(|| format!("creating {label} render pipeline"))
-+}
-+
+     device
+         .newRenderPipelineStateWithDescriptor_error(&descriptor)
+         .with_context(|| format!("creating {label} render pipeline"))
+ }
+ 
 +/// What the backdrop blur shaders read; mirrors `BackdropBlurParams` in
 +/// shaders.metal. Floats only, so both sides lay it out the same.
 +#[repr(C)]
@@ -1019,12 +1159,14 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +            opacity: blur.opacity,
 +        }
 +    }
- }
- 
++}
++
  fn build_path_sprite_pipeline_state(
+     device: &ProtocolObject<dyn MTLDevice>,
+     library: &ProtocolObject<dyn MTLLibrary>,
 diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/shaders.metal
---- a/gpui-pre-apple/src/shaders.metal	2006-07-24 03:21:28
-+++ b/gpui-pre-apple/src/shaders.metal	2026-11-13 20:29:53
+--- a/gpui-pre-apple/src/shaders.metal
++++ b/gpui-pre-apple/src/shaders.metal
 @@ -469,7 +469,7 @@
    Shadow shadow = shadows[shadow_id];
  
@@ -1046,11 +1188,28 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
    }
  
    return input.color * float4(1., 1., 1., alpha);
-@@ -1276,4 +1281,153 @@
-   }
+@@ -715,8 +720,15 @@
+   PolychromeSprite sprite = sprites[input.sprite_id];
+   constexpr sampler atlas_texture_sampler(mag_filter::linear,
+                                           min_filter::linear);
+-  float4 sample =
+-      atlas_texture.sample(atlas_texture_sampler, input.tile_position);
++  // Nearest-neighbour: the linear sampler read at the centre of the texel
++  // the position falls in returns that texel alone.
++  float2 tile_position = input.tile_position;
++  if (sprite.nearest) {
++    float2 atlas_size =
++        float2(atlas_texture.get_width(), atlas_texture.get_height());
++    tile_position = (floor(tile_position * atlas_size) + 0.5) / atlas_size;
++  }
++  float4 sample = atlas_texture.sample(atlas_texture_sampler, tile_position);
+   float distance =
+       quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+ 
+@@ -1277,3 +1289,152 @@
  
    return color;
-+}
+ }
 +
 +// --- backdrop blur --- //
 +//
@@ -1199,10 +1358,25 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
 +  float3 rgb = mix(float3(luma), color.rgb, params->saturation) * params->brightness;
 +  color.rgb = clamp(rgb, float3(0.), float3(color.a));
 +  return color * coverage;
- }
++}
+diff --color -ruN gpui-pre-apple-0.3.12/vendor/gpui/src/scene.rs b/gpui-pre-apple/vendor/gpui/src/scene.rs
+--- a/gpui-pre-apple/vendor/gpui/src/scene.rs
++++ b/gpui-pre-apple/vendor/gpui/src/scene.rs
+@@ -748,7 +748,10 @@
+ #[expect(missing_docs)]
+ pub struct PolychromeSprite {
+     pub order: DrawOrder,
+-    pub pad: u32,
++    /// Sampled nearest-neighbour (CSS `image-rendering: pixelated`) rather
++    /// than linearly. Takes the place of the struct's former padding word,
++    /// so the layout the shaders read is unchanged.
++    pub nearest: PaddedBool32,
+     pub tile: AtlasTile,
+     pub grayscale: PaddedBool32,
+     pub opacity: f32,
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/backdrop_blur.rs b/gpui-pre-wgpu/src/backdrop_blur.rs
---- a/gpui-pre-wgpu/src/backdrop_blur.rs	1970-01-01 01:00:00
-+++ b/gpui-pre-wgpu/src/backdrop_blur.rs	2026-11-13 20:48:11
+--- a/gpui-pre-wgpu/src/backdrop_blur.rs
++++ b/gpui-pre-wgpu/src/backdrop_blur.rs
 @@ -0,0 +1,465 @@
 +//! Backdrop blurs ([`gpui::BackdropBlur`]) for the wgpu renderer.
 +//!
@@ -1670,8 +1844,8 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/backdrop_blur.rs b/gpui-pre-wgpu/src/
 +    }
 +}
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/backdrop_blur.wgsl b/gpui-pre-wgpu/src/backdrop_blur.wgsl
---- a/gpui-pre-wgpu/src/backdrop_blur.wgsl	1970-01-01 01:00:00
-+++ b/gpui-pre-wgpu/src/backdrop_blur.wgsl	2026-11-13 20:50:08
+--- a/gpui-pre-wgpu/src/backdrop_blur.wgsl
++++ b/gpui-pre-wgpu/src/backdrop_blur.wgsl
 @@ -0,0 +1,149 @@
 +// Backdrop blur. The frame is drawn into a texture of its own while a blur is
 +// on screen; each blur shrinks the region around it into a scratch texture
@@ -1823,16 +1997,16 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/backdrop_blur.wgsl b/gpui-pre-wgpu/sr
 +    return textureLoad(source, vec2<i32>(input.position.xy), 0);
 +}
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/gpui_wgpu.rs b/gpui-pre-wgpu/src/gpui_wgpu.rs
---- a/gpui-pre-wgpu/src/gpui_wgpu.rs	2006-07-24 03:21:28
-+++ b/gpui-pre-wgpu/src/gpui_wgpu.rs	2026-11-13 20:48:32
+--- a/gpui-pre-wgpu/src/gpui_wgpu.rs
++++ b/gpui-pre-wgpu/src/gpui_wgpu.rs
 @@ -1,3 +1,4 @@
 +mod backdrop_blur;
  mod cosmic_text_system;
  mod wgpu_atlas;
  mod wgpu_context;
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/shaders.wgsl b/gpui-pre-wgpu/src/shaders.wgsl
---- a/gpui-pre-wgpu/src/shaders.wgsl	2006-07-24 03:21:28
-+++ b/gpui-pre-wgpu/src/shaders.wgsl	2026-11-13 20:29:08
+--- a/gpui-pre-wgpu/src/shaders.wgsl
++++ b/gpui-pre-wgpu/src/shaders.wgsl
 @@ -959,7 +959,7 @@
      // clip so the shadow never escapes the element.
      element_bounds: Bounds,
@@ -1863,6 +2037,36 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/shaders.wgsl b/gpui-pre-wgpu/src/shad
      }
  
      return blend_color(input.color, alpha);
+@@ -1261,7 +1266,7 @@
+ 
+ struct PolychromeSprite {
+     order: u32,
+-    pad: u32,
++    nearest: u32,
+     tile: AtlasTile,
+     grayscale: u32,
+     opacity: f32,
+@@ -1293,13 +1298,18 @@
+ 
+ @fragment
+ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
++    let sprite = load_poly_sprite(input.sprite_id);
++    // Nearest-neighbour: the linear sampler read at the centre of the texel
++    // the position falls in returns that texel alone.
++    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
++    let texel_centre = (floor(input.tile_position * atlas_size) + 0.5) / atlas_size;
++    let tile_position = select(input.tile_position, texel_centre, sprite.nearest != 0u);
++    let sample = textureSample(t_sprite, s_sprite, tile_position);
+     // Alpha clip after using the derivatives.
+     if (any(input.clip_distances < vec4<f32>(0.0))) {
+         return vec4<f32>(0.0);
+     }
+ 
+-    let sprite = load_poly_sprite(input.sprite_id);
+     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+ 
+     var color = sample;
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_context.rs b/gpui-pre-wgpu/src/wgpu_context.rs
 --- a/gpui-pre-wgpu/src/wgpu_context.rs
 +++ b/gpui-pre-wgpu/src/wgpu_context.rs
@@ -1883,8 +2087,8 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_context.rs b/gpui-pre-wgpu/src/w
              backend_options: wgpu::BackendOptions::default(),
              memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_renderer.rs b/gpui-pre-wgpu/src/wgpu_renderer.rs
---- a/gpui-pre-wgpu/src/wgpu_renderer.rs	2006-07-24 03:21:28
-+++ b/gpui-pre-wgpu/src/wgpu_renderer.rs	2026-11-13 20:48:32
+--- a/gpui-pre-wgpu/src/wgpu_renderer.rs
++++ b/gpui-pre-wgpu/src/wgpu_renderer.rs
 @@ -1,4 +1,5 @@
  // Modified for gpui-pre (snapshot of zed@d2a4fb6): adapt device queues and sRGB detection to wgpu 30.0.1.
 +use crate::backdrop_blur::BackdropBlurRenderer;
@@ -1990,21 +2194,21 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_renderer.rs b/gpui-pre-wgpu/src/
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
-@@ -1639,6 +1691,11 @@
-                     PrimitiveBatch::Surfaces(_surfaces) => {}
+@@ -1640,6 +1692,11 @@
                  }
              }
-+        }
+         }
 +        if blur_frame_view.is_some()
 +            && let Some(blur_renderer) = &self.resources.backdrop_blur
 +        {
 +            blur_renderer.present(&device, &mut encoder, target_view);
-         }
++        }
  
          let submission = self
+             .resources()
 diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/src/shaders.hlsl
---- a/gpui-pre-windows/src/shaders.hlsl	2006-07-24 03:21:28
-+++ b/gpui-pre-windows/src/shaders.hlsl	2026-11-13 20:29:00
+--- a/gpui-pre-windows/src/shaders.hlsl
++++ b/gpui-pre-windows/src/shaders.hlsl
 @@ -887,7 +887,7 @@
      Shadow shadow = shadows[shadow_id];
  
@@ -2026,4 +2230,31 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
      }
  
      return input.color * float4(1., 1., 1., alpha);
+@@ -1212,7 +1217,7 @@
+ 
+ struct PolychromeSprite {
+     uint order;
+-    uint pad;
++    uint nearest;
+     AtlasTile tile;
+     uint grayscale;
+     float opacity;
+@@ -1255,7 +1260,16 @@
+ 
+ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Target {
+     PolychromeSprite sprite = poly_sprites[input.sprite_id];
+-    float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
++    // Nearest-neighbour: the linear sampler read at the centre of the texel
++    // the position falls in returns that texel alone.
++    float2 tile_position = input.tile_position;
++    if (sprite.nearest != 0u) {
++        float atlas_width, atlas_height;
++        t_sprite.GetDimensions(atlas_width, atlas_height);
++        float2 atlas_size = float2(atlas_width, atlas_height);
++        tile_position = (floor(tile_position * atlas_size) + 0.5) / atlas_size;
++    }
++    float4 sample = t_sprite.Sample(s_sprite, tile_position);
+     float distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+ 
+     float4 color = sample;
 ```

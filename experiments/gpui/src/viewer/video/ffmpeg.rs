@@ -102,6 +102,22 @@ pub struct Info {
     pub fps: f64,
     pub duration: f64,
     pub audio: bool,
+    /// The YCbCr matrix the picture is converted to RGB with, as the
+    /// scaler names it.
+    pub matrix: &'static str,
+}
+
+/// The scaler's matrix for a stream's `color_space`. A stream that does not
+/// say is taken as BT.709, as Chromium takes it (the scaler's own default is
+/// BT.601, which draws reds and blues more saturated than production).
+pub fn color_matrix(color_space: Option<&str>) -> &'static str {
+    match color_space {
+        Some("bt470bg" | "smpte170m" | "bt601") => "bt601",
+        Some("bt2020nc" | "bt2020c") => "bt2020",
+        Some("smpte240m") => "smpte240m",
+        Some("fcc") => "fcc",
+        _ => "bt709",
+    }
 }
 
 /// Reads `ffprobe -of json` output.
@@ -159,6 +175,7 @@ pub fn parse_probe(json: &str) -> Result<Info, String> {
         fps,
         duration,
         audio: streams.iter().any(|stream| stream["codec_type"] == "audio"),
+        matrix: color_matrix(video["color_space"].as_str()),
     })
 }
 
@@ -247,8 +264,8 @@ impl VideoStream {
                 "-dn".into(),
                 "-vf".into(),
                 format!(
-                    "fps={:.6},scale={}:{}:flags=bicubic,format=bgra",
-                    info.fps, info.width, info.height
+                    "fps={:.6},scale={}:{}:flags=bicubic:in_color_matrix={},format=bgra",
+                    info.fps, info.width, info.height, info.matrix
                 ),
                 "-f".into(),
                 "rawvideo".into(),
@@ -656,7 +673,9 @@ impl Backend for FfmpegPlayer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, FfmpegPlayer, Frame, Info, SEEK_INTERVAL, parse_probe, seek_due};
+    use super::{
+        Backend, FfmpegPlayer, Frame, Info, SEEK_INTERVAL, color_matrix, parse_probe, seek_due,
+    };
 
     #[test]
     fn a_scrub_restarts_the_decoders_at_most_every_interval() {
@@ -683,6 +702,7 @@ mod tests {
                 fps: 30000. / 1001.,
                 duration: 10.051,
                 audio: true,
+                matrix: "bt709",
             }
         );
         let silent = r#"{"streams":[{"codec_type":"video","width":640,"height":480,
@@ -690,6 +710,15 @@ mod tests {
         let info = parse_probe(silent).unwrap();
         assert_eq!((info.fps, info.duration, info.audio), (25., 0., false));
         assert!(parse_probe(r#"{"streams":[{"codec_type":"audio"}]}"#).is_err());
+    }
+
+    #[test]
+    fn untagged_video_converts_as_bt709() {
+        assert_eq!(color_matrix(None), "bt709");
+        assert_eq!(color_matrix(Some("unknown")), "bt709");
+        assert_eq!(color_matrix(Some("smpte170m")), "bt601");
+        assert_eq!(color_matrix(Some("bt470bg")), "bt601");
+        assert_eq!(color_matrix(Some("bt2020nc")), "bt2020");
     }
 
     /// Plays a video named by `PICTO_GPUI_TEST_WEBM` through the bundled
