@@ -1192,7 +1192,7 @@ impl SubscriptionsScreen {
                         .cursor_pointer()
                         .hover(move |style| style.text_color(theme.primary()).underline())
                         .child(target_label)
-                        .on_click(move |_, _, cx| cx.open_url(&url))
+                        .on_click(move |_, _, cx| crate::desktop::open_link(&url, cx))
                         .into_any_element(),
                     None => div()
                         .w_full()

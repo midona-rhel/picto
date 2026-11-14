@@ -260,6 +260,38 @@ fn listed(paths: &[PathBuf]) -> String {
         .join(" | ")
 }
 
+/// Whether a link may be handed to the system: only web addresses, as
+/// production's `open_external_url` allows. A source address comes from
+/// downloaded metadata or from what was typed, so a `file:` address or one
+/// for another application's scheme is never opened.
+pub fn is_web_link(link: &str) -> bool {
+    let link = link.trim();
+    let Some((scheme, rest)) = link.split_once(':') else {
+        return false;
+    };
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && rest.starts_with("//")
+        && rest.len() > 2
+}
+
+/// `open_external_url`: a web address in the browser. Anything else is
+/// refused with production's message.
+pub fn open_link(link: &str, cx: &mut App) {
+    if !is_web_link(link) {
+        crate::ui::notify::error(
+            "Could not open link",
+            "Only HTTP and HTTPS links can be opened externally",
+            cx,
+        );
+        return;
+    }
+    if live(cx) {
+        cx.open_url(link.trim());
+    } else {
+        record(format!("open-link {}", link.trim()));
+    }
+}
+
 /// `shell.openPath`: the file in its default application.
 pub fn open_default(path: &Path, cx: &App) {
     if live(cx) {
@@ -802,6 +834,29 @@ fn sort_applications(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_web_links_are_opened() {
+        for link in [
+            "https://example.com/a?b=c",
+            "http://example.com",
+            " HTTPS://Example.com ",
+        ] {
+            assert!(super::is_web_link(link), "{link}");
+        }
+        for link in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "picto://open",
+            "smb://server/share",
+            "https:",
+            "https://",
+            "example.com",
+            "",
+        ] {
+            assert!(!super::is_web_link(link), "{link}");
+        }
+    }
+
     use super::{
         Application, active_runs, badge_count, finished_body, new_items, sort_applications,
     };
