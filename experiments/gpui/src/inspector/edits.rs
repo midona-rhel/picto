@@ -30,9 +30,12 @@ impl Inspector {
     pub(super) fn target(&self, cx: &App) -> Option<Target> {
         let session = self.session.read(cx);
         let records = |ids: &[TagId]| {
-            ids.iter()
+            let mut records = ids
+                .iter()
                 .filter_map(|id| session.tags.get(&id.0).cloned())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            crate::tags::sort_as_library(&mut records);
+            records
         };
         match self.shown {
             Mode::Item => {

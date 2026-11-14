@@ -691,11 +691,14 @@ impl Inspector {
         let (entries, tags) = {
             let session = self.session.read(cx);
             let tags = summary.as_ref().map_or_else(Vec::new, |summary| {
-                summary
+                let mut tags = summary
                     .shared_tags
                     .iter()
                     .filter_map(|id| session.tags.get(&id.0).cloned())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                // As production lists them, unsorted after `tags.get_many`.
+                crate::tags::sort_as_library(&mut tags);
+                tags
             });
             (session.nav.clone(), tags)
         };
