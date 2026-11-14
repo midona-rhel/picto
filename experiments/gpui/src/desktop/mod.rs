@@ -664,6 +664,7 @@ pub fn system_path(path: &Path) -> PathBuf {
 }
 
 /// Production's order: the default application first, then by name.
+#[cfg(any(test, target_os = "macos"))]
 fn sort_applications(
     applications: &mut [Application],
     compare: impl Fn(&str, &str) -> std::cmp::Ordering,
