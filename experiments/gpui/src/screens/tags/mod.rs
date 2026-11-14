@@ -145,7 +145,7 @@ impl TagsScreen {
     ) -> Self {
         let search = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Search tags"))
+                .placeholder("Search tags")
                 .submits()
         });
         let toolbar = cx.new(|cx| TagsToolbar {

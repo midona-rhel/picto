@@ -126,7 +126,7 @@ impl BatchRename {
         let pattern = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
         let replacement = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Replace with"))
+                .placeholder("Replace with")
                 .submits()
         });
         let start = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
@@ -192,7 +192,8 @@ impl BatchRename {
         }
         // Find shares the format's text, as one field in production.
         self.pattern.update(cx, |input, _| {
-            input.set_placeholder(if mode == Mode::Replace { t("Find") } else { "" })
+            // i18n: a placeholder; the field shows it in the language
+            input.set_placeholder(if mode == Mode::Replace { "Find" } else { "" })
         });
         cx.notify();
     }

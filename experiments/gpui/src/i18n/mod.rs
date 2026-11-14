@@ -134,9 +134,13 @@ static CATALOGS: LazyLock<Vec<Catalog>> = LazyLock::new(|| {
 /// `messageKeyByTranslation`: the English key of each translation, the
 /// first catalog's when two share a text.
 static KEY_BY_TRANSLATION: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
+    // In a fixed order (catalogs in `Locale::ALL`'s, keys sorted), so a
+    // translation two keys share is always told back to the same one.
     let mut keys = HashMap::new();
     for catalog in CATALOGS.iter() {
-        for (key, translation) in catalog {
+        let mut entries: Vec<_> = catalog.iter().collect();
+        entries.sort_unstable();
+        for (key, translation) in entries {
             keys.entry(translation.as_str()).or_insert(key.as_str());
         }
     }

@@ -84,7 +84,7 @@ impl SourcesState {
             editing: None,
             input: cx.new(|cx| {
                 TextInput::new(Kind::Inspector, cx)
-                    .placeholder(t("https://..."))
+                    .placeholder("https://...")
                     .submits()
             }),
             field: Rc::new(Cell::new(Bounds::default())),

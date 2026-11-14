@@ -214,7 +214,7 @@ impl LibraryPopover {
         cx: &mut Context<Self>,
     ) -> Self {
         let search =
-            cx.new(|cx| TextInput::new(Kind::Popover, cx).placeholder(t("Search libraries…")));
+            cx.new(|cx| TextInput::new(Kind::Popover, cx).placeholder("Search libraries…"));
         let subscriptions = vec![cx.observe(&search, |_, _, cx| cx.notify())];
         let mut this = Self {
             session,

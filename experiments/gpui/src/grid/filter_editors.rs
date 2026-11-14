@@ -292,7 +292,7 @@ impl SaveFilterEditor {
     pub fn new(savable: bool, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Filter name"))
+                .placeholder("Filter name")
                 .submits()
         });
         let subscriptions = vec![

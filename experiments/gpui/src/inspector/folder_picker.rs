@@ -250,7 +250,7 @@ pub struct FolderPicker {
 
 impl FolderPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder(t("Search...")));
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
         let menu = menu::Host::deferred(
             crate::ui::layer::MENU,
             menu::Return::To(search.read(cx).focus_handle(cx)),
@@ -667,7 +667,7 @@ impl FolderPicker {
     ) {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Folder name"))
+                .placeholder("Folder name")
                 .submits()
         });
         let subscriptions = vec![

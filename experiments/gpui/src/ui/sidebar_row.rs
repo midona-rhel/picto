@@ -525,7 +525,9 @@ impl RenderOnce for SidebarRow {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(self.label),
+                    // `translateMessage(node.name)`, as production's sidebar
+                    // shows every row's name.
+                    .child(crate::i18n::t_shared(self.label)),
             ),
         };
         if let Some(activity) = self.activity {

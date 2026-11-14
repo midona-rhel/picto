@@ -188,6 +188,9 @@ impl SettingsModel {
         self.saved.locale = locale.code();
         crate::state::update(cx, |state| state.locale = locale.code().into());
         crate::i18n::show(locale, cx);
+        // The destinations' names were read in the language before.
+        self.session
+            .update(cx, |session, cx| session.refresh_navigation(cx));
         cx.notify();
     }
 

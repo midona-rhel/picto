@@ -329,7 +329,7 @@ impl Sidebar {
         home: FocusHandle,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter = cx.new(|cx| TextInput::new(Kind::Sidebar, cx).placeholder(t("Filter")));
+        let filter = cx.new(|cx| TextInput::new(Kind::Sidebar, cx).placeholder("Filter"));
         let switcher = Rc::new(Cell::new(Bounds::default()));
         let library_popover = cx.new(|cx| {
             LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)

@@ -196,13 +196,13 @@ impl Inspector {
     ) -> Self {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Inspector, cx)
-                .placeholder(t("Name"))
+                .placeholder("Name")
                 .commits_on_blur(window, cx)
                 .expanding()
         });
         let notes = cx.new(|cx| {
             TextInput::new(Kind::Inspector, cx)
-                .placeholder(t("Notes"))
+                .placeholder("Notes")
                 .commits_on_blur(window, cx)
                 .expanding()
         });

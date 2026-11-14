@@ -2,8 +2,10 @@
 //! text that would show in English whatever the language.
 //!
 //! What it checks, in the code outside tests:
-//! - every literal given to `t(…)` or `tf!(…)` is one of production's keys
-//!   (`en.json`), so the lookup cannot miss;
+//! - every literal given to `t(…)` or `tf!(…)`, or to a shared control
+//!   that translates what it is given (a menu row, a select's choice, a text
+//!   field's placeholder), is one of production's keys (`en.json`), so the
+//!   lookup cannot miss;
 //! - every literal given to `en(…)`, the mark of a text only this app has,
 //!   is not a key (it would be translatable) and is listed in
 //!   `gpui_only.txt`, and every line there is still used;
@@ -42,12 +44,11 @@ const NOT_SHOWN: [&str; 7] = [
 ];
 
 /// Calls whose literal argument is drawn.
-const SINKS: [&str; 14] = [
+const SINKS: [&str; 13] = [
     "tip(",
     ".child(",
     ".label(",
     ".tooltip(",
-    ".placeholder(",
     ".title(",
     ".message(",
     ".description(",
@@ -367,7 +368,9 @@ fn usage(before: &str) -> Use {
                 && action.len() > 1
                 && !action[..action.len() - 1].contains([',', '(', ')'])
         })
-    }) || compact.ends_with("submenu(");
+    }) || compact.ends_with("submenu(")
+        || compact.ends_with(".placeholder(")
+        || compact.ends_with(".set_placeholder(");
     if translating || called("t(") || called("tf!(") || called("t_with(") || called("i18n::t(") {
         Use::Translated
     } else if called("en(") || called("i18n::en(") {
@@ -500,7 +503,7 @@ fn scan() -> Findings {
             let at = format!("{name}:{} {:?}", literal.line, literal.text);
             match usage(&literal.before) {
                 Use::Translated => {
-                    if !super::is_key(&literal.text) {
+                    if !super::is_key(&literal.text) && has_letters(&literal.text) {
                         findings.unknown_keys.push(at);
                     }
                 }

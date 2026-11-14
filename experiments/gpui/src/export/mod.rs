@@ -366,12 +366,12 @@ impl Exports {
     pub fn export_as(&mut self, target: SelectionTarget, count: u64, cx: &mut Context<Self>) {
         let width = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Width"))
+                .placeholder("Width")
                 .submits()
         });
         let height = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Height"))
+                .placeholder("Height")
                 .submits()
         });
         let typed = |input: &Entity<TextInput>, cx: &mut Context<Self>| {

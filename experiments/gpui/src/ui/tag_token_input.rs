@@ -71,7 +71,7 @@ impl TagTokenInput {
     pub fn new(values: Vec<String>, search: Search, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextInput::new(super::text_input::Kind::Form, cx)
-                .placeholder(t("Search tags..."))
+                .placeholder("Search tags...")
                 .submits()
         });
         let subscriptions = vec![

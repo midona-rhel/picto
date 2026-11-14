@@ -136,13 +136,13 @@ impl ScopeState {
         Self {
             name: cx.new(|cx| {
                 TextInput::new(text_input::Kind::Inspector, cx)
-                    .placeholder(t("Name"))
+                    .placeholder("Name")
                     .commits_on_blur(window, cx)
                     .expanding()
             }),
             notes: cx.new(|cx| {
                 TextInput::new(text_input::Kind::Inspector, cx)
-                    .placeholder(t("Notes"))
+                    .placeholder("Notes")
                     .commits_on_blur(window, cx)
                     .expanding()
             }),

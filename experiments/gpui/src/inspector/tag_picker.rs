@@ -117,7 +117,7 @@ pub struct TagPicker {
 
 impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder(t("Search...")));
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
         // The keyboard goes back to the search once a row's menu has gone.
         let menu = menu::Host::deferred(
             crate::ui::layer::MENU,

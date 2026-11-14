@@ -89,9 +89,9 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
 
 impl SettingsWindow {
     fn new(model: Entity<SettingsModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder(t("Search...")));
+        let search = cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder("Search..."));
         let shortcut_search =
-            cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder(t("Search shortcuts…")));
+            cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder("Search shortcuts…"));
         let capture_focus = cx.focus_handle();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);

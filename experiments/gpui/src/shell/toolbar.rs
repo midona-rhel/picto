@@ -48,7 +48,7 @@ impl Toolbar {
     }
 
     pub fn new(session: Entity<Session>, viewer: &Entity<Viewer>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Search, cx).placeholder(t("Search")));
+        let search = cx.new(|cx| TextInput::new(Kind::Search, cx).placeholder("Search"));
         let zoom = cx.new(|_| Zoom::new());
         let subscriptions = vec![
             cx.observe(&search, |this, search, cx| {
@@ -163,6 +163,9 @@ impl Toolbar {
         let mut path = div().flex().items_center().whitespace_nowrap();
         let separator = || div().mx(px(5.)).opacity(0.4).child("/");
         for (position, (index, label)) in crumbs.into_iter().enumerate() {
+            // `translateMessage(label)`: a destination's name in the language
+            // of the moment.
+            let label = crate::i18n::t(&label).to_owned();
             if position == last && results.is_none() {
                 path = path.child(div().child(label));
                 continue;

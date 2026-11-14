@@ -101,7 +101,7 @@ impl SelectionState {
         Self {
             notes: cx.new(|cx| {
                 TextInput::new(Kind::Inspector, cx)
-                    .placeholder(t("Notes"))
+                    .placeholder("Notes")
                     .commits_on_blur(window, cx)
                     .expanding()
             }),

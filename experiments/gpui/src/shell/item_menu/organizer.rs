@@ -69,12 +69,12 @@ impl Organizer {
     pub fn new(session: Entity<Session>, request: Request, cx: &mut Context<Self>) -> Self {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder(t("Group name"))
+                .placeholder("Group name")
                 .submits()
         });
         let notes = cx.new(|cx| {
             let mut input =
-                TextInput::new(Kind::Area, cx).placeholder(t("Optional notes for the collection"));
+                TextInput::new(Kind::Area, cx).placeholder("Optional notes for the collection");
             input.set_text(request.notes, cx);
             input
         });

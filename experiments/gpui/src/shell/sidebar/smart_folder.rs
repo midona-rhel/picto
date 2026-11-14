@@ -149,14 +149,14 @@ impl SmartFolderEditor {
         };
         let name = cx.new(|cx| {
             let mut input = TextInput::new(Kind::Form, cx)
-                .placeholder(t("Smart Folder Name"))
+                .placeholder("Smart Folder Name")
                 .submits();
             input.set_text(name, cx);
             input.caret_at_end(cx);
             input
         });
         let notes = cx.new(|cx| {
-            let mut input = TextInput::new(Kind::Area, cx).placeholder(t("Notes..."));
+            let mut input = TextInput::new(Kind::Area, cx).placeholder("Notes...");
             input.set_text(notes, cx);
             input
         });
