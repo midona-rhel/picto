@@ -212,9 +212,12 @@ impl SettingsWindow {
                             theme,
                             "Check for a newer version of Picto.",
                             div().flex().gap(px(8.)).child(
-                                // TODO: check the release feed and offer the download.
+                                // TODO: check the release feed and offer the
+                                // download; disabled until then, as the
+                                // application menu's Check for Updates is.
                                 ui::action_button("check-updates", Look::Settings)
-                                    .label("Check Now"),
+                                    .label("Check Now")
+                                    .disabled(true),
                             ),
                         ))
                         .child(

@@ -613,6 +613,8 @@ impl Inspector {
         } else {
             "Auto Tag".to_owned()
         };
+        // Production's disabled look until the AI tagger is built.
+        let enabled = enabled && crate::grid::menu::AUTO_TAG_BUILT;
         let row = ui::action_row(
             SharedString::from(format!("{id}-action")),
             "inspector-auto-tag",

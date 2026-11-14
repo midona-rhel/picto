@@ -84,11 +84,9 @@ impl Shell {
                     );
                 }
             }
-            Action::OpenWithOther => {
-                // TODO: open Windows' own application chooser on the file
-                // (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), which
-                // is the only system that offers this row.
-            }
+            // TODO: Windows' application chooser (see the row, which stays
+            // disabled until then).
+            Action::OpenWithOther => {}
             Action::LoadingApplications => {}
             Action::OpenFolder => {
                 // TODO: open the folder tile's folder once the grid shows
@@ -337,10 +335,9 @@ impl Shell {
                 self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
             }
-            Action::AutoTag => {
-                // TODO: open the AI tagger on the selection, beside the
-                // inspector.
-            }
+            // TODO: open the AI tagger on the selection, beside the inspector
+            // (the row stays disabled until then).
+            Action::AutoTag => {}
             Action::CopyTags => self.copy_tags(target, cx),
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();
@@ -392,11 +389,8 @@ impl Shell {
                     });
                 }
             }
-            Action::SearchByImage(_) => {
-                // TODO: production uploads the original to the engine from a
-                // hidden browser window (`runReverseImageSearch`) and shows
-                // the results page; this needs that upload.
-            }
+            // TODO: reverse image search (the rows stay disabled until then).
+            Action::SearchByImage(_) => {}
             Action::SetLibraryCover => {
                 // The shown file, framed at once (`initialCandidate`).
                 if let (Some(item), Some(file)) = (target.items.first(), file) {

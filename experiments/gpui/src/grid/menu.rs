@@ -49,9 +49,25 @@ pub enum OpenWith {
     /// nothing when there are none.
     Applications(Vec<crate::desktop::Application>),
     /// The system's own chooser (Windows): one row.
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Chooser,
 }
+
+// Rows production offers and runs whose feature this app does not have
+// yet: they are drawn where production draws them, disabled, as the
+// application menu's rows for the same features are (`.todo()`).
+
+// TODO: open the AI tagger on the items, beside the inspector
+// (`aiTaggerPortalAtom`); then enable Auto Tag here and in the inspector.
+pub const AUTO_TAG_BUILT: bool = false;
+// TODO: production uploads the original to the engine from a hidden browser
+// window and shows the results page (`runReverseImageSearch`); search by
+// image needs that upload.
+const SEARCH_BY_IMAGE_BUILT: bool = false;
+// TODO: open Windows' own application chooser on the file
+// (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), the only system that
+// offers "Open With Other...".
+const OPEN_WITH_CHOOSER_BUILT: bool = false;
 
 /// The reverse image search providers (`REVERSE_IMAGE_SEARCH_ENGINES`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -449,10 +465,14 @@ impl Builder<'_> {
                 ))
             }
             OpenWith::Chooser if h.open_with_chooser => rows.push(
-                item(Action::OpenWithOther, "Open With Other...", true)
-                    .icon("menu-apps")
-                    .shortcut(self.hint("file.openOtherApp"))
-                    .into(),
+                item(
+                    Action::OpenWithOther,
+                    "Open With Other...",
+                    OPEN_WITH_CHOOSER_BUILT,
+                )
+                .icon("menu-apps")
+                .shortcut(self.hint("file.openOtherApp"))
+                .into(),
             ),
             _ => {}
         }
@@ -556,6 +576,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         }
         return rows;
     }
+
     if d.folders_only {
         if d.single
             && d.single_hash
@@ -786,7 +807,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             )
             .icon("menu-auto-tag")
             .shortcut(b.hint("organize.autoTag"))
-            .disabled(!ai_tag_enabled)
+            .disabled(!ai_tag_enabled || !AUTO_TAG_BUILT)
             .into(),
         );
         rows.push(
@@ -846,7 +867,14 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             Some("menu-search"),
             ENGINES
                 .iter()
-                .map(|(engine, label)| item(Action::SearchByImage(*engine), *label, true).into())
+                .map(|(engine, label)| {
+                    item(
+                        Action::SearchByImage(*engine),
+                        *label,
+                        SEARCH_BY_IMAGE_BUILT,
+                    )
+                    .into()
+                })
                 .collect(),
         ));
         rows.push(Row::Separator);
