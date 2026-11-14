@@ -118,7 +118,11 @@ pub fn info_widths(name: f32, available: f32) -> (f32, f32) {
 /// Where the Electron app keeps `config.json` (`app.getPath('appData')`
 /// joined with `picto`).
 fn config_path() -> Option<PathBuf> {
-    Some(crate::state::config_folder()?.join("picto").join("config.json"))
+    Some(
+        crate::state::config_folder()?
+            .join("picto")
+            .join("config.json"),
+    )
 }
 
 /// Reads the known libraries and prepares their covers. Blocking: run it
