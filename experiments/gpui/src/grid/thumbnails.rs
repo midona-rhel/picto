@@ -138,11 +138,7 @@ pub fn png_for(jpeg: &Path) -> PathBuf {
 /// that resolves one item at a time. The grid does not check: its cache
 /// tries the `.png` when the `.jpg` cannot be read.
 pub fn existing(jpeg: PathBuf) -> PathBuf {
-    if jpeg.exists() {
-        return jpeg;
-    }
-    let png = png_for(&jpeg);
-    if png.exists() { png } else { jpeg }
+    present(&jpeg).unwrap_or(jpeg)
 }
 
 /// The thumbnail file there is for this `.jpg` path, if any: the `.jpg`,

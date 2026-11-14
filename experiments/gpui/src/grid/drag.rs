@@ -29,6 +29,23 @@ pub struct Cover {
     pub matte: Rgba,
 }
 
+/// The thumbnail cache's holders for the covers the ghost shows.
+const GHOST_HOLDERS: [&str; 3] = ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"];
+
+/// Keeps the dragged items' covers decoded while the ghost shows them;
+/// `&[]` lets them go.
+pub fn pin_covers(thumbnails: &Entity<Thumbnails>, covers: &[Cover], cx: &mut App) {
+    thumbnails.update(cx, |thumbnails, _| {
+        for (at, holder) in GHOST_HOLDERS.into_iter().enumerate() {
+            let cover = covers.get(at);
+            thumbnails.pin(
+                holder,
+                cover.map(|cover| Resource::Path(cover.thumbnail.clone().into())),
+            );
+        }
+    });
+}
+
 /// The items being dragged.
 #[derive(Clone)]
 pub struct ItemDrag {

@@ -271,7 +271,7 @@ impl GroupEditor {
         self.press = None;
         self.dragging = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
-        self.close_preview(cx);
+        self.preview.close(cx);
         cx.notify();
     }
 
@@ -423,29 +423,20 @@ impl GroupEditor {
             marquee::on_magnifier(&self.layout.tiles[index], x, y, text_height)
         });
         if let Some((index, _, _)) = magnifier {
-            self.preview.hide = None;
-            if self.preview.show.is_some() {
-                return;
-            }
             let target = self
                 .members
                 .get(index)
                 .filter(|item| !item.mime.starts_with("video/"))
                 .map(|item| (item.content_hash.clone(), self.files[index].clone()));
-            if let Some((hash, path)) = target {
-                self.preview.show = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(crate::motion::HOVER_PREVIEW_DELAY)
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.preview.show = None;
-                        this.open_preview(hash, path, cx);
-                    });
-                }));
-            }
+            let (hash, path) = target.unzip();
+            self.preview.rest_on(
+                hash,
+                move |_| async move { path },
+                |this: &mut Self| &mut this.preview,
+                cx,
+            );
         } else {
-            self.preview.show = None;
-            self.hide_preview_soon(cx);
+            self.preview.away(|this: &mut Self| &mut this.preview, cx);
         }
     }
 
@@ -454,69 +445,7 @@ impl GroupEditor {
         if self.marquee.is_none() && self.hovered.take().is_some() {
             cx.notify();
         }
-        self.preview.show = None;
-        self.preview.hide = None;
-        self.hide_preview_soon(cx);
-    }
-
-    fn hide_preview_soon(&mut self, cx: &mut Context<Self>) {
-        if self.preview.shown.is_none() || self.preview.hide.is_some() {
-            return;
-        }
-        self.preview.hide = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(crate::motion::HOVER_PREVIEW_HIDE)
-                .await;
-            let _ = this.update(cx, |this, cx| this.close_preview(cx));
-        }));
-    }
-
-    fn close_preview(&mut self, cx: &mut Context<Self>) {
-        let open = self.preview.shown.is_some();
-        if let Some(image) = self.preview.clear() {
-            crate::atlas::release(image, cx);
-        }
-        if open {
-            cx.notify();
-        }
-    }
-
-    /// The hover preview of a member's original, decoded off the drawing
-    /// thread.
-    fn open_preview(&mut self, hash: String, path: PathBuf, cx: &mut Context<Self>) {
-        if self
-            .preview
-            .shown
-            .as_ref()
-            .is_some_and(|shown| shown.hash == hash)
-        {
-            return;
-        }
-        if let Some(image) = self
-            .preview
-            .shown
-            .take()
-            .and_then(|mut shown| shown.take_image())
-        {
-            crate::atlas::release(image, cx);
-        }
-        let expected = hash.clone();
-        let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
-        let load = cx.background_executor().spawn(load);
-        let task = cx.spawn(async move |this, cx| {
-            let Ok(image) = load.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| match &mut this.preview.shown {
-                Some(shown) if shown.hash == expected => {
-                    shown.decoded(image);
-                    cx.notify();
-                }
-                _ => crate::atlas::release(image, cx),
-            });
-        });
-        self.preview.shown = Some(preview::Shown::new(hash, task));
-        cx.notify();
+        self.preview.left(|this: &mut Self| &mut this.preview, cx);
     }
 
     /// A left press: on an image it may become a drag; on empty space it
@@ -711,9 +640,7 @@ impl Render for GroupEditor {
         if top != self.last_top {
             self.last_top = top;
             self.hovered = None;
-            if let Some(image) = self.preview.clear() {
-                crate::atlas::release(image, cx);
-            }
+            self.preview.close(cx);
             self.scrolled = Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()

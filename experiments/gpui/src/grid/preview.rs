@@ -5,6 +5,8 @@
 use crate::{motion, theme};
 use gpui::*;
 use std::{
+    future::Future,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -41,21 +43,126 @@ impl Shown {
     }
 }
 
-/// The timers and the open preview.
+/// The timers and the open preview of a view of tiles (the library's grid,
+/// a collection's editor). The view says where the pointer rests and how to
+/// find the hovered file; `of` finds this preview in the view again when a
+/// timer fires or the file arrives.
 #[derive(Default)]
 pub struct HoverPreview {
-    pub show: Option<Task<()>>,
-    pub hide: Option<Task<()>>,
+    show: Option<Task<()>>,
+    hide: Option<Task<()>>,
     pub shown: Option<Shown>,
 }
 
 impl HoverPreview {
-    /// Closes the preview at once and forgets both timers, handing back the
-    /// original to release.
-    pub fn clear(&mut self) -> Option<Arc<RenderImage>> {
+    /// The pointer rests on the magnifier of the file `hash` (`None`: one
+    /// that is not previewed, such as a video). Its preview opens after the
+    /// hover delay, unless one is already on its way; `resolve` then finds
+    /// the file's path.
+    pub fn rest_on<V: 'static, F>(
+        &mut self,
+        hash: Option<String>,
+        resolve: impl FnOnce(&mut Context<V>) -> F + 'static,
+        of: fn(&mut V) -> &mut Self,
+        cx: &mut Context<V>,
+    ) where
+        F: Future<Output = Option<PathBuf>> + 'static,
+    {
+        self.hide = None;
+        if self.show.is_some() {
+            return;
+        }
+        let Some(hash) = hash else {
+            return;
+        };
+        self.show = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(motion::HOVER_PREVIEW_DELAY)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                of(this).show = None;
+                let path = resolve(cx);
+                of(this).open(hash, path, of, cx);
+            });
+        }));
+    }
+
+    /// The pointer is over the view but not on a magnifier: an open
+    /// preview closes after a moment.
+    pub fn away<V: 'static>(&mut self, of: fn(&mut V) -> &mut Self, cx: &mut Context<V>) {
+        self.show = None;
+        if self.shown.is_none() || self.hide.is_some() {
+            return;
+        }
+        self.hide = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(motion::HOVER_PREVIEW_HIDE)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let open = of(this).close(cx);
+                if open {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    /// The pointer left the view.
+    pub fn left<V: 'static>(&mut self, of: fn(&mut V) -> &mut Self, cx: &mut Context<V>) {
+        self.hide = None;
+        self.away(of, cx);
+    }
+
+    /// Closes the preview at once (the view scrolled) and forgets both
+    /// timers. Whether one was open.
+    pub fn close(&mut self, cx: &mut App) -> bool {
         self.show = None;
         self.hide = None;
-        self.shown.take().and_then(|mut shown| shown.take_image())
+        let shown = self.shown.take();
+        let open = shown.is_some();
+        if let Some(image) = shown.and_then(|mut shown| shown.take_image()) {
+            crate::atlas::release(image, cx);
+        }
+        open
+    }
+
+    /// Opens the preview of the file `hash` at the path `path` resolves to,
+    /// decoded off the drawing thread.
+    fn open<V: 'static>(
+        &mut self,
+        hash: String,
+        path: impl Future<Output = Option<PathBuf>> + 'static,
+        of: fn(&mut V) -> &mut Self,
+        cx: &mut Context<V>,
+    ) {
+        if self.shown.as_ref().is_some_and(|shown| shown.hash == hash) {
+            return;
+        }
+        if let Some(image) = self.shown.take().and_then(|mut shown| shown.take_image()) {
+            crate::atlas::release(image, cx);
+        }
+        let expected = hash.clone();
+        let load = cx.spawn(async move |this, cx| {
+            let Some(path) = path.await else {
+                return;
+            };
+            let load = cx.update(|cx| {
+                let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
+                cx.background_executor().spawn(load)
+            });
+            let Ok(image) = load.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| match &mut of(this).shown {
+                Some(shown) if shown.hash == expected => {
+                    shown.decoded(image);
+                    cx.notify();
+                }
+                _ => crate::atlas::release(image, cx),
+            });
+        });
+        self.shown = Some(Shown::new(hash, load));
+        cx.notify();
     }
 }
 
@@ -71,16 +178,12 @@ pub fn strength(since_opened: Duration, since_decoded: Option<Duration>) -> Opti
 /// The image's size: its own, scaled down only as far as needed to fit the
 /// window less the inset, keeping its shape (`max-width`/`max-height`).
 pub fn fitted(natural: (f32, f32), window: (f32, f32)) -> (f32, f32) {
-    let (width, height) = natural;
-    if width <= 0. || height <= 0. {
+    let room = (window.0 - 2. * INSET, window.1 - 2. * INSET);
+    if natural.0 <= 0. || natural.1 <= 0. || room.0 <= 0. || room.1 <= 0. {
         return (0., 0.);
     }
-    let room = (
-        (window.0 - 2. * INSET).max(0.),
-        (window.1 - 2. * INSET).max(0.),
-    );
-    let scale = (room.0 / width).min(room.1 / height).min(1.);
-    (width * scale, height * scale)
+    let scale = crate::viewer::camera::fit_scale(natural, room).min(1.);
+    (natural.0 * scale, natural.1 * scale)
 }
 
 /// The overlay for the open preview, if it is showing yet, and whether its

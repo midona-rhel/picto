@@ -237,15 +237,12 @@ fn media_rect(
     let image_height = tile.h - prefs.text_height();
     let timed = item.mime.starts_with("video/") || item.mime.starts_with("audio/");
     let contain = (prefs.mode == ViewMode::Grid && !prefs.fit_cover) || timed;
-    let rect = match aspect(item).filter(|_| contain) {
-        Some(aspect) => {
-            let aspect = aspect as f32;
-            let scale = (tile.w / aspect).min(image_height);
-            let (w, h) = (aspect * scale, scale);
-            ((tile.w - w) / 2., (image_height - h) / 2., w, h)
-        }
-        None => (0., 0., tile.w, image_height),
-    };
+    let rect = aspect(item)
+        .filter(|_| contain)
+        .and_then(|aspect| {
+            crate::viewer::camera::contain((aspect as f32, 1.), (tile.w, image_height))
+        })
+        .unwrap_or((0., 0., tile.w, image_height));
     (contain, rect)
 }
 
@@ -799,10 +796,6 @@ impl GridView {
             marquee::on_magnifier(&self.layout.tiles[index], x, y, self.text_height)
         });
         if let Some((index, _, _)) = magnifier {
-            self.preview.hide = None;
-            if self.preview.show.is_some() {
-                return;
-            }
             // The item under the magnifier when the pointer arrived is the
             // one previewed, as the Electron grid's timer captures it: the
             // item the tile was laid out for, if the session still holds it.
@@ -814,20 +807,28 @@ impl GridView {
                 .get(index)
                 .filter(|item| Some(item.root_id.0) == laid_out && !item.mime.starts_with("video/"))
                 .map(|item| (item.root_id, item.content_hash.clone()));
-            if let Some((id, hash)) = target {
-                self.preview.show = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(crate::motion::HOVER_PREVIEW_DELAY)
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.preview.show = None;
-                        this.open_preview(id, hash, cx);
-                    });
-                }));
-            }
+            let hash = target.as_ref().map(|(_, hash)| hash.clone());
+            let session = self.session.clone();
+            // The file's path from the library, off the drawing thread.
+            let resolve = move |cx: &mut Context<Self>| {
+                let path = target.map(|(id, wanted)| {
+                    session.read(cx).run(move |library| {
+                        let details = library.details(id).ok()?;
+                        // A collection shows the media its tile shows.
+                        details
+                            .media
+                            .iter()
+                            .find(|media| media.facts.content_hash == wanted)
+                            .or(details.media.first())
+                            .map(|media| PathBuf::from(&media.file_path))
+                    })
+                });
+                async move { path?.await.ok().flatten() }
+            };
+            self.preview
+                .rest_on(hash, resolve, |this: &mut Self| &mut this.preview, cx);
         } else {
-            self.preview.show = None;
-            self.hide_preview_soon(cx);
+            self.preview.away(|this: &mut Self| &mut this.preview, cx);
         }
     }
 
@@ -837,85 +838,7 @@ impl GridView {
         if self.marquee.is_none() && self.hovered.take().is_some() {
             cx.notify();
         }
-        self.preview.show = None;
-        self.preview.hide = None;
-        self.hide_preview_soon(cx);
-    }
-
-    fn hide_preview_soon(&mut self, cx: &mut Context<Self>) {
-        if self.preview.shown.is_none() || self.preview.hide.is_some() {
-            return;
-        }
-        self.preview.hide = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(crate::motion::HOVER_PREVIEW_HIDE)
-                .await;
-            let _ = this.update(cx, |this, cx| this.close_preview(cx));
-        }));
-    }
-
-    fn close_preview(&mut self, cx: &mut Context<Self>) {
-        let open = self.preview.shown.is_some();
-        if let Some(image) = self.preview.clear() {
-            crate::atlas::release(image, cx);
-        }
-        if open {
-            cx.notify();
-        }
-    }
-
-    /// Opens the preview of an item's original: its file's path from the
-    /// library, then the decode, both off the drawing thread.
-    fn open_preview(&mut self, id: picto_library::RootId, hash: String, cx: &mut Context<Self>) {
-        if self
-            .preview
-            .shown
-            .as_ref()
-            .is_some_and(|shown| shown.hash == hash)
-        {
-            return;
-        }
-        if let Some(image) = self
-            .preview
-            .shown
-            .take()
-            .and_then(|mut shown| shown.take_image())
-        {
-            crate::atlas::release(image, cx);
-        }
-        let wanted = hash.clone();
-        let path = self.session.read(cx).run(move |library| {
-            let details = library.details(id).ok()?;
-            // A collection shows the media its tile shows.
-            details
-                .media
-                .iter()
-                .find(|media| media.facts.content_hash == wanted)
-                .or(details.media.first())
-                .map(|media| PathBuf::from(&media.file_path))
-        });
-        let expected = hash.clone();
-        let load = cx.spawn(async move |this, cx| {
-            let Ok(Some(path)) = path.await else {
-                return;
-            };
-            let load = cx.update(|cx| {
-                let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
-                cx.background_executor().spawn(load)
-            });
-            let Ok(image) = load.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| match &mut this.preview.shown {
-                Some(shown) if shown.hash == expected => {
-                    shown.decoded(image);
-                    cx.notify();
-                }
-                _ => crate::atlas::release(image, cx),
-            });
-        });
-        self.preview.shown = Some(preview::Shown::new(hash, load));
-        cx.notify();
+        self.preview.left(|this: &mut Self| &mut this.preview, cx);
     }
 
     /// A left press on empty space starts a rubber band. Shift, or the
@@ -1027,14 +950,7 @@ impl GridView {
             self.press = None;
             return;
         }
-        for (holder, cover) in ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"]
-            .into_iter()
-            .zip(items.covers.iter().map(Some).chain(std::iter::repeat(None)))
-        {
-            let resource = cover.map(|cover| Resource::Path(cover.thumbnail.clone().into()));
-            self.thumbnails
-                .update(cx, |thumbnails, _| thumbnails.pin(holder, resource));
-        }
+        drag::pin_covers(&self.thumbnails, &items.covers, cx);
         self.dragging = true;
         self.pointer_left(cx);
         self.resolve_drag_files(&items, window, cx);
@@ -1144,10 +1060,7 @@ impl GridView {
             return;
         }
         self.swallow_tile_click = true;
-        for holder in ["drag-ghost-0", "drag-ghost-1", "drag-ghost-2"] {
-            self.thumbnails
-                .update(cx, |thumbnails, _| thumbnails.pin(holder, None));
-        }
+        drag::pin_covers(&self.thumbnails, &[], cx);
         let mut dropped = None;
         drag::model(cx).update(cx, |drags, cx| {
             if let Some(items) = drags.items.take() {
@@ -1371,11 +1284,11 @@ impl GridView {
     /// Moves the selection as the Electron grid's keyboard navigation does and
     /// scrolls the new selection into view.
     pub fn move_selection(&mut self, action: nav::Move, extend: bool, cx: &mut Context<Self>) {
-        let (width, height) = (
-            f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER,
-            f32::from(self.bounds.size.height),
-        );
-        let target = self.session.read(cx).move_target(action, width, height);
+        let height = f32::from(self.bounds.size.height);
+        let target = self
+            .session
+            .read(cx)
+            .move_target(action, self.grid_width(), height);
         let Some(target) = target else {
             return;
         };
@@ -1595,9 +1508,7 @@ impl Render for GridView {
             self.hovered = None;
             // The anchor was for where the scroll was when it asked.
             self.window_anchor = None;
-            if let Some(image) = self.preview.clear() {
-                crate::atlas::release(image, cx);
-            }
+            self.preview.close(cx);
             self.scrolled = std::time::Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
