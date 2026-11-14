@@ -30,7 +30,7 @@ use layout::{Layout, ViewMode};
 use picto_library::query::{ItemScope, RootSummary};
 use prefs::ViewPrefs;
 use std::path::PathBuf;
-use thumbnails::Thumbnails;
+use thumbnails::{Thumb, Thumbnails};
 
 /// A tile was right-clicked at this window position.
 pub struct MenuRequested(pub Point<Pixels>);
@@ -105,9 +105,6 @@ pub struct GridView {
     /// first.
     layout_ids: Vec<u32>,
     layout_start: usize,
-    /// Files whose missing thumbnail the application was asked to render
-    /// (`scheduleThumbnailAfterMiss`), each once.
-    rendering: std::collections::HashSet<String>,
     /// The subfolder tiles above the items, in a folder that has children.
     subfolders: subfolders::Header,
     /// Where items dragged within a folder would be put back
@@ -211,15 +208,6 @@ impl EventEmitter<MenuRequested> for GridView {}
 impl EventEmitter<EmptyMenuRequested> for GridView {}
 
 impl EventEmitter<Activated> for GridView {}
-
-/// Where a tile's thumbnail is.
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Thumb {
-    Pending,
-    Loaded,
-    /// It could not be read or decoded: the tile shows the broken page.
-    Failed,
-}
 
 /// What a tile draws, copied out of the session for the visible tiles only.
 struct TileData {
@@ -634,6 +622,7 @@ impl GridView {
             // A folder changed: the subfolder tiles' covers are read again.
             if matches!(change, Change::Navigation) {
                 this.subfolders.stale = true;
+                this.subfolders.relist = true;
             }
             if !matches!(change, Change::Viewer) {
                 cx.notify();
@@ -652,8 +641,10 @@ impl GridView {
             },
         );
         let originals = cx.new(originals::Originals::new);
-        // An original that finished decoding is drawn on the next frame.
+        // An original that finished decoding, or a missing thumbnail that
+        // was made, is drawn on the next frame.
         cx.observe(&originals, |_, _, cx| cx.notify()).detach();
+        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
         Self {
             session,
             thumbnails,
@@ -685,7 +676,6 @@ impl GridView {
             art: None,
             layout_ids: Vec::new(),
             layout_start: 0,
-            rendering: Default::default(),
             subfolders: Default::default(),
             reorder: None,
             drag_files: None,
@@ -693,36 +683,6 @@ impl GridView {
             drag_request: Latest::default(),
             _session: subscription,
             _thumbnails: changed,
-        }
-    }
-
-    /// Asks the application to render the thumbnails of files that have
-    /// none yet (`media.render_thumbnail_now`), as the media protocol does
-    /// on a miss, and draws those it cannot make (Flash, PDF and the other
-    /// paged documents) as the Electron main process does
-    /// (`renderExternalThumbnail`); the thumbnail is read again once it has
-    /// been written.
-    fn render_missing(&mut self, missing: Vec<(String, String, PathBuf)>, cx: &mut Context<Self>) {
-        for (hash, mime, jpeg) in missing {
-            // Each file once; one whose thumbnail exists but did not decode
-            // stays broken.
-            if !self.rendering.insert(hash.clone())
-                || jpeg.exists()
-                || thumbnails::png_for(&jpeg).exists()
-            {
-                continue;
-            }
-            let made = thumbnails::render_missing(&self.session, hash, mime, jpeg.clone(), cx);
-            cx.spawn(async move |this, cx| {
-                if made.await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.thumbnails
-                            .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
         }
     }
 
@@ -1937,29 +1897,23 @@ impl Render for GridView {
             tiles
                 .iter_mut()
                 .map(|data| {
-                    // A font draws its card and has nothing to load.
-                    if data.item.mime.starts_with("font/") {
-                        data.thumb = Thumb::Loaded;
-                    } else {
-                        let resource = Resource::Path(data.thumbnail.clone().into());
-                        data.thumb = if thumbnails.is_loaded(&resource) {
-                            Thumb::Loaded
-                        } else if thumbnails.is_failed(&resource) {
-                            missing.push((
-                                data.item.content_hash.clone(),
-                                data.item.mime.clone(),
-                                data.thumbnail.clone(),
-                            ));
-                            Thumb::Failed
-                        } else {
-                            Thumb::Pending
-                        };
+                    let resource = Resource::Path(data.thumbnail.clone().into());
+                    data.thumb = thumbnails.thumb(&resource, &data.item.mime);
+                    if data.thumb == Thumb::Failed {
+                        missing.push(thumbnails::Missing {
+                            hash: data.item.content_hash.clone(),
+                            mime: data.item.mime.clone(),
+                            jpeg: data.thumbnail.clone(),
+                        });
                     }
                     (data.item.root_id.0, data.thumb == Thumb::Loaded)
                 })
                 .collect::<Vec<_>>()
         };
-        self.render_missing(missing, cx);
+        let session = self.session.clone();
+        self.thumbnails.update(cx, |thumbnails, cx| {
+            thumbnails.make_missing(&session, missing, cx)
+        });
         // Tiles in the viewport that draw more pixels than their thumbnail
         // holds ask for their original, which arrives after a short dwell.
         let scale = window.scale_factor();

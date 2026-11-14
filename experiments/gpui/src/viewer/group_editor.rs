@@ -134,8 +134,6 @@ pub struct GroupEditor {
     files: Vec<PathBuf>,
     selected: BTreeSet<MediaId>,
     anchor: Option<MediaId>,
-    /// Members whose missing thumbnail was asked for, each once.
-    rendering: std::collections::HashSet<String>,
     scroll: ScrollHandle,
     bounds: Bounds<Pixels>,
     layout: Layout,
@@ -175,16 +173,18 @@ impl GroupEditor {
             },
         )
         .detach();
+        // A missing thumbnail that was made is drawn on the next frame.
+        let thumbnails = cx.new(Thumbnails::new);
+        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
         Self {
             session,
-            thumbnails: cx.new(Thumbnails::new),
+            thumbnails,
             focus: cx.focus_handle(),
             collection: None,
             members: Vec::new(),
             thumbs: Vec::new(),
             files: Vec::new(),
             selected: BTreeSet::new(),
-            rendering: Default::default(),
             anchor: None,
             scroll: ScrollHandle::new(),
             bounds: Bounds::default(),
@@ -768,48 +768,30 @@ impl Render for GroupEditor {
         self.thumbnails
             .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
         let mut missing = Vec::new();
-        let states: Vec<grid::Thumb> = {
+        let states: Vec<thumbnails::Thumb> = {
             let thumbnails = self.thumbnails.read(cx);
             visible
                 .iter()
                 .map(|index| {
                     let resource = Resource::Path(self.thumbs[*index].clone().into());
-                    if self.members[*index].mime.starts_with("font/")
-                        || thumbnails.is_loaded(&resource)
-                    {
-                        grid::Thumb::Loaded
-                    } else if thumbnails.is_failed(&resource) {
-                        missing.push(*index);
-                        grid::Thumb::Failed
-                    } else {
-                        grid::Thumb::Pending
+                    let thumb = thumbnails.thumb(&resource, &self.members[*index].mime);
+                    // A member with no thumbnail yet has one made, as the
+                    // library's grid asks for its tiles'.
+                    if thumb == thumbnails::Thumb::Failed {
+                        missing.push(thumbnails::Missing {
+                            hash: self.members[*index].content_hash.clone(),
+                            mime: self.members[*index].mime.clone(),
+                            jpeg: self.thumbs[*index].clone(),
+                        });
                     }
+                    thumb
                 })
                 .collect()
         };
-        // A member with no thumbnail yet has one made, as the library's
-        // grid asks for its tiles'.
-        for index in missing {
-            let (hash, mime, jpeg) = (
-                self.members[index].content_hash.clone(),
-                self.members[index].mime.clone(),
-                self.thumbs[index].clone(),
-            );
-            if !self.rendering.insert(hash.clone()) || thumbnails::present(&jpeg).is_some() {
-                continue;
-            }
-            let made = thumbnails::render_missing(&self.session, hash, mime, jpeg.clone(), cx);
-            cx.spawn(async move |this, cx| {
-                if made.await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.thumbnails
-                            .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
-        }
+        let session = self.session.clone();
+        self.thumbnails.update(cx, |thumbnails, cx| {
+            thumbnails.make_missing(&session, missing, cx)
+        });
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
         let decoded: Vec<(u32, bool)> = visible
             .iter()
@@ -817,7 +799,7 @@ impl Render for GroupEditor {
             .map(|(index, state)| {
                 (
                     self.members[*index].root_id.0,
-                    *state == grid::Thumb::Loaded,
+                    *state == thumbnails::Thumb::Loaded,
                 )
             })
             .collect();

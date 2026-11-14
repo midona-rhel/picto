@@ -53,11 +53,17 @@ pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("no thumbnail folder"))?;
     std::fs::create_dir_all(directory)?;
-    // Written whole before it takes the thumbnail's name.
+    // Written whole before it takes the thumbnail's name; a partial file
+    // that could not be finished is not left behind.
     let partial = output.with_extension(format!("{}.tmp", std::process::id()));
-    picture.save_with_format(&partial, image::ImageFormat::Png)?;
-    std::fs::rename(&partial, output)?;
-    Ok(())
+    let saved = picture
+        .save_with_format(&partial, image::ImageFormat::Png)
+        .map_err(anyhow::Error::from)
+        .and_then(|()| Ok(std::fs::rename(&partial, output)?));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    saved
 }
 
 /// The movie's picture once it has played, muted, for the settling time.

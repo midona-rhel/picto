@@ -283,6 +283,14 @@ pub struct Header {
     /// The destination the children were listed for.
     shown_for: Option<usize>,
     pub children: Vec<Child>,
+    /// What the children were listed for: the destination, whether it shows
+    /// its subfolders' items, and whether the viewer covers the grid.
+    listed: Option<(usize, bool, bool)>,
+    /// The destination list changed: the children are listed again.
+    pub relist: bool,
+    /// Which names take two lines, and the room a line has they were
+    /// measured for.
+    lines: Option<(f32, Vec<bool>)>,
     covers: HashMap<FolderId, Option<Cover>>,
     /// The folders whose covers were last asked for; asked again when the
     /// list changes or a folder changed.
@@ -307,6 +315,9 @@ impl Default for Header {
         Self {
             shown_for: None,
             children: Vec::new(),
+            listed: None,
+            relist: false,
+            lines: None,
             covers: HashMap::new(),
             asked: Vec::new(),
             request: super::Latest::default(),
@@ -353,24 +364,41 @@ impl GridView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (children, displayed, gap, target, content, blobs) = {
+        let (displayed, gap, target, content) = {
             let session = self.session.read(cx);
-            let children = if session.viewer {
-                Vec::new()
-            } else {
-                children(
-                    &session.nav,
-                    session.displayed,
-                    session.prefs.show_subfolders,
-                )
-            };
+            let listing = (
+                session.displayed,
+                session.prefs.show_subfolders,
+                session.viewer,
+            );
+            // Listed again only when the destination, the list or what it
+            // shows changed, not every frame.
+            let header = &mut self.subfolders;
+            if header.listed != Some(listing) || header.relist {
+                header.listed = Some(listing);
+                header.relist = false;
+                header.lines = None;
+                header.children = if session.viewer {
+                    Vec::new()
+                } else {
+                    children(
+                        &session.nav,
+                        session.displayed,
+                        session.prefs.show_subfolders,
+                    )
+                };
+                // The covers are asked for again when the folders differ.
+                header.stale |= header
+                    .children
+                    .iter()
+                    .map(|child| child.folder)
+                    .ne(header.asked.iter().copied());
+            }
             (
-                children,
                 session.displayed,
                 session.prefs.gap,
                 session.tile,
                 session.total > 0,
-                session.blobs().to_path_buf(),
             )
         };
         let header = &mut self.subfolders;
@@ -380,17 +408,19 @@ impl GridView {
             header.drop = None;
             header.renaming = None;
         }
-        if children.is_empty() {
+        if header.children.is_empty() {
             header.expanded = true;
         }
-        let ids = children
-            .iter()
-            .map(|child| child.folder)
-            .collect::<Vec<_>>();
-        if (ids != header.asked || header.stale) && !ids.is_empty() {
+        if header.stale && !header.children.is_empty() {
+            let ids = header
+                .children
+                .iter()
+                .map(|child| child.folder)
+                .collect::<Vec<_>>();
             header.asked = ids.clone();
             header.stale = false;
             let request = header.request.next();
+            let blobs = self.session.read(cx).blobs().to_path_buf();
             let job = self.session.read(cx).run(move |library| {
                 ids.iter()
                     .map(|id| (*id, read_cover(library, *id, &blobs)))
@@ -414,18 +444,11 @@ impl GridView {
         }
         // A folder just made from a tile's menu is renamed once it shows.
         if let Some(node) = header.rename_next.clone()
-            && children.iter().any(|child| child.node == node)
+            && let Some(child) = header.children.iter().find(|child| child.node == node)
         {
             header.rename_next = None;
-            let name = children
-                .iter()
-                .find(|child| child.node == node)
-                .map(|child| child.label.clone())
-                .unwrap_or_default();
-            header.children = children;
+            let name = child.label.clone();
             self.rename_subfolder(node, name, window, cx);
-        } else {
-            header.children = children;
         }
         let header = &mut self.subfolders;
         let tile_width = {
@@ -433,11 +456,23 @@ impl GridView {
             columns((width - padding * 2.).max(0.), target, gap).1
         };
         let name_room = (tile_width - NAME_ICON - NAME_GAP).max(0.);
+        if header
+            .lines
+            .as_ref()
+            .is_none_or(|(room, _)| *room != name_room)
+        {
+            let two_lines = header
+                .children
+                .iter()
+                .map(|child| super::name_width(&child.label, window) > name_room)
+                .collect();
+            header.lines = Some((name_room, two_lines));
+        }
         let two_lines = header
-            .children
-            .iter()
-            .map(|child| super::name_width(&child.label, window) > name_room)
-            .collect::<Vec<_>>();
+            .lines
+            .as_ref()
+            .map(|(_, lines)| lines.as_slice())
+            .unwrap_or_default();
         header.geometry = geometry(
             width,
             target,

@@ -22,8 +22,37 @@ pub struct Thumbnails {
     pins: HashMap<&'static str, Resource>,
     /// What the grid's visible band wants.
     wanted: HashSet<Resource>,
-    pub hits: u64,
-    pub loads: u64,
+    /// Missing thumbnails being made.
+    renders: Renders,
+}
+
+/// Where a tile's thumbnail is.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Thumb {
+    Pending,
+    Loaded,
+    /// It could not be read or decoded: the tile shows the broken page.
+    Failed,
+}
+
+/// A file a tile shows whose thumbnail could not be read.
+pub struct Missing {
+    pub hash: String,
+    pub mime: String,
+    /// The `.jpg` the tile reads.
+    pub jpeg: PathBuf,
+}
+
+/// The missing thumbnails being made, a couple at a time, of the tiles that
+/// still show them.
+#[derive(Default)]
+struct Renders {
+    /// The tiles on screen whose thumbnail is missing, waiting their turn.
+    waiting: Vec<Missing>,
+    /// Being made now, each by its file.
+    running: HashMap<String, Task<()>>,
+    /// Each file is tried once: one that could not be made stays broken.
+    tried: HashSet<String>,
 }
 
 struct Entry {
@@ -32,6 +61,28 @@ struct Entry {
     used: u64,
     /// It was painted at least once.
     drawn: bool,
+}
+
+impl Renders {
+    /// The tiles on screen whose thumbnail is missing now: those not tried
+    /// yet wait their turn in this order, any that left the screen are
+    /// dropped, and as many as there is room for start, which are returned.
+    fn admit(&mut self, missing: Vec<Missing>) -> Vec<Missing> {
+        self.waiting = missing
+            .into_iter()
+            .filter(|file| {
+                !self.tried.contains(&file.hash) && !self.running.contains_key(&file.hash)
+            })
+            .collect();
+        let room = RENDERS
+            .saturating_sub(self.running.len())
+            .min(self.waiting.len());
+        let starting = self.waiting.drain(..room).collect::<Vec<_>>();
+        for file in &starting {
+            self.tried.insert(file.hash.clone());
+        }
+        starting
+    }
 }
 
 /// What a decoded thumbnail usually takes: 512 × 384 pixels (a 4:3 picture
@@ -51,8 +102,12 @@ pub fn budget(window: (f32, f32)) -> usize {
     let down = (window.1 / crate::grid::nav::SMALLEST_TILE).ceil().max(1.);
     3 * (across * down) as usize * TYPICAL_BYTES
 }
+
 /// `thumbnailDecodeWorker.ts` runs six loads at once.
 const CONCURRENCY: usize = 6;
+/// Missing thumbnails made at once: a Flash movie plays for seconds to give
+/// its picture, and a paged document is opened and drawn.
+const RENDERS: usize = 2;
 
 /// The order to load a band of tiles in: those in the viewport before those
 /// in the margin around it, and nearest the viewport's middle first. Each
@@ -106,43 +161,43 @@ pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// `scheduleThumbnailAfterMiss`: asks the application to render a missing
+/// `scheduleThumbnailAfterMiss`: asks the application to render a file's
 /// thumbnail (`media.render_thumbnail_now`), as the media protocol does on a
 /// miss, and draws one it cannot make (Flash, PDF and the other paged
-/// documents) as the Electron main process does (`renderExternalThumbnail`).
-/// Resolves to whether there is a thumbnail now. The library's grid and a
-/// collection's editor both ask through this.
-pub fn render_missing(
+/// documents) as the Electron main process does
+/// (`renderExternalThumbnail`), off the main thread and only into a marked
+/// disposable copy, as every write here. Resolves to whether there is a
+/// thumbnail now.
+async fn make(
     session: &gpui::Entity<crate::session::Session>,
-    hash: String,
-    mime: String,
-    jpeg: PathBuf,
-    cx: &mut App,
-) -> Task<bool> {
-    let answer = session.read(cx).dispatch(
-        "media.render_thumbnail_now",
-        serde_json::json!({ "file_hash": hash }),
-    );
-    let (original, disposable) = {
-        let session = session.read(cx);
-        (session.original(&hash, &mime), session.disposable())
-    };
-    cx.spawn(async move |_| {
-        let _ = answer.await;
-        let png = png_for(&jpeg);
-        // Only into a marked disposable copy, as every write here.
-        if present(&jpeg).is_none() && disposable && crate::grid::rendered::draws(&mime) {
-            // A thread of its own: a movie plays for seconds first.
-            let (sent, drawn) = futures::channel::oneshot::channel();
-            std::thread::spawn(move || {
-                let _ = sent.send(crate::grid::rendered::render(&mime, &original, &png));
-            });
-            if let Ok(Err(error)) = drawn.await {
-                eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
+    hash: &str,
+    mime: &str,
+    jpeg: &Path,
+    cx: &mut AsyncApp,
+) -> bool {
+    let (answer, original, disposable) = session.update(cx, |session, _| {
+        (
+            session.dispatch(
+                "media.render_thumbnail_now",
+                serde_json::json!({ "file_hash": hash }),
+            ),
+            session.original(hash, mime),
+            session.disposable(),
+        )
+    });
+    let _ = answer.await;
+    let (hash, mime, jpeg) = (hash.to_owned(), mime.to_owned(), jpeg.to_path_buf());
+    cx.background_executor()
+        .spawn(async move {
+            if present(&jpeg).is_none() && disposable && crate::grid::rendered::draws(&mime) {
+                let png = png_for(&jpeg);
+                if let Err(error) = crate::grid::rendered::render(&mime, &original, &png) {
+                    eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
+                }
             }
-        }
-        present(&jpeg).is_some()
-    })
+            present(&jpeg).is_some()
+        })
+        .await
 }
 
 /// `media.regenerate_thumbnails` as the Electron main process performs it
@@ -163,15 +218,14 @@ pub fn regenerate(
     let files: Vec<_> = files
         .into_iter()
         .map(|(hash, mime)| {
-            let session = session.read(cx);
-            let (jpeg, original) = (session.thumbnail(&hash), session.original(&hash, &mime));
-            (hash, mime, jpeg, original)
+            let jpeg = session.read(cx).thumbnail(&hash);
+            (hash, mime, jpeg)
         })
         .collect();
     let session = session.clone();
     cx.spawn(async move |cx| {
-        for (hash, mime, jpeg, original) in files {
-            let made = regenerate_one(&session, &hash, &mime, &jpeg, &original, cx).await;
+        for (hash, mime, jpeg) in files {
+            let made = regenerate_one(&session, &hash, &mime, &jpeg, cx).await;
             session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
             if let Err(error) = made {
                 cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
@@ -187,11 +241,9 @@ async fn regenerate_one(
     session: &gpui::Entity<crate::session::Session>,
     hash: &str,
     mime: &str,
-    jpeg: &std::path::Path,
-    original: &std::path::Path,
+    jpeg: &Path,
     cx: &mut gpui::AsyncApp,
 ) -> Result<(), String> {
-    use crate::grid::rendered;
     let previous = present(jpeg);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -202,24 +254,7 @@ async fn regenerate_one(
     if let (Some(previous), Some(backup)) = (&previous, &backup) {
         std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
     }
-    let answer = session.update(cx, |session, _| {
-        session.dispatch(
-            "media.render_thumbnail_now",
-            serde_json::json!({ "file_hash": hash }),
-        )
-    });
-    let _ = answer.await;
-    let png = png_for(jpeg);
-    if present(jpeg).is_none() && rendered::draws(mime) {
-        // A thread of its own: a movie plays for seconds first.
-        let (sent, drawn) = futures::channel::oneshot::channel();
-        let (mime, original) = (mime.to_owned(), original.to_path_buf());
-        std::thread::spawn(move || {
-            let _ = sent.send(rendered::render(&mime, &original, &png));
-        });
-        let _ = drawn.await;
-    }
-    if present(jpeg).is_some() {
+    if make(session, hash, mime, jpeg, cx).await {
         if let Some(backup) = backup {
             let _ = std::fs::remove_file(backup);
         }
@@ -277,8 +312,54 @@ impl Thumbnails {
             clock: 0,
             pins: HashMap::new(),
             wanted: HashSet::new(),
-            hits: 0,
-            loads: 0,
+            renders: Renders::default(),
+        }
+    }
+
+    /// Where a tile's thumbnail is. A font draws its card and has nothing
+    /// to load.
+    pub fn thumb(&self, resource: &Resource, mime: &str) -> Thumb {
+        if mime.starts_with("font/") || self.is_loaded(resource) {
+            Thumb::Loaded
+        } else if self.is_failed(resource) {
+            Thumb::Failed
+        } else {
+            Thumb::Pending
+        }
+    }
+
+    /// Has the thumbnails of the tiles on screen that could not be read
+    /// made (`scheduleThumbnailAfterMiss`), a couple at a time, each file
+    /// once; a tile that left the screen before its turn is not made. A
+    /// thumbnail that was made is read again, and the views that observe
+    /// this cache are told. One whose file is there but did not decode
+    /// stays broken.
+    pub fn make_missing(
+        &mut self,
+        session: &gpui::Entity<crate::session::Session>,
+        missing: Vec<Missing>,
+        cx: &mut Context<Self>,
+    ) {
+        for Missing { hash, mime, jpeg } in self.renders.admit(missing) {
+            let session = session.clone();
+            let key = hash.clone();
+            let task = cx.spawn(async move |this, cx| {
+                let exists = {
+                    let jpeg = jpeg.clone();
+                    cx.background_executor()
+                        .spawn(async move { present(&jpeg).is_some() })
+                        .await
+                };
+                let made = !exists && make(&session, &hash, &mime, &jpeg, cx).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.renders.running.remove(&hash);
+                    if made {
+                        this.forget(&jpeg, cx);
+                    }
+                    cx.notify();
+                });
+            });
+            self.renders.running.insert(key, task);
         }
     }
 
@@ -300,7 +381,7 @@ impl Thumbnails {
 
     /// Whether this thumbnail (or the `.png` it falls back to) is decoded
     /// and ready to paint.
-    pub fn is_loaded(&self, resource: &Resource) -> bool {
+    fn is_loaded(&self, resource: &Resource) -> bool {
         match self.state(resource) {
             Some(loaded) => {
                 loaded || fallback(resource).is_some_and(|png| self.state(&png) == Some(true))
@@ -367,7 +448,6 @@ impl Thumbnails {
         let item = ImageCacheItem::new(resource, cx);
         // The view that asked is told when it is ready.
         item.use_image(window);
-        self.loads += 1;
         let used = self.tick();
         self.entries.insert(
             resource.clone(),
@@ -457,7 +537,6 @@ impl ImageCache for Thumbnails {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let used = self.tick();
         if let Some(entry) = self.entries.get_mut(resource) {
-            self.hits += 1;
             entry.used = used;
             let image = entry.item.use_image(window);
             entry.drawn |= matches!(image, Some(Ok(_)));
@@ -586,6 +665,36 @@ mod tests {
             held > BAND && held * each <= budget((300., 300.)) + BAND * each,
             "{held} in the atlas"
         );
+    }
+
+    #[test]
+    fn missing_thumbnails_are_made_two_at_a_time_while_their_tiles_show() {
+        let file = |hash: &str| super::Missing {
+            hash: hash.into(),
+            mime: "application/pdf".into(),
+            jpeg: PathBuf::from(format!("/l/blobs/t/{hash}.jpg")),
+        };
+        let hashes = |files: &[super::Missing]| {
+            files
+                .iter()
+                .map(|file| file.hash.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut renders = super::Renders::default();
+        let started = renders.admit(["a", "b", "c", "d"].map(file).into());
+        assert_eq!(hashes(&started), ["a", "b"]);
+        for file in started {
+            renders.running.insert(file.hash, gpui::Task::ready(()));
+        }
+        // Scrolled on: c left the screen before its turn; e came.
+        assert!(renders.admit(["b", "d", "e"].map(file).into()).is_empty());
+        assert_eq!(hashes(&renders.waiting), ["d", "e"]);
+        // One finished: the next in view starts; a finished file is not
+        // made again.
+        renders.running.remove("a");
+        let started = renders.admit(["a", "d", "e"].map(file).into());
+        assert_eq!(hashes(&started), ["d"]);
+        assert_eq!(hashes(&renders.waiting), ["e"]);
     }
 
     #[test]
