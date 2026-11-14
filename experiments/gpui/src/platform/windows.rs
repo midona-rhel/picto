@@ -14,6 +14,31 @@ unsafe extern "system" {
         flags: u32,
     ) -> i32;
     fn ShowWindow(window: isize, command: i32) -> i32;
+    #[cfg(debug_assertions)]
+    fn PostMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
+}
+
+/// The window's handle (`HWND`), while it is open.
+pub fn hwnd(window: &Window) -> Option<isize> {
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(win32) => Some(win32.hwnd.get()),
+        _ => None,
+    }
+}
+
+/// Asks the window to close as its close button does (`WM_CLOSE`).
+#[cfg(debug_assertions)]
+pub fn post_close(window: &Window) {
+    const WM_CLOSE: u32 = 0x0010;
+    let Some(hwnd) = hwnd(window) else {
+        return;
+    };
+    // SAFETY: `hwnd` is the live window GPUI made; `WM_CLOSE` takes no
+    // parameters and is handled from the thread's messages later.
+    unsafe {
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
 }
 
 /// Floats the window over every window that does not float

@@ -91,6 +91,34 @@ pub fn order_front(ns_window: &AnyObject) {
     }
 }
 
+/// Closes the window as its close button does (`performClose:`): the
+/// window is asked first, then closed. Sent from the run loop, as a click
+/// is, rather than now: GPUI asks the window's own handler only while the
+/// app is not borrowed.
+#[cfg(debug_assertions)]
+pub fn perform_close(ns_window: &AnyObject) {
+    // SAFETY: `performSelector:withObject:afterDelay:` is an NSObject
+    // method taking a selector, its argument (here nil, `performClose:`'s
+    // sender) and a delay; the window is retained until it is sent.
+    unsafe {
+        let _: () = msg_send![
+            ns_window,
+            performSelector: sel!(performClose:),
+            withObject: None::<&AnyObject>,
+            afterDelay: 0.0f64
+        ];
+    }
+}
+
+/// The window server's number for the window (`windowNumber`), which
+/// `screencapture -l` takes.
+#[cfg(debug_assertions)]
+pub fn window_number(ns_window: &AnyObject) -> isize {
+    // SAFETY: `windowNumber` is an NSWindow method that takes nothing and
+    // returns an NSInteger.
+    unsafe { msg_send![ns_window, windowNumber] }
+}
+
 /// Shows the window behind every other window (`orderBack:`).
 pub fn order_back(ns_window: &AnyObject) {
     // SAFETY: `orderBack:` is an NSWindow method taking its sender, an

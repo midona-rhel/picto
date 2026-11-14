@@ -18,6 +18,8 @@
 //! window, looks at its page every 750 ms, and sends the credential.
 pub mod adapters;
 pub mod browser;
+#[cfg(debug_assertions)]
+pub mod check;
 pub mod cookies;
 pub mod machine;
 pub mod oauth;
@@ -177,6 +179,12 @@ impl Logins {
         self.machine.state()
     }
 
+    /// The sign-in window open now, for the checks (`check.rs`).
+    #[cfg(debug_assertions)]
+    pub fn window(&self) -> Option<&LoginWindow> {
+        self.window.as_ref()
+    }
+
     /// `auth_session_start`: signs in to `site_id` (and, for SubscribeStar,
     /// the service chosen), cancelling any login under way.
     pub fn start(
@@ -329,6 +337,16 @@ impl Logins {
             }
             Event::Callback(url) => self.machine.may_navigate(&url).1,
             Event::OpenHere(url) => vec![Effect::Load(url)],
+            Event::Failed { url, description } => self.machine.load_failed(&url, &description),
+            Event::Unavailable(error) => {
+                // The window holds no web view; it goes, and the login ends
+                // with why.
+                self.poll = None;
+                if let Some(window) = self.window.take() {
+                    window.close(cx);
+                }
+                self.machine.could_not_open(error)
+            }
             Event::Closed => {
                 // The platform closed it; nothing is left to close.
                 self.window = None;

@@ -194,6 +194,31 @@ impl Machine {
         self.inspect()
     }
 
+    /// `did-fail-load` for the main frame: the window is shown, and the
+    /// Accounts window told why. Nothing is saved; the next look at the page
+    /// says what it shows, as production's does.
+    pub fn load_failed(&mut self, url: &str, description: &str) -> Vec<Effect> {
+        let Some(adapter) = self.adapter.clone().filter(|_| self.window_open) else {
+            return Vec::new();
+        };
+        let why = if description.trim().is_empty() {
+            "error"
+        } else {
+            description.trim()
+        };
+        let url = if url.is_empty() {
+            self.state.current_url.clone()
+        } else {
+            Some(url.to_owned())
+        };
+        self.patch(
+            Some(Status::Error),
+            Some(format!("{} could not load ({why}).", adapter.site().label)),
+            url,
+        );
+        vec![Effect::Show]
+    }
+
     /// `page-title-updated`.
     pub fn titled(&mut self, title: &str) {
         if self.window_open {

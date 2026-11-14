@@ -374,6 +374,33 @@ fn a_window_the_system_cannot_open_ends_the_login_with_why() {
     assert!(harness.machine.tick().is_empty());
 }
 
+// 'reports main-frame load failures without completing authentication'
+#[test]
+fn a_page_that_fails_to_load_is_reported_and_nothing_is_saved() {
+    let mut harness = Harness::default();
+    harness.start("patreon", None).unwrap();
+    let shown = harness.shown;
+    let effects = harness
+        .machine
+        .load_failed("https://www.patreon.com/login", "NAME_NOT_RESOLVED");
+    harness.run(effects);
+    assert_eq!(harness.state().status, Status::Error);
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Patreon could not load (NAME_NOT_RESOLVED).")
+    );
+    assert_eq!(
+        harness.state().current_url.as_deref(),
+        Some("https://www.patreon.com/login")
+    );
+    assert_eq!(harness.shown, shown + 1);
+    assert!(harness.persisted.is_empty());
+    // A closed window's late report changes nothing.
+    harness.machine.window_closed();
+    assert!(harness.machine.load_failed("https://www.patreon.com/", "TIMEOUT").is_empty());
+    assert_eq!(harness.state().status, Status::Cancelled);
+}
+
 #[test]
 fn a_look_already_under_way_is_not_started_twice() {
     let mut harness = Harness::default();
