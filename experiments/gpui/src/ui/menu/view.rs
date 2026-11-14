@@ -90,6 +90,7 @@ impl Menu {
         (scale, opacity): (f32, f32),
         origin: (f32, f32),
         content: Div,
+        window: &Window,
         cx: &App,
     ) -> crate::ui::GlassPanel {
         let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
@@ -116,8 +117,26 @@ impl Menu {
                     .flex_col(),
             )
             .when(self.presentation == Presentation::PopUpWindows, |panel| {
-                // TODO: blur what is behind the pop-up window with the system's material.
-                panel.without_backdrop_blur()
+                // What is behind is another window: the window's system blur
+                // shows beneath the panel instead, under a fill that gives it
+                // the glass's brightness, or, where the system cannot blur
+                // there, a more opaque glass.
+                let theme = theme::theme(cx);
+                let fill = if crate::ui::window_chrome::system_blurs() {
+                    crate::ui::window_chrome::place_system_blur(
+                        window,
+                        Bounds::new(
+                            point(px(at.0 + dx), px(at.1 + dy)),
+                            size(px(scaled_w), px(scaled_h)),
+                        ),
+                        theme::RADIUS_LG,
+                        opacity,
+                    );
+                    crate::ui::fill_over_system_blur(theme.glass(), theme.glass_blur().brightness)
+                } else {
+                    crate::ui::fill_without_blur(theme.glass())
+                };
+                panel.without_backdrop_blur().bg(fill)
             })
     }
 
@@ -380,6 +399,7 @@ impl Menu {
             self.root_motion(),
             self.root_origin(rows),
             panel,
+            window,
             cx,
         )
     }
@@ -454,6 +474,7 @@ impl Menu {
             (1., 1.),
             (0., 0.),
             content,
+            window,
             cx,
         )
         // Reaching the submenu keeps it open.
