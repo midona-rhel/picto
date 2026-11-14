@@ -267,6 +267,13 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     append_tree(&smart, None, None, &mut nav);
     Ok((nav, tags))
 }
+/// Runs a screen's read or edit, timed for the stats.
+fn run(job: Job, library: &Library) {
+    let started = std::time::Instant::now();
+    job(library);
+    crate::stats::job_ran(started.elapsed());
+}
+
 /// The first ordinal a window asks for.
 fn first(window: &WindowRequest) -> usize {
     match window.position {
@@ -322,7 +329,7 @@ pub fn start(
                 let result = match request {
                     Request::Opened(Ok(())) => {
                         for job in held.take().into_iter().flatten() {
-                            job(library);
+                            run(job, library);
                         }
                         continue;
                     }
@@ -330,7 +337,7 @@ pub fn start(
                     Request::Job(job) => {
                         match &mut held {
                             Some(held) => held.push(job),
-                            None => job(library),
+                            None => run(job, library),
                         }
                         continue;
                     }
@@ -534,6 +541,147 @@ mod acceptance {
         assert_eq!(text_filter("日本"), FilterExpr::default());
         assert_ne!(text_filter("日本語"), FilterExpr::default());
     }
+    /// Every read the grid makes, timed on a real copy (any size), and a
+    /// guard that a window deep in a destination costs about what its first
+    /// window costs: the grid holds one window at a time, so a read that
+    /// grows with where it is in a million items would show as a stall on
+    /// every jump and fling. Also times what the screens read at that size:
+    /// each sort, each smart folder, searches, the summary of everything
+    /// selected and the sidebar's counts. Prints one line each.
+    ///
+    /// ```sh
+    /// PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline \
+    ///     window_reads_stay_flat_across_the_library -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy"]
+    fn window_reads_stay_flat_across_the_library() {
+        use picto_library::predicate::{ItemSort, SortDirection, SortField, ViewQuerySpec};
+        use std::time::{Duration, Instant};
+        let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
+        let root = crate::application::guard(std::path::Path::new(&root)).unwrap();
+        let opening = Instant::now();
+        let library = Library::open(root.join("library.sqlite")).unwrap();
+        eprintln!("open the library: {:?}", opening.elapsed());
+        let timed = |what: &str, query: &RootQuery, start: usize| {
+            // The first read, and the best of three for the guard, so
+            // another process's burst is not counted.
+            let mut times = Vec::new();
+            let mut total = 0;
+            for _ in 0..3 {
+                let started = Instant::now();
+                let window = library
+                    .query_window(
+                        query,
+                        &WindowRequest::at(start, crate::grid::window::WINDOW),
+                    )
+                    .unwrap();
+                times.push(started.elapsed());
+                total = window.page.total as usize;
+            }
+            let best = times.iter().copied().min().unwrap();
+            eprintln!(
+                "{what} at {start}: first {:.1} ms, best {:.1} ms ({total} items)",
+                times[0].as_secs_f64() * 1e3,
+                best.as_secs_f64() * 1e3
+            );
+            (best, total)
+        };
+        let query = |scope: ItemScope, filter: FilterExpr, field, direction| RootQuery {
+            scope,
+            view: ViewQuerySpec {
+                filter,
+                sort: ItemSort {
+                    field,
+                    direction,
+                    random_seed: Some("1".into()),
+                },
+            },
+        };
+        let fields = [
+            SortField::ImportedAt,
+            SortField::CapturedAt,
+            SortField::Name,
+            SortField::Rating,
+            SortField::TotalSize,
+            SortField::Random,
+        ];
+        let mut flat = Vec::new();
+        for field in fields {
+            for direction in [SortDirection::Descending, SortDirection::Ascending] {
+                let all = query(ItemScope::All, FilterExpr::default(), field, direction);
+                let label = format!("All by {field:?} {direction:?}");
+                let (first, total) = timed(&label, &all, 0);
+                let deepest = [total / 2, total.saturating_sub(crate::grid::window::WINDOW)]
+                    .into_iter()
+                    .map(|start| timed(&label, &all, start).0)
+                    .max()
+                    .unwrap();
+                flat.push((label, first, deepest));
+            }
+        }
+        let default_sort = |scope| {
+            query(
+                scope,
+                FilterExpr::default(),
+                SortField::ImportedAt,
+                SortDirection::Descending,
+            )
+        };
+        for folder in library.smart_folders().unwrap() {
+            let scope = ItemScope::SmartFolder {
+                smart_folder_id: folder.smart_folder_id,
+            };
+            let (_, total) = timed(
+                &format!("smart folder {}", folder.name),
+                &default_sort(scope.clone()),
+                0,
+            );
+            timed(
+                &format!("smart folder {}", folder.name),
+                &default_sort(scope),
+                total / 2,
+            );
+        }
+        for scope in [
+            ItemScope::Inbox,
+            ItemScope::Trash,
+            ItemScope::RecentlyViewed,
+        ] {
+            timed(&format!("{scope:?}"), &default_sort(scope.clone()), 0);
+        }
+        for text in ["lan", "land", "landscape", "needle", "zzzz-nothing"] {
+            let search = query(
+                ItemScope::All,
+                text_filter(text),
+                SortField::ImportedAt,
+                SortDirection::Descending,
+            );
+            timed(&format!("search {text:?}"), &search, 0);
+        }
+        let started = Instant::now();
+        let summary = library
+            .selection_summary(&picto_library::selection::SelectionTarget::Query {
+                query: default_sort(ItemScope::All),
+                excluded_root_ids: Vec::new(),
+            })
+            .unwrap();
+        eprintln!(
+            "summary of everything selected: {:?} ({} items)",
+            started.elapsed(),
+            summary.selected_count
+        );
+        let started = Instant::now();
+        navigation(&library).unwrap();
+        eprintln!("sidebar destinations and counts: {:?}", started.elapsed());
+        for (label, first, deepest) in flat {
+            assert!(
+                deepest <= first * 4 + Duration::from_millis(20),
+                "{label}: a deep window took {deepest:?}, the first {first:?}"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy made by run.sh"]
     fn real_snapshot_query_details_rating_undo_redo() {

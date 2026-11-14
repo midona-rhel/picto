@@ -14,7 +14,7 @@ pub struct Thumbnails {
     /// of the least recently used first. A use only stamps its entry: a
     /// resource is a path, and comparing paths walks their components, so
     /// nothing is searched for in a list on the way.
-    entries: HashMap<Resource, (ImageCacheItem, u64)>,
+    entries: HashMap<Resource, Entry>,
     clock: u64,
     /// Images a view outside the grid is showing, which stay decoded. Such a
     /// view does not repaint as the grid scrolls, so if its image were
@@ -24,6 +24,14 @@ pub struct Thumbnails {
     wanted: HashSet<Resource>,
     pub hits: u64,
     pub loads: u64,
+}
+
+struct Entry {
+    item: ImageCacheItem,
+    /// When it was last used, by `Thumbnails::clock`.
+    used: u64,
+    /// It was painted at least once.
+    drawn: bool,
 }
 
 /// Decoded thumbnails kept beyond the ones wanted now.
@@ -90,8 +98,8 @@ fn primary(resource: &Resource) -> Option<Resource> {
 impl Thumbnails {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.on_release(|cache, cx| {
-            for (_, (item, _)) in std::mem::take(&mut cache.entries) {
-                if let Some(Ok(image)) = item.get() {
+            for (_, entry) in std::mem::take(&mut cache.entries) {
+                if let Some(Ok(image)) = entry.item.get() {
                     cx.drop_image(image, None);
                 }
             }
@@ -117,7 +125,7 @@ impl Thumbnails {
     }
 
     fn state(&self, resource: &Resource) -> Option<bool> {
-        match self.entries.get(resource)?.0.get()? {
+        match self.entries.get(resource)?.item.get()? {
             Ok(_) => Some(true),
             Err(_) => Some(false),
         }
@@ -150,12 +158,12 @@ impl Thumbnails {
 
     /// The decoded thumbnail, once it is ready.
     pub fn image(&self, resource: &Resource) -> Option<Arc<RenderImage>> {
-        self.entries.get(resource)?.0.get()?.ok()
+        self.entries.get(resource)?.item.get()?.ok()
     }
 
     /// The decoded size of a thumbnail, in its pixels, once it is ready.
     pub fn size(&self, resource: &Resource) -> Option<(f32, f32)> {
-        match self.entries.get(resource)?.0.get()? {
+        match self.entries.get(resource)?.item.get()? {
             Ok(image) => {
                 let size = image.size(0);
                 Some((size.width.0 as f32, size.height.0 as f32))
@@ -173,8 +181,8 @@ impl Thumbnails {
             Resource::Path(jpeg.into()),
             Resource::Path(png_for(jpeg).into()),
         ] {
-            if let Some((item, _)) = self.entries.remove(&resource)
-                && let Some(Ok(image)) = item.get()
+            if let Some(entry) = self.entries.remove(&resource)
+                && let Some(Ok(image)) = entry.item.get()
             {
                 cx.drop_image(image, None);
             }
@@ -194,7 +202,14 @@ impl Thumbnails {
         item.use_image(window);
         self.loads += 1;
         let used = self.tick();
-        self.entries.insert(resource.clone(), (item, used));
+        self.entries.insert(
+            resource.clone(),
+            Entry {
+                item,
+                used,
+                drawn: false,
+            },
+        );
     }
 
     /// The grid's thumbnails for this frame, most wanted first. A load that
@@ -207,16 +222,17 @@ impl Thumbnails {
         let abandoned = self
             .entries
             .iter()
-            .filter(|(resource, (item, _))| item.get().is_none() && !self.held(resource))
+            .filter(|(resource, entry)| entry.item.get().is_none() && !self.held(resource))
             .map(|(resource, _)| resource.clone())
             .collect::<Vec<_>>();
         for resource in &abandoned {
             self.entries.remove(resource);
+            crate::stats::thumbnail_abandoned();
         }
         let mut pending = self
             .entries
             .values()
-            .filter(|(item, _)| item.get().is_none())
+            .filter(|entry| entry.item.get().is_none())
             .count();
         for resource in &wanted {
             if pending >= CONCURRENCY {
@@ -234,7 +250,7 @@ impl Thumbnails {
         let mut oldest_first = self
             .entries
             .iter()
-            .map(|(resource, (_, used))| (*used, resource.clone()))
+            .map(|(resource, entry)| (entry.used, resource.clone()))
             .collect::<Vec<_>>();
         oldest_first.sort_unstable_by_key(|(used, _)| *used);
         let mut over = self.entries.len() - capacity;
@@ -246,11 +262,11 @@ impl Thumbnails {
                 continue;
             }
             over -= 1;
-            if let Some((item, _)) = self.entries.remove(&resource)
-                && let Some(Ok(image)) = item.get()
+            if let Some(entry) = self.entries.remove(&resource)
+                && let Some(Ok(image)) = entry.item.get()
             {
                 cx.drop_image(image, Some(window));
-                crate::stats::thumbnail_evicted();
+                crate::stats::thumbnail_evicted(entry.drawn);
             }
         }
     }
@@ -264,10 +280,11 @@ impl ImageCache for Thumbnails {
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let used = self.tick();
-        if let Some((item, stamp)) = self.entries.get_mut(resource) {
+        if let Some(entry) = self.entries.get_mut(resource) {
             self.hits += 1;
-            *stamp = used;
-            let image = item.use_image(window);
+            entry.used = used;
+            let image = entry.item.use_image(window);
+            entry.drawn |= matches!(image, Some(Ok(_)));
             if let Some(Err(_)) = &image
                 && let Some(png) = fallback(resource)
             {

@@ -42,6 +42,10 @@ static GRID_TILES_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 static STALL_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_READS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_EVICTIONS: AtomicU64 = AtomicU64::new(0);
+/// Thumbnails decoded and let go without ever being painted.
+static THUMBNAIL_UNSEEN: AtomicU64 = AtomicU64::new(0);
+/// Thumbnail loads dropped before they finished, the tile scrolled away.
+static THUMBNAIL_ABANDONED: AtomicU64 = AtomicU64::new(0);
 
 pub fn rendered(view: View) {
     RENDERS[view as usize].fetch_add(1, Relaxed);
@@ -187,6 +191,18 @@ pub fn window_read(what: &str, start: usize, took: Duration) {
     }
 }
 
+/// A screen's own read or edit ran on the library thread for `took`:
+/// printed at once when it took long enough to notice.
+pub fn job_ran(took: Duration) {
+    if enabled() && took >= Duration::from_millis(5) {
+        eprintln!(
+            "stats job took={:.1}ms at={:.0}ms",
+            took.as_secs_f64() * 1000.,
+            since_launch().as_secs_f64() * 1000.
+        );
+    }
+}
+
 /// A destination's first window arrived: printed at once, with how long
 /// after launch.
 pub fn results_opened(total: u64) {
@@ -221,8 +237,16 @@ pub fn thumbnail_read() {
     THUMBNAIL_READS.fetch_add(1, Relaxed);
 }
 
-pub fn thumbnail_evicted() {
+/// A decoded thumbnail was let go; `drawn` says whether it was ever painted.
+pub fn thumbnail_evicted(drawn: bool) {
     THUMBNAIL_EVICTIONS.fetch_add(1, Relaxed);
+    if !drawn {
+        THUMBNAIL_UNSEEN.fetch_add(1, Relaxed);
+    }
+}
+
+pub fn thumbnail_abandoned() {
+    THUMBNAIL_ABANDONED.fetch_add(1, Relaxed);
 }
 
 pub fn start_reporting(cx: &mut App) {
@@ -253,6 +277,8 @@ pub fn start_reporting(cx: &mut App) {
             let tiles = GRID_TILES.swap(0, Relaxed);
             let reads = THUMBNAIL_READS.swap(0, Relaxed);
             let evictions = THUMBNAIL_EVICTIONS.swap(0, Relaxed);
+            let unseen = THUMBNAIL_UNSEEN.swap(0, Relaxed);
+            let abandoned = THUMBNAIL_ABANDONED.swap(0, Relaxed);
             let gaps = GRID_GAPS.swap(0, Relaxed);
             let gap = GRID_GAP_MICROS.swap(0, Relaxed);
             let widest = GRID_GAP_MAX_MICROS.swap(0, Relaxed);
@@ -274,7 +300,8 @@ pub fn start_reporting(cx: &mut App) {
                 "stats repaints[{repaints}] grid-build avg={:.2}ms max={:.2}ms \
                  (own time: max={:.2}ms layout max={:.2}ms tiles max={:.2}ms) tiles/frame={} \
                  frame-gap avg={:.1}ms max={:.1}ms late={late}/{gaps} \
-                 main-thread stall max={:.1}ms thumbnail-reads={reads} evictions={evictions}",
+                 main-thread stall max={:.1}ms thumbnail-reads={reads} evictions={evictions} \
+                 (never painted={unseen}) abandoned={abandoned}",
                 build as f64 / grid.max(1) as f64 / 1000.,
                 longest as f64 / 1000.,
                 longest_cpu as f64 / 1000.,

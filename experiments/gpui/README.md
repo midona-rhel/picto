@@ -54,13 +54,18 @@ The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
 The app runs Picto's application layer, `picto_core` (the `core/` crate),
 in-process, as the Electron app runs it through its napi addon:
 `application.rs` sets the application data root, registers the event
-callback, and opens the copy with `picto_core::state::open_library` on a
-Tokio runtime of its own. That starts the same workers as production:
-publication, imports and ingest, derivatives (thumbnails, perceptual hashes
-and the automatic duplicate scan), full-text indexing, checkpoints, AI
-tagging, and the subscription scheduler and runners. `Session::run` keeps
-working: the library thread borrows the application's own `Library`
-(`LibraryApplication::library()`), so the database is opened once.
+callback, and opens the copy with `picto_core::state::open_library_reporting`
+(`open_library`, which also hands over the `Library` as soon as the database
+is open) on a Tokio runtime of its own. That starts the same workers as
+production: publication, imports and ingest, derivatives (thumbnails,
+perceptual hashes and the automatic duplicate scan), full-text indexing,
+checkpoints, AI tagging, and the subscription scheduler and runners.
+`Session::run` keeps working: the library thread borrows the application's
+own `Library` (`LibraryApplication::library()`), so the database is opened
+once. The sidebar and the grid read with it as soon as it is handed over,
+while the application still runs its recovery passes (on a million items
+they take 10–30 s); the screens' own reads and edits (`Session::run`) wait
+for the whole open, as commands do.
 
 - Commands: `Session::dispatch("command.name", json!({...}))` sends a command
   as the renderer's `invoke(command, args)` does
@@ -1583,8 +1588,34 @@ on it with the meter on, for checking scrolling, resizing and loading at
 scale. It reads no existing library.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
-often each view repainted, how long the grid took to build a frame, the gap
-between grid frames, and how many thumbnail files were read.
+often each view repainted, how long the grid took to build a frame (on the
+clock, and in the main thread's own time, with its layout and tile parts),
+the gap between grid frames, the longest the main thread kept a 4 ms timer
+waiting (a stall), how many thumbnail files were read, let go, let go
+without ever being painted, or dropped unfinished. It also prints at once
+each stage of opening (database readable, application finished), each
+window of results read on the library thread and when it arrived, and each
+screen read or edit on the library thread that took 5 ms or more.
+
+Two guards for scale: `a_frame_does_the_same_work_whatever_the_library_size`
+(a regular test) checks that the window asked for, the tiles laid out and the
+tiles drawn are the same at 3,000, a million and fifty million items; and,
+on a real copy of any size,
+
+```sh
+PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline \
+    window_reads_stay_flat_across_the_library -- --ignored --nocapture
+PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline time_each_stage -- --ignored --nocapture
+```
+
+time every read the grid makes (each sort, at the start, middle and end;
+smart folders; searches; the summary of everything selected) and fail if a
+window deep in the list costs much more than the first, and time each stage
+of opening. On the million-item library on 14 November 2026: every window
+read 0.3–9 ms, wherever it was; the summary of a million selected items
+0.6 ms; opening the database and its resident indexes 1.2–11 s (the
+library's own load, varying with the system's file cache); the recovery
+passes 13 s alone, 28–30 s with the app drawing beside them.
 
 ### Format matrix
 
