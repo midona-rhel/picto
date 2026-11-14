@@ -292,6 +292,52 @@ pub fn record_ipc(command: &str, duration_ms: f64, error: Option<&str>) {
     }
 }
 
+/// The `log` crate's records: GPUI, its renderers, wgpu and the decoders
+/// report through it (a skipped frame, a lost drawable, a failed upload).
+/// Warnings and errors go to the log window as the renderer's, and to
+/// standard error. Installed before the core's tracing, whose own bridge for
+/// `log` then stays out: its filter keeps only the core's targets, which
+/// do not log through `log`.
+struct Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let level = match record.level() {
+            log::Level::Error => Level::Error,
+            _ => Level::Warn,
+        };
+        let message = record.args().to_string();
+        eprintln!("picto: {} {}: {message}", level.name(), record.target());
+        // `try_add`: a record logged while the store is held (a panic
+        // being recorded) is not worth waiting for.
+        try_add(Line {
+            level,
+            source: Source::Renderer,
+            target: record.target().to_owned(),
+            message,
+            timestamp: now(),
+            duration_ms: None,
+        });
+    }
+
+    fn flush(&self) {}
+}
+
+/// Takes the `log` crate's warnings and errors from here on.
+pub fn install_logger() {
+    static LOGGER: Logger = Logger;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

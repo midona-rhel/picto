@@ -6535,6 +6535,7 @@ dependencies = [
  "jpeg-decoder",
  "jxl-oxide",
  "libc",
+ "log",
  "lyon_tessellation",
  "objc2 0.6.5",
  "objc2-av-foundation",

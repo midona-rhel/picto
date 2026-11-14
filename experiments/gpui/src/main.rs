@@ -189,6 +189,7 @@ fn remember_window(window: &Window, cx: &mut App) {
 }
 
 fn main() {
+    diagnostics::install_logger();
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
     let working_directory = std::env::current_dir().unwrap_or_default();
