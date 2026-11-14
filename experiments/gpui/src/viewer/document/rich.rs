@@ -742,6 +742,20 @@ fn styled(
     builder.marks = saved;
 }
 
+/// The pictures in blocks, at any depth.
+pub fn pictures(blocks: &[Block]) -> Vec<Arc<RenderImage>> {
+    let mut found = Vec::new();
+    for block in blocks {
+        match block {
+            Block::Picture(picture) => found.push(picture.image.clone()),
+            Block::Quote(inner) => found.extend(pictures(inner)),
+            Block::List { items, .. } => found.extend(items.iter().flat_map(|item| pictures(item))),
+            _ => {}
+        }
+    }
+    found
+}
+
 /// The plain text of blocks, for checking what a document holds.
 #[cfg(test)]
 pub fn text_of(blocks: &[Block]) -> String {

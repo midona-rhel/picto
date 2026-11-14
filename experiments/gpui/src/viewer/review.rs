@@ -242,9 +242,14 @@ struct HalfState {
 /// When the pill appeared, for `reviewPillIn`.
 struct Entered(Instant);
 
-/// The drawn bitmaps, for the display scale they were drawn at.
+/// The drawn bitmaps, one set per display scale, kept for the app's life:
+/// the pill comes and goes with each Inbox item, and drawing them again
+/// each time would cost a blur on the drawing thread and leave the old set
+/// in the sprite atlas.
 #[derive(Default)]
-struct ArtCache(Option<Rc<Art>>);
+struct ArtCache(Vec<Rc<Art>>);
+
+impl Global for ArtCache {}
 
 impl RenderOnce for Controls {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -338,9 +343,9 @@ impl RenderOnce for Controls {
 /// The bitmaps for the window's display scale, drawn on first use.
 fn art(window: &mut Window, cx: &mut App) -> Rc<Art> {
     let scale = window.scale_factor();
-    let cache = window.use_keyed_state("inbox-review-art", cx, |_, _| ArtCache::default());
-    if let Some(art) = cache.read(cx).0.clone().filter(|art| art.scale == scale) {
-        return art;
+    let cache = cx.default_global::<ArtCache>();
+    if let Some(art) = cache.0.iter().find(|art| art.scale == scale) {
+        return art.clone();
     }
     let color = |token: u32| {
         let color = rgb(token);
@@ -353,12 +358,7 @@ fn art(window: &mut Window, cx: &mut App) -> Rc<Art> {
             color(theme::REVIEW_REJECT_GLOW),
         ],
     ));
-    let old = cache.update(cx, |cache, _| cache.0.replace(art.clone()));
-    if let Some(old) = old {
-        for image in old.images() {
-            cx.drop_image(image.clone(), Some(window));
-        }
-    }
+    cache.0.push(art.clone());
     art
 }
 

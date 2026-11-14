@@ -54,12 +54,8 @@ impl EventEmitter<MenuRequested> for QuickLook {}
 
 impl QuickLook {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let surface = cx.new(|cx| {
-            let mut surface = MediaSurface::default();
-            // No navigator in Quick Look.
-            surface.set_options(options(cx, false, false), cx);
-            surface
-        });
+        // No navigator in Quick Look.
+        let surface = cx.new(|cx| MediaSurface::new(options(cx, false, false), cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
         let subscriptions = vec![
             cx.subscribe(&group, |this, _, event: &group::MemberMenu, cx| {

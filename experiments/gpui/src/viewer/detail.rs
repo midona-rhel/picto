@@ -221,11 +221,7 @@ impl DetailWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let surface = cx.new(|cx| {
-            let mut surface = MediaSurface::default();
-            surface.set_options(options(cx, true, true), cx);
-            surface
-        });
+        let surface = cx.new(|cx| MediaSurface::new(options(cx, true, true), cx));
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let subscriptions = vec![

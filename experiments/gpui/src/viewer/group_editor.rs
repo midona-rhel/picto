@@ -474,7 +474,7 @@ impl GroupEditor {
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         let open = self.preview.shown.is_some();
         if let Some(image) = self.preview.clear() {
-            cx.drop_image(image, None);
+            super::release_image(image, cx);
         }
         if open {
             cx.notify();
@@ -498,7 +498,7 @@ impl GroupEditor {
             .take()
             .and_then(|mut shown| shown.take_image())
         {
-            cx.drop_image(image, None);
+            super::release_image(image, cx);
         }
         let expected = hash.clone();
         let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
@@ -512,7 +512,7 @@ impl GroupEditor {
                     shown.decoded(image);
                     cx.notify();
                 }
-                _ => cx.drop_image(image, None),
+                _ => super::release_image(image, cx),
             });
         });
         self.preview.shown = Some(preview::Shown::new(hash, task));

@@ -102,6 +102,8 @@ impl ReaderViewer {
         } else {
             PageStyle::Text
         };
+        // A book's pictures leave the sprite atlas with the reader.
+        cx.on_release(|this, cx| this.release_pictures(cx)).detach();
         let mut this = Self {
             path,
             mime,
@@ -153,6 +155,7 @@ impl ReaderViewer {
                 }
                 match result {
                     Ok((chapters, blocks, truncated)) => {
+                        this.release_pictures(cx);
                         this.chapters = chapters;
                         this.blocks = Some(Arc::new(blocks));
                         this.truncated = truncated;
@@ -164,6 +167,18 @@ impl ReaderViewer {
                 cx.notify();
             });
         }));
+    }
+
+    /// Lets go of the shown chapter's pictures.
+    fn release_pictures(&mut self, cx: &mut App) {
+        for picture in self
+            .blocks
+            .take()
+            .iter()
+            .flat_map(|blocks| rich::pictures(blocks))
+        {
+            crate::viewer::release_image(picture, cx);
+        }
     }
 
     pub fn previous_page(&mut self, cx: &mut Context<Self>) {
@@ -586,5 +601,51 @@ mod tests {
         ];
         let spaces = spacing(&blocks, 16., PageStyle::Book);
         assert!(spaces.iter().all(|space| *space == (0., 0.)));
+    }
+
+    /// A book's chapter pictures leave the sprite atlas when the reader
+    /// turns to the next chapter.
+    #[test]
+    fn a_chapter_left_takes_its_pictures_out_of_the_atlas() {
+        use super::{ReaderViewer, RendererKind, rich};
+        use gpui::{AnyWindowHandle, AppContext as _, TestAppContext};
+        let book = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/fixtures/documents/book.epub");
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| cx.set_global(crate::theme::DARK));
+        let window = cx.add_window(|_, cx| {
+            ReaderViewer::new(RendererKind::Epub, book, "application/epub+zip".into(), cx)
+        });
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            for _ in 0..2 {
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            }
+        };
+        draw(&mut cx);
+        let pictures = window
+            .read_with(&cx, |reader, _| {
+                rich::pictures(reader.blocks.as_ref().unwrap())
+            })
+            .unwrap();
+        assert_eq!(pictures.len(), 1);
+        let in_atlas = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, _| {
+                window.has_image_atlas_entry(&pictures[0])
+            })
+            .unwrap()
+        };
+        assert!(in_atlas(&mut cx));
+        window
+            .update(&mut cx, |reader, _, cx| reader.next_page(cx))
+            .unwrap();
+        draw(&mut cx);
+        assert_eq!(window.read_with(&cx, |reader, _| reader.page).unwrap(), 1);
+        assert!(!in_atlas(&mut cx));
     }
 }

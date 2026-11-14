@@ -444,7 +444,7 @@ fn fonts_load_and_have_outlines() {
 // The macOS text system and Metal draw these; other platforms have no
 // headless renderer here yet.
 #[cfg(target_os = "macos")]
-mod gpu {
+pub(crate) mod gpu {
     use super::super::{Document, kind::RendererKind, kind::renderer_kind};
     use super::{assert_drawn, fixture, font_files, ink};
 
@@ -474,7 +474,9 @@ mod gpu {
         }
     }
 
-    fn context() -> HeadlessAppContext {
+    /// An app that draws off-screen through the macOS text system and
+    /// Metal, with the theme and the bundled monospace face.
+    pub fn context() -> HeadlessAppContext {
         let text_system: Arc<dyn gpui::PlatformTextSystem> =
             Arc::new(gpui_apple::AppleTextSystem::new());
         let mut cx = HeadlessAppContext::with_platform(

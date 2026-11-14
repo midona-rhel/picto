@@ -17,7 +17,7 @@ mod shell;
 pub mod unsupported;
 
 #[cfg(test)]
-mod matrix;
+pub(crate) mod matrix;
 
 use super::surface::MediaSurface;
 use crate::keymap::Scope;

@@ -79,11 +79,6 @@ impl Art {
             shadow,
         }
     }
-
-    /// Every image, for dropping them from the sprite atlas.
-    pub fn images(&self) -> impl Iterator<Item = &Arc<RenderImage>> {
-        self.glow.iter().chain(&self.shadow).flatten()
-    }
 }
 
 /// The flash step for a `brightness()` amount between 1 and 2.

@@ -161,11 +161,63 @@ pub struct MediaSurface {
     /// short delay before it appears.
     overflowing_since: Option<Instant>,
     options: Options,
+    /// Pictures replaced since the last frame, let go of GPUI's sprite
+    /// atlas once nothing draws them.
+    retired: Vec<Arc<RenderImage>>,
 }
 
 impl EventEmitter<Event> for MediaSurface {}
 
 impl MediaSurface {
+    /// A surface with a host's options. The pictures it holds leave GPUI's
+    /// sprite atlas when they are replaced, and all of them when it goes.
+    pub fn new(options: Options, cx: &mut Context<Self>) -> Self {
+        cx.on_release(|this, cx| {
+            let held = match this.held.take() {
+                Some(Held::Image { image, .. }) => Some(image),
+                _ => None,
+            };
+            let images = this.retired.drain(..);
+            for image in images.chain(
+                [this.thumbnail.take(), this.full.take(), held]
+                    .into_iter()
+                    .flatten(),
+            ) {
+                cx.drop_image(image, None);
+            }
+        })
+        .detach();
+        Self {
+            options,
+            ..Self::default()
+        }
+    }
+
+    /// Lets go of a picture that was replaced, once nothing draws it.
+    fn retire(&mut self, image: Option<Arc<RenderImage>>) {
+        self.retired.extend(image);
+    }
+
+    /// Takes the retired pictures nothing draws any more out of the sprite
+    /// atlas of every window.
+    fn release_retired(&mut self, window: &mut Window, cx: &mut App) {
+        let held = match &self.held {
+            Some(Held::Image { image, .. }) => Some(image),
+            _ => None,
+        };
+        let shown = [self.thumbnail.as_ref(), self.full.as_ref(), held];
+        let (kept, released): (Vec<_>, Vec<_>) = self.retired.drain(..).partition(|image| {
+            shown
+                .iter()
+                .flatten()
+                .any(|shown| Arc::ptr_eq(shown, image))
+        });
+        self.retired = kept;
+        for image in released {
+            cx.drop_image(image, Some(window));
+        }
+    }
+
     pub fn stop(&mut self) {
         self.flash = None;
         self.flash_task = None;
@@ -749,13 +801,10 @@ impl MediaSurface {
                                         for pixel in rgba.as_chunks_mut::<4>().0 {
                                             pixel.swap(0, 2);
                                         }
-                                        if let Some(old) = this.full.take() {
-                                            cx.drop_image(old, None);
-                                        }
-                                        this.full =
-                                            Some(Arc::new(RenderImage::new(smallvec::smallvec![
-                                                image::Frame::new(rgba)
-                                            ])));
+                                        let old = this.full.replace(Arc::new(RenderImage::new(
+                                            smallvec::smallvec![image::Frame::new(rgba)],
+                                        )));
+                                        this.retire(old);
                                         if this.full_key != this.key {
                                             this.full_key = this.key.clone();
                                             cx.emit(Event::Progressed);
@@ -870,9 +919,11 @@ impl MediaSurface {
                     if this.key == expected {
                         // A thumbnail that fails to decode still counts as
                         // settled: the original follows on its own.
-                        this.thumbnail = result.ok();
+                        let old = std::mem::replace(&mut this.thumbnail, result.ok());
+                        this.retire(old);
                         if this.full_key != expected {
-                            this.full = None;
+                            let old = this.full.take();
+                            this.retire(old);
                         }
                         this.present_key();
                         if let Some(document) = &this.document {
@@ -891,7 +942,8 @@ impl MediaSurface {
                 let result = load.await;
                 let _ = entity.update(cx, |this, cx| {
                     if this.key == key {
-                        this.full = result.ok();
+                        let old = std::mem::replace(&mut this.full, result.ok());
+                        this.retire(old);
                         this.full_key = key.clone();
                         this.present_key();
                         cx.emit(Event::Progressed);
@@ -917,7 +969,8 @@ impl MediaSurface {
                 }
                 match result {
                     Ok(image) => {
-                        this.full = Some(image);
+                        let old = this.full.replace(image);
+                        this.retire(old);
                         this.full_key = key.clone();
                         this.present_key();
                     }
@@ -1359,6 +1412,7 @@ impl Render for MediaSurface {
         }
         surface = surface.children(navigator);
         self.release_hold(cx);
+        self.release_retired(window, cx);
         if let Some(held) = &self.held {
             let layer = div().absolute().inset_0();
             surface = surface.child(match held {
@@ -1475,5 +1529,81 @@ fn paint_checkerboard(bounds: Bounds<Pixels>, scale: f32, window: &mut Window) {
             Bounds::new(point(px(x), px(y)), size(px(w), px(h))),
             rgb(theme::TRANSPARENCY_GRID_DARK),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaSurface, Options};
+    use gpui::{AnyWindowHandle, AppContext as _, RenderImage, TestAppContext};
+    use std::sync::Arc;
+
+    /// Fifty 12-megapixel originals opened and closed in turn, as the
+    /// viewer opens them: only the last one's pictures stay in the sprite
+    /// atlas (about 48 MB each), not every one ever viewed.
+    #[test]
+    fn originals_opened_and_closed_leave_the_sprite_atlas() {
+        let folder = tempfile::tempdir().unwrap();
+        let photo = folder.path().join("photo.jpg");
+        image::RgbImage::from_fn(4000, 3000, |x, y| {
+            image::Rgb([x as u8, y as u8, (x ^ y) as u8])
+        })
+        .save(&photo)
+        .unwrap();
+        let thumbnail = folder.path().join("thumbnail.jpg");
+        image::RgbImage::from_fn(400, 300, |x, _| image::Rgb([x as u8, 90, 200]))
+            .save(&thumbnail)
+            .unwrap();
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, cx| MediaSurface::new(Options::default(), cx));
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+        let mut shown: Vec<Arc<RenderImage>> = Vec::new();
+        for item in 0..50 {
+            let key = format!("item-{item}");
+            window
+                .update(&mut cx, |surface, _, cx| {
+                    let natural = Some((4000., 3000.));
+                    let (thumbnail, photo) = (thumbnail.clone(), photo.clone());
+                    surface.open(key.clone(), thumbnail, natural, photo, "image/jpeg", cx)
+                })
+                .unwrap();
+            draw(&mut cx);
+            let pictures = window
+                .read_with(&cx, |surface, _| {
+                    assert_eq!(surface.full_key, key);
+                    [surface.thumbnail.clone(), surface.full.clone()]
+                })
+                .unwrap();
+            shown.extend(
+                pictures
+                    .into_iter()
+                    .map(|picture| picture.expect("decoded")),
+            );
+            // Closed: the item rests, kept for a reopening.
+            window
+                .update(&mut cx, |surface, _, _| surface.rest())
+                .unwrap();
+            draw(&mut cx);
+        }
+        let in_atlas: Vec<bool> = cx
+            .update_window(handle, |_, window, _| {
+                shown
+                    .iter()
+                    .map(|image| window.has_image_atlas_entry(image))
+                    .collect()
+            })
+            .unwrap();
+        let (earlier, last) = in_atlas.split_at(in_atlas.len() - 2);
+        assert_eq!(last, [true, true]);
+        assert!(earlier.iter().all(|kept| !kept), "{in_atlas:?}");
     }
 }

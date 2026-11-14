@@ -299,11 +299,7 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let surface = cx.new(|cx| {
-            let mut surface = MediaSurface::default();
-            surface.set_options(options(cx, true, false), cx);
-            surface
-        });
+        let surface = cx.new(|cx| MediaSurface::new(options(cx, true, false), cx));
         let viewer = cx.entity().downgrade();
         let toolbar = cx.new(|cx| ViewerToolbar::new(session.clone(), surface.clone(), viewer, cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
@@ -840,6 +836,14 @@ fn shown_collection(session: &Session) -> Option<&picto_library::RootDetails> {
     session
         .selected_details()
         .filter(|details| details.root.kind == picto_library::RootKind::Collection)
+}
+
+/// Takes a picture nothing draws any more out of the sprite atlas of every
+/// window, where GPUI keeps it until told. Done once no window is being
+/// updated: the window that is drawing or handling input is out of the
+/// app's list meanwhile, and would keep the picture.
+pub fn release_image(image: std::sync::Arc<RenderImage>, cx: &mut App) {
+    cx.defer(move |cx| cx.drop_image(image, None));
 }
 
 /// An item's size in image pixels, when the library knows it.
