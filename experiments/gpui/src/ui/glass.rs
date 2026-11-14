@@ -55,6 +55,48 @@ pub fn glass_panel(id: impl Into<ElementId>, radius: f32, cx: &App) -> GlassPane
     panel
 }
 
+/// The fill a glass panel in its own transparent window draws over the
+/// system's plain blur of what is behind the window
+/// ([`super::window_chrome::system_blur_behind`]), so that it shows what
+/// `glass` over a blur with `brightness` shows. A brightness below 1 is a
+/// black layer of `1 − brightness` over the blur, exactly. Above 1 there
+/// is no layer that multiplies, and a white layer of 0.4 comes nearest to
+/// `min(1, 3x)` over all of `x` (the two differ by at most 0.4, where the
+/// blur is black or a third bright, of which the glass lets a tenth
+/// through). The glass and the layer are then one colour.
+pub fn fill_over_system_blur(glass: Rgba, brightness: f32) -> Rgba {
+    let (layer, strength) = if brightness <= 1. {
+        (0., 1. - brightness)
+    } else {
+        (1., 0.4)
+    };
+    let alpha = 1. - (1. - glass.a) * (1. - strength);
+    let channel = |value: f32| {
+        if alpha <= 0. {
+            0.
+        } else {
+            (glass.a * value + (1. - glass.a) * strength * layer) / alpha
+        }
+    };
+    Rgba {
+        r: channel(glass.r),
+        g: channel(glass.g),
+        b: channel(glass.b),
+        a: alpha,
+    }
+}
+
+/// The fill of a glass panel in its own transparent window where the
+/// system cannot blur what is behind the window: with nothing to blur it,
+/// the glass lets half as much through, so that what shows behind stays
+/// as faint as the blurred glass keeps it.
+pub fn fill_without_blur(glass: Rgba) -> Rgba {
+    Rgba {
+        a: 1. - (1. - glass.a) / 2.,
+        ..glass
+    }
+}
+
 /// A surface that shows what the window drew behind it through a backdrop
 /// blur (CSS `backdrop-filter`) and casts its drop shadows only outside its
 /// rounded shape, as CSS draws a `box-shadow`. Give it its fill as usual;
@@ -243,12 +285,62 @@ impl Element for GlassPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::laid_over;
+    use super::{fill_over_system_blur, fill_without_blur, laid_over};
     use gpui::{
         BACKDROP_BLUR_MAX_TAPS, BackdropBlur, BackdropBlurKernel, Bounds, ContentMask, Corners,
-        DevicePixels, PrimitiveBatch, Quad, ScaledPixels, Scene, Size, backdrop_blur_downsample,
-        backdrop_blur_reduced_sigma, point, size,
+        DevicePixels, PrimitiveBatch, Quad, Rgba, ScaledPixels, Scene, Size,
+        backdrop_blur_downsample, backdrop_blur_reduced_sigma, point, size,
     };
+
+    /// What `fill` over `blurred` shows, one channel.
+    fn over(fill: Rgba, value: f32, blurred: f32) -> f32 {
+        fill.a * value + (1. - fill.a) * blurred
+    }
+
+    #[test]
+    fn unblurred_glass_lets_half_as_much_through() {
+        let glass = Rgba {
+            r: 0.1,
+            g: 0.2,
+            b: 0.3,
+            a: 0.92,
+        };
+        let fill = fill_without_blur(glass);
+        assert!((fill.a - 0.96).abs() < 1e-6);
+        assert_eq!((fill.r, fill.g, fill.b), (0.1, 0.2, 0.3));
+    }
+
+    #[test]
+    fn a_dark_pop_up_shows_what_its_glass_shows_over_the_dimmed_blur() {
+        let glass = Rgba {
+            r: 0.1,
+            g: 0.1,
+            b: 0.1,
+            a: 0.92,
+        };
+        let fill = fill_over_system_blur(glass, 0.7);
+        for blurred in [0., 0.25, 0.5, 1.] {
+            let wanted = 0.92 * 0.1 + 0.08 * 0.7 * blurred;
+            assert!((over(fill, fill.r, blurred) - wanted).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn a_light_pop_up_comes_within_its_glass_share_of_the_brightened_blur() {
+        let glass = Rgba {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a: 0.9,
+        };
+        let fill = fill_over_system_blur(glass, 3.);
+        assert!(fill.a > glass.a && fill.a < 1.);
+        for step in 0..=20 {
+            let blurred = step as f32 / 20.;
+            let wanted = 0.9 + 0.1 * (3. * blurred).min(1.);
+            assert!((over(fill, fill.r, blurred) - wanted).abs() <= 0.1 * 0.4 + 1e-5);
+        }
+    }
 
     fn scaled(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
         Bounds {

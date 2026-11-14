@@ -2,6 +2,7 @@ use super::tooltip::{self, Tip};
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
+use std::rc::Rc;
 use std::time::Duration;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -504,7 +505,7 @@ impl RenderOnce for IconButton {
         // window's own listeners (a grid's marquee under a dialog), which
         // the panel holding it can no longer stop once it is occluded.
         let mut button = div()
-            .id(self.id)
+            .id(self.id.clone())
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .relative()
@@ -569,6 +570,18 @@ impl RenderOnce for IconButton {
         if disabled {
             return button;
         }
+        let focus = super::focus::control(&self.id, window, cx);
+        // `SmartFolderModal`'s `.conditionButton:focus-visible`; production's
+        // other glyph buttons draw no ring.
+        if look == Look::Condition {
+            let ring = super::focus::Ring {
+                width: 1.,
+                offset: 1.,
+                color: theme.text(),
+            };
+            let border = if paint.border.is_some() { 1. } else { 0. };
+            button = button.children(focus.ring(ring, radius, border));
+        }
         if let Some(tip) = &self.tip {
             let tip = if look == Look::Media {
                 tip.clone().above()
@@ -611,14 +624,23 @@ impl RenderOnce for IconButton {
                 .on_mouse_up_out(MouseButton::Left, move |_, _, cx| release(&out, cx));
         }
         if let Some(handler) = self.on_click {
+            let handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> = Rc::from(handler);
+            let pressed = handler.clone();
             button = if look == Look::Media {
                 button.on_click(move |event, window, cx| {
                     cx.stop_propagation();
                     handler(event, window, cx);
                 })
             } else {
-                button.on_click(handler)
+                button.on_click(move |event, window, cx| handler(event, window, cx))
             };
+            button = focus.attach(
+                button,
+                super::focus::Kind::Button,
+                move |event, window, cx| pressed(event, window, cx),
+            );
+        } else {
+            button = focus.attach(button, super::focus::Kind::Button, |_, _, _| {});
         }
         button
     }

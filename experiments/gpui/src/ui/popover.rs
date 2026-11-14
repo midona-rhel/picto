@@ -173,7 +173,8 @@ impl RenderOnce for Popover {
         .left_0()
         .w(relative(scale))
         .h(relative(scale));
-        let panel = div()
+        // Tab and Shift-Tab stay among the popover's own controls.
+        let panel = super::focus::scope(div(), &self.focus)
             .id(self.id)
             .occlude()
             .relative()

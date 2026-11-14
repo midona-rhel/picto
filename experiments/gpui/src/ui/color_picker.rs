@@ -131,6 +131,7 @@ impl RenderOnce for ColorPicker {
             };
             let ring = swatch(color, (chosen == Some(position)).then_some(check), cx);
             let handler = self.on_pick.clone();
+            let pressed = handler.clone();
             let hex = *hex;
             let target = div()
                 .id(("swatch", position))
@@ -141,6 +142,21 @@ impl RenderOnce for ColorPicker {
                         handler(hex, window, cx);
                     }
                 });
+            // `ColorPicker`'s swatches are `<button>`s: stops with no ring.
+            let target = super::focus::button(
+                target,
+                &ElementId::NamedChild(
+                    std::sync::Arc::new(self.id.clone()),
+                    format!("swatch-{position}").into(),
+                ),
+                window,
+                cx,
+                move |_, window, cx| {
+                    if let Some(handler) = &pressed {
+                        handler(hex, window, cx);
+                    }
+                },
+            );
             row = row.child(super::tooltip::attach(
                 target,
                 ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), (*label).into()),

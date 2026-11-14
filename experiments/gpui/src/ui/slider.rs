@@ -1,3 +1,4 @@
+use super::focus::{self, SliderKey, slider_key};
 use crate::theme;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -97,6 +98,8 @@ impl RenderOnce for Slider {
         let handler = self.on_change;
         let width = self.width;
         let dialog = self.dialog;
+        let focus = super::focus::control(&self.id, window, cx);
+        let keyed = handler.clone();
         let root = div().id(self.id).occlude().relative().cursor_pointer();
         let root = if dialog {
             // The track's 4px are the element's layout; the thumb hangs
@@ -167,7 +170,7 @@ impl RenderOnce for Slider {
                 )
         };
         let thumb = if dialog { DIALOG_THUMB } else { THUMB };
-        root.child(
+        let root = root.child(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -225,7 +228,53 @@ impl RenderOnce for Slider {
                 0.
             }))
             .h(px(thumb)),
-        )
+        );
+        // `<input type="range">`'s keys; it draws no ring.
+        let moved = move |key: SliderKey| {
+            let keyed = keyed.clone();
+            move |cx: &mut App| {
+                let next = slider_key(key, value, min, max, step);
+                if let Some(handler) = &keyed
+                    && next != value
+                {
+                    handler(next, cx);
+                }
+            }
+        };
+        let root = root
+            .on_action({
+                let moved = moved(SliderKey::Down);
+                move |_: &focus::Left, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::Down);
+                move |_: &focus::Down, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::Up);
+                move |_: &focus::Right, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::Up);
+                move |_: &focus::Up, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::PageDown);
+                move |_: &focus::PageDown, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::PageUp);
+                move |_: &focus::PageUp, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::Home);
+                move |_: &focus::Home, _, cx| moved(cx)
+            })
+            .on_action({
+                let moved = moved(SliderKey::End);
+                move |_: &focus::End, _, cx| moved(cx)
+            });
+        focus.attach(root, focus::Kind::Slider, |_, _, _| {})
     }
 }
 

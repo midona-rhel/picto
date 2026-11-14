@@ -109,6 +109,135 @@ pub fn order_out(window: &Window) {
     let _ = window;
 }
 
+/// Whether [`system_blur_behind`] blurs what is behind a pop-up window on
+/// this system, kept to its panel: on macOS (an `NSVisualEffectView`
+/// beneath the panel) and Windows (acrylic, with the window cut to the
+/// panel). On Linux GPUI's blur (`ext-background-effect` or KDE's protocol
+/// on Wayland; none on X11) covers the whole window, shadow room included,
+/// so it is not asked for and the panel draws a more opaque glass instead.
+pub const fn system_blurs() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
+/// Gives a transparent pop-up window the system's blur of what is behind
+/// it, shown only beneath the panel [`place_system_blur`] names. Called as
+/// the window opens; until a panel is placed nothing is blurred.
+pub fn system_blur_behind(window: &Window) {
+    if !system_blurs() {
+        return;
+    }
+    window.set_background_appearance(WindowBackgroundAppearance::Blurred);
+    #[cfg(target_os = "macos")]
+    appkit::with_ns_window(window, appkit::backdrop::hide);
+}
+
+/// Keeps the blur of [`system_blur_behind`] to the panel at `panel` in the
+/// window, with corners of `radius`, at `alpha`.
+pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, alpha: f32) {
+    #[cfg(target_os = "macos")]
+    {
+        let height = f32::from(window.viewport_size().height);
+        let rect = (
+            f32::from(panel.origin.x),
+            f32::from(panel.origin.y),
+            f32::from(panel.size.width),
+            f32::from(panel.size.height),
+        );
+        appkit::with_ns_window(window, |ns_window| {
+            appkit::backdrop::place(ns_window, rect, height, radius, alpha)
+        });
+    }
+    // Acrylic fills the whole window and takes no shape of its own, so the
+    // window is cut to the panel's rounded rectangle; the drawn shadow, in
+    // the room around the panel, is cut away with it. Its fade is the
+    // panel's own opacity.
+    #[cfg(target_os = "windows")]
+    {
+        let _ = alpha;
+        win32::cut_to(window, panel, radius);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = (window, panel, radius, alpha);
+}
+
+/// A panel as a Windows window region: left, top, right and bottom in
+/// device pixels (right and bottom one past the panel, where GDI's regions
+/// end) and the corners' diameter.
+#[cfg(any(test, target_os = "windows"))]
+fn panel_region(panel: Bounds<Pixels>, radius: f32, scale: f32) -> [i32; 5] {
+    let at = |value: Pixels| (f32::from(value) * scale).round() as i32;
+    [
+        at(panel.origin.x),
+        at(panel.origin.y),
+        at(panel.origin.x + panel.size.width) + 1,
+        at(panel.origin.y + panel.size.height) + 1,
+        (radius * 2. * scale).round() as i32,
+    ]
+}
+
+/// The window region a pop-up window on Windows is cut to.
+#[cfg(target_os = "windows")]
+mod win32 {
+    use gpui::{Bounds, Pixels, Window};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateRoundRectRgn(
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+            width: i32,
+            height: i32,
+        ) -> *mut c_void;
+        fn DeleteObject(object: *mut c_void) -> i32;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetWindowRgn(window: isize, region: *mut c_void, redraw: i32) -> i32;
+    }
+
+    thread_local! {
+        /// The region each window was last cut to, so it is set again only
+        /// when the panel moves or changes size.
+        static CUT: RefCell<HashMap<u64, [i32; 5]>> = RefCell::new(HashMap::new());
+    }
+
+    pub(super) fn cut_to(window: &Window, panel: Bounds<Pixels>, radius: f32) {
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = win32.hwnd.get();
+        let wanted = super::panel_region(panel, radius, window.scale_factor());
+        let id = window.window_handle().window_id().as_u64();
+        let unchanged = CUT.with(|cut| cut.borrow_mut().insert(id, wanted) == Some(wanted));
+        if unchanged {
+            return;
+        }
+        let [left, top, right, bottom, diameter] = wanted;
+        // SAFETY: GDI and user32 calls with the arguments they take; once
+        // `SetWindowRgn` succeeds the system owns the region, and it is
+        // deleted here only when it was refused.
+        unsafe {
+            let shape = CreateRoundRectRgn(left, top, right, bottom, diameter, diameter);
+            if shape.is_null() {
+                return;
+            }
+            if SetWindowRgn(hwnd, shape, 1) == 0 {
+                DeleteObject(shape);
+            }
+        }
+    }
+}
+
 /// The Window menu's Bring All to Front (`arrangeInFront:`).
 pub fn bring_all_to_front(cx: &mut App) {
     #[cfg(target_os = "macos")]
@@ -285,6 +414,143 @@ pub(crate) mod appkit {
         }
     }
 
+    /// The system's blur of what is behind a transparent window, kept to one
+    /// rounded panel of it. GPUI's `WindowBackgroundAppearance::Blurred`
+    /// lays an `NSVisualEffectView` over the whole content view, beneath
+    /// GPUI's own view, with the material's tint and saturation taken out,
+    /// so what shows is the plain blur. Here that view is hidden until
+    /// [`place_backdrop`] sets it to the panel's rectangle and shape. It
+    /// lies inside the content view, so a Core Animation transform of the
+    /// content view's layer (`pop_in`) moves it with the panel, and beneath
+    /// GPUI's view, so it takes no pointer.
+    pub mod backdrop {
+        use objc2::msg_send;
+        use objc2::rc::Retained;
+        use objc2::runtime::{AnyClass, AnyObject, Bool};
+        use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize};
+        use std::ffi::c_void;
+
+        /// GPUI's effect view in the content view of `ns_window`.
+        ///
+        /// # Safety
+        /// `ns_window` is a live NSWindow; called on the main thread.
+        unsafe fn effect_view(ns_window: *mut c_void) -> Option<Retained<AnyObject>> {
+            let effect = AnyClass::get(c"NSVisualEffectView")?;
+            // SAFETY: documented AppKit selectors with these types.
+            unsafe {
+                let window = ns_window.cast::<AnyObject>();
+                let content: Option<Retained<AnyObject>> = msg_send![window, contentView];
+                let subviews: Option<Retained<AnyObject>> = msg_send![&*content?, subviews];
+                let subviews = subviews?;
+                let count: usize = msg_send![&*subviews, count];
+                (0..count).find_map(|index| {
+                    let view: Option<Retained<AnyObject>> =
+                        msg_send![&*subviews, objectAtIndex: index];
+                    let view = view?;
+                    let is_effect: Bool = msg_send![&*view, isKindOfClass: effect];
+                    is_effect.as_bool().then_some(view)
+                })
+            }
+        }
+
+        /// Hides the effect view until a panel places it. Called as the
+        /// window opens, before it first shows.
+        pub fn hide(ns_window: *mut c_void) {
+            // SAFETY: as `effect_view` requires; `setHidden:` and
+            // `setAutoresizingMask:` take a BOOL and an NSUInteger.
+            unsafe {
+                if let Some(view) = effect_view(ns_window) {
+                    let _: () = msg_send![&*view, setHidden: true];
+                    // It follows the panel, not the window's size.
+                    let _: () = msg_send![&*view, setAutoresizingMask: 0usize];
+                }
+            }
+        }
+
+        /// Sets the effect view to the panel at `(x, y, w, h)` (points from
+        /// the content's top left) with corners of `radius`, at `alpha`.
+        /// `height` is the content's height, as AppKit counts y upwards.
+        pub fn place(
+            ns_window: *mut c_void,
+            (x, y, w, h): (f32, f32, f32, f32),
+            height: f32,
+            radius: f32,
+            alpha: f32,
+        ) {
+            // SAFETY: as `effect_view` requires; each selector is AppKit's,
+            // sent with the argument types it takes.
+            unsafe {
+                let Some(view) = effect_view(ns_window) else {
+                    return;
+                };
+                let frame = NSRect::new(
+                    NSPoint::new(x.into(), (height - y - h).into()),
+                    NSSize::new(w.into(), h.into()),
+                );
+                let _: () = msg_send![&*view, setFrame: frame];
+                let _: () = msg_send![&*view, setAlphaValue: f64::from(alpha)];
+                let mask: Option<Retained<AnyObject>> = msg_send![&*view, maskImage];
+                if mask.is_none()
+                    && let Some(mask) = rounded_mask(radius.into())
+                {
+                    let _: () = msg_send![&*view, setMaskImage: &*mask];
+                }
+                let _: () = msg_send![&*view, setHidden: false];
+            }
+        }
+
+        /// A rounded rectangle of `radius` that stretches to any size: its
+        /// corners are kept and its middle drawn out (`capInsets`), as
+        /// `NSVisualEffectView.maskImage` documents for rounded shapes.
+        fn rounded_mask(radius: f64) -> Option<Retained<AnyObject>> {
+            let (image, path, color) = (
+                AnyClass::get(c"NSImage")?,
+                AnyClass::get(c"NSBezierPath")?,
+                AnyClass::get(c"NSColor")?,
+            );
+            let side = radius * 2. + 1.;
+            let draw = block2::RcBlock::new(move |rect: NSRect| -> Bool {
+                // SAFETY: AppKit's drawing selectors, called by AppKit on
+                // the main thread while the image draws.
+                unsafe {
+                    let shape: Option<Retained<AnyObject>> = msg_send![
+                        path,
+                        bezierPathWithRoundedRect: rect,
+                        xRadius: radius,
+                        yRadius: radius
+                    ];
+                    let black: Option<Retained<AnyObject>> = msg_send![color, blackColor];
+                    if let (Some(shape), Some(black)) = (shape, black) {
+                        let _: () = msg_send![&*black, set];
+                        let _: () = msg_send![&*shape, fill];
+                    }
+                }
+                Bool::YES
+            });
+            // SAFETY: `imageWithSize:flipped:drawingHandler:` takes an
+            // NSSize, a BOOL and a block of this signature; `setCapInsets:`
+            // an NSEdgeInsets; `setResizingMode:` an NSInteger (stretch, 1).
+            unsafe {
+                let mask: Option<Retained<AnyObject>> = msg_send![
+                    image,
+                    imageWithSize: NSSize::new(side, side),
+                    flipped: false,
+                    drawingHandler: &*draw
+                ];
+                let mask = mask?;
+                let insets = NSEdgeInsets {
+                    top: radius,
+                    left: radius,
+                    bottom: radius,
+                    right: radius,
+                };
+                let _: () = msg_send![&*mask, setCapInsets: insets];
+                let _: () = msg_send![&*mask, setResizingMode: 1isize];
+                Some(mask)
+            }
+        }
+    }
+
     /// Runs `work` with the window's NSWindow, if it has one.
     /// `[NSApp arrangeInFront:nil]`: the app's windows in front of other
     /// apps', in their order.
@@ -338,4 +604,17 @@ pub fn close_button(
     super::icon_button(id, "window-close")
         .look(super::icon_button::Look::WindowClose)
         .on_click(on_click)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panel_region;
+    use gpui::{Bounds, point, px, size};
+
+    #[test]
+    fn a_panel_is_cut_out_in_device_pixels_with_its_round_corners() {
+        let panel = Bounds::new(point(px(40.), px(40.5)), size(px(270.), px(300.)));
+        assert_eq!(panel_region(panel, 12., 1.), [40, 41, 311, 342, 24]);
+        assert_eq!(panel_region(panel, 12., 1.5), [60, 61, 466, 512, 36]);
+    }
 }

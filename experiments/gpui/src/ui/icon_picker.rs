@@ -197,6 +197,16 @@ impl IconPicker {
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.pick(value.map(str::to_owned), window, cx)
             }));
+        // Each tile is a `<button>`: a stop with no ring.
+        let press =
+            cx.listener(move |this, _, window, cx| this.pick(value.map(str::to_owned), window, cx));
+        let tile = super::focus::button(
+            tile,
+            &ElementId::from(("icon-tile", index)),
+            window,
+            cx,
+            press,
+        );
         super::tooltip::attach(
             tile,
             ("icon-tile-tip", index),

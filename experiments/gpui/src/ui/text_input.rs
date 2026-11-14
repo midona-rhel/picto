@@ -1480,12 +1480,19 @@ impl TextElement {
                 .collect();
             (None, quads)
         };
-        self.input.update(cx, |input, cx| {
-            if input.overflowing != overflowing {
+        // A notification made while a frame is drawn schedules no frame of
+        // its own, so the owner's expansion is asked for explicitly.
+        let changed = self.input.update(cx, |input, cx| {
+            let changed = input.overflowing != overflowing;
+            if changed {
                 input.overflowing = overflowing;
                 cx.notify();
             }
+            changed
         });
+        if changed {
+            window.request_animation_frame();
+        }
         PrepaintState::Wrapped {
             lines,
             cursor,
@@ -1604,6 +1611,8 @@ impl Element for TextElement {
                 input.overflowing = overflowing;
                 cx.notify();
             });
+            // Made while a frame is drawn: ask for the next one.
+            window.request_animation_frame();
         }
 
         // A field that is not being edited shows its start and an ellipsis,
@@ -1788,6 +1797,10 @@ impl Element for TextElement {
                         if scroll != input.area.offset() {
                             input.area.set_offset(scroll);
                             cx.notify();
+                            // Made while a frame is drawn: ask for the
+                            // next one, or the caret stays out of view
+                            // until something else redraws the field.
+                            window.request_animation_frame();
                         }
                     }
                 }
@@ -1824,6 +1837,11 @@ impl Render for TextInput {
         } else {
             div().size_full().flex().items_center()
         };
+        #[cfg(test)]
+        {
+            let name = format!("field \"{}\"", self.placeholder);
+            crate::ui::focus::names::name_text(&self.focus_handle(cx), name, cx);
+        }
         root.key_context(if self.multiline {
             "TextInput TextArea"
         } else {
@@ -1960,7 +1978,8 @@ impl Focusable for TextInput {
 impl TextInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            // A field is a stop for Tab, as an `<input>` is.
+            focus_handle: cx.focus_handle().tab_stop(true),
             content: "".into(),
             placeholder: "Search".into(),
             selected_range: 0..0,

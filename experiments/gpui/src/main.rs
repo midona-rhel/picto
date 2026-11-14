@@ -93,6 +93,7 @@ fn prepare(cx: &mut App) {
     ui::selection_modal::bind(cx);
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
+    ui::focus::bind(cx);
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
     app_menu::bind(cx);
     imports::bind(cx);

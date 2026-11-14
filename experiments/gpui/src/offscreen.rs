@@ -20,7 +20,8 @@
 //! 3`), which chooses an application menu row, or `invoke <command>
 //! <json>`, which sends an application command (`folders.create`, …) and
 //! prints its answer, so a script can set a copy up as it sets up the
-//! reference's.
+//! reference's, or `focused`, which prints the control with the keyboard
+//! and whether Tab put it there (its focus ring shows).
 //! `PICTO_GPUI_LAZY=1` starts a script lazy. `PICTO_GPUI_WINDOW=1213x865`
 //! sets the main window's size. `PICTO_GPUI_STATE=<folder>` keeps what the
 //! script arranges (rail widths, folds, filters, shortcuts…) in that folder
@@ -158,6 +159,15 @@ fn plays_a_script() {
                 .get(index)
                 .unwrap_or_else(|| panic!("there are {} windows", windows.len()));
             settle(&mut cx, window, Duration::from_millis(200), lazy);
+        } else if line == "focused" {
+            // Prints the control with the keyboard, the off-screen side of
+            // the reference's `js document.activeElement`.
+            let focused = cx
+                .update_window(window, |_, window, cx| {
+                    crate::ui::focus::names::focused(window, cx)
+                })
+                .unwrap();
+            println!("focused: {focused}");
         } else if line == "lazy" || line == "eager" {
             lazy = line == "lazy";
         } else if let Some(rest) = line.strip_prefix("notify ") {

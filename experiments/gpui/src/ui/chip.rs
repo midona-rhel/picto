@@ -2,6 +2,7 @@ use super::tooltip::{self, Tip};
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
+use std::rc::Rc;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type MenuHandler = Box<dyn Fn(&Point<Pixels>, &mut Window, &mut App) + 'static>;
@@ -184,6 +185,8 @@ impl RenderOnce for Chip {
             });
         }
         if let Some(handler) = self.on_remove {
+            let handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> = Rc::from(handler);
+            let pressed = handler.clone();
             let remove = div()
                 .id("remove")
                 .size(px(18.))
@@ -201,6 +204,14 @@ impl RenderOnce for Chip {
                     cx.stop_propagation();
                     handler(event, window, cx);
                 });
+            // `TagChip`'s remove `<button>`: a stop, with no ring.
+            let remove = super::focus::button(
+                remove,
+                &ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "remove".into()),
+                window,
+                cx,
+                move |event, window, cx| pressed(event, window, cx),
+            );
             chip = chip.child(tooltip::attach(
                 remove,
                 ElementId::NamedChild(std::sync::Arc::new(self.id), "remove-tip".into()),

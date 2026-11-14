@@ -289,6 +289,16 @@ impl RenderOnce for Select {
             button = button.w(px(width));
         }
         let handler = self.on_change.map(Rc::new);
+        button = keys(
+            button,
+            &self.id,
+            &state,
+            self.choices.iter().map(|choice| choice.value).collect(),
+            current,
+            handler.clone(),
+            window,
+            cx,
+        );
         if super::menu::is_pop_up(window, cx) {
             return pop_up(
                 button,
@@ -364,6 +374,117 @@ impl RenderOnce for Select {
             .with_priority(LAYER),
         )
     }
+}
+
+/// Makes the button a stop with `CmSelect`'s keys: Space opens or closes
+/// the list as a click does; Enter opens it, or takes the highlighted choice
+/// and closes it; Up and Down open it at the current choice, then move the
+/// highlight; Home and End open it at the first or last choice; Escape
+/// closes it (and with it closed reaches the dialog); Tab closes it on its
+/// way to the next stop. It draws no ring.
+#[allow(clippy::too_many_arguments)]
+fn keys(
+    button: Stateful<Div>,
+    id: &ElementId,
+    state: &Entity<State>,
+    values: Vec<&'static str>,
+    current: Option<usize>,
+    handler: Option<Rc<ChangeHandler>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    use super::focus::{self, Kind};
+    let focus = focus::control(id, window, cx);
+    let count = values.len();
+    let at = current.unwrap_or(0);
+    // Opens the list with `index` highlighted, or moves the highlight there.
+    let highlight = {
+        let state = state.clone();
+        move |index: usize, cx: &mut App| {
+            if count == 0 {
+                return;
+            }
+            state.update(cx, |state, cx| {
+                state.open = true;
+                state.highlighted = Some(index.min(count - 1));
+                cx.notify();
+            });
+        }
+    };
+    let close = {
+        let state = state.clone();
+        move |cx: &mut App| {
+            if state.read(cx).open {
+                state.update(cx, |state, cx| {
+                    state.open = false;
+                    cx.notify();
+                });
+            }
+        }
+    };
+    let stepped = |delta: isize| {
+        let state = state.clone();
+        let highlight = highlight.clone();
+        move |cx: &mut App| {
+            let (open, highlighted) = {
+                let state = state.read(cx);
+                (state.open, state.highlighted)
+            };
+            if !open {
+                highlight(at, cx);
+            } else {
+                let from = highlighted.unwrap_or(at) as isize;
+                highlight((from + delta).max(0) as usize, cx);
+            }
+        }
+    };
+    let (up, down) = (stepped(-1), stepped(1));
+    let (home, end) = (highlight.clone(), highlight.clone());
+    let choose_state = state.clone();
+    let choose_open = highlight.clone();
+    let (cancel_state, cancel_close) = (state.clone(), close.clone());
+    let (next_close, previous_close) = (close.clone(), close);
+    let toggle_state = state.clone();
+    let button = button
+        .on_action(move |_: &focus::Up, _, cx| up(cx))
+        .on_action(move |_: &focus::Down, _, cx| down(cx))
+        .on_action(move |_: &focus::Home, _, cx| home(0, cx))
+        .on_action(move |_: &focus::End, _, cx| end(count.saturating_sub(1), cx))
+        .on_action(move |_: &focus::Choose, window, cx| {
+            let (open, highlighted) = {
+                let state = choose_state.read(cx);
+                (state.open, state.highlighted)
+            };
+            if !open {
+                choose_open(at, cx);
+                return;
+            }
+            choose_state.update(cx, |state, cx| {
+                state.open = false;
+                cx.notify();
+            });
+            if let (Some(index), Some(handler)) = (highlighted, &handler)
+                && let Some(value) = values.get(index)
+            {
+                handler(*value, window, cx);
+            }
+        })
+        .on_action(move |_: &focus::Cancel, _, cx| {
+            if cancel_state.read(cx).open {
+                cancel_close(cx);
+            } else {
+                cx.propagate();
+            }
+        })
+        .capture_action(move |_: &focus::Next, _, cx| next_close(cx))
+        .capture_action(move |_: &focus::Previous, _, cx| previous_close(cx));
+    focus.attach(button, Kind::Select, move |_, _, cx| {
+        toggle_state.update(cx, |state, cx| {
+            state.open = !state.open;
+            state.highlighted = current;
+            cx.notify();
+        })
+    })
 }
 
 /// What the list shows and whom it tells.

@@ -13,6 +13,12 @@ exclude = ["vendor"]
 # Keep symbols/checks while optimizing the rendering and decoding hot paths.
 [profile.dev]
 opt-level = 1
+# Line numbers in backtraces are all the checks here need. Full debug
+# information and the incremental caches of this crate, the vendored GPUI
+# and the application core made every build cycle write several gigabytes
+# that nothing cleaned up.
+debug = "line-tables-only"
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
@@ -95,7 +101,7 @@ core-foundation-sys = "0.8"
 # Video playback through AVFoundation, presented as CoreVideo pixel buffers
 # by GPUI's `surface` element; the same versions GPUI builds.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSKeyValueObserving"] }
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSKeyValueObserving", "NSGeometry"] }
 objc2-core-foundation = "0.3"
 objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
 objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }

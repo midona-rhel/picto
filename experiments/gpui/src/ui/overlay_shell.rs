@@ -29,6 +29,8 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("right", Right, context),
         KeyBinding::new("enter", Confirm, context),
         KeyBinding::new("tab", NextView, context),
+        // Production reads only the key, so Shift-Tab turns the same way.
+        KeyBinding::new("shift-tab", NextView, context),
     ]);
 }
 
