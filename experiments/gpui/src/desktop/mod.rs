@@ -421,6 +421,28 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
+/// Show in File Manager for a library in the Library Manager: its folder,
+/// only when it is the open library or one the list of libraries holds.
+pub fn reveal_library(path: &Path, cx: &mut App) {
+    let text = path.to_string_lossy();
+    let open = crate::libraries::host::current(cx).is_some_and(|(root, _)| root == path);
+    let state = crate::state::get(cx);
+    let listed = state.library_history.iter().any(|known| *known == text)
+        || state.pinned_libraries.iter().any(|known| *known == text);
+    if !open && !listed {
+        return crate::ui::notify::error(
+            "Could not show file",
+            format!("{} is not a library in the list", path.display()),
+            cx,
+        );
+    }
+    if live(cx) {
+        cx.reveal_path(&system_path(path));
+    } else {
+        record(format!("reveal {}", path.display()));
+    }
+}
+
 /// `picto:shell:openWithApplication`: the file, if it is one of the copy's,
 /// in the application at `application` (macOS only, as in production).
 #[cfg(target_os = "macos")]

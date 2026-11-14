@@ -40,7 +40,6 @@
 //! (`crate::prompt`). Give it before the line that opens the dialog; the
 //! answers are used in order.
 use crate::pointer;
-use crate::shell::Shell;
 use gpui::{AnyWindowHandle, AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -134,7 +133,14 @@ fn settle(cx: &mut HeadlessAppContext, window: AnyWindowHandle, time: Duration, 
 fn plays_a_script() {
     let variable =
         |name: &str| PathBuf::from(std::env::var_os(name).unwrap_or_else(|| panic!("set {name}")));
-    let root = crate::application::guard(&variable("PICTO_GPUI_COPY")).unwrap();
+    // A copy, as always; or, with `PICTO_GPUI_TEST_LIBRARIES` and no copy,
+    // the gate, from which the script opens the generated libraries in that
+    // folder (`libraries::test_folder`).
+    let root = match std::env::var_os("PICTO_GPUI_COPY") {
+        Some(copy) => Some(crate::application::guard(std::path::Path::new(&copy)).unwrap()),
+        None if std::env::var_os("PICTO_GPUI_TEST_LIBRARIES").is_some() => None,
+        None => panic!("set PICTO_GPUI_COPY"),
+    };
     let script = std::fs::read_to_string(variable("PICTO_GPUI_SCRIPT")).unwrap();
     let out = variable("PICTO_GPUI_OUT");
     std::fs::create_dir_all(&out).unwrap();
@@ -143,19 +149,24 @@ fn plays_a_script() {
     // As the app does at launch: the previous session's panics are shown in
     // the log window (from `PICTO_GPUI_STATE`'s `logs/`), and panics recorded.
     crate::diagnostics::crash::install();
-    let (events, delivered) = std::sync::mpsc::channel();
-    let application = crate::application::Application::new(root.clone(), events);
-    let closing = application.clone();
     let mut cx =
         HeadlessAppContext::with_platform(text_system(), Arc::new(crate::assets::Assets), renderer);
     cx.allow_parking();
     cx.update(crate::prepare);
     let window = cx
-        .open_window(size(px(width), px(height)), move |window, cx| {
-            cx.new(|cx| Shell::new(root, application, delivered, window, cx))
+        .open_window(size(px(width), px(height)), |_, cx| {
+            cx.new(crate::libraries::host::Main::new)
         })
         .unwrap();
     let main: AnyWindowHandle = window.into();
+    let (incoming, _arrived) = futures::channel::mpsc::unbounded();
+    cx.update(|cx| {
+        crate::app_menu::set_main_window(main, cx);
+        crate::libraries::host::attach(window, incoming, cx);
+        if let Some(root) = root {
+            crate::libraries::host::start(root, crate::libraries::Kind::Copy, None, window, cx);
+        }
+    });
     // The frame the app's main window asks for, so its own chrome shows as
     // on the platform (the window's buttons and edges on Linux).
     if let Some(decorations) = crate::ui::window_chrome::DECORATIONS {
@@ -259,7 +270,10 @@ fn plays_a_script() {
             let (command, args) = rest.trim().split_once(' ').unwrap_or((rest.trim(), "{}"));
             let args: serde_json::Value =
                 serde_json::from_str(args).unwrap_or_else(|error| panic!("{line}: {error}"));
-            let mut answer = closing.dispatch(command.to_owned(), args);
+            let application = cx
+                .update(|cx| crate::libraries::host::application(cx))
+                .expect("a library is open");
+            let mut answer = application.dispatch(command.to_owned(), args);
             let started = std::time::Instant::now();
             let result = loop {
                 settle(&mut cx, window, Duration::from_millis(50), lazy);
@@ -311,7 +325,7 @@ fn plays_a_script() {
             }
         });
     }
-    closing.close();
+    cx.update(crate::libraries::host::close_for_quit);
 }
 
 /// `notify <tone> <title> | <message>`: shows a notification as the app

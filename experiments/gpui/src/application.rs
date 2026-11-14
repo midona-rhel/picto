@@ -8,6 +8,7 @@
 //! (`picto_core::state::open_library` on its root), and the library thread
 //! of [`crate::backend`] borrows the application's own `Library` rather than
 //! opening the database a second time.
+use crate::libraries::Kind;
 use futures::channel::oneshot;
 use picto_core::dto::{LIBRARY_CHANGED_EVENT, LibraryChanged};
 use picto_library::Library;
@@ -233,12 +234,14 @@ pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
     guard(&kept.join(name))
 }
 
-/// The database's own files, which the online backup has already copied.
+/// The database's own files, which the online backup has already copied,
+/// and the lock an application holding the library open keeps (a locked
+/// file cannot be read on Windows, and a copy is not open anywhere).
 fn is_database_file(name: &str) -> bool {
     matches!(
         name,
         "library.sqlite" | "library.sqlite-wal" | "library.sqlite-shm" | "library.sqlite-journal"
-    )
+    ) || name == picto_core::state::LIBRARY_LOCK_FILE
 }
 
 /// Copies `from` to `to`, folders and all, refusing symbolic links.
@@ -319,7 +322,15 @@ fn first_link(root: &Path) -> Option<PathBuf> {
 ///   the real library.
 ///
 /// Each step is idempotent; the copy is detached again on every launch.
+/// A folder without the marker is a library the user keeps: it is refused
+/// before anything is opened.
 pub fn detach(root: &Path) -> Result<(), String> {
+    if !root.join(MARKER).is_file() {
+        return Err(format!(
+            "{} is not a disposable copy (no {MARKER}); it is not detached",
+            root.display()
+        ));
+    }
     let mut connection = rusqlite::Connection::open(root.join("library.sqlite"))
         .map_err(|error| format!("open the copy's database: {error}"))?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -386,12 +397,22 @@ pub fn detach(root: &Path) -> Result<(), String> {
 /// `$XDG_CONFIG_HOME` or `~/.config` on Linux), so the models production
 /// downloaded are found. A debug build keeps it beside the copy, never in
 /// the user's own folder, unless `PICTO_GPUI_APP_DATA` names one.
-pub fn application_data(copy: &Path) -> Option<PathBuf> {
+///
+/// A debug build opening a library the user keeps never writes beside it:
+/// it uses `app-data` in this app's own folder.
+pub fn application_data(root: &Path, kind: Kind) -> Option<PathBuf> {
     if let Some(folder) = crate::seams::app_data() {
         return Some(folder);
     }
+    if cfg!(test) && kind == Kind::Real {
+        return Some(std::env::temp_dir().join("picto-gpui-test-app-data"));
+    }
     if cfg!(debug_assertions) || cfg!(test) {
-        return copy.parent().map(|scratch| scratch.join("app-data"));
+        return match kind {
+            Kind::Copy => root.parent().map(|scratch| scratch.join("app-data")),
+            Kind::Real => crate::state::config_folder()
+                .map(|folder| folder.join("Picto GPUI").join("app-data")),
+        };
     }
     crate::state::config_folder().map(|folder| folder.join("picto"))
 }
@@ -400,18 +421,24 @@ pub fn application_data(copy: &Path) -> Option<PathBuf> {
 pub struct Application {
     runtime: tokio::runtime::Runtime,
     root: PathBuf,
+    kind: Kind,
+    /// Set once the library is being closed: commands are refused from then
+    /// on, so none reaches the library opened after it.
+    retired: std::sync::atomic::AtomicBool,
     /// `None` while the library opens, then whether it opened.
     opened: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     report: tokio::sync::watch::Sender<Option<Result<(), String>>>,
 }
 
 impl Application {
-    /// Prepares the application for a guarded copy and starts delivering its
-    /// events to `events`. Nothing is opened until [`Application::open`].
-    pub fn new(root: PathBuf, events: mpsc::Sender<Event>) -> Arc<Self> {
+    /// Prepares the application for a guarded copy, or for a library the
+    /// user keeps that `crate::libraries` admitted, and starts delivering
+    /// its events to `events` (the events of an application made before go
+    /// nowhere from then on). Nothing is opened until [`Application::open`].
+    pub fn new(root: PathBuf, kind: Kind, events: mpsc::Sender<Event>) -> Arc<Self> {
         // Where the AI models the application keeps outside a library are.
-        // This can be set once per process.
-        if let Some(data) = application_data(&root) {
+        // This can be set once per process: the first library decides.
+        if let Some(data) = application_data(&root, kind) {
             let _ = picto_core::state::set_application_data_root(data);
         }
         picto_core::state::init_tracing();
@@ -437,12 +464,30 @@ impl Application {
         Arc::new(Self {
             runtime,
             root,
+            kind,
+            retired: std::sync::atomic::AtomicBool::new(false),
             opened,
             report,
         })
     }
 
-    /// Detaches the copy and opens it as the Electron app opens a library,
+    /// The library's folder.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Whether it is a disposable copy or a library the user keeps.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Whether the library opened: `None` until the open has finished.
+    pub fn opened(&self) -> tokio::sync::watch::Receiver<Option<Result<(), String>>> {
+        self.opened.clone()
+    }
+
+    /// Opens the library as the Electron app opens one, a copy detached
+    /// first and a library the user keeps as it is,
     /// starting the application's workers. Blocks the calling thread until
     /// it is open, and hands back its `Library`. `readable` is handed that
     /// `Library` as soon as the database is open, before the application's
@@ -452,7 +497,11 @@ impl Application {
         &self,
         readable: impl FnOnce(Arc<Library>) + Send + 'static,
     ) -> Result<Arc<Library>, String> {
-        let opened = detach(&self.root).and_then(|()| {
+        let detached = match self.kind {
+            Kind::Copy => detach(&self.root),
+            Kind::Real => Ok(()),
+        };
+        let opened = detached.and_then(|()| {
             self.runtime
                 .block_on(picto_core::state::open_library_reporting(
                     self.root.clone(),
@@ -476,6 +525,13 @@ impl Application {
     ) -> oneshot::Receiver<Result<Value, String>> {
         let (answer, receiver) = oneshot::channel();
         let command = command.into();
+        if self.retired.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = answer.send(Err(format!(
+                "{} was closed; {command} was not sent",
+                self.root.display()
+            )));
+            return receiver;
+        }
         let mut opened = self.opened.clone();
         let started = std::time::Instant::now();
         self.runtime.spawn(async move {
@@ -502,9 +558,16 @@ impl Application {
         receiver
     }
 
-    /// Stops the workers and checkpoints the copy, as the Electron app does
-    /// before it quits.
+    /// Refuses commands from now on.
+    pub fn retire(&self) {
+        self.retired
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Stops the workers and checkpoints the library, as the Electron app
+    /// does before it quits or switches, and refuses commands from then on.
     pub fn close(&self) {
+        self.retire();
         if let Err(error) = self.runtime.block_on(picto_core::state::close_library()) {
             eprintln!("picto: closing the library: {error}");
         }
@@ -712,7 +775,8 @@ mod tests {
         let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
         let root = guard(std::path::Path::new(&root)).unwrap();
         let (events, received) = std::sync::mpsc::channel();
-        let application = super::Application::new(root.clone(), events);
+        let application =
+            super::Application::new(root.clone(), crate::libraries::Kind::Copy, events);
         // Sent before the library has opened: it waits for the open.
         let early = application.dispatch("sidebar.counts", serde_json::json!({}));
         let started = std::time::Instant::now();
@@ -820,6 +884,26 @@ mod tests {
             }
         }
         application.close();
+    }
+
+    /// `--detach` and every launch detach only a marked copy: a library
+    /// the user keeps is refused before its database is opened, and left
+    /// exactly as it was.
+    #[test]
+    fn detach_never_touches_a_library_without_the_marker() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = crate::libraries::admission::tests::real_library(folder.path(), "Kept");
+        rusqlite::Connection::open(root.join("library.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
+                 VALUES (1, 'f1', 'Watched', '/Users/me/Downloads', 1, 0);",
+            )
+            .unwrap();
+        let before = crate::libraries::admission::tests::snapshot(&root);
+        assert!(detach(&root).is_err());
+        assert_eq!(crate::libraries::admission::tests::snapshot(&root), before);
+        assert!(!root.join(super::DETACHED).exists());
     }
 
     #[test]

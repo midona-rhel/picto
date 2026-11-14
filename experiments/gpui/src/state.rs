@@ -146,6 +146,18 @@ pub struct State {
     pub audio_visualization: String,
     /// `picto-zoom-factor`: the interface zoom (`crate::zoom`).
     pub zoom_factor: f64,
+    /// `config.json` `libraryHistory`: the libraries the user keeps that
+    /// this app opened, most recent first (`crate::libraries`). Disposable
+    /// copies are never listed.
+    pub library_history: Vec<String>,
+    /// `config.json` `pinnedLibraries`: Quick Access, in the order pinned.
+    pub pinned_libraries: Vec<String>,
+    /// `config.json` `lastLibrary`: the library opened at start.
+    pub last_library: Option<String>,
+    /// The libraries the user agreed this app may read and write directly,
+    /// by path and database file (`libraries::Identity`). This app's own;
+    /// production has none.
+    pub library_consents: Vec<(String, String)>,
 }
 
 impl Default for State {
@@ -170,6 +182,10 @@ impl Default for State {
             locale: String::new(),
             audio_visualization: "spectrum".into(),
             zoom_factor: 1.0,
+            library_history: Vec::new(),
+            pinned_libraries: Vec::new(),
+            last_library: None,
+            library_consents: Vec::new(),
         }
     }
 }
@@ -303,6 +319,33 @@ impl State {
         if let Some(zoom) = get("zoomFactor").and_then(Value::as_f64) {
             state.zoom_factor = crate::zoom::clamp(zoom);
         }
+        let paths = |key: &str| {
+            get(key).and_then(Value::as_array).map(|paths| {
+                paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+        };
+        if let Some(history) = paths("libraryHistory") {
+            state.library_history = history;
+        }
+        if let Some(pinned) = paths("pinnedLibraries") {
+            state.pinned_libraries = pinned;
+        }
+        state.last_library = text("lastLibrary");
+        if let Some(consents) = get("libraryConsents").and_then(Value::as_array) {
+            state.library_consents = consents
+                .iter()
+                .filter_map(|consent| {
+                    Some((
+                        consent.get("path")?.as_str()?.to_owned(),
+                        consent.get("database")?.as_str()?.to_owned(),
+                    ))
+                })
+                .collect();
+        }
         let extra = migrated
             .into_iter()
             .filter(|(key, _)| !KNOWN.contains(&key.as_str()))
@@ -376,6 +419,18 @@ impl State {
         }
         put("audioVisualization", json!(self.audio_visualization));
         put("zoomFactor", json!(self.zoom_factor));
+        put("libraryHistory", json!(self.library_history));
+        put("pinnedLibraries", json!(self.pinned_libraries));
+        put("lastLibrary", json!(self.last_library));
+        put(
+            "libraryConsents",
+            Value::Array(
+                self.library_consents
+                    .iter()
+                    .map(|(path, database)| json!({ "path": path, "database": database }))
+                    .collect(),
+            ),
+        );
         Value::Object(object)
     }
 
@@ -387,7 +442,7 @@ impl State {
 }
 
 /// The fields this version reads and writes.
-const KNOWN: [&str; 18] = [
+const KNOWN: [&str; 22] = [
     "version",
     "window",
     "sidebarWidth",
@@ -406,6 +461,10 @@ const KNOWN: [&str; 18] = [
     "locale",
     "audioVisualization",
     "zoomFactor",
+    "libraryHistory",
+    "pinnedLibraries",
+    "lastLibrary",
+    "libraryConsents",
 ];
 
 /// Brings a file written by an earlier version to this version's layout,
@@ -629,6 +688,10 @@ mod tests {
             locale: "fi".into(),
             audio_visualization: "orbit".into(),
             zoom_factor: 1.35,
+            library_history: vec!["/b/Two.library".into(), "/a/One.library".into()],
+            pinned_libraries: vec!["/a/One.library".into()],
+            last_library: Some("/b/Two.library".into()),
+            library_consents: vec![("/b/Two.library".into(), "16777234:991".into())],
             ..State::default()
         };
         state

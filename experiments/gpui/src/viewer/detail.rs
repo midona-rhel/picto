@@ -590,11 +590,11 @@ impl DetailWindow {
                     ),
                     hash,
                 };
-                if let Some(main) = crate::app_menu::main_window(cx) {
-                    let _ = main.update(cx, move |shell, window, cx| {
-                        shell.open_library_cover(Some(candidate), cx);
-                        ui::window_chrome::activate(window);
+                if let Some(shell) = crate::libraries::host::shell(cx) {
+                    shell.update(cx, move |shell, cx| {
+                        shell.open_library_cover(Some(candidate), cx)
                     });
+                    crate::app_menu::bring_forward(cx);
                 }
             }
             _ => {

@@ -587,7 +587,7 @@ impl Shell {
 
     /// `openCurrentLibraryCoverPicker`, framing `candidate` at once when
     /// it is given.
-    pub(crate) fn open_library_cover(
+    pub fn open_library_cover(
         &mut self,
         candidate: Option<crate::ui::cover_dialog::Candidate>,
         cx: &mut Context<Self>,
