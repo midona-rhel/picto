@@ -2,8 +2,8 @@
 //! close button of a window that hides the system's, and on Windows and
 //! Linux, where production's windows are frameless, the minimise, maximise
 //! and close buttons and (Linux) the edges that resize the window.
-#[cfg(target_os = "macos")]
 use crate::i18n::t;
+#[cfg(target_os = "macos")]
 use crate::platform::macos;
 use crate::theme;
 use gpui::*;
