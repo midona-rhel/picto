@@ -1,5 +1,6 @@
 //! The About section: the version, the update check and the links.
 use super::version;
+use crate::i18n::t;
 use crate::settings::pieces::{block, card, row, separator, title, value};
 use crate::settings::window::SettingsWindow;
 use crate::theme;
@@ -80,7 +81,7 @@ impl SettingsWindow {
                                         .line_height(px(32.))
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(theme.text())
-                                        .child("Picto"),
+                                        .child(t("Picto")),
                                 )
                                 .child(
                                     div()
@@ -89,7 +90,7 @@ impl SettingsWindow {
                                         // Mantine's body `line-height: 1.55`.
                                         .line_height(px(theme::TEXT_MD * 1.55))
                                         .text_color(theme.text_secondary())
-                                        .child("Personal media library and organization."),
+                                        .child(t("Personal media library and organization.")),
                                 )
                                 .child(
                                     // An inline span on the paragraph's 20.15px
@@ -100,25 +101,25 @@ impl SettingsWindow {
                                         .font_family(theme::FONT_INSPECTOR_MONO)
                                         .text(theme::TEXT_SM)
                                         .text_color(theme.text_tertiary())
-                                        .child(format!("Version {}{platform}", version())),
+                                        .child(format!("{}{}{platform}", t("Version "), version())),
                                 ),
                         ),
                 )
                 .child(
                     block().child(
                         card(theme)
-                            .child(title(theme, "Application"))
+                            .child(title(theme, t("Application")))
                             .child(row(
                                 theme,
-                                "Software updates",
+                                t("Software updates"),
                                 // TODO: check the release feed; disabled until
                                 // then, as Check for Updates is.
                                 ui::action_button("about-check-updates", Look::Settings)
-                                    .label("Check Now")
+                                    .label(t("Check Now"))
                                     .disabled(true),
                             ))
                             .child(separator(theme))
-                            .child(row(theme, "License", value(theme, "MIT"))),
+                            .child(row(theme, t("License"), value(theme, t("MIT")))),
                     ),
                 )
                 .child(
@@ -129,21 +130,24 @@ impl SettingsWindow {
                         .child(about_link(
                             "github",
                             "settings-brand-github",
-                            "Project on GitHub",
+                            // `{t("Project on GitHub ")}` before the link glyph
+                            t("Project on GitHub ").trim_end(),
                             "https://github.com/midona-rhel/picto",
                             cx,
                         ))
                         .child(about_link(
                             "release-notes",
                             "refresh",
-                            "Release notes",
+                            // `{t("Release notes ")}` before the link glyph
+                            t("Release notes ").trim_end(),
                             "https://github.com/midona-rhel/picto/releases",
                             cx,
                         ))
                         .child(about_link(
                             "license",
                             "settings-scale",
-                            "Open-source license",
+                            // `{t("Open-source license ")}` before the link glyph
+                            t("Open-source license ").trim_end(),
                             "https://github.com/midona-rhel/picto/blob/main/LICENSE",
                             cx,
                         )),
@@ -156,7 +160,7 @@ impl SettingsWindow {
                         .text(theme::TEXT_SM)
                         .line_height(px(theme::TEXT_SM * 1.55))
                         .text_color(theme.text_tertiary())
-                        .child(format!("© {year} Picto contributors")),
+                        .child(format!("© {year} {}", t("Picto contributors"))),
                 )
                 .into_any_element(),
         ]

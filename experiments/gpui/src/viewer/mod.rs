@@ -22,6 +22,7 @@ pub mod toolbar;
 pub mod trigger;
 pub mod video;
 
+use crate::i18n::t;
 use crate::session::{Change, Session, Transition};
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -184,8 +185,8 @@ impl Boundary {
     pub fn notice(&self, end: End, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let (fade, label) = match end {
-            End::First => (&self.first, "First item"),
-            End::Last => (&self.last, "Last item"),
+            End::First => (&self.first, t("First item")),
+            End::Last => (&self.last, t("Last item")),
         };
         let side = div().absolute().top_0().bottom_0().flex().items_center();
         let side = match end {

@@ -20,6 +20,7 @@ use super::document::geometry::PageSize;
 use super::document::kind::{RendererKind, renderer_kind};
 use super::document::{paged, pages};
 use super::surface::{self, MediaSurface};
+use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
@@ -706,7 +707,7 @@ impl Render for GroupReader {
                                         .justify_center()
                                         .text(theme::TEXT_LG)
                                         .text_color(theme::theme(cx).text_secondary())
-                                        .child("This group is empty."),
+                                        .child(t("This group is empty.")),
                                 )
                             }),
                     ),

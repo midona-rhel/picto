@@ -167,8 +167,8 @@ impl Imports {
             Dropped::Nothing => {}
             Dropped::PackMixed => {
                 self.report(
-                    "Could not import Picto Pack",
-                    "Drop one Picto Pack at a time without other files.",
+                    crate::i18n::t("Could not import Picto Pack"),
+                    crate::i18n::t("Drop one Picto Pack at a time without other files."),
                     cx,
                 );
             }
@@ -270,7 +270,7 @@ impl Imports {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import files".into()),
+            prompt: Some(crate::i18n::t("Import files").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = chosen.await else {
@@ -298,7 +298,7 @@ impl Imports {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Import folder".into()),
+            prompt: Some(crate::i18n::t("Import folder").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = chosen.await else {
@@ -326,13 +326,17 @@ impl Imports {
             Some(Pasted::Picture(image)) => match write_picture(&image) {
                 Ok(path) => (vec![path], true),
                 Err(error) => {
-                    self.report("Could not paste import", &error.to_string(), cx);
+                    self.report(
+                        crate::i18n::t("Could not paste import"),
+                        &error.to_string(),
+                        cx,
+                    );
                     return;
                 }
             },
             None => {
                 self.report(
-                    "Could not paste import",
+                    crate::i18n::t("Could not paste import"),
                     "The clipboard does not contain importable files or an image.",
                     cx,
                 );
@@ -359,8 +363,11 @@ impl Imports {
         let (id, title) = (blocking.task_id, blocking.title.clone());
         self.show(id, cx);
         self.report(
-            "An import is already running",
-            &format!("Let “{title}” finish or stop it before starting another."),
+            crate::i18n::t("An import is already running"),
+            &crate::tf!(
+                "Let “{value0}” finish or stop it before starting another.",
+                title
+            ),
             cx,
         );
         false
@@ -392,7 +399,7 @@ impl Imports {
 
     /// `addMedia`: starts the import; its task takes the foreground.
     fn enqueue(&mut self, paths: Vec<PathBuf>, params: Params, cx: &mut Context<Self>) {
-        self.enqueue_as("Could not import media", paths, params, cx);
+        self.enqueue_as(crate::i18n::t("Could not import media"), paths, params, cx);
     }
 
     /// [`Imports::enqueue`], a failure titled `failure` ("Could not import
@@ -548,7 +555,12 @@ impl Imports {
         let path = folder.path.clone();
         self.dialog.dismiss(cx);
         if self.allow(cx) {
-            self.enqueue_as("Could not import folder", vec![path], params, cx);
+            self.enqueue_as(
+                crate::i18n::t("Could not import folder"),
+                vec![path],
+                params,
+                cx,
+            );
         }
     }
 
@@ -677,7 +689,7 @@ impl Imports {
         self.control(
             "tasks.pause",
             serde_json::json!({ "task_id": task }),
-            "Could not pause the import",
+            crate::i18n::t("Could not pause the import"),
             cx,
         );
     }
@@ -686,7 +698,7 @@ impl Imports {
         self.control(
             "tasks.resume",
             serde_json::json!({ "task_id": task }),
-            "Could not resume the import",
+            crate::i18n::t("Could not resume the import"),
             cx,
         );
     }
@@ -695,7 +707,7 @@ impl Imports {
         self.control(
             "tasks.dismiss",
             serde_json::json!({ "task_id": task }),
-            "Could not close the task",
+            crate::i18n::t("Could not close the task"),
             cx,
         );
     }
@@ -744,7 +756,7 @@ impl Imports {
         self.control(
             "tasks.stop",
             serde_json::json!({ "task_id": id, "undo": undo }),
-            "Could not stop the import",
+            crate::i18n::t("Could not stop the import"),
             cx,
         );
         cx.notify();

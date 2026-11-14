@@ -312,6 +312,8 @@ impl Menu {
     /// a row whose contents arrive after the menu opened. A submenu open at
     /// or below it closes, since its rows have moved.
     pub fn replace_entry(&mut self, label: &str, replacement: Vec<Entry>, cx: &mut Context<Self>) {
+        // Labels are kept as shown.
+        let label = crate::i18n::t(label);
         let found = self.entries.iter().position(|entry| match entry {
             Entry::Item(item) => item.label.as_ref() == label,
             Entry::Submenu(submenu) => submenu.label.as_ref() == label,

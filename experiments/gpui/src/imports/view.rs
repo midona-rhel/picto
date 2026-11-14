@@ -142,14 +142,14 @@ impl Imports {
             buttons = buttons.child(
                 ui::icon_button("task-minimize", "task-minus")
                     .look(IconLook::Task)
-                    .tip(ui::tip("Minimize"))
+                    .tip(ui::tip(crate::i18n::t("Minimize")))
                     .on_click(on_click(this, move |imports, cx| imports.minimize(id, cx))),
             );
         }
         buttons = buttons.child(
             ui::icon_button("task-close", "notify-close")
                 .look(IconLook::Task)
-                .tip(ui::tip("Close"))
+                .tip(ui::tip(crate::i18n::t("Close")))
                 .on_click(on_click(this, move |imports, cx| {
                     if ended {
                         imports.dismiss(id, cx);
@@ -198,16 +198,16 @@ impl Imports {
                     .text_color(theme.text_tertiary())
                     .font_features(theme::tabular_figures())
                     .children((task.existing > 0).then(|| {
-                        div().child(format!(
-                            "{} already in library",
+                        div().child(crate::tf!(
+                            "{value0} already in library",
                             crate::grid::format::grouped(task.existing)
                         ))
                     }))
                     .children((task.failed > 0).then(|| {
                         div()
                             .text_color(rgb(theme::TASK_WARNING_GLYPH))
-                            .child(format!(
-                                "{} failed",
+                            .child(crate::tf!(
+                                "{value0} failed",
                                 crate::grid::format::grouped(task.failed)
                             ))
                     })),
@@ -223,9 +223,12 @@ impl Imports {
                     .padding(8.)
                     .icon("task-alert-triangle", 14.)
                     .label(if self.view.show_failures {
-                        "Hide failed".to_string()
+                        crate::i18n::t("Hide failed").to_string()
                     } else {
-                        format!("Show {} failed", crate::grid::format::grouped(task.failed))
+                        crate::tf!(
+                            "Show {value0} failed",
+                            crate::grid::format::grouped(task.failed)
+                        )
                     })
                     .on_click(on_click(this, |imports, cx| imports.toggle_failures(cx))),
             );
@@ -234,25 +237,25 @@ impl Imports {
         if ended {
             foot = foot.child(
                 foot_button("task-done", ButtonLook::Primary)
-                    .label("Done")
+                    .label(crate::i18n::t("Done"))
                     .on_click(on_click(this, move |imports, cx| imports.dismiss(id, cx))),
             );
         } else if phase != Phase::Removing {
             foot = foot.child(if phase == Phase::Paused {
                 foot_button("task-resume", ButtonLook::Primary)
                     .icon("task-player-play", 14.)
-                    .label("Resume")
+                    .label(crate::i18n::t("Resume"))
                     .on_click(on_click(this, move |imports, cx| imports.resume(id, cx)))
             } else {
                 foot_button("task-pause", ButtonLook::Standard)
                     .icon("task-player-pause", 14.)
-                    .label("Pause")
+                    .label(crate::i18n::t("Pause"))
                     .on_click(on_click(this, move |imports, cx| imports.pause(id, cx)))
             });
             foot = foot.child(
                 foot_button("task-stop", ButtonLook::Standard)
                     .icon("task-player-stop", 14.)
-                    .label("Stop…")
+                    .label(crate::i18n::t("Stop…"))
                     .on_click(on_click(this, |imports, cx| imports.ask_to_stop(cx))),
             );
         }
@@ -317,9 +320,9 @@ impl Imports {
             .gap(px(10.))
             .min_w_0()
             .child(titles(
-                format!("Stop importing “{}”?", task.title),
-                format!(
-                    "{} of {} files are done so far",
+                crate::tf!("Stop importing “{value0}”?", task.title),
+                crate::tf!(
+                    "{value0} of {value1} files are done so far",
                     crate::grid::format::grouped(task.done),
                     crate::grid::format::grouped(task.total)
                 ),
@@ -425,7 +428,7 @@ impl Imports {
             .child(div().flex_1())
             .child(
                 foot_button("stop-cancel", ButtonLook::Standard)
-                    .label("Keep importing")
+                    .label(crate::i18n::t("Keep importing"))
                     .on_click(on_click(this, |imports, cx| imports.keep_importing(cx))),
             )
             .child(
@@ -438,9 +441,9 @@ impl Imports {
                     },
                 )
                 .label(if remove {
-                    "Stop and remove"
+                    crate::i18n::t("Stop and remove")
                 } else {
-                    "Stop import"
+                    crate::i18n::t("Stop import")
                 })
                 .on_click(on_click(this, |imports, cx| imports.stop(cx))),
             );
@@ -526,7 +529,7 @@ impl Imports {
                         .child(
                             ui::icon_button(("task-bar-show", id as u64), "task-chevron-up")
                                 .look(IconLook::Task)
-                                .tip(ui::tip("Show").above())
+                                .tip(ui::tip(crate::i18n::t("Show")).above())
                                 .on_click(on_click(&this, move |imports, cx| imports.show(id, cx))),
                         );
                     panel
@@ -545,15 +548,15 @@ impl Imports {
         Some(match &layer.content {
             Dialog::Collection { paths, .. } => ui::confirm::confirm(
                 "import-collection",
-                "Import as Collection?",
+                crate::i18n::t("Import as Collection?"),
                 format!(
                     "Do you wish to import these {} media items as a collection?",
                     paths.len()
                 ),
-                "Yes",
+                crate::i18n::t("Yes"),
                 layer.presence,
             )
-            .cancel_label("No")
+            .cancel_label(crate::i18n::t("No"))
             .focus(&layer.focus)
             .on_close(close)
             .on_cancel(on(&this, |imports, cx| {
@@ -563,8 +566,8 @@ impl Imports {
             .into_any_element(),
             Dialog::Folder(folder) => {
                 let name = folder_name(&folder.path);
-                let label = format!("Import {name}");
-                let bold = "Import ".len()..label.len();
+                let label = format!("{}{name}", crate::i18n::t("Import "));
+                let bold = label.len() - name.len()..label.len();
                 let analyzing = matches!(folder.analysis, Analysis::Checking);
                 let failed = matches!(folder.analysis, Analysis::Failed);
                 let message = match &folder.analysis {
@@ -599,7 +602,7 @@ impl Imports {
                         .text_color(theme.text_secondary())
                         .child(text)
                 };
-                ui::modal("import-folder", "Import Folder", layer.presence)
+                ui::modal("import-folder", crate::i18n::t("Import Folder"), layer.presence)
                     .size(ui::modal::Size::Small)
                     .focus(&layer.focus)
                     .on_close(close)
@@ -621,57 +624,57 @@ impl Imports {
                                         },
                                     )])),
                             )
-                            .children(analyzing.then(|| help("Checking the folder structure...")))
+                            .children(analyzing.then(|| help(crate::i18n::t("Checking the folder structure..."))))
                             .children(message.map(|message| ui::form::warning_box(theme, message)))
                             .children(failed.then(|| {
                                 ui::form::warning_box(
                                     theme,
-                                    "Picto could not inspect this folder. Choose it again or check that it is still available.",
+                                    crate::i18n::t("Picto could not inspect this folder. Choose it again or check that it is still available."),
                                 )
                             }))
                             .child(row(
-                                "Preserve folder structure",
+                                crate::i18n::t("Preserve folder structure"),
                                 "import-preserve",
                                 folder.preserve_structure,
                                 FolderOption::Preserve,
                                 false,
                             ))
                             .child(row(
-                                "Include subfolders",
+                                crate::i18n::t("Include subfolders"),
                                 "import-subfolders",
                                 folder.include_subfolders,
                                 FolderOption::Subfolders,
                                 false,
                             ))
                             .child(row(
-                                "Include folders without media",
+                                crate::i18n::t("Include folders without media"),
                                 "import-without-media",
                                 folder.include_folders_without_media,
                                 FolderOption::WithoutMedia,
                                 !folder.preserve_structure,
                             ))
                             .child(row(
-                                "Watch this folder",
+                                crate::i18n::t("Watch this folder"),
                                 "import-watch",
                                 folder.watch,
                                 FolderOption::Watch,
                                 false,
                             ))
                             .child(help(
-                                "Automatically import new media added to this folder. Watching uses the same subfolder setting above.",
+                                crate::i18n::t("Automatically import new media added to this folder. Watching uses the same subfolder setting above."),
                             ))
                             .child(help(
-                                "Folders whose subtree contains no supported media are skipped by default.",
+                                crate::i18n::t("Folders whose subtree contains no supported media are skipped by default."),
                             )),
                     )
                     .footer(
                         ui::action_button("import-folder-cancel", ButtonLook::Standard)
-                            .label("Cancel")
+                            .label(crate::i18n::t("Cancel"))
                             .on_click(on_click(&this, |imports, cx| imports.dialog.dismiss(cx))),
                     )
                     .footer({
                         let mut button = ui::action_button("import-folder-go", ButtonLook::Primary)
-                            .label("Import")
+                            .label(crate::i18n::t("Import"))
                             .disabled(analyzing || failed || blocked.is_some());
                         if let Some(reason) = blocked {
                             button = button.tip(ui::tip(reason));

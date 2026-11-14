@@ -1,4 +1,5 @@
 use super::tooltip::{self, Tip};
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
@@ -172,7 +173,7 @@ impl RenderOnce for Chip {
             chip = chip.child(tooltip::attach(
                 remove,
                 ElementId::NamedChild(std::sync::Arc::new(self.id), "remove-tip".into()),
-                Tip::new("Remove"),
+                Tip::new(t("Remove")),
                 18.,
                 window,
                 cx,

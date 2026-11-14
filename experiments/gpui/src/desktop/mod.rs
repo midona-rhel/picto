@@ -396,7 +396,9 @@ pub fn open_link(link: &str, cx: &mut App) {
 pub fn open_default(path: &Path, cx: &mut App) {
     let path = match checked_one(path, cx) {
         Ok(path) => path,
-        Err(error) => return crate::ui::notify::error("Could not open file", error, cx),
+        Err(error) => {
+            return crate::ui::notify::error(crate::i18n::t("Could not open file"), error, cx);
+        }
     };
     if live(cx) {
         cx.open_with_system(&system_path(&path));

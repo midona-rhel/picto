@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 /// `CURATED_ICONS` in `iconRegistry.ts`: the name stored on a folder, which
 /// is also the glyph's file in `assets/`, and its label.
+// i18n: translated where drawn (the tiles' tips)
 const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconPhoto", "Photo"),
     ("IconVideo", "Video"),
@@ -150,7 +151,7 @@ impl IconPicker {
     ) -> Self {
         Self {
             value,
-            default_label: "Use default folder icon".into(),
+            default_label: crate::i18n::en("Use default folder icon").into(),
             on_change: Rc::new(on_change),
         }
     }
@@ -224,7 +225,14 @@ impl Render for IconPicker {
         let label = self.default_label.clone();
         grid = grid.child(self.tile(0, "IconFolder", label, None, window, cx));
         for (index, (name, label)) in CURATED_ICONS.iter().enumerate() {
-            grid = grid.child(self.tile(index + 1, name, (*label).into(), Some(name), window, cx));
+            grid = grid.child(self.tile(
+                index + 1,
+                name,
+                crate::i18n::t(label).into(),
+                Some(name),
+                window,
+                cx,
+            ));
         }
         div()
             .id("icon-picker")

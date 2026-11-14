@@ -13,6 +13,7 @@ mod requests;
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::inspector::{FolderPicker, TagPicker, folder_picker, tag_picker};
 use crate::session::{Change, Session};
 use crate::ui;
@@ -123,6 +124,7 @@ impl Command {
 }
 
 /// `SCHEDULES`: the stored value and its label.
+// i18n: translated where drawn (menu rows)
 const SCHEDULES: [(&str, &str); 4] = [
     ("manual", "Manual"),
     ("daily", "Daily"),
@@ -141,7 +143,7 @@ fn schedule_named(value: &str) -> Option<&'static str> {
 /// The Schedule submenu: the current schedule ticked and not offered again.
 fn schedule_menu(current: Option<&str>) -> menu::Entry {
     menu::submenu(
-        "Schedule",
+        t("Schedule"),
         SCHEDULES
             .iter()
             .map(|(value, label)| {
@@ -163,6 +165,7 @@ fn schedule_menu(current: Option<&str>) -> menu::Entry {
 }
 
 /// The tabs of a subscription's data plane.
+// i18n: translated where drawn
 const TABS: [&str; 3] = ["Sources", "History", "Problems"];
 const SOURCES: usize = 0;
 const HISTORY: usize = 1;
@@ -418,7 +421,7 @@ impl SubscriptionsScreen {
             let _ = this.update(cx, |this, cx| {
                 this.busy -= 1;
                 if let Err(error) = &outcome {
-                    crate::ui::notify::error("Subscription action failed", error.clone(), cx);
+                    crate::ui::notify::error(t("Subscription action failed"), error.clone(), cx);
                 }
                 then(this, outcome, cx);
                 this.session
@@ -464,7 +467,9 @@ impl SubscriptionsScreen {
                             .retain(|id| list.iter().any(|entry| entry.id == *id));
                         this.list = Some(list);
                     }
-                    Err(error) => crate::ui::notify::error("Subscriptions unavailable", error, cx),
+                    Err(error) => {
+                        crate::ui::notify::error(t("Subscriptions unavailable"), error, cx)
+                    }
                 }
                 this.settled(cx);
                 cx.notify();
@@ -632,18 +637,18 @@ impl SubscriptionsScreen {
                     .unwrap_or(false);
                 match latest.status.as_str() {
                     "succeeded" if exists => crate::ui::notify::success(
-                        "Gallery already exists",
+                        t("Gallery already exists"),
                         format!("{title} is already in the library."),
                         cx,
                     ),
                     "succeeded" => crate::ui::notify::success(
-                        "Gallery downloaded",
+                        t("Gallery downloaded"),
                         format!("{title} has been downloaded."),
                         cx,
                     ),
                     "cancelled" => {}
                     status => crate::ui::notify::error(
-                        "Gallery import failed",
+                        t("Gallery import failed"),
                         latest.error_message.clone().unwrap_or_else(|| {
                             format!(
                                 "Gallery worker failed ({}).",
@@ -691,7 +696,7 @@ impl SubscriptionsScreen {
                 for (id, result) in settled {
                     this.acting.remove(&id);
                     if let Ok(Err(error)) = result {
-                        crate::ui::notify::error("Subscription action failed", error, cx);
+                        crate::ui::notify::error(t("Subscription action failed"), error, cx);
                     }
                 }
                 this.session
@@ -750,7 +755,11 @@ impl SubscriptionsScreen {
                 Ok(Err(error)) => {
                     let _ = this.update(cx, |this, cx| {
                         if this.detail_generation == generation {
-                            crate::ui::notify::error("Subscription details unavailable", error, cx);
+                            crate::ui::notify::error(
+                                t("Subscription details unavailable"),
+                                error,
+                                cx,
+                            );
                         }
                     });
                     return;
@@ -817,7 +826,7 @@ impl SubscriptionsScreen {
                     }
                     // `loadMoreHealth` runs through `act`.
                     (Ok(Err(error)), _) => {
-                        ui::notify::error("Subscription action failed", error, cx)
+                        ui::notify::error(t("Subscription action failed"), error, cx)
                     }
                     _ => {}
                 }
@@ -960,17 +969,17 @@ impl SubscriptionsScreen {
                 let paused = subscription.run_status.as_deref() == Some("paused");
                 let acting = self.acting.contains(&subscription.id);
                 let (run_label, run_icon) = match (active, running) {
-                    (true, true) => ("Pause", "menu-player-pause"),
-                    (true, false) if paused => ("Resume", "menu-player-play"),
-                    (true, false) => ("Retry", "menu-refresh"),
-                    (false, _) => ("Run Now", "menu-player-play"),
+                    (true, true) => (t("Pause"), "menu-player-pause"),
+                    (true, false) if paused => (t("Resume"), "menu-player-play"),
+                    (true, false) => (t("Retry"), "menu-refresh"),
+                    (false, _) => (t("Run Now"), "menu-player-play"),
                 };
                 let (hold_label, hold_icon) = if active {
-                    ("Stop", "menu-player-stop")
+                    (t("Stop"), "menu-player-stop")
                 } else if subscription.paused {
-                    ("Release Hold", "menu-player-play")
+                    (t("Release Hold"), "menu-player-play")
                 } else {
-                    ("Hold", "menu-hand-stop")
+                    (t("Hold"), "menu-hand-stop")
                 };
                 vec![
                     menu::item("run", run_label)
@@ -1015,21 +1024,24 @@ impl SubscriptionsScreen {
                     .all(|subscription| subscription.schedule == first)
                     .then_some(first);
                 vec![
-                    menu::item("run-all", format!("Run {total} Now"))
+                    menu::item("run-all", crate::tf!("Run {value0} Now", total))
                         .icon("menu-player-play")
                         .disabled(any_active)
                         .into(),
-                    menu::item("hold-all", format!("Hold {total}"))
+                    menu::item("hold-all", crate::tf!("Hold {value0}", total))
                         .icon("menu-hand-stop")
                         .disabled(any_active)
                         .into(),
-                    menu::item("release-all", format!("Release Hold for {total}"))
-                        .icon("menu-player-play")
-                        .disabled(any_active)
-                        .into(),
+                    menu::item(
+                        "release-all",
+                        crate::tf!("Release Hold for {value0}", total),
+                    )
+                    .icon("menu-player-play")
+                    .disabled(any_active)
+                    .into(),
                     schedule_menu(shared),
                     menu::Entry::Separator,
-                    menu::item("delete-all", format!("Delete {total}…"))
+                    menu::item("delete-all", crate::tf!("Delete {value0}…", total))
                         .icon("menu-trash")
                         .danger(true)
                         .into(),
@@ -1283,8 +1295,8 @@ impl SubscriptionsScreen {
 /// `e.g. <the site's example>`, or `query` while there is no site.
 fn placeholder(site: &str) -> SharedString {
     match format::site(site) {
-        Some(site) => format!("e.g. {}", site.example_query).into(),
-        None => "query".into(),
+        Some(site) => crate::tf!("e.g. {value0}", site.example_query).into(),
+        None => t("query").into(),
     }
 }
 
@@ -1329,7 +1341,7 @@ impl Render for SubscriptionsScreen {
             .overflow_hidden()
             .text_color(theme.text())
             .track_focus(&self.focus)
-            .key_context("Subscriptions")
+            .key_context(t("Subscriptions"))
             // A press takes the keyboard to the screen.
             .on_mouse_down(
                 MouseButton::Left,

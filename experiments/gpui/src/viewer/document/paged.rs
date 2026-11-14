@@ -14,6 +14,7 @@ use super::geometry::{self, Column, PageSize, ScaleMode};
 use super::kind::RendererKind;
 use super::pages::{PageWorker, RenderedPage};
 use super::shell;
+use crate::i18n::t;
 use crate::{theme, ui};
 use gpui::*;
 use std::collections::HashMap;
@@ -538,8 +539,8 @@ impl PagedViewer {
 
 fn open_failure(kind: RendererKind) -> &'static str {
     match kind {
-        RendererKind::Pdf => "Could not open this PDF.",
-        RendererKind::Djvu => "Could not open this DjVu document.",
+        RendererKind::Pdf => t("Could not open this PDF."),
+        RendererKind::Djvu => t("Could not open this DjVu document."),
         _ => "Could not open this CBZ.",
     }
 }
@@ -620,7 +621,7 @@ impl Render for PagedViewer {
                 .text_size(px(theme::TEXT_SM))
                 .line_height(px(theme::TEXT_SM * 1.5))
                 .text_color(theme::theme(cx).text_secondary())
-                .child(error)
+                .child(crate::i18n::t_shared(error))
         });
         let pages: Vec<Div> = column
             .pages

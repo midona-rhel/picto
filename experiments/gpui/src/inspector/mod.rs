@@ -21,6 +21,7 @@ pub use tag_dialog::TagDialog;
 pub use tag_picker::TagPicker;
 
 use crate::grid::{format, thumbnails::Thumbnails};
+use crate::i18n::t;
 use crate::session::{Change, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -622,9 +623,9 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let label = if count > 1 {
-            format!("Auto Tag {} Images", format::grouped(count))
+            crate::tf!("Auto Tag {value0} Images", format::grouped(count))
         } else {
-            "Auto Tag".to_owned()
+            t("Auto Tag").to_owned()
         };
         // Production's disabled look until the AI tagger is built.
         let enabled = enabled && crate::grid::menu::AUTO_TAG_BUILT;
@@ -644,7 +645,7 @@ impl Inspector {
         ui::tooltip::attach(
             div().id(id).child(row),
             SharedString::from(format!("{id}-tip")),
-            ui::tip("Suggest tags with AI").shortcut("organize.autoTag", cx),
+            ui::tip(t("Suggest tags with AI")).shortcut("organize.autoTag", cx),
             theme::CONTROL_MD,
             window,
             cx,
@@ -661,11 +662,11 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tip = ui::tip("Add to Folder").shortcut("organize.addFolder", cx);
+        let tip = ui::tip(t("Add to Folder")).shortcut("organize.addFolder", cx);
         if empty {
             self.add_row(
                 "add-to-folder",
-                "Add to Folder",
+                t("Add to Folder"),
                 tip,
                 Self::open_folder_picker_at,
                 window,
@@ -687,11 +688,11 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tip = ui::tip("Add Tags").shortcut("organize.addTag", cx);
+        let tip = ui::tip(t("Add Tags")).shortcut("organize.addTag", cx);
         if empty {
             self.add_row(
                 "add-tags",
-                "Add Tags",
+                t("Add Tags"),
                 tip,
                 Self::open_tag_picker_at,
                 window,
@@ -704,8 +705,8 @@ impl Inspector {
         }
     }
 
-    /// The Folders and Tags sections; a right-click in one opens its picker
-    /// (`onContextMenu`).
+    /// The Folders and Tags sections, by their English title; a right-click
+    /// in one opens its picker (`onContextMenu`).
     fn picker_section(
         &self,
         title: &'static str,
@@ -723,7 +724,7 @@ impl Inspector {
             Self::open_folder_picker_at
         };
         div().relative().child(self.place(key)).child(
-            self.section(title, Some(content), cx).on_menu(
+            self.section(t(title), Some(content), cx).on_menu(
                 cx.listener(move |this, _: &Point<Pixels>, window, cx| open(this, key, window, cx)),
             ),
         )
@@ -934,10 +935,10 @@ impl Inspector {
                     }),
                 );
             let tip = if self.copied == Some(color) {
-                "Copied!".to_owned()
+                t("Copied!").to_owned()
             } else {
-                format!(
-                    "{} · Click to filter · Right-click for actions",
+                crate::tf!(
+                    "{value0} · Click to filter · Right-click for actions",
                     colors::hex(color)
                 )
             };
@@ -987,14 +988,14 @@ impl Inspector {
                 .icon("menu-funnel")
                 .into(),
             menu::Entry::Separator,
-            copy("hex", "Copy HEX"),
-            copy("rgb", "Copy RGB"),
-            copy("rgba", "Copy RGBA"),
-            copy("hsl", "Copy HSL"),
+            copy("hex", t("Copy HEX")),
+            copy("rgb", t("Copy RGB")),
+            copy("rgba", t("Copy RGBA")),
+            copy("hsl", t("Copy HSL")),
             menu::Entry::Separator,
-            copy("hsv", "Copy HSV"),
-            copy("hwb", "Copy HWB"),
-            copy("cmyk", "Copy CMYK"),
+            copy("hsv", t("Copy HSV")),
+            copy("hwb", t("Copy HWB")),
+            copy("cmyk", t("Copy CMYK")),
         ];
         let menu = cx.new(|cx| menu::Menu::new(entries, position, cx).search(false));
         self.menu
@@ -1039,7 +1040,7 @@ impl Inspector {
             .flex()
             .items_center()
             .text(theme::TEXT_CAPTION)
-            .child(div().flex_1().child("Rating"));
+            .child(div().flex_1().child(t("Rating")));
         // The stars sit in the row's value cell, which is drawn at 80%.
         for value in 1..=5 {
             let star = if value <= shown {
@@ -1199,15 +1200,17 @@ impl Inspector {
 
         // Folders: a chip each, then "+"; or one wide button when there are none.
         let folders = self.folder_chips(&entries, &details.folder_ids, window, cx);
+        // i18n: the section's English title; picker_section shows it in the language
         panel = panel.child(self.picker_section("Folders", folders, cx));
         let tags = self.tag_chips(tags, true, window, cx);
+        // i18n: the section's English title; picker_section shows it in the language
         panel = panel.child(self.picker_section("Tags", tags, cx));
 
         // `normalizedCoreProperties`: a row with nothing to say is left out.
         let mut properties = div()
             .child(self.rating(Rate::Item(id), details.rating.bitmap_key() as usize, cx))
             .child(Self::property(
-                "Items",
+                t("Items"),
                 format::grouped(root.media_count as u64),
                 cx,
             ));
@@ -1216,13 +1219,13 @@ impl Inspector {
             .filter(|(width, height)| *width > 0 && *height > 0)
         {
             properties = properties.child(Self::property(
-                "Dimensions",
+                t("Dimensions"),
                 format!("{width} × {height}"),
                 cx,
             ));
         }
         properties = properties.child(Self::property(
-            "Size",
+            t("Size"),
             crate::text::size_to_gigabytes(root.total_size_bytes),
             cx,
         ));
@@ -1238,22 +1241,22 @@ impl Inspector {
             [one] => Some(crate::text::inspector_type(one)),
             _ => Some("Mixed".into()),
         } {
-            properties = properties.child(Self::property("Type", kind, cx));
+            properties = properties.child(Self::property(t("Type"), kind, cx));
         }
         if let Some(duration) = cover
             .and_then(|media| media.facts.duration_ms)
             .filter(|duration| *duration > 0)
         {
             properties = properties.child(Self::property(
-                "Duration",
+                t("Duration"),
                 format::format_duration(duration),
                 cx,
             ));
         }
         for (label, at) in [
-            ("Date Imported", Some(root.imported_at_ms)),
-            ("Date Created", root.captured_at_ms),
-            ("Date Modified", Some(root.modified_at_ms)),
+            (t("Date Imported"), Some(root.imported_at_ms)),
+            (t("Date Created"), root.captured_at_ms),
+            (t("Date Modified"), Some(root.modified_at_ms)),
         ] {
             if let Some(date) = at.and_then(format_date) {
                 properties = properties.child(Self::property(label, date, cx));
@@ -1274,7 +1277,7 @@ impl Inspector {
         );
         scroller.child(
             panel
-                .child(self.section("Properties", Some(properties.into_any_element()), cx))
+                .child(self.section(t("Properties"), Some(properties.into_any_element()), cx))
                 .when(!details.media.is_empty(), |panel| {
                     panel.child(div().mt(px(12.)).child(export))
                 })
@@ -1291,7 +1294,7 @@ impl Inspector {
         count: u64,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        ui::action_row(id, "inspector-export", "Export")
+        ui::action_row(id, "inspector-export", t("Export"))
             .glyph(16.)
             .height(theme::CONTROL_MD)
             .on_click(cx.listener(move |_, _, _, cx| {
@@ -1319,12 +1322,12 @@ impl Inspector {
         if mode != Mode::Scope {
             panel = panel.child(self.source(None, cx));
         }
-        panel = panel.child(self.section("Properties", Some(div().into_any_element()), cx));
+        panel = panel.child(self.section(t("Properties"), Some(div().into_any_element()), cx));
         // An item's or a selection's details are on their way; a
         // destination's skeleton says nothing unless something failed.
         let status = match error {
             Some(error) => Some(Self::status(error, true, cx)),
-            None if mode != Mode::Scope => Some(Self::status("Loading...", false, cx)),
+            None if mode != Mode::Scope => Some(Self::status(t("Loading..."), false, cx)),
             None => None,
         };
         self.scroller().child(panel.children(status))

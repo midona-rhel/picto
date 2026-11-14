@@ -2,6 +2,7 @@
 //! system, then a page with its name, four modes (a sample, a waterfall of
 //! sizes, the glyphs, and facts about the file), five paper colours and a
 //! size control floating at the bottom.
+use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::{theme, ui};
 use anyhow::{Result, anyhow, bail};
@@ -18,6 +19,7 @@ pub enum Tab {
     Information,
 }
 
+// i18n: translated where drawn
 const TABS: [(Tab, &str); 4] = [
     (Tab::Preview, "Preview"),
     (Tab::Waterfall, "Waterfall"),
@@ -44,6 +46,7 @@ const PAPERS: [Paper; 5] = [
 ];
 
 const WATERFALL_SIZES: [f32; 11] = [72., 64., 56., 48., 38., 30., 24., 20., 16., 14., 12.];
+// i18n: translated where drawn (the groups' names; the glyphs are samples)
 const GLYPH_GROUPS: [(&str, &str); 4] = [
     ("Uppercase", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
     ("Lowercase", "abcdefghijklmnopqrstuvwxyz"),
@@ -396,7 +399,7 @@ impl Render for FontViewer {
                         this.tab = tab;
                         cx.notify();
                     }))
-                    .child(label)
+                    .child(t(label))
             }));
         let papers = div()
             .flex()
@@ -461,7 +464,7 @@ impl Render for FontViewer {
                         this.paper = choice;
                         cx.notify();
                     }))
-                    .child("A")
+                    .child(t("A"))
             }));
         let toolbar = div()
             .h(px(60.))
@@ -503,13 +506,13 @@ impl Render for FontViewer {
                 div()
                     .text_size(px(theme::TEXT_MD))
                     .line_height(px((theme::TEXT_MD * 1.4).round()))
-                    .child(row("File name", self.name.clone()))
-                    .child(row("Format", format_name(&self.mime).into()))
-                    .child(row("Preview engine", "GPUI text system".into()))
+                    .child(row(t("File name"), self.name.clone()))
+                    .child(row(t("Format"), format_name(&self.mime).into()))
+                    .child(row(t("Preview engine"), "GPUI text system".into()))
                     .into_any_element()
             }
-            (Status::Loading, _) => message("Loading font…").into_any_element(),
-            (Status::Failed, _) => message("This font cannot be previewed.").into_any_element(),
+            (Status::Loading, _) => message(t("Loading font…")).into_any_element(),
+            (Status::Failed, _) => message(en("This font cannot be previewed.")).into_any_element(),
             (Status::Ready(family), Tab::Preview) => {
                 let size = 38. * scale;
                 let body = 18. * scale;
@@ -523,7 +526,7 @@ impl Render for FontViewer {
                             .text_size(px(size))
                             .line_height(px(size * 1.25))
                             .font_weight(FontWeight::MEDIUM)
-                            .child("The quick brown fox jumps over the lazy dog."),
+                            .child(t("The quick brown fox jumps over the lazy dog.")),
                     )
                     .child(
                         div()
@@ -531,7 +534,7 @@ impl Render for FontViewer {
                             .text_size(px(body))
                             .line_height(px(body * 1.6))
                             .child(
-                                "Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers.",
+                                t("Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers."),
                             ),
                     )
                     .child(
@@ -539,6 +542,7 @@ impl Render for FontViewer {
                             .mb(px(20.))
                             .text_size(px(body))
                             .line_height(px(body * 1.6))
+                            // i18n: a font sample, the same in every language
                             .child("ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789"),
                     )
                     .into_any_element()
@@ -555,7 +559,7 @@ impl Render for FontViewer {
                         .overflow_hidden()
                         .text_size(px(size))
                         .line_height(px(size * 1.35))
-                        .child("Hamburgefontsiv 0123456789")
+                        .child(t("Hamburgefontsiv 0123456789"))
                 }))
                 .into_any_element(),
             (Status::Ready(family), Tab::Glyphs) => div()
@@ -569,7 +573,7 @@ impl Render for FontViewer {
                                 .line_height(px(20.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(faded(ink, 60.))
-                                .child(label),
+                                .child(t(label)),
                         )
                         .child(div().flex().flex_wrap().gap(px(1.)).children(
                             glyphs.chars().enumerate().map(|(index, glyph)| {

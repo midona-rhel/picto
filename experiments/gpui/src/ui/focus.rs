@@ -45,6 +45,7 @@ actions!(
 
 /// The key contexts that hold a scope's Tab and Shift-Tab: a dialog
 /// (`ui::modal`), the Settings window and a popover.
+// i18n: a key context
 const SCOPES: [&str; 3] = ["Modal", "Settings", "Popover"];
 
 pub fn bind(cx: &mut App) {

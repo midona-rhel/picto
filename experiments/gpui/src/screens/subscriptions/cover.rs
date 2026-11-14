@@ -4,6 +4,7 @@
 use super::dialogs::Dialog;
 use super::{SubscriptionsScreen, data, requests};
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::ui::cover_dialog::{Candidate, Cover, CoverHost, Target, add_page};
 use gpui::*;
 use picto_core::subscription_catalog::SubscriptionCoverCandidatePage;
@@ -11,8 +12,8 @@ use serde_json::Value;
 use std::rc::Rc;
 
 const INSTRUCTIONS: &str =
-    "Select one of the images downloaded that has been added to the library.";
-const EMPTY: &str = "No images have been added yet.";
+    crate::i18n::en("Select one of the images downloaded that has been added to the library.");
+const EMPTY: &str = crate::i18n::en("No images have been added yet.");
 
 impl SubscriptionsScreen {
     /// The menu's Set Cover Photo….
@@ -88,14 +89,14 @@ impl SubscriptionsScreen {
                         cover.loading_more = false;
                         if more {
                             crate::ui::notify::error(
-                                "Unable to load more subscription media",
+                                t("Unable to load more subscription media"),
                                 error,
                                 cx,
                             );
                         } else {
                             cover.candidates = Rc::default();
                             crate::ui::notify::error(
-                                "Unable to load subscription media",
+                                t("Unable to load subscription media"),
                                 error,
                                 cx,
                             );

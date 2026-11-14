@@ -5,6 +5,7 @@
 //! that deletes goes through the item menu's permanent delete, which asks
 //! first when it cannot be undone.
 use super::Shell;
+use crate::i18n::t;
 use crate::viewer::review::{self, Decision, Flash, View};
 use gpui::*;
 use picto_library::selection::SelectionTarget;
@@ -201,7 +202,7 @@ impl Shell {
             self.reviewer.abandon(ticket, id);
             crate::ui::notify::error(
                 review_failure(decision),
-                "The next items could not be loaded.",
+                t("The next items could not be loaded."),
                 cx,
             );
             return;
@@ -393,8 +394,8 @@ impl Shell {
 /// `reportFailure`'s title for a review that could not be saved.
 fn review_failure(decision: Decision) -> &'static str {
     match decision {
-        Decision::Accept => "Unable to accept item",
-        Decision::Reject => "Unable to reject item",
+        Decision::Accept => t("Unable to accept item"),
+        Decision::Reject => t("Unable to reject item"),
     }
 }
 

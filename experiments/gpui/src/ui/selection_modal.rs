@@ -4,6 +4,7 @@
 //! the empty state and the footer's summary of what Apply will do.
 use super::overlay_shell;
 use super::text_input::{self, TextInput};
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
@@ -261,6 +262,7 @@ pub fn empty_state(text: &'static str, cx: &App) -> Div {
 /// The footer's summary: what Apply adds and removes and how many files it
 /// applies to, or how many are selected while nothing is pending.
 pub fn summary(added: usize, removed: usize, selected: usize) -> String {
+    // i18n: production writes the summary in English
     let files = |count: usize| format!("{count} file{}", if count == 1 { "" } else { "s" });
     let mut parts = Vec::new();
     if added > 0 {
@@ -304,9 +306,9 @@ pub fn footer_left(summary: String, hints: bool, cx: &App) -> Div {
         overlay_shell::hint(cx)
             .child(overlay_shell::kbd("↑↓", cx))
             .child(overlay_shell::kbd("↩", cx))
-            .child(" Select")
+            .child(format!(" {}", t("Select")))
             .child(overlay_shell::tab_key(cx))
-            .child(" Switch"),
+            .child(format!(" {}", t("Switch"))),
     )
 }
 

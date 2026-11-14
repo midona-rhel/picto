@@ -5,6 +5,7 @@
 //! the selected items, Cancel and Escape forget them. The tags checked at
 //! first are those of the item the inspector shows or last showed.
 use crate::grid::format;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::tags::{Preferences, TagPager, View, record_name as name};
 use crate::theme;
@@ -338,7 +339,7 @@ impl TagDialog {
         let mut rail = shell::rail(RAIL, cx)
             .child(item(
                 "tag-dialog-recent",
-                "Recent".into(),
+                t("Recent").into(),
                 recent.to_string(),
                 View::Recent,
                 None,
@@ -346,7 +347,7 @@ impl TagDialog {
             ))
             .child(item(
                 "tag-dialog-selected",
-                "Selected".into(),
+                t("Selected").into(),
                 self.entity.len().to_string(),
                 View::Selected,
                 None,
@@ -355,7 +356,7 @@ impl TagDialog {
             .child(shell::rail_separator(cx))
             .child(item(
                 "tag-dialog-all",
-                "All".into(),
+                t("All").into(),
                 format::grouped(total),
                 View::All,
                 None,
@@ -497,9 +498,9 @@ impl TagDialog {
         if rows.is_empty() {
             scroller = scroller.child(shell::empty_state(
                 match self.view {
-                    View::Selected => "No tags on this entity",
-                    View::Recent => "No recently used tags",
-                    _ => "No tags found",
+                    View::Selected => t("No tags on this entity"),
+                    View::Recent => t("No recently used tags"),
+                    _ => t("No tags found"),
                 },
                 cx,
             ));
@@ -584,17 +585,17 @@ impl Render for TagDialog {
         );
         let mut buttons = div().flex().items_center().gap(px(6.)).child(
             ui::action_button("tag-dialog-cancel", Look::Standard)
-                .label("Cancel")
+                .label(t("Cancel"))
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
         );
         if pending > 0 {
             buttons = buttons.child(
                 ui::action_button("tag-dialog-apply", Look::Primary)
-                    .label(format!("Apply ({pending})"))
+                    .label(format!("{}{pending})", t("Apply (")))
                     .on_click(cx.listener(|this, _, _, cx| this.apply(cx))),
             );
         }
-        ui::modal("tag-dialog", "Add Tags", presence)
+        ui::modal("tag-dialog", t("Add Tags"), presence)
             .size(Size::Large)
             .flush()
             .focus(&focus)

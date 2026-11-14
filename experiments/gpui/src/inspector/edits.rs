@@ -6,6 +6,7 @@ use super::membership::{self, Touches};
 use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::session::{Report, Reread};
 use crate::tags::{Common, record_name as name};
 use crate::ui::{
@@ -156,7 +157,7 @@ impl Inspector {
         let target = SelectionTarget::Explicit { root_ids: vec![id] };
         self.session.update(cx, |session, cx| {
             let _ = session.edit_reporting(
-                Report::failure("Could not change rating"),
+                Report::failure(t("Could not change rating")),
                 move |library| library.set_rating(&target, rating),
                 Reread::DETAILS,
                 cx,
@@ -529,7 +530,7 @@ impl Inspector {
                 matches!(entry.scope, ItemScope::FolderTree { folder_id } if folder_id == folder)
             });
             let label = entry.map_or_else(
-                || format!("Folder {}", folder.0),
+                || format!("{} {}", t("Folder"), folder.0),
                 |entry| entry.label.clone(),
             );
             let color = entry.and_then(|entry| entry.tint).unwrap_or(FOLDER_COLOR);
@@ -713,9 +714,21 @@ impl Inspector {
             window.focus(&confirm.focus, cx);
             window.request_animation_frame();
         }
+        // Production fills the field's English name into the title and the
+        // button, and writes the message in English.
         let (title, label, what) = match confirm.content.overwrite {
-            Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),
-            Overwrite::Sources(_) => ("Overwrite sources?", "Overwrite Sources", "source URLs"),
+            Overwrite::Notes(_) => (
+                crate::tf!("Overwrite {value0}?", "notes"),
+                // i18n: production fills in the English name
+                crate::tf!("Overwrite {value0}", "Notes"),
+                "notes",
+            ),
+            Overwrite::Sources(_) => (
+                crate::tf!("Overwrite {value0}?", "sources"),
+                // i18n: production fills in the English name
+                crate::tf!("Overwrite {value0}", "Sources"),
+                "source URLs",
+            ),
         };
         let message = format!(
             "This will replace existing {what} on all {} selected items. Are you sure?",

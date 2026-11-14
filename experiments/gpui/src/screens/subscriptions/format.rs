@@ -1,6 +1,8 @@
 //! What the Subscriptions screen says about a subscription: its status, its
 //! times and counts, as `subscriptionUtils.ts` and the components word them.
 use super::data::{Query, Run, Subscription};
+use crate::i18n::format::{Unit, relative};
+use crate::i18n::{en, t};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use picto_core::subscriptions::sites::{SITES, SiteEntry};
 
@@ -38,17 +40,17 @@ pub fn card_status(subscription: &Subscription) -> (Tone, &'static str) {
     let running = running(subscription);
     let active = subscription.active_run_id.is_some();
     if subscription.run_status.as_deref() == Some("inbox_full") {
-        (Tone::Paused, "Inbox full")
+        (Tone::Paused, t("Inbox full"))
     } else if subscription.paused || (active && !running) {
-        (Tone::Paused, "Paused")
+        (Tone::Paused, t("Paused"))
     } else if running {
-        (Tone::Running, "Syncing")
+        (Tone::Running, t("Syncing"))
     } else if subscription.open_issues > 0 {
-        (Tone::Attention, "Warning")
+        (Tone::Attention, t("Warning"))
     } else if !active && subscription_completed(subscription) {
-        (Tone::Success, "Complete")
+        (Tone::Success, t("Complete"))
     } else {
-        (Tone::Idle, "Idle")
+        (Tone::Idle, t("Idle"))
     }
 }
 
@@ -82,16 +84,16 @@ pub fn detail_status(subscription: &Subscription) -> (Tone, &'static str) {
         Tone::Idle
     };
     let label = if run_failed {
-        "Warning"
+        t("Warning")
     } else if waiting_for_inbox {
-        "Inbox full"
+        t("Inbox full")
     } else {
         match tone {
-            Tone::Running => "Syncing",
-            Tone::Paused => "Paused",
-            Tone::Attention => "Warning",
-            Tone::Success => "Complete",
-            Tone::Idle => "Idle",
+            Tone::Running => t("Syncing"),
+            Tone::Paused => t("Paused"),
+            Tone::Attention => t("Warning"),
+            Tone::Success => t("Complete"),
+            Tone::Idle => t("Idle"),
         }
     };
     (tone, label)
@@ -111,9 +113,9 @@ pub fn run_status(run: &Run) -> (Tone, String) {
         _ => Tone::Idle,
     };
     let label = match run.status.as_str() {
-        "completed" | "succeeded" => "Complete".to_owned(),
-        _ if waiting => "Inbox full".to_owned(),
-        _ if paused => "Paused".to_owned(),
+        "completed" | "succeeded" => t("Complete").to_owned(),
+        _ if waiting => t("Inbox full").to_owned(),
+        _ if paused => t("Paused").to_owned(),
         _ => match &run.failure_kind {
             Some(kind) => kind.replace('_', " "),
             None => run.status.clone(),
@@ -125,6 +127,7 @@ pub fn run_status(run: &Run) -> (Tone, String) {
 /// The badge of an issue in the Problems tab.
 pub fn issue_label(kind: &str) -> String {
     if kind == "download_item" {
+        // i18n: production's badge, in English
         "download".to_owned()
     } else {
         kind.replace('_', " ")
@@ -134,16 +137,16 @@ pub fn issue_label(kind: &str) -> String {
 /// `describeFailure`: what to do about a query's recorded failure.
 pub fn describe_failure(kind: Option<&str>, message: Option<&str>) -> Option<String> {
     let text = match kind {
-        Some("not_found") => "User/query not found — check the handle",
-        Some("unauthorized") => "Login rejected — check the account in Accounts",
-        Some("expired") => "Session expired — log in again in Accounts",
+        Some("not_found") => t("User/query not found — check the handle"),
+        Some("unauthorized") => t("Login rejected — check the account in Accounts"),
+        Some("expired") => t("Session expired — log in again in Accounts"),
         Some("rate_limited") => {
-            "Rate limited by the site — resumes automatically when the limit resets"
+            t("Rate limited by the site — resumes automatically when the limit resets")
         }
-        Some("network") => "Network error — check your connection",
-        Some("environment") => "Local setup problem — check the logs",
-        Some("stale") => "Interrupted by app shutdown",
-        Some("inbox_full") => "Paused — inbox is full",
+        Some("network") => t("Network error — check your connection"),
+        Some("environment") => t("Local setup problem — check the logs"),
+        Some("stale") => t("Interrupted by app shutdown"),
+        Some("inbox_full") => t("Paused — inbox is full"),
         _ => return message.map(str::to_owned),
     };
     Some(text.to_owned())
@@ -153,18 +156,18 @@ pub fn describe_failure(kind: Option<&str>, message: Option<&str>) -> Option<Str
 pub fn describe_gallery_failure(kind: Option<&str>, message: Option<&str>) -> &'static str {
     let message = message.unwrap_or_default().to_lowercase();
     if message.contains("requires gp") {
-        "Original requires GP"
+        t("Original requires GP")
     } else if message.contains("image viewing limit") {
-        "Image limit reached"
+        t("Image limit reached")
     } else if message.contains("temporarily blocked") {
-        "Temporarily rate limited"
+        t("Temporarily rate limited")
     } else if message.contains("web page instead of a file") {
-        "Invalid media response"
+        t("Invalid media response")
     } else {
         match kind {
-            Some("unauthorized" | "expired") => "Login required",
-            Some("rate_limited") => "Rate limited",
-            _ => "Download failed",
+            Some("unauthorized" | "expired") => t("Login required"),
+            Some("rate_limited") => t("Rate limited"),
+            _ => t("Download failed"),
         }
     }
 }
@@ -256,13 +259,13 @@ pub fn query_last_check(query: &Query) -> Option<&str> {
 /// its history for the first time.
 pub fn query_state(query: &Query) -> &'static str {
     if query.paused {
-        "Paused"
+        t("Paused")
     } else if query.last_failure_message.is_some() {
-        "Failed"
+        t("Failed")
     } else if query.initial_run_complete {
-        "Ready"
+        t("Ready")
     } else {
-        "Initial sync"
+        t("Initial sync")
     }
 }
 
@@ -295,13 +298,13 @@ pub fn auth_warning(site_id: &str, logins: &[Login], health: &[Login]) -> Option
         return None;
     }
     Some(if missing {
-        "Sign in required".to_owned()
+        t("Sign in required").to_owned()
     } else {
         checked
             .and_then(|login| login.last_error.as_deref())
             .map(str::trim)
             .filter(|error| !error.is_empty())
-            .unwrap_or("Sign in again")
+            .unwrap_or(en("Sign in again"))
             .to_owned()
     })
 }
@@ -312,6 +315,7 @@ pub fn gallery_service(url: &str) -> Option<&'static str> {
     let url = url.trim().to_lowercase();
     let rest = url
         .strip_prefix("https://")
+        // i18n: a URL's scheme
         .or_else(|| url.strip_prefix("http://"))?;
     let rest = rest.strip_prefix("www.").unwrap_or(rest);
     if rest.starts_with("exhentai.org/") {
@@ -332,21 +336,19 @@ pub fn latest_failure(subscription: &Subscription) -> Option<&Query> {
         .max_by(|left, right| left.last_failure_at.cmp(&right.last_failure_at))
 }
 
-/// `n thing` or `n things`, with the count grouped.
-pub fn counted(value: i64, singular: &str) -> String {
-    format!(
-        "{} {singular}{}",
-        crate::grid::format::grouped(value),
-        if value == 1 { "" } else { "s" }
-    )
-}
-
 /// What a card says under its name: items, then sources when there are any.
 pub fn card_meta(items: i64, sources: usize) -> String {
-    let mut meta = counted(items, "item");
+    // `{items} {t("item")}{items === 1 ? '' : t("s")}`
+    let mut meta = format!(
+        "{} {}{}",
+        crate::grid::format::grouped(items),
+        t("item"),
+        if items == 1 { "" } else { t("s") }
+    );
     if sources > 0 {
         meta.push_str(&format!(
             " · {sources} source{}",
+            // i18n: production writes the sources in English
             if sources == 1 { "" } else { "s" }
         ));
     }
@@ -374,59 +376,38 @@ fn round(value: f64) -> i64 {
     (value + 0.5).floor() as i64
 }
 
-/// `Intl.RelativeTimeFormat` in English with `numeric: 'auto'`.
-fn relative(amount: i64, unit: &str) -> String {
-    match (amount, unit) {
-        (0, "minute") => "this minute".to_owned(),
-        (1, "day") => "tomorrow".to_owned(),
-        (-1, "day") => "yesterday".to_owned(),
-        (1, "month") => "next month".to_owned(),
-        (-1, "month") => "last month".to_owned(),
-        _ => {
-            let plural = if amount.abs() == 1 { "" } else { "s" };
-            if amount < 0 {
-                format!("{} {unit}{plural} ago", -amount)
-            } else {
-                format!("in {amount} {unit}{plural}")
-            }
-        }
-    }
-}
-
-/// `formatRelativeTime`, relative to `now`.
+/// `formatRelativeTime`, relative to `now`, in the system's language as
+/// `Intl.RelativeTimeFormat` without a locale writes it.
 pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
-        return "Never".to_owned();
+        return t("Never").to_owned();
     };
     let Some(time) = parse_time(value) else {
         return value.to_owned();
     };
     let minutes = round((time - now).num_milliseconds() as f64 / 60_000.);
     if minutes.abs() < 60 {
-        return relative(minutes, "minute");
+        return relative(minutes, Unit::Minute);
     }
     let hours = round(minutes as f64 / 60.);
     if hours.abs() < 48 {
-        return relative(hours, "hour");
+        return relative(hours, Unit::Hour);
     }
     let days = round(hours as f64 / 24.);
     if days.abs() < 30 {
-        return relative(days, "day");
+        return relative(days, Unit::Day);
     }
-    relative(round(days as f64 / 30.), "month")
+    relative(round(days as f64 / 30.), Unit::Month)
 }
 
 /// `formatDateTime`: the medium date and short time, as en-US writes them.
 pub fn date_time(value: Option<&str>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
-        return "None".to_owned();
+        return t("None").to_owned();
     };
     parse_time(value).map_or_else(
         || value.to_owned(),
-        |time| {
-            time.format(crate::text::date_format::MEDIUM_DATE_TIME)
-                .to_string()
-        },
+        |time| crate::i18n::format::medium_date_time(time.naive_local()),
     )
 }
 

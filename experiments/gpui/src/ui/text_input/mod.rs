@@ -181,6 +181,8 @@ impl TextInput {
     }
 
     /// What the empty field shows.
+    /// The placeholder, production's English text: it is shown in the
+    /// interface's language whenever the field is drawn.
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self

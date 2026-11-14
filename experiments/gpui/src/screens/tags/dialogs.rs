@@ -1,6 +1,7 @@
 //! The Tags screen's dialogs: the tag editor (`TagEditorModal`), the merge
 //! picker (`RelationPicker`), the group dialogs and the confirmations.
 use super::{TagsScreen, model};
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -109,7 +110,7 @@ fn input_with(
 }
 
 pub fn editor(tag: TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
-    let name = input_with("namespace:tag", Some(crate::tags::record_name(&tag)), cx);
+    let name = input_with(t("namespace:tag"), Some(crate::tags::record_name(&tag)), cx);
     let submitted = cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_editor(cx));
     // The rename button follows what is typed.
     let typed = cx.observe(&name, |_, _, cx| cx.notify());
@@ -121,7 +122,7 @@ pub fn editor(tag: TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
 }
 
 pub fn merge(tag: &TagRecord, cx: &mut Context<TagsScreen>) -> Dialog {
-    let search = input_with("Search existing tags", None, cx);
+    let search = input_with(t("Search existing tags"), None, cx);
     let typed = cx.observe(&search, |this, search, cx| {
         let query = search.read(cx).value();
         this.search_merge(query, cx);
@@ -152,7 +153,7 @@ pub fn rename_group(group: TagNamespaceRecord, cx: &mut Context<TagsScreen>) -> 
 }
 
 pub fn create_group(cx: &mut Context<TagsScreen>) -> Dialog {
-    let name = input_with("Group name", None, cx);
+    let name = input_with(t("Group name"), None, cx);
     let submitted = cx.subscribe(&name, |this, _, _: &Submitted, cx| {
         this.submit_group_name(cx)
     });
@@ -336,7 +337,7 @@ impl TagsScreen {
         let cancel_button = |cx: &mut Context<Self>| {
             let focus = focus.clone();
             ui::action_button(("cancel", index), ButtonLook::Standard)
-                .label("Cancel")
+                .label(t("Cancel"))
                 .disabled(busy)
                 .on_click(cx.listener(move |this, _, _, cx| this.cancel(&focus, cx)))
         };
@@ -382,7 +383,7 @@ impl TagsScreen {
             Dialog::Editor { tag, name, .. } => {
                 let typed = name.read(cx).value();
                 let (merge_tag, delete_tag) = (tag.clone(), tag.clone());
-                dialog("Edit tag", Size::Large).child(
+                dialog(t("Edit tag"), Size::Large).child(
                     div()
                         .flex()
                         .flex_col()
@@ -428,8 +429,9 @@ impl TagsScreen {
                                                 // The modal body's 20px line.
                                                 .line_height(px(20.))
                                                 .child(format!(
-                                                    "{} media items",
-                                                    tag.assignment_count
+                                                    "{} {}",
+                                                    tag.assignment_count,
+                                                    t("media items")
                                                 )),
                                         ),
                                 ),
@@ -451,14 +453,14 @@ impl TagsScreen {
                                                 .text(theme::TEXT_MD)
                                                 .line_height(px(theme::LINE_HEIGHT_MD))
                                                 .font_weight(FontWeight::SEMIBOLD)
-                                                .child("Tag name"),
+                                                .child(t("Tag name")),
                                         )
                                         .child(
                                             ui::action_button(
                                                 "editor-rename",
                                                 ButtonLook::Standard,
                                             )
-                                            .label("Rename")
+                                            .label(t("Rename"))
                                             .icon("tags-edit", 14.)
                                             .disabled(busy || typed.trim().is_empty())
                                             .on_click(
@@ -485,7 +487,7 @@ impl TagsScreen {
                                 .border_color(theme.border_secondary())
                                 .child(
                                     ui::action_button("editor-merge", ButtonLook::Standard)
-                                        .label("Merge into...")
+                                        .label(t("Merge into..."))
                                         .icon("tags-git-merge", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -495,7 +497,7 @@ impl TagsScreen {
                                 )
                                 .child(
                                     ui::action_button("editor-delete", ButtonLook::Danger)
-                                        .label("Delete")
+                                        .label(t("Delete"))
                                         .icon("trash-2", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -557,7 +559,7 @@ impl TagsScreen {
                     );
                 }
                 let searched = !query.trim().is_empty();
-                dialog("Merge into existing tag", Size::Medium).child(
+                dialog(t("Merge into existing tag"), Size::Medium).child(
                     // `.pickerBody`
                     div()
                         .min_h(px(260.))
@@ -574,11 +576,11 @@ impl TagsScreen {
                                 0.6,
                             ),
                         ))
-                        .when(*loading, |body| body.child(hint("Searching...", cx)))
+                        .when(*loading, |body| body.child(hint(t("Searching..."), cx)))
                         .children(error.as_ref().map(|error| error_banner(error.clone(), cx)))
                         .when(
                             !*loading && error.is_none() && searched && results.is_empty(),
-                            |body| body.child(hint("No existing tags found.", cx)),
+                            |body| body.child(hint(t("No existing tags found."), cx)),
                         )
                         .child(list),
                 )
@@ -586,12 +588,12 @@ impl TagsScreen {
             Dialog::DeleteTag { tag } => {
                 let id = tag.tag_id;
                 return confirm(
-                    "Delete tag",
+                    t("Delete tag"),
                     format!(
                         "Delete {}? Existing media will remain untouched.",
                         crate::tags::record_name(&tag)
                     ),
-                    "Delete tag",
+                    t("Delete tag"),
                     true,
                     Box::new(move |this, cx| this.delete_tag(id, cx)),
                     cx,
@@ -600,12 +602,12 @@ impl TagsScreen {
             Dialog::DeleteGroup { group } => {
                 let deleted = group.clone();
                 return confirm(
-                    "Delete tag group",
+                    t("Delete tag group"),
                     format!(
                         "Delete the {} group? Its tags will move to General; no tags or media assignments will be deleted.",
                         group.name
                     ),
-                    "Delete group",
+                    t("Delete group"),
                     false,
                     Box::new(move |this, cx| this.delete_group(deleted.clone(), cx)),
                     cx,
@@ -615,13 +617,13 @@ impl TagsScreen {
                 let count = self.unused;
                 let focus = focus.clone();
                 return confirm(
-                    "Delete unused tags",
+                    t("Delete unused tags"),
                     format!(
                         "Delete {} {} with no assignments anywhere in the library? Tags used by Inbox or Trash items are kept.",
                         crate::grid::format::grouped(count),
                         if count == 1 { "tag" } else { "tags" }
                     ),
-                    "Delete unused tags",
+                    t("Delete unused tags"),
                     true,
                     Box::new(move |this, cx| {
                         this.cancel(&focus, cx);
@@ -632,24 +634,24 @@ impl TagsScreen {
             }
             Dialog::RenameGroup { group, name, .. } => {
                 let ready = group_name(name, Some(&group.name), cx).is_some();
-                dialog("Rename tag group", Size::Small)
+                dialog(t("Rename tag group"), Size::Small)
                     .child(ui::field(("group-name", index), name, Look::Modal))
                     .footer(cancel_button(cx))
                     .footer(
                         ui::action_button(("rename-group", index), ButtonLook::Standard)
-                            .label("Rename")
+                            .label(t("Rename"))
                             .disabled(busy || !ready)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_group_name(cx))),
                     )
             }
             Dialog::CreateGroup { name, .. } => {
                 let ready = group_name(name, None, cx).is_some();
-                dialog("Create tag group", Size::Small)
+                dialog(t("Create tag group"), Size::Small)
                     .child(ui::field(("group-name", index), name, Look::Modal))
                     .footer(cancel_button(cx))
                     .footer(
                         ui::action_button(("create-group", index), ButtonLook::Standard)
-                            .label("Create")
+                            .label(t("Create"))
                             .disabled(busy || !ready)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_group_name(cx))),
                     )

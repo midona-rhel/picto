@@ -3,6 +3,7 @@
 //! tag picker and the Tags screen: their views, rail and paging), the rows
 //! every tag context menu starts with and what they do, and the starred
 //! tags and group colours kept in the library's application settings.
+use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::menu;
@@ -439,9 +440,9 @@ pub fn common_menu(
             entries.push(
                 menu::submenu(
                     if current.is_some() {
-                        "Move to Group…"
+                        t("Move to Group…")
                     } else {
-                        "Add to Group…"
+                        t("Add to Group…")
                     },
                     targets
                         .into_iter()

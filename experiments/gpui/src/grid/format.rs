@@ -60,21 +60,10 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-/// `toLocaleString()` for a count: digits grouped by thousands with commas.
+/// `toLocaleString()` for a count: digits grouped as the system's language
+/// groups them.
 pub fn grouped(count: impl Into<i128>) -> String {
-    let count = count.into();
-    let digits = count.unsigned_abs().to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
-    if count < 0 {
-        out.push('-');
-    }
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(digit);
-    }
-    out
+    crate::i18n::format::grouped(count.into())
 }
 
 /// A palette entry as an sRGB colour (`labToHex` in `labColor.ts`).

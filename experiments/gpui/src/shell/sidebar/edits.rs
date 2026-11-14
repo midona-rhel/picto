@@ -3,6 +3,7 @@
 //! appearance, sorting and Quick Access. A folder's or smart folder's name
 //! and notes are written here for the inspector too.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
+use crate::i18n::t;
 use crate::session::{Change, Report, Reread, Session, edit_then, edit_then_in};
 use crate::ui::text_input::{Kind, Renamed, TextInput};
 use gpui::*;
@@ -214,11 +215,13 @@ impl Sidebar {
             &self.session,
             Report::folder_depth(),
             Reread::NAVIGATION,
+            // i18n: production names a new folder in English
             move |library| library.create_folder("New Folder", parent),
             window,
             cx,
             |this, result, window, cx| {
                 if let Ok((id, _)) = result {
+                    // i18n: production names a new folder in English
                     this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
                 }
             },
@@ -241,13 +244,14 @@ impl Sidebar {
         let report = if adds {
             Report::folder_depth()
         } else {
-            Report::failure("Could not create folder")
+            Report::failure(t("Could not create folder"))
         };
         edit_then_in(
             &self.session,
             report,
             Reread::NAVIGATION,
             move |library| -> picto_library::Result<_> {
+                // i18n: production names a new folder in English
                 let (id, _) = library.create_folder("New Folder", parent)?;
                 if let Some(members) = &members {
                     library.add_to_folder(members, id)?;
@@ -268,6 +272,7 @@ impl Sidebar {
                             session.clear_selection(cx);
                         });
                     }
+                    // i18n: production names a new folder in English
                     this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
                 }
             },
@@ -413,7 +418,7 @@ impl Sidebar {
         crate::settings::model(cx).update(cx, |model, cx| {
             model.apply_now_reporting(
                 |app| app.sidebar_quick_access = unique.clone(),
-                Some("Unable to update Quick Access"),
+                Some(t("Unable to update Quick Access")),
                 cx,
             )
         });

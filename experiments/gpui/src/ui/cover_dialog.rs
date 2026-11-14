@@ -7,6 +7,7 @@
 //! [`cover_layer`] draws the dialog for any of them.
 use crate::cover::Crop;
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look as ButtonLook, modal::Size};
 use crate::{theme, ui::modal::Presence};
@@ -340,7 +341,7 @@ pub fn cover_layer<V: CoverHost>(
                 .items_center()
                 .gap(px(12.))
                 .text_color(theme.text_secondary())
-                .child(div().flex_1().min_w_0().child("Zoom"))
+                .child(div().flex_1().min_w_0().child(t("Zoom")))
                 .child(
                     div().w(px(320.)).flex_none().child(
                         ui::slider::slider(
@@ -359,7 +360,7 @@ pub fn cover_layer<V: CoverHost>(
                     ),
                 );
             let back = view.clone();
-            ui::modal("media-cover", "Set cover photo", presence)
+            ui::modal("media-cover", t("Set cover photo"), presence)
                 .size(Size::Medium)
                 .focus(&focus)
                 .on_close(dismiss)
@@ -375,7 +376,7 @@ pub fn cover_layer<V: CoverHost>(
                 )
                 .footer(
                     ui::action_button("media-cover-back", ButtonLook::Standard)
-                        .label("Back")
+                        .label(t("Back"))
                         .disabled(busy)
                         .on_click(move |_, _, cx| {
                             let _ = back.update(cx, |this, cx| this.unselect_candidate(cx));
@@ -383,7 +384,7 @@ pub fn cover_layer<V: CoverHost>(
                 )
                 .footer(
                     ui::action_button("media-cover-confirm", ButtonLook::Primary)
-                        .label("Confirm")
+                        .label(t("Confirm"))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| this.save_cover(cx))),
                 )
@@ -402,7 +403,7 @@ pub fn cover_layer<V: CoverHost>(
                     .into_any_element()
             };
             let body = if cover.loading {
-                message("Loading…")
+                message(t("Loading…"))
             } else if cover.candidates.is_empty() {
                 message(cover.empty)
             } else {
@@ -512,12 +513,12 @@ pub fn cover_layer<V: CoverHost>(
                                     .bg(theme.glass())
                                     .text(theme::TEXT_SM)
                                     .text_color(theme.text_secondary())
-                                    .child("Loading more…"),
+                                    .child(t("Loading more…")),
                             )
                     }))
                     .into_any_element()
             };
-            ui::modal("media-cover", "Set cover photo", presence)
+            ui::modal("media-cover", t("Set cover photo"), presence)
                 .size(Size::Large)
                 .focus(&focus)
                 .on_close(dismiss)

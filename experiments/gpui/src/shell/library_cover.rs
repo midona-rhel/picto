@@ -7,6 +7,7 @@
 //! `.picto-library-cover.json`; the sidebar and the library list then show
 //! the new cover.
 use crate::grid::thumbnails::{self, Thumbnails};
+use crate::i18n::{en, t};
 use crate::session::{Change, Session};
 use crate::ui;
 use crate::ui::cover_dialog::{Candidate, Cover, CoverHost, Target, add_page, cover_layer};
@@ -16,8 +17,8 @@ use picto_library::query::{ItemScope, PageRequest, RootQuery, RootSummary};
 use std::path::{Path, PathBuf};
 
 const INSTRUCTIONS: &str =
-    "Select a media item from this library, then adjust its position and zoom.";
-const EMPTY: &str = "This library has no media available for a cover.";
+    en("Select a media item from this library, then adjust its position and zoom.");
+const EMPTY: &str = en("This library has no media available for a cover.");
 /// `PAGE_SIZE` in `libraryAppearance.ts`.
 const PAGE: usize = 200;
 /// The cover file's names beside the library's database.
@@ -58,7 +59,11 @@ impl LibraryCover {
     /// once when it is given, with the library's media loading behind it.
     pub fn open(&mut self, initial: Option<Candidate>, cx: &mut Context<Self>) {
         if self.session.read(cx).library_root().is_none() {
-            ui::notify::error("Could not set library cover", "No library is open.", cx);
+            ui::notify::error(
+                t("Could not set library cover"),
+                en("No library is open."),
+                cx,
+            );
             return;
         }
         self.saving = false;
@@ -115,10 +120,10 @@ impl LibraryCover {
                         // Production's words, from the subscription dialog
                         // it shares.
                         let title = if more {
-                            "Unable to load more subscription media"
+                            t("Unable to load more subscription media")
                         } else {
                             cover.candidates = Default::default();
-                            "Unable to load subscription media"
+                            t("Unable to load subscription media")
                         };
                         ui::notify::error(title, error, cx);
                         None
@@ -247,7 +252,11 @@ impl CoverHost for LibraryCover {
             )
         };
         let Some(library) = library.filter(|_| disposable) else {
-            ui::notify::error("Could not set library cover", "No library is open.", cx);
+            ui::notify::error(
+                t("Could not set library cover"),
+                en("No library is open."),
+                cx,
+            );
             return;
         };
         self.saving = true;
@@ -276,7 +285,7 @@ impl CoverHost for LibraryCover {
                         this.dialog.close(cx);
                     }
                     Err(error) => {
-                        ui::notify::error("Could not set library cover", error, cx);
+                        ui::notify::error(t("Could not set library cover"), error, cx);
                         cx.notify();
                     }
                 }

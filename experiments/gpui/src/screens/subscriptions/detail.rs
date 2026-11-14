@@ -4,6 +4,7 @@
 use super::data::{self, Detail};
 use super::format::{self, Track};
 use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure, place_of};
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::status_badge::Tone;
 use crate::ui::{self, action_button::Look};
@@ -154,7 +155,7 @@ impl SubscriptionsScreen {
                         )
                     })
                 })
-                .unwrap_or_else(|| "Run interrupted".to_owned())
+                .unwrap_or_else(|| crate::i18n::en("Run interrupted").to_owned())
         });
 
         let cover_size = RAIL_CONTENT - 32.;
@@ -196,7 +197,7 @@ impl SubscriptionsScreen {
                     }
                 })),
             "subscription-rail-name-tip",
-            ui::tip("Double-click to rename"),
+            ui::tip(t("Double-click to rename")),
             24.,
             window,
             cx,
@@ -280,14 +281,14 @@ impl SubscriptionsScreen {
         let acting = self.acting.contains(&id);
         let primary = if active {
             let (variant, icon, label) = if running {
-                (Look::Standard, "player-pause", "Pause")
+                (Look::Standard, "player-pause", t("Pause"))
             } else if run_failed {
-                (Look::Primary, "refresh", "Retry")
+                (Look::Primary, "refresh", t("Retry"))
             } else {
                 (
                     Look::Primary,
                     "player-play",
-                    if paused_run { "Resume" } else { "Retry" },
+                    if paused_run { t("Resume") } else { t("Retry") },
                 )
             };
             ui::action_button("subscription-run", variant)
@@ -296,7 +297,7 @@ impl SubscriptionsScreen {
                 .disabled(acting)
         } else {
             ui::action_button("subscription-run", Look::Primary)
-                .label("Run now")
+                .label(t("Run now"))
                 .icon("player-play", 14.)
                 .disabled(acting || subscription.paused || subscription.queries.is_empty())
         }
@@ -306,13 +307,13 @@ impl SubscriptionsScreen {
         let (hold_icon, hold_label, hold_tip) = if active {
             (
                 "player-stop",
-                "Stop",
-                "Stop this run and keep the posts already added",
+                t("Stop"),
+                t("Stop this run and keep the posts already added"),
             )
         } else if subscription.paused {
-            ("player-play", "Release", "Allow future runs again")
+            ("player-play", t("Release"), t("Allow future runs again"))
         } else {
-            ("hand-stop", "Hold", "Put future runs on hold")
+            ("hand-stop", t("Hold"), t("Put future runs on hold"))
         };
         let overflow = self.overflow.clone();
         let bounds = self.overflow.clone();
@@ -360,7 +361,7 @@ impl SubscriptionsScreen {
                             .glyph(16.)
                             .size(30.)
                             .radius(theme::RADIUS_MD)
-                            .tip(ui::tip("More actions"))
+                            .tip(ui::tip(t("More actions")))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let at = bounds.get();
                                 let position = point(at.left(), at.bottom() + px(4.));
@@ -408,13 +409,15 @@ impl SubscriptionsScreen {
                     .text_color(theme.text_tertiary())
                     .whitespace_nowrap()
                     .child(format!(
-                        "{} / {} posts processed",
+                        "{} / {} {}",
                         crate::grid::format::grouped(settled),
-                        crate::grid::format::grouped(target)
+                        crate::grid::format::grouped(target),
+                        t("posts processed")
                     ))
                     .child(format!(
-                        "{} files downloaded",
-                        crate::grid::format::grouped(downloaded)
+                        "{} {}",
+                        crate::grid::format::grouped(downloaded),
+                        t("files downloaded")
                     )),
             )
             .child(
@@ -475,25 +478,31 @@ impl SubscriptionsScreen {
             .flex()
             .flex_col()
             .child(row(
-                "Posts traversed",
+                t("Posts traversed"),
                 value(of_run(progress.posts_traversed)),
             ))
             .child(row(
-                "Posts added",
+                t("Posts added"),
                 value(crate::grid::format::grouped(if has_run {
                     progress.posts_added
                 } else {
                     stored_posts
                 })),
             ))
-            .child(row("Posts skipped", value(of_run(progress.posts_skipped))))
-            .child(row("Files downloaded", value(of_run(progress.downloaded))))
             .child(row(
-                "Files already in library",
+                t("Posts skipped"),
+                value(of_run(progress.posts_skipped)),
+            ))
+            .child(row(
+                t("Files downloaded"),
+                value(of_run(progress.downloaded)),
+            ))
+            .child(row(
+                t("Files already in library"),
                 value(of_run(progress.files_already_in_library)),
             ))
             .child(row(
-                "Last check",
+                t("Last check"),
                 value(format::relative_time(
                     format::last_check(subscription),
                     chrono::Local::now(),
@@ -501,7 +510,7 @@ impl SubscriptionsScreen {
             ))
             // `setSchedule`
             .child(row(
-                "Schedule",
+                t("Schedule"),
                 ui::select(
                     "subscription-schedule",
                     subscription.schedule.clone(),
@@ -522,7 +531,7 @@ impl SubscriptionsScreen {
             ))
             // `setPostsPerRun`
             .child(row(
-                "Posts per run",
+                t("Posts per run"),
                 ui::number_input(
                     "subscription-posts-per-run",
                     subscription.posts_per_run,
@@ -590,7 +599,7 @@ impl SubscriptionsScreen {
                     .text_color(theme.text_secondary())
                     .child(place_of(self.add_folder.clone()))
                     .child(
-                        ui::action_row("subscription-add-folders", "plus", "Add to folders")
+                        ui::action_row("subscription-add-folders", "plus", t("Add to folders"))
                             .glyph(14.)
                             .on_click(add_folder),
                     ),
@@ -637,7 +646,7 @@ impl SubscriptionsScreen {
                     .text_color(theme.text_tertiary())
                     .child(place_of(self.add_tag.clone()))
                     .child(
-                        ui::action_row("subscription-add-tags", "plus", "Add tags")
+                        ui::action_row("subscription-add-tags", "plus", t("Add tags"))
                             .glyph(14.)
                             .on_click(add_tag),
                     ),
@@ -664,7 +673,7 @@ impl SubscriptionsScreen {
                     .text_size(px(theme::TEXT_SM))
                     .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("New files"),
+                    .child(t("New files")),
             )
             .child(
                 div()
@@ -674,7 +683,7 @@ impl SubscriptionsScreen {
                     .text_size(px(theme::TEXT_SM))
                     .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                     .text_color(theme.text_tertiary())
-                    .child("Automatically add to folders")
+                    .child(t("Automatically add to folders"))
                     .child(folders),
             )
             .child(
@@ -686,7 +695,7 @@ impl SubscriptionsScreen {
                     // `TagAssignmentControl`'s `line-height: var(--line-height-md)`.
                     .line_height(px(theme::LINE_HEIGHT_MD))
                     .text_color(theme.text())
-                    .child("Automatically add tags")
+                    .child(t("Automatically add tags"))
                     .child(tags),
             )
     }
@@ -707,17 +716,17 @@ impl SubscriptionsScreen {
             .cloned();
         let body = match self.tab {
             SOURCES if subscription.queries.is_empty() => {
-                plane_message("No sources yet.", cx).into_any_element()
+                plane_message(t("No sources yet."), cx).into_any_element()
             }
             SOURCES => self.sources(subscription, window, cx).into_any_element(),
             HISTORY => match &detail {
-                None => plane_message("Loading history…", cx).into_any_element(),
+                None => plane_message(t("Loading history…"), cx).into_any_element(),
                 Some(detail) => self.history(detail, window, cx).into_any_element(),
             },
             _ => match &detail {
-                None => plane_message("Checking for problems…", cx).into_any_element(),
+                None => plane_message(t("Checking for problems…"), cx).into_any_element(),
                 Some(detail) if detail.issues.total == 0 => {
-                    plane_message("No problems found.", cx).into_any_element()
+                    plane_message(t("No problems found."), cx).into_any_element()
                 }
                 Some(detail) => self.problems(detail, window, cx).into_any_element(),
             },
@@ -753,7 +762,7 @@ impl SubscriptionsScreen {
                         ui::segmented::segmented(
                             "subscription-tabs",
                             ui::segmented::Look::Tabs,
-                            TABS.iter().map(|tab| ui::segmented::tab(*tab)).collect(),
+                            TABS.iter().map(|tab| ui::segmented::tab(t(tab))).collect(),
                             Some(self.tab),
                         )
                         .on_select({
@@ -901,10 +910,10 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Source", false, cx),
-            heading("Query", false, cx),
-            heading("Posts", true, cx),
-            heading("Media", true, cx),
+            heading(t("Source"), false, cx),
+            heading(t("Query"), false, cx),
+            heading(t("Posts"), true, cx),
+            heading(t("Media"), true, cx),
             div().into_any_element(),
         ]));
         let active = subscription.active_run_id.is_some();
@@ -938,7 +947,7 @@ impl SubscriptionsScreen {
                         .flex_none()
                         .child(ui::icon("circle-check-filled", 13., rgb(theme::SUCCESS))),
                     ("subscription-query-complete-tip", query_id),
-                    ui::tip("Checked all available posts"),
+                    ui::tip(t("Checked all available posts")),
                     13.,
                     window,
                     cx,
@@ -979,7 +988,7 @@ impl SubscriptionsScreen {
             let name = ui::tooltip::attach(
                 name,
                 ("subscription-query-tip", query_id),
-                ui::tip("Double-click for source details"),
+                ui::tip(t("Double-click for source details")),
                 17.,
                 window,
                 cx,
@@ -999,7 +1008,7 @@ impl SubscriptionsScreen {
                 .child(
                     ui::small_button(("query-run", query_id), "player-play")
                         .disabled(waiting)
-                        .tip(ui::tip("Run only this source now"))
+                        .tip(ui::tip(t("Run only this source now")))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.run_query(id, cx)
@@ -1010,9 +1019,9 @@ impl SubscriptionsScreen {
                         .toggled(group_posts)
                         .disabled(waiting)
                         .tip(ui::tip(if group_posts {
-                            "Group multi-media posts"
+                            t("Group multi-media posts")
                         } else {
-                            "Keep post media separate"
+                            t("Keep post media separate")
                         }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -1026,9 +1035,9 @@ impl SubscriptionsScreen {
                     )
                     .disabled(waiting)
                     .tip(ui::tip(if paused {
-                        "Resume this source in future subscription runs"
+                        t("Resume this source in future subscription runs")
                     } else {
-                        "Put this source on hold until it is resumed"
+                        t("Put this source on hold until it is resumed")
                     }))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -1038,7 +1047,7 @@ impl SubscriptionsScreen {
                 .child(
                     ui::small_button(("query-edit", query_id), "pencil")
                         .disabled(waiting)
-                        .tip(ui::tip("Edit"))
+                        .tip(ui::tip(t("Edit")))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.open_edit_query(&edited, cx)
@@ -1047,7 +1056,7 @@ impl SubscriptionsScreen {
                 .child(
                     ui::small_button(("query-delete", query_id), "trash-2")
                         .disabled(waiting)
-                        .tip(ui::tip("Delete"))
+                        .tip(ui::tip(t("Delete")))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.confirm_delete_query(id, cx)
@@ -1093,7 +1102,7 @@ impl SubscriptionsScreen {
                 .px(px(16.))
                 .text(theme::TEXT_MD)
                 .text_color(theme::theme(cx).text_tertiary())
-                .child("No runs yet.")
+                .child(t("No runs yet."))
                 .into_any_element();
         }
         let widths = format::tracks(
@@ -1111,11 +1120,11 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Started", false, cx),
-            heading("Status", false, cx),
-            heading("Fetched", true, cx),
-            heading("Reused", true, cx),
-            heading("Notes", false, cx),
+            heading(t("Started"), false, cx),
+            heading(t("Status"), false, cx),
+            heading(t("Fetched"), true, cx),
+            heading(t("Reused"), true, cx),
+            heading(t("Notes"), false, cx),
         ]));
         let rows = detail
             .runs
@@ -1169,10 +1178,10 @@ impl SubscriptionsScreen {
             widths.iter().copied().zip(values).collect()
         };
         let header = table_row(cells(vec![
-            heading("Status", false, cx),
-            heading("Post", false, cx),
-            heading("Why it failed", false, cx),
-            heading("Last seen", false, cx),
+            heading(t("Status"), false, cx),
+            heading(t("Post"), false, cx),
+            heading(t("Why it failed"), false, cx),
+            heading(t("Last seen"), false, cx),
             div().into_any_element(),
         ]));
         let now = chrono::Local::now();
@@ -1208,7 +1217,7 @@ impl SubscriptionsScreen {
                     .then(|| {
                         ui::small_button(("issue-fix", issue.id as usize), "shield-lock")
                             .glyph(13.)
-                            .tip(ui::tip("Fix login"))
+                            .tip(ui::tip(t("Fix login")))
                     });
                 let row = table_row(cells(vec![
                     div()
@@ -1250,7 +1259,7 @@ impl SubscriptionsScreen {
                 .border_color(theme.border_secondary())
                 .child(
                     ui::action_button("issues-more", Look::Standard)
-                        .label("Load more")
+                        .label(t("Load more"))
                         .disabled(self.loading_more)
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_issues(cx))),
                 )
@@ -1290,7 +1299,7 @@ impl SubscriptionsScreen {
                 // button's own height and padding win in production's
                 // stylesheet order, so it is the standard button.
                 ui::action_button("add-query", Look::Standard)
-                    .label("Add")
+                    .label(t("Add"))
                     .disabled(self.busy() || !typed)
                     .on_click(cx.listener(|this, _, _, cx| this.submit_query(cx))),
             )

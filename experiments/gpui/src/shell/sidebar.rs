@@ -5,6 +5,7 @@
 use super::library::{LibraryPopover, Toggled};
 use crate::backend::Navigation;
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::motion;
 use crate::session::{Change, Session};
 use crate::ui;
@@ -44,8 +45,8 @@ const SECTIONS: [Section; 2] = [Section::Folders, Section::SmartFolders];
 impl Section {
     fn label(self) -> &'static str {
         match self {
-            Section::Folders => "Folders",
-            Section::SmartFolders => "Smart Folders",
+            Section::Folders => t("Folders"),
+            Section::SmartFolders => t("Smart Folders"),
         }
     }
     /// The id the section is folded under, as `picto-sidebar-collapsed`
@@ -154,6 +155,7 @@ impl Preferences {
 
 /// The system rows the visibility menu lists: id, label and glyph. All and
 /// Trash are always shown.
+// i18n: translated where drawn (menu rows)
 const SYSTEM_ROWS: [(&str, &str, &str); 10] = [
     ("system:active", "All", "menu-photo"),
     ("system:inbox", "Inbox", "menu-inbox"),

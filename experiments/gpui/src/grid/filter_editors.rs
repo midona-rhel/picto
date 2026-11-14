@@ -3,6 +3,7 @@
 //! and the field that names a saved filter. Each is a view a menu row
 //! draws; each tells the bar what was committed.
 use super::filters;
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -63,8 +64,8 @@ impl RangeEditor {
                 input
             })
         };
-        let min = field(minimum, "Min", cx);
-        let max = field(maximum, "Max", cx);
+        let min = field(minimum, t("Min"), cx);
+        let max = field(maximum, t("Max"), cx);
         let subscriptions = vec![
             cx.observe(&min, |this, _, cx| this.schedule(cx)),
             cx.observe(&max, |this, _, cx| this.schedule(cx)),
@@ -188,8 +189,8 @@ impl Render for ResolutionEditor {
             .flex()
             .flex_col()
             .gap(px(6.))
-            .child(row("Width", &self.width))
-            .child(row("Height", &self.height))
+            .child(row(t("Width"), &self.width))
+            .child(row(t("Height"), &self.height))
     }
 }
 
@@ -249,7 +250,7 @@ impl Render for DateRangeEditor {
             .flex()
             .gap(px(8.))
             .child(column(
-                "From",
+                t("From"),
                 ui::date_picker::date_picker("date-from", self.first.clone()).on_change(
                     move |day, _, cx| {
                         let _ = from.update(cx, |this, cx| {
@@ -260,7 +261,7 @@ impl Render for DateRangeEditor {
                 ),
             ))
             .child(column(
-                "To",
+                t("To"),
                 ui::date_picker::date_picker("date-to", self.last.clone()).on_change(
                     move |day, _, cx| {
                         let _ = to.update(cx, |this, cx| {
@@ -333,7 +334,7 @@ impl Render for SaveFilterEditor {
             .text(theme::TEXT_SM)
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text())
-            .child("Save");
+            .child(t("Save"));
         button = if enabled {
             button
                 .cursor_pointer()

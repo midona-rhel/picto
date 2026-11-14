@@ -1,5 +1,6 @@
 //! The sections of the Settings window, the settings each one holds, and
 //! the search that finds them.
+use crate::i18n::t;
 
 /// A section of the window (`PANELS`).
 pub struct PanelDef {
@@ -32,6 +33,7 @@ const fn panel(
     }
 }
 
+// i18n: translated where drawn
 pub const PANELS: [PanelDef; 14] = [
     panel(
         "general",
@@ -148,6 +150,7 @@ pub const PANELS: [PanelDef; 14] = [
 ];
 
 /// `ALL_SETTINGS`: individual settings the search finds, by section.
+// i18n: translated where drawn (searched as shown)
 const ALL_SETTINGS: [(&str, &str, &str); 14] = [
     (
         "Appearance",
@@ -232,11 +235,12 @@ pub fn matched_panels(query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter(|(_, panel)| {
-            panel.label.to_lowercase().contains(query)
+            // Labels as shown; the keywords are English, as production's are.
+            t(panel.label).to_lowercase().contains(query)
                 || panel.keywords.contains(query)
                 || ALL_SETTINGS.iter().any(|(label, keywords, of)| {
                     *of == panel.id
-                        && (label.to_lowercase().contains(query) || keywords.contains(query))
+                        && (t(label).to_lowercase().contains(query) || keywords.contains(query))
                 })
         })
         .map(|(index, _)| index)

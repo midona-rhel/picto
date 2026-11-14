@@ -2,6 +2,7 @@
 //! between two step buttons (`TitlebarZoomSlider`), or the viewer's zoom
 //! percentage on a logarithmic track with no buttons (`TitlebarRangeSlider`
 //! as `ViewerToolbar` uses it).
+use crate::i18n::t;
 use crate::{theme, ui};
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
@@ -241,7 +242,7 @@ impl Render for Zoom {
             .child(
                 ui::icon_button("zoom-out", "toolbar-minus")
                     .disabled(self.value <= MINIMUM)
-                    .tip(ui::tip("Zoom out").shortcut("view.zoomOut", cx))
+                    .tip(ui::tip(t("Zoom out")).shortcut("view.zoomOut", cx))
                     .on_click(
                         cx.listener(|this, _, _, cx| this.set(step_tile(this.value, false), cx)),
                     ),
@@ -250,7 +251,7 @@ impl Render for Zoom {
             .child(
                 ui::icon_button("zoom-in", "toolbar-plus")
                     .disabled(self.value >= MAXIMUM)
-                    .tip(ui::tip("Zoom in").shortcut("view.zoomIn", cx))
+                    .tip(ui::tip(t("Zoom in")).shortcut("view.zoomIn", cx))
                     .on_click(
                         cx.listener(|this, _, _, cx| this.set(step_tile(this.value, true), cx)),
                     ),

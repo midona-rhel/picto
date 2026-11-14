@@ -126,7 +126,7 @@ impl RenderOnce for FilterControl {
             }
         };
         let tip = if self.active {
-            format!("{} · Right-click to clear", self.label)
+            crate::tf!("{value0} · Right-click to clear", self.label)
         } else {
             self.label.to_string()
         };

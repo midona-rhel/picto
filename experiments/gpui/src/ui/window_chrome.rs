@@ -2,6 +2,7 @@
 //! close button of a window that hides the system's, and on Windows and
 //! Linux, where production's windows are frameless, the minimise, maximise
 //! and close buttons and (Linux) the edges that resize the window.
+use crate::i18n::t;
 #[cfg(target_os = "macos")]
 use crate::platform::macos;
 use crate::theme;
@@ -82,9 +83,9 @@ pub fn caption_buttons(id: &str, window: &Window) -> Option<Div> {
             })
             .glyph(glyph_size)
             .tip(super::tip(match area {
-                WindowControlArea::Min => "Minimize",
-                WindowControlArea::Max => "Maximize",
-                _ => "Close",
+                WindowControlArea::Min => t("Minimize"),
+                WindowControlArea::Max => t("Maximize"),
+                _ => t("Close"),
             }))
             .window_control(area);
         if cfg!(target_os = "windows") {

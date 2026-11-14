@@ -141,18 +141,18 @@ impl Task {
     pub fn heading(&self) -> String {
         let title = &self.title;
         match self.phase() {
-            Phase::Finished => format!("Imported “{title}”"),
-            Phase::Stopped => format!("Stopped importing “{title}”"),
-            Phase::Undone => format!("Undid importing “{title}”"),
-            Phase::Removing => format!("Undoing “{title}”"),
-            _ => format!("Importing “{title}”"),
+            Phase::Finished => crate::tf!("Imported “{value0}”", title),
+            Phase::Stopped => crate::tf!("Stopped importing “{value0}”", title),
+            Phase::Undone => crate::tf!("Undid importing “{value0}”", title),
+            Phase::Removing => crate::tf!("Undoing “{value0}”", title),
+            _ => crate::tf!("Importing “{value0}”", title),
         }
     }
 
     /// `taskSubtitle`
     pub fn subtitle(&self) -> String {
         match self.phase() {
-            Phase::Finding => "Finding files…".into(),
+            Phase::Finding => crate::i18n::t("Finding files…").into(),
             Phase::Importing => match self.rate_per_second {
                 Some(rate) if rate >= 0.1 => {
                     let rate = if rate >= 10. {
@@ -160,24 +160,24 @@ impl Task {
                     } else {
                         format!("{rate:.1}")
                     };
-                    format!("Adding to library · {rate} files/s")
+                    crate::tf!("Adding to library · {value0} files/s", rate)
                 }
-                _ => "Adding to library".into(),
+                _ => crate::i18n::t("Adding to library").into(),
             },
-            Phase::Paused => "Paused".into(),
-            Phase::Removing => "Removing the items it added…".into(),
+            Phase::Paused => crate::i18n::t("Paused").into(),
+            Phase::Removing => crate::i18n::t("Removing the items it added…").into(),
             Phase::Finished => match self.finished_at_ms {
-                Some(finished) => format!(
-                    "Finished in {}",
+                Some(finished) => crate::tf!(
+                    "Finished in {value0}",
                     duration(finished.saturating_sub(self.created_at_ms))
                 ),
-                None => "Finished".into(),
+                None => crate::i18n::t("Finished").into(),
             },
             Phase::Stopped => self
                 .error
                 .clone()
-                .unwrap_or_else(|| "Stopped before every file was imported".into()),
-            Phase::Undone => format!("Removed the {} items it added", grouped(self.added)),
+                .unwrap_or_else(|| crate::i18n::t("Stopped before every file was imported").into()),
+            Phase::Undone => crate::tf!("Removed the {value0} items it added", grouped(self.added)),
         }
     }
 
@@ -229,19 +229,26 @@ impl Task {
     pub fn counts(&self) -> (String, Option<String>) {
         match self.phase() {
             Phase::Finding => (
-                format!("{} files found", grouped(self.total)),
-                Some("Starting…".into()),
+                crate::tf!("{value0} files found", grouped(self.total)),
+                Some(crate::i18n::t("Starting…").into()),
             ),
             Phase::Finished | Phase::Stopped | Phase::Undone => (
-                format!("{} added", grouped(self.added)),
-                Some(format!("{} files", grouped(self.total))),
+                crate::tf!("{value0} added", grouped(self.added)),
+                Some(crate::tf!("{value0} files", grouped(self.total))),
             ),
             phase => (
-                format!("{} of {} files", grouped(self.done), grouped(self.total)),
+                crate::tf!(
+                    "{value0} of {value1} files",
+                    grouped(self.done),
+                    grouped(self.total)
+                ),
                 match phase {
-                    Phase::Paused => Some("Paused".into()),
+                    Phase::Paused => Some(crate::i18n::t("Paused").into()),
                     Phase::Removing => None,
-                    _ => Some(time_left(self.eta_seconds).unwrap_or_else(|| "Estimating…".into())),
+                    _ => Some(
+                        time_left(self.eta_seconds)
+                            .unwrap_or_else(|| crate::i18n::t("Estimating…").into()),
+                    ),
                 },
             ),
         }
@@ -252,7 +259,7 @@ impl Task {
     pub fn bar_detail(&self) -> String {
         let phase = self.phase();
         if phase == Phase::Finding {
-            return format!("{} found", grouped(self.total));
+            return crate::tf!("{value0} found", grouped(self.total));
         }
         let progress = format!("{} / {}", grouped(self.done), grouped(self.total));
         match time_left_short(self.eta_seconds).filter(|_| phase == Phase::Importing) {
@@ -266,9 +273,9 @@ impl Task {
         let remaining = self.total.saturating_sub(self.done);
         let mut choices = vec![(
             StopChoice::Keep,
-            "Keep what was imported",
-            format!(
-                "The {} new items stay. The remaining {} files are not imported.",
+            crate::i18n::t("Keep what was imported"),
+            crate::tf!(
+                "The {value0} new items stay. The remaining {value1} files are not imported.",
                 grouped(self.added),
                 grouped(remaining)
             ),
@@ -276,9 +283,9 @@ impl Task {
         if self.revertible {
             choices.push((
                 StopChoice::Remove,
-                "Remove what was imported",
-                format!(
-                    "Deletes the {} items this import added. Items that were already in your library are left alone.",
+                crate::i18n::t("Remove what was imported"),
+                crate::tf!(
+                    "Deletes the {value0} items this import added. Items that were already in your library are left alone.",
                     grouped(self.added)
                 ),
             ));
@@ -299,12 +306,12 @@ pub enum StopChoice {
 pub fn time_left(seconds: Option<u64>) -> Option<String> {
     let seconds = seconds?;
     Some(if seconds < 60 {
-        "Less than a minute left".into()
+        crate::i18n::t("Less than a minute left").into()
     } else if seconds < 3600 {
-        format!("About {} min left", seconds.div_ceil(60))
+        crate::tf!("About {value0} min left", seconds.div_ceil(60))
     } else {
         let (hours, minutes) = hours_and_minutes(seconds);
-        format!("About {hours} h {minutes} min left")
+        crate::tf!("About {value0} h {value1} min left", hours, minutes)
     })
 }
 
@@ -312,12 +319,12 @@ pub fn time_left(seconds: Option<u64>) -> Option<String> {
 pub fn time_left_short(seconds: Option<u64>) -> Option<String> {
     let seconds = seconds?;
     Some(if seconds < 60 {
-        "<1 min".into()
+        crate::i18n::t("<1 min").into()
     } else if seconds < 3600 {
-        format!("{} min", seconds.div_ceil(60))
+        crate::tf!("{value0} min", seconds.div_ceil(60))
     } else {
         let (hours, minutes) = hours_and_minutes(seconds);
-        format!("{hours} h {minutes} min")
+        crate::tf!("{value0} h {value1} min", hours, minutes)
     })
 }
 
@@ -333,13 +340,13 @@ fn hours_and_minutes(seconds: u64) -> (u64, u64) {
 pub fn duration(milliseconds: i64) -> String {
     let seconds = ((milliseconds as f64 / 1000.).round() as i64).max(1);
     if seconds < 60 {
-        return format!("{seconds} s");
+        return crate::tf!("{value0} s", seconds);
     }
     let minutes = seconds / 60;
     if minutes < 60 {
-        return format!("{minutes} min {} s", seconds % 60);
+        return crate::tf!("{value0} min {value1} s", minutes, seconds % 60);
     }
-    format!("{} h {} min", minutes / 60, minutes % 60)
+    crate::tf!("{value0} h {value1} min", minutes / 60, minutes % 60)
 }
 
 /// Which task the foreground dialog shows and which run in the task bar
@@ -396,7 +403,10 @@ pub fn gate<'a>(tasks: &'a [Task], action: &str) -> Option<(&'a Task, String)> {
     let task = tasks
         .iter()
         .find(|task| task.blocks.iter().any(|blocked| blocked == action))?;
-    Some((task, format!("Available when “{}” finishes", task.title)))
+    Some((
+        task,
+        crate::tf!("Available when “{value0}” finishes", task.title),
+    ))
 }
 
 #[cfg(test)]

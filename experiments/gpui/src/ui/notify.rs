@@ -4,6 +4,7 @@
 //! button is pressed. Call [`error`], [`warning`], [`info`] or [`success`]
 //! from anywhere a `cx` is, an async result's included; the main window's
 //! [`Host`] draws whatever is current above everything else.
+use crate::i18n::t;
 use crate::theme::{self, Text as _};
 use crate::{motion, ui};
 use gpui::prelude::FluentBuilder as _;
@@ -230,8 +231,10 @@ fn error_options(title: SharedString, message: SharedString) -> (Tone, Options) 
         return (
             Tone::Warning,
             Options::new(
-                "Folder depth limit",
-                "Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.",
+                t("Folder depth limit"),
+                crate::i18n::en(
+                    "Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.",
+                ),
             ),
         );
     }

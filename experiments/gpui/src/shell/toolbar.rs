@@ -2,6 +2,7 @@
 //! toolbar (`GridToolbar.tsx`) with Back, Forward and the scope title, or the
 //! viewer toolbar while an item is open.
 use crate::backend::Screen;
+use crate::i18n::t;
 use crate::session::{Change, Session, Transition};
 use crate::ui::{
     self,
@@ -162,6 +163,9 @@ impl Toolbar {
         let mut path = div().flex().items_center().whitespace_nowrap();
         let separator = || div().mx(px(5.)).opacity(0.4).child("/");
         for (position, (index, label)) in crumbs.into_iter().enumerate() {
+            // `translateMessage(label)`: a destination's name in the language
+            // of the moment.
+            let label = crate::i18n::t(&label).to_owned();
             if position == last && results.is_none() {
                 path = path.child(div().child(label));
                 continue;
@@ -219,7 +223,11 @@ impl Toolbar {
 
 /// `Search results · N`, the count grouped by thousands.
 fn search_results_label(total: u64) -> String {
-    format!("Search results · {}", crate::grid::format::grouped(total))
+    format!(
+        "{} · {}",
+        crate::i18n::en("Search results"),
+        crate::grid::format::grouped(total)
+    )
 }
 
 impl Render for Toolbar {
@@ -303,7 +311,7 @@ impl Render for Toolbar {
                 "history-back",
                 -1,
                 back,
-                ui::tip("Back").shortcut("nav.back", cx),
+                ui::tip(t("Back")).shortcut("nav.back", cx),
                 cx,
             ))
             .child(history(
@@ -311,7 +319,7 @@ impl Render for Toolbar {
                 "history-forward",
                 1,
                 forward,
-                ui::tip("Forward").shortcut("nav.forward", cx),
+                ui::tip(t("Forward")).shortcut("nav.forward", cx),
                 cx,
             ));
         // A screen has no grid to zoom, filter or search: the Electron
@@ -359,7 +367,7 @@ impl Render for Toolbar {
                     .flex_none()
                     .child(
                         ui::icon_button("view-options", "toolbar-layout")
-                            .tip(ui::tip("View options"))
+                            .tip(ui::tip(t("View options")))
                             .toggled(view_menu_open)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let button = this.view_button.get();
@@ -381,7 +389,7 @@ impl Render for Toolbar {
                 // Lit while the filter bar is open or any filter is set,
                 // with the number set.
                 ui::icon_button("filter-library", "toolbar-filter")
-                    .tip(ui::tip("Filter library"))
+                    .tip(ui::tip(t("Filter library")))
                     .toggled(bar_open || filter_count > 0)
                     .badge(filter_count)
                     .on_click(cx.listener(move |this, _, _, cx| {

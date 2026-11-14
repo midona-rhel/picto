@@ -9,6 +9,7 @@ pub mod registry;
 mod shortcuts;
 mod window;
 
+use crate::i18n::t;
 use crate::session::Session;
 use gpui::*;
 use model::{AppSettings, GridDefaults};
@@ -33,8 +34,6 @@ pub struct Settings {
     pub shortcuts: Overrides,
 }
 
-/// The languages Settings offers (`SUPPORTED_LOCALES`).
-const LOCALES: [&str; 8] = ["en", "de", "es", "pt", "fr", "zh-CN", "ja", "fi"];
 /// `AUDIO_VISUALIZATION_OPTIONS`.
 const VISUALIZATIONS: [&str; 4] = ["none", "spectrum", "oscilloscope", "orbit"];
 
@@ -47,10 +46,8 @@ impl Settings {
         Self {
             keyboard,
             shortcuts,
-            locale: LOCALES
-                .into_iter()
-                .find(|locale| *locale == state.locale)
-                .unwrap_or("en"),
+            // The language shown: the kept choice, else the system's.
+            locale: crate::i18n::current().code(),
             audio_visualization: VISUALIZATIONS
                 .into_iter()
                 .find(|mode| *mode == state.audio_visualization)
@@ -74,11 +71,11 @@ impl Settings {
                 )
             })
             .collect();
-        let (preset, locale, mode) = (self.keyboard.value(), self.locale, self.audio_visualization);
+        // The language is kept when it is chosen (`choose_locale`).
+        let (preset, mode) = (self.keyboard.value(), self.audio_visualization);
         crate::state::update(cx, |state| {
             state.keyboard_preset = preset.into();
             state.shortcut_overrides = overrides;
-            state.locale = locale.into();
             state.audio_visualization = mode.into();
         });
     }
@@ -178,6 +175,22 @@ impl SettingsModel {
     /// Changes the draft.
     pub fn edit(&mut self, change: impl FnOnce(&mut Settings), cx: &mut Context<Self>) {
         change(&mut self.draft);
+        cx.notify();
+    }
+
+    /// `setLocale`: a language chosen in Settings is shown in every window
+    /// at once and kept, whether or not the rest is saved.
+    pub fn choose_locale(&mut self, code: &'static str, cx: &mut Context<Self>) {
+        let Some(locale) = crate::i18n::Locale::normalize(code) else {
+            return;
+        };
+        self.draft.locale = locale.code();
+        self.saved.locale = locale.code();
+        crate::state::update(cx, |state| state.locale = locale.code().into());
+        crate::i18n::show(locale, cx);
+        // The destinations' names were read in the language before.
+        self.session
+            .update(cx, |session, cx| session.refresh_navigation(cx));
         cx.notify();
     }
 
@@ -287,7 +300,7 @@ impl SettingsModel {
             let mut result = match written.await {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(error)) => Err(error.to_string()),
-                Err(_) => Err("Unable to save settings.".to_string()),
+                Err(_) => Err(t("Unable to save settings.").to_string()),
             };
             if reset && result.is_ok() {
                 let answer = this.update(cx, |this, cx| {
@@ -299,7 +312,7 @@ impl SettingsModel {
                     Ok(answer) => match answer.await {
                         Ok(Ok(_)) => Ok(()),
                         Ok(Err(error)) => Err(error),
-                        Err(_) => Err("Unable to save settings.".to_string()),
+                        Err(_) => Err(t("Unable to save settings.").to_string()),
                     },
                     Err(_) => return false,
                 };

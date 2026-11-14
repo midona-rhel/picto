@@ -63,6 +63,7 @@ impl PageStyle {
 /// (`TextDocumentViewer.tsx`).
 pub fn load_text(path: &std::path::Path, mime: &str) -> Result<(Vec<Block>, bool)> {
     use std::io::Read;
+    // i18n: an error the document view shows through t()
     let file = std::fs::File::open(path).map_err(|_| anyhow!("Could not open this document."))?;
     let mut bytes = Vec::new();
     file.take(TEXT_LIMIT as u64 + 1).read_to_end(&mut bytes)?;

@@ -11,6 +11,7 @@
 //! and anything else reaches it through [`get`].
 mod view;
 
+use crate::i18n::t;
 use crate::session::Session;
 use crate::ui::{
     self,
@@ -75,11 +76,11 @@ impl Format {
 
     pub fn label(self) -> &'static str {
         match self {
-            Format::Original => "Original Format",
-            Format::Jpeg => "JPEG",
-            Format::Png => "PNG",
-            Format::Webp => "WebP",
-            Format::Avif => "AVIF",
+            Format::Original => t("Original Format"),
+            Format::Jpeg => t("JPEG"),
+            Format::Png => t("PNG"),
+            Format::Webp => t("WebP"),
+            Format::Avif => t("AVIF"),
         }
     }
 
@@ -153,11 +154,13 @@ fn export_outcome(result: &Value) -> (String, Option<String>) {
     (title, problem)
 }
 
-/// "1 file", "3 files", with grouped digits.
+/// "1 file", "3 files", with grouped digits. This app reports exports
+/// production leaves silent; their words are English.
 fn files(count: u64) -> String {
     format!(
         "{} file{}",
         crate::grid::format::grouped(count),
+        // i18n: this app's own export report, in English
         if count == 1 { "" } else { "s" }
     )
 }
@@ -183,6 +186,7 @@ pub fn safe_pack_name(value: &str) -> String {
     }
     let cleaned = cleaned.trim_end_matches('.');
     if cleaned.is_empty() {
+        // i18n: a file's name, English as production suggests it
         "Picto Pack".into()
     } else {
         cleaned.to_owned()
@@ -326,7 +330,7 @@ impl Exports {
     /// `chooseAndExportOriginals`: the folder dialog, then every file as
     /// it is.
     pub fn export_originals(&mut self, target: SelectionTarget, cx: &mut Context<Self>) {
-        let chosen = crate::prompt::folder("Export originals", cx);
+        let chosen = crate::prompt::folder(t("Export originals"), cx);
         cx.spawn(async move |this, cx| {
             let Ok(Some(folder)) = chosen.await else {
                 return;
@@ -334,7 +338,7 @@ impl Exports {
             let _ = this.update(cx, |this, cx| {
                 this.export(
                     Request::originals(target, folder),
-                    "Could not export originals",
+                    t("Could not export originals"),
                     cx,
                 )
             });
@@ -410,7 +414,7 @@ impl Exports {
 
     /// Browse: the folder the files go to.
     fn browse(&mut self, cx: &mut Context<Self>) {
-        let chosen = crate::prompt::folder("Choose export folder", cx);
+        let chosen = crate::prompt::folder(t("Choose export folder"), cx);
         cx.spawn(async move |this, cx| {
             let Ok(Some(folder)) = chosen.await else {
                 return;
@@ -487,6 +491,7 @@ impl Exports {
                 mode: PackMode::Export {
                     source,
                     count,
+                    // i18n: a file's name, English as production suggests it
                     name: name.unwrap_or_else(|| "Picto Pack".into()),
                 },
                 busy: false,
@@ -501,7 +506,7 @@ impl Exports {
     pub fn choose_pack(&mut self, cx: &mut Context<Self>) {
         // TODO: limit the dialog to `.picto-pack` files; GPUI's path
         // prompt takes no file types.
-        let chosen = crate::prompt::file("Import Picto Pack", cx);
+        let chosen = crate::prompt::file(t("Import Picto Pack"), cx);
         cx.spawn(async move |this, cx| {
             let Ok(Some(path)) = chosen.await else {
                 return;
@@ -542,7 +547,9 @@ impl Exports {
                         cx,
                     );
                 }
-                Ok(Err(error)) => notify(Level::Error, "Could not import Picto Pack", &error, cx),
+                Ok(Err(error)) => {
+                    notify(Level::Error, t("Could not import Picto Pack"), &error, cx)
+                }
                 Err(_) => {}
             });
         })
@@ -600,9 +607,9 @@ impl Exports {
                         Ok(Ok(result)) => {
                             notify(
                                 Level::Success,
-                                "Picto Pack imported",
-                                &format!(
-                                    "Imported {} items and {} media files.",
+                                t("Picto Pack imported"),
+                                &crate::tf!(
+                                    "Imported {value0} items and {value1} media files.",
                                     result["imported_roots"].as_u64().unwrap_or(0),
                                     result["imported_media"].as_u64().unwrap_or(0)
                                 ),
@@ -611,7 +618,7 @@ impl Exports {
                             this.close(cx);
                         }
                         Ok(Err(error)) => {
-                            notify(Level::Error, "Could not import Picto Pack", &error, cx);
+                            notify(Level::Error, t("Could not import Picto Pack"), &error, cx);
                             this.settle_pack(cx);
                         }
                         Err(_) => this.settle_pack(cx),
@@ -634,17 +641,18 @@ impl Exports {
                     let summary = Summary::read(&result["summary"]);
                     notify(
                         Level::Success,
-                        "Picto Pack exported",
-                        &format!(
-                            "Exported {} items and {} media files.",
-                            summary.root_count, summary.media_count
+                        t("Picto Pack exported"),
+                        &crate::tf!(
+                            "Exported {value0} items and {value1} media files.",
+                            summary.root_count,
+                            summary.media_count
                         ),
                         cx,
                     );
                     this.close(cx);
                 }
                 Ok(Err(error)) => {
-                    notify(Level::Error, "Could not export Picto Pack", &error, cx);
+                    notify(Level::Error, t("Could not export Picto Pack"), &error, cx);
                     this.settle_pack(cx);
                 }
                 Err(_) => this.settle_pack(cx),

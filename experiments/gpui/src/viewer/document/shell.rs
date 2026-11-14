@@ -2,6 +2,7 @@
 //! scrolling viewport on the dark backdrop with the page centred in it, and
 //! a footer as tall as the titlebar with Previous page, "Page n of m" and
 //! Next page.
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{theme, ui};
 use gpui::*;
@@ -98,7 +99,9 @@ impl RenderOnce for DocumentShell {
                 .text_size(px(theme::TEXT_SM))
                 .line_height(px(theme::TEXT_SM * 1.5))
                 .text_color(theme.text_secondary())
-                .child(error)
+                // A message that is one of production's keys shows in the
+                // language; a decoder's own detail stays as it came.
+                .child(crate::i18n::t_shared(error))
                 .into_any_element(),
             None => div()
                 .id("document-viewport")
@@ -150,7 +153,7 @@ impl RenderOnce for DocumentShell {
                 .child(
                     ui::icon_button("document-previous", "toolbar-chevron-left")
                         .disabled(!can_previous)
-                        .tip(ui::tip("Previous page").shortcut("document.previousPage", cx))
+                        .tip(ui::tip(t("Previous page")).shortcut("document.previousPage", cx))
                         .on_click(move |_, window, cx| {
                             if let Some(previous) = &previous {
                                 previous(window, cx);
@@ -161,7 +164,7 @@ impl RenderOnce for DocumentShell {
                 .child(
                     ui::icon_button("document-next", "toolbar-chevron-right")
                         .disabled(!can_next)
-                        .tip(ui::tip("Next page").shortcut("document.nextPage", cx))
+                        .tip(ui::tip(t("Next page")).shortcut("document.nextPage", cx))
                         .on_click(move |_, window, cx| {
                             if let Some(next) = &next {
                                 next(window, cx);
@@ -216,10 +219,12 @@ pub fn footer(cx: &App) -> Div {
 
 /// "Page n of m", with a dash while the count is unknown.
 pub fn page_status(page: usize, count: usize) -> String {
+    // `{t("Page ")}{pageNumber} {t("of ")}{pageCount || '—'}`
+    let (word, of) = (crate::i18n::t("Page "), crate::i18n::t("of "));
     if count == 0 {
-        format!("Page {page} of —")
+        format!("{word}{page} {of}—")
     } else {
-        format!("Page {page} of {count}")
+        format!("{word}{page} {of}{count}")
     }
 }
 

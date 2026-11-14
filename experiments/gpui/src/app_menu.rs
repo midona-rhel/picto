@@ -982,7 +982,8 @@ pub fn in_window_entries(window: &Window, cx: &mut App) -> Vec<crate::ui::menu::
                         && item.built
                         && (window.is_action_available(action, cx)
                             || cx.is_action_available(action));
-                    let mut row = ui_menu::item(item.action.name(), item.title.clone())
+                    let mut row = ui_menu::item(item.action.name(), "")
+                        .english(item.title.clone())
                         .value(path)
                         .disabled(!enabled);
                     if let Some(keys) = item.accelerator(preset, overrides) {

@@ -2,6 +2,7 @@
 //! `itemFilters.ts`), how they become the library's filter expression
 //! (`compileGridQuery`), how many are set (`countActiveGridFilters`), and the
 //! labels the bar's controls show (`GridFilterMenu.tsx`).
+use crate::i18n::{en, t};
 use picto_library::predicate::{FilterClause, FilterExpr, SetMatchMode};
 use picto_library::{FolderId, LabColor, Rating, TagId};
 
@@ -122,16 +123,16 @@ impl Field {
 
     pub fn label(self) -> &'static str {
         match self {
-            Field::Color => "Color",
-            Field::Tags => "Tags",
-            Field::Folders => "Folders",
-            Field::Rating => "Rating",
-            Field::Type => "Type",
-            Field::Imported => "Date Imported",
-            Field::Modified => "Date Modified",
-            Field::Resolution => "Resolution",
-            Field::Duration => "Duration",
-            Field::Size => "File Size",
+            Field::Color => t("Color"),
+            Field::Tags => t("Tags"),
+            Field::Folders => t("Folders"),
+            Field::Rating => t("Rating"),
+            Field::Type => t("Type"),
+            Field::Imported => t("Date Imported"),
+            Field::Modified => t("Date Modified"),
+            Field::Resolution => t("Resolution"),
+            Field::Duration => t("Duration"),
+            Field::Size => t("File Size"),
         }
     }
 
@@ -500,7 +501,7 @@ impl Filters {
                 .color
                 .as_ref()
                 .map(|hex| hex.to_uppercase())
-                .unwrap_or_else(|| "Color".into()),
+                .unwrap_or_else(|| t("Color").into()),
             Field::Tags => {
                 let labels = self
                     .include_tags
@@ -509,17 +510,18 @@ impl Filters {
                     .chain(
                         self.exclude_tags
                             .iter()
-                            .map(|tag| format!("Not {}", tag.name)),
+                            .map(|tag| format!("{} {}", en("Not"), tag.name)),
                     )
                     .collect::<Vec<_>>();
                 if labels.is_empty() {
-                    "Tags".into()
+                    t("Tags").into()
                 } else {
                     labels.join(", ")
                 }
             }
             Field::Folders => {
-                let name = |id: u32| folder_name(id).unwrap_or_else(|| format!("Folder {id}"));
+                let name =
+                    |id: u32| folder_name(id).unwrap_or_else(|| format!("{} {id}", t("Folder")));
                 let labels = self
                     .include_folders
                     .iter()
@@ -527,23 +529,23 @@ impl Filters {
                     .chain(
                         self.exclude_folders
                             .iter()
-                            .map(|id| format!("Not {}", name(*id))),
+                            .map(|id| format!("{} {}", en("Not"), name(*id))),
                     )
                     .collect::<Vec<_>>();
                 if labels.is_empty() {
-                    "Folders".into()
+                    t("Folders").into()
                 } else {
                     labels.join(", ")
                 }
             }
             Field::Rating => {
                 if self.ratings.is_empty() {
-                    "Rating".into()
+                    t("Rating").into()
                 } else {
                     self.ratings
                         .iter()
                         .map(|stars| match stars {
-                            0 => "Unrated".to_owned(),
+                            0 => t("Unrated").to_owned(),
                             stars => stars.to_string(),
                         })
                         .collect::<Vec<_>>()
@@ -562,20 +564,24 @@ impl Filters {
                     )
                     .collect::<Vec<_>>();
                 if labels.is_empty() {
-                    "Type".into()
+                    t("Type").into()
                 } else {
                     labels.join(", ")
                 }
             }
-            Field::Imported => {
-                date_range_label("Date Imported", self.imported_after, self.imported_before)
-            }
-            Field::Modified => {
-                date_range_label("Date Modified", self.modified_after, self.modified_before)
-            }
+            Field::Imported => date_range_label(
+                t("Date Imported"),
+                self.imported_after,
+                self.imported_before,
+            ),
+            Field::Modified => date_range_label(
+                t("Date Modified"),
+                self.modified_after,
+                self.modified_before,
+            ),
             Field::Resolution => {
                 if !self.has_resolution() {
-                    "Resolution".into()
+                    t("Resolution").into()
                 } else {
                     let bound = |value: Option<u64>, empty: &str| {
                         value.map_or_else(|| empty.to_owned(), |value| value.to_string())
@@ -590,18 +596,18 @@ impl Filters {
                 }
             }
             Field::Duration => range_label(
-                "Duration",
+                t("Duration"),
                 self.min_duration_ms,
                 self.max_duration_ms,
                 1000,
-                "s",
+                t("s"),
             ),
             Field::Size => range_label(
-                "File Size",
+                t("File Size"),
                 self.min_size_bytes,
                 self.max_size_bytes,
                 1_000_000,
-                "MB",
+                t("MB"),
             ),
         }
     }
@@ -753,6 +759,7 @@ pub fn date_preset(now_ms: i64, days: i64, end_offset: i64) -> (i64, i64) {
 }
 
 /// The date menu's presets: label, days, and the end's offset from today.
+// i18n: translated where drawn (menu rows)
 pub const DATE_PRESETS: [(&str, i64, i64); 6] = [
     ("Today", 1, 1),
     ("Yesterday", 1, 0),
@@ -797,7 +804,9 @@ pub fn amount(text: &str, multiplier: u64) -> Option<u64> {
 /// `SetMatchMode` as `ItemFilters` writes it.
 fn mode_name(mode: SetMatchMode) -> &'static str {
     match mode {
+        // i18n: a value, not shown
         SetMatchMode::Any => "any",
+        // i18n: a value, not shown
         SetMatchMode::All => "all",
         SetMatchMode::Exact => "exact",
     }

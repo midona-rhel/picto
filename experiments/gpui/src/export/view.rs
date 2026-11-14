@@ -2,6 +2,7 @@
 //! Pack dialog (`PictoPackModal.tsx`), both on the shared dialog with
 //! `GlassModal.module.css`'s form layout.
 use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource};
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
@@ -39,7 +40,11 @@ fn separator(theme: &theme::Theme) -> Div {
 
 /// "Export 3 Files", with the count as production writes it, ungrouped.
 pub(super) fn convert_title(count: u64) -> String {
-    format!("Export {count} File{}", if count == 1 { "" } else { "s" })
+    crate::tf!(
+        "Export {value0} File{value1}",
+        count,
+        crate::i18n::plural_s(count as i128)
+    )
 }
 
 impl Render for Exports {
@@ -83,12 +88,12 @@ impl Exports {
                     .output_dir
                     .as_ref()
                     .map(|dir| SharedString::from(dir.to_string_lossy().into_owned())),
-                "Choose export folder...",
+                t("Choose export folder..."),
                 cx,
             ))
             .child(
                 ui::action_button("export-browse", ButtonLook::Standard)
-                    .label("Browse")
+                    .label(t("Browse"))
                     .on_click(on_click(this, |exports, cx| exports.browse(cx))),
             );
         let choices = Format::ALL
@@ -104,13 +109,13 @@ impl Exports {
                 })
         };
         let mut body = stack()
-            .child(field(theme, "Destination", destination))
-            .child(field(theme, "Format", div().flex().child(select)));
+            .child(field(theme, t("Destination"), destination))
+            .child(field(theme, t("Format"), div().flex().child(select)));
         if format.has_quality() {
             let this = this.clone();
             body = body.child(field(
                 theme,
-                format!("Quality — {}%", convert.quality),
+                format!("{}{}%", t("Quality — "), convert.quality),
                 ui::slider("export-quality", convert.quality as f64, 1., 100., 1.)
                     .look(ui::slider::Look::Dialog)
                     .on_change(move |value, cx| {
@@ -129,7 +134,7 @@ impl Exports {
                 .child(separator(theme))
                 .child(field(
                     theme,
-                    "Resize (optional)",
+                    t("Resize (optional)"),
                     row()
                         .child(size_field("export-width", &convert.width))
                         // `.inlineLabel`
@@ -146,7 +151,7 @@ impl Exports {
                 .child(
                     row()
                         .justify_between()
-                        .child(label(theme, "Keep Aspect Ratio"))
+                        .child(label(theme, t("Keep Aspect Ratio")))
                         .child(
                             ui::toggle("export-keep-aspect", convert.keep_aspect)
                                 .on_toggle(on(this, |exports, cx| exports.toggle_aspect(cx))),
@@ -158,14 +163,14 @@ impl Exports {
             .child(body)
             .footer(
                 ui::action_button("export-cancel", ButtonLook::Standard)
-                    .label("Cancel")
+                    .label(t("Cancel"))
                     .on_click(on_click(this, |exports, cx| {
                         exports.close(cx);
                     })),
             )
             .footer(
                 ui::action_button("export-go", ButtonLook::Primary)
-                    .label("Export")
+                    .label(t("Export"))
                     .disabled(convert.output_dir.is_none())
                     .on_click(on_click(this, |exports, cx| exports.convert(cx))),
             )
@@ -182,7 +187,7 @@ impl Exports {
         let importing = matches!(pack.mode, PackMode::Import { .. });
         let heading = match &pack.mode {
             PackMode::Import { summary, .. } => summary.name.clone(),
-            PackMode::Export { .. } => "Portable library package".into(),
+            PackMode::Export { .. } => t("Portable library package").into(),
         };
         let mut notes = div()
             .flex()
@@ -198,11 +203,11 @@ impl Exports {
             )
             .child(label(
                 theme,
-                "Picto Packs keep original media, collections, names, notes, dates, ratings, tags, source links, and included folder definitions.",
+                t("Picto Packs keep original media, collections, names, notes, dates, ratings, tags, source links, and included folder definitions."),
             ))
             .child(label(
                 theme,
-                "Subscriptions, provider history, authentication, and folder watch paths are never included.",
+                t("Subscriptions, provider history, authentication, and folder watch paths are never included."),
             ));
         if let PackMode::Export {
             source: PackSource::SmartFolder(_),
@@ -211,7 +216,7 @@ impl Exports {
         {
             notes = notes.child(label(
                 theme,
-                "Smart-folder exports contain only the current matching items. The smart-folder rule and container are not included.",
+                t("Smart-folder exports contain only the current matching items. The smart-folder rule and container are not included."),
             ));
         }
         // The tile is 48 wide and 53 tall in production: its icon is an
@@ -241,26 +246,26 @@ impl Exports {
         };
         let facts = match &pack.mode {
             PackMode::Import { summary, .. } => stack()
-                .child(fact("Items", summary.root_count.to_string()))
-                .child(fact("Media files", summary.media_count.to_string()))
-                .child(fact("Folders", summary.folder_count.to_string()))
+                .child(fact(t("Items"), summary.root_count.to_string()))
+                .child(fact(t("Media files"), summary.media_count.to_string()))
+                .child(fact(t("Folders"), summary.folder_count.to_string()))
                 .child(fact(
-                    "Smart folders",
+                    t("Smart folders"),
                     summary.smart_folder_count.to_string(),
                 ))
                 .child(fact(
-                    "Original size",
+                    t("Original size"),
                     crate::text::size_to_terabytes(summary.total_bytes),
                 )),
-            PackMode::Export { count, .. } => fact("Selected items", count.to_string()),
+            PackMode::Export { count, .. } => fact(t("Selected items"), count.to_string()),
         };
         let busy = pack.busy;
         ui::modal(
             "pack-dialog",
             if importing {
-                "Import Picto Pack"
+                t("Import Picto Pack")
             } else {
-                "Export Picto Pack"
+                t("Export Picto Pack")
             },
             presence,
         )
@@ -280,7 +285,7 @@ impl Exports {
         )
         .footer(
             ui::action_button("pack-cancel", ButtonLook::Standard)
-                .label("Cancel")
+                .label(t("Cancel"))
                 .disabled(busy)
                 .on_click(on_click(this, |exports, cx| {
                     exports.close(cx);
@@ -289,11 +294,11 @@ impl Exports {
         .footer(
             ui::action_button("pack-go", ButtonLook::Primary)
                 .label(if busy {
-                    "Working..."
+                    t("Working...")
                 } else if importing {
-                    "Import"
+                    t("Import")
                 } else {
-                    "Choose Destination..."
+                    t("Choose Destination...")
                 })
                 .disabled(busy)
                 .on_click(on_click(this, |exports, cx| exports.run_pack(cx))),

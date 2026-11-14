@@ -6,6 +6,7 @@ use super::flash::{Flash, Playback};
 use super::surface::MediaSurface;
 use super::video::button::media_button;
 use super::video::controls::{button_row, controls_bar, volume_panel};
+use crate::i18n::t;
 use crate::ui;
 use gpui::*;
 
@@ -38,7 +39,11 @@ pub fn controls(
                     "player-play"
                 },
                 20.,
-                ui::tip(if playback.playing { "Pause" } else { "Play" }),
+                ui::tip(if playback.playing {
+                    t("Pause")
+                } else {
+                    t("Play")
+                }),
             )
             .on_click(move |_, _, cx| {
                 if ready {
@@ -47,7 +52,7 @@ pub fn controls(
             }),
         )
         .child(
-            media_button("flash-stop", "player-stop", 18., ui::tip("Stop")).on_click(
+            media_button("flash-stop", "player-stop", 18., ui::tip(t("Stop"))).on_click(
                 move |_, _, cx| {
                     if ready {
                         stop(Box::new(Flash::stop), cx)

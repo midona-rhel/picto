@@ -470,7 +470,9 @@ impl Element for TextElement {
         let cursor = input.cursor_offset();
         let focused = input.focus_handle.is_focused(window);
         let marked_range = input.marked_range.clone();
-        let placeholder = input.placeholder.clone();
+        // Shown in the language of the moment, as production's
+        // `translateMessage` recovers a placeholder made in another one.
+        let placeholder = crate::i18n::t_shared(input.placeholder.clone());
         let kind = input.kind;
         let multiline = input.multiline;
         let previous_scroll = input.scroll;

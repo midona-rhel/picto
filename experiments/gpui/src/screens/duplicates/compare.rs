@@ -1,6 +1,7 @@
 //! The arithmetic of duplicate review: which pair comes next, how its facts
 //! are written, and the linked zoom and pan of the two previews
 //! (`useLinkedComparisonZoom.ts`).
+use crate::i18n::t;
 use picto_library::FileId;
 
 /// A pair, by its two file IDs in ascending order.
@@ -39,14 +40,21 @@ pub fn select_stable(
 /// `toFixed` rounds a tie up, so the arithmetic is done in whole hundredths.
 pub fn similarity_label(distance: u32) -> String {
     if distance == 0 {
-        return "100% similar".into();
+        // Production writes the exact match in English.
+        return crate::i18n::en("100% similar").into();
     }
     let hundredths = 10_000u32.saturating_sub(distance);
     if distance < 10 {
-        format!("{}.{:02}% similar", hundredths / 100, hundredths % 100)
+        crate::tf!(
+            "{value0}% similar",
+            format!("{}.{:02}", hundredths / 100, hundredths % 100)
+        )
     } else {
         let tenths = (hundredths + 5) / 10;
-        format!("{}.{}% similar", tenths / 10, tenths % 10)
+        crate::tf!(
+            "{value0}% similar",
+            format!("{}.{}", tenths / 10, tenths % 10)
+        )
     }
 }
 
@@ -54,7 +62,7 @@ pub fn similarity_label(distance: u32) -> String {
 pub fn dimensions(width: Option<u32>, height: Option<u32>) -> String {
     match (width, height) {
         (Some(width), Some(height)) => format!("{width} x {height}"),
-        _ => "Unknown".into(),
+        _ => t("Unknown").into(),
     }
 }
 
@@ -66,11 +74,8 @@ pub fn short_date(milliseconds: i64) -> String {
         .timestamp_millis_opt(milliseconds)
         .single()
         .map_or_else(
-            || "Unknown".into(),
-            |date| {
-                date.format(crate::text::date_format::LOCALE_DATE)
-                    .to_string()
-            },
+            || t("Unknown").into(),
+            |date| crate::i18n::format::date(date.date_naive()),
         )
 }
 

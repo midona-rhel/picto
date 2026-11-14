@@ -22,6 +22,7 @@ pub mod thumbnails;
 pub mod tile;
 pub mod window;
 
+use crate::i18n::t;
 use crate::session::{Change, Session};
 use crate::theme::Text as _;
 use crate::{theme, ui};
@@ -1151,7 +1152,7 @@ impl Render for GridView {
                         .hover(move |style| {
                             style.text_color(theme.text()).bg(theme.surface_hover())
                         })
-                        .child("Retry")
+                        .child(t("Retry"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.session.update(cx, |session, cx| session.reload(cx));
                         })),
@@ -1184,14 +1185,14 @@ impl Render for GridView {
                         }
                     };
                     vec![
-                        ui::empty_state_action("grid-import-files", "upload", "Import Files")
+                        ui::empty_state_action("grid-import-files", "upload", t("Import Files"))
                             .disabled(blocked.is_some())
                             .on_click(start(false))
                             .into_any_element(),
                         ui::empty_state_action(
                             "grid-import-folder",
                             "folder-plus",
-                            "Import Folder",
+                            t("Import Folder"),
                         )
                         .disabled(blocked.is_some())
                         .on_click(start(true))

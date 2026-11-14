@@ -6,6 +6,7 @@ use super::{
     DuplicatesScreen, DuplicatesToolbar, FitPair, KeepBoth, KeepLeft, KeepRight, NARROW_WIDTH,
     NextPair, NotDuplicate, PREVIEW_MIN, PreviousPair, Side, SmartMerge, compare,
 };
+use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look;
 use crate::{motion, theme, ui};
@@ -41,30 +42,33 @@ impl DuplicatesScreen {
             .text_color(theme.text_secondary())
             .children(
                 self.loading_message
-                    .then_some("Loading duplicate review queue..."),
+                    .then_some(t("Loading duplicate review queue...")),
             )
     }
 
     fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let resolved = self.initial_total.saturating_sub(self.total);
         let (title, description) = match &self.error {
-            Some(error) => ("Unable to load duplicate review".to_owned(), error.clone()),
+            Some(error) => (
+                t("Unable to load duplicate review").to_owned(),
+                error.clone(),
+            ),
             None if resolved > 0 => (
-                "Review complete".to_owned(),
+                en("Review complete").to_owned(),
                 format!("{resolved} decisions saved."),
             ),
             None => (
-                "No duplicate pairs".to_owned(),
-                "Scan the library to find similar images.".to_owned(),
+                en("No duplicate pairs").to_owned(),
+                en("Scan the library to find similar images.").to_owned(),
             ),
         };
         let action = ui::empty_state_action(
             "duplicates-scan",
             "action-refresh",
             if self.error.is_some() {
-                "Retry"
+                t("Retry")
             } else {
-                "Scan library"
+                t("Scan library")
             },
         )
         .disabled(self.scanning || self.resolving)
@@ -101,11 +105,14 @@ impl DuplicatesScreen {
         let theme = theme::theme(cx);
         let shown = self.shown.as_ref().expect("a pair is on screen");
         let side = &shown.sides[index];
-        let (label, keep) = if index == 0 {
-            ("Left candidate", "Keep left")
+        // Production fills the side's English name in: `t("Keep {value0}")`
+        // for the tip, `{t("Keep ")}{side}` on the button.
+        let (label, which) = if index == 0 {
+            (en("Left candidate"), "left")
         } else {
-            ("Right candidate", "Keep right")
+            (en("Right candidate"), "right")
         };
+        let keep = crate::tf!("Keep {value0}", which);
         // Keeps this file and merges the other's item into it; the other
         // file is deleted from the copy.
         let mut keep_button = ui::action_button(("duplicate-keep", index), Look::Standard)
@@ -125,7 +132,9 @@ impl DuplicatesScreen {
         keep_button = if compact {
             keep_button.width(theme::CONTROL_MD).padding(0.)
         } else {
-            keep_button.padding(10.).label(keep)
+            keep_button
+                .padding(10.)
+                .label(format!("{}{which}", t("Keep ")))
         };
         let header = div()
             .h(px(CARD_HEADER))
@@ -293,7 +302,7 @@ impl DuplicatesScreen {
                 div()
                     .text_color(theme.text_secondary())
                     .text(theme::TEXT_SM)
-                    .child("Media details unavailable")
+                    .child(t("Media details unavailable"))
             }));
         if self.difference_hovered && !self.resolving {
             // `.differenceComposite`: on black.
@@ -382,34 +391,37 @@ impl DuplicatesScreen {
         };
         let mut rows = vec![
             row(
-                "Resolution",
+                t("Resolution"),
                 compare::dimensions(side.file.pixel_width, side.file.pixel_height),
             ),
-            row("Size", crate::text::size_to_megabytes(side.file.size_bytes)),
-            row("Format", side.file.mime_type.clone()),
             row(
-                "Rating",
+                t("Size"),
+                crate::text::size_to_megabytes(side.file.size_bytes),
+            ),
+            row(t("Format"), side.file.mime_type.clone()),
+            row(
+                t("Rating"),
                 details
-                    .map_or("Unrated", |details| rating_name(details.rating))
+                    .map_or(t("Unrated"), |details| rating_name(details.rating))
                     .into(),
             ),
             row(
-                "Tags",
+                t("Tags"),
                 details
                     .map_or(0, |details| details.tag_ids.len())
                     .to_string(),
             ),
             row(
-                "Created",
+                t("Created"),
                 details
                     .and_then(|details| details.root.captured_at_ms)
                     .filter(|at| *at != 0)
-                    .map_or_else(|| "Unknown".into(), compare::short_date),
+                    .map_or_else(|| t("Unknown").into(), compare::short_date),
             ),
             row(
-                "Added",
+                t("Added"),
                 details.map_or_else(
-                    || "Unknown".into(),
+                    || t("Unknown").into(),
                     |details| compare::short_date(details.root.imported_at_ms),
                 ),
             ),
@@ -423,9 +435,9 @@ impl DuplicatesScreen {
             } else {
                 root.name.clone()
             };
-            rows.push(row("Group", group));
+            rows.push(row(t("Group"), group));
         }
-        rows.push(row("Occurrences", side.occurrences.to_string()));
+        rows.push(row(t("Occurrences"), side.occurrences.to_string()));
         div()
             .h(px(CARD_METADATA))
             .flex_none()
@@ -464,22 +476,22 @@ impl DuplicatesScreen {
         };
         let not_duplicates = button("duplicates-not", Look::Standard)
             .icon("action-x", 15.)
-            .label("Not duplicates")
-            .tip(ui::tip("These are different media").shortcut("dup.notDuplicate", cx))
+            .label(t("Not duplicates"))
+            .tip(ui::tip(t("These are different media")).shortcut("dup.notDuplicate", cx))
             .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
         let keep_both = button("duplicates-keep-both", Look::Standard)
             .icon("action-copy", 15.)
-            .label("Keep both")
-            .tip(ui::tip("Keep both files").shortcut("dup.keepBoth", cx))
+            .label(t("Keep both"))
+            .tip(ui::tip(t("Keep both files")).shortcut("dup.keepBoth", cx))
             .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
         // Keeps the better file of the two and merges the other into it,
         // ringing the survivor in green while hovered.
         let hover = cx.weak_entity();
         let smart_merge = button("duplicates-smart-merge", Look::Primary)
             .icon("action-arrows-join", 16.)
-            .label("Smart merge")
+            .label(t("Smart merge"))
             .tip(
-                ui::tip("Keep the stronger file and preserve item metadata")
+                ui::tip(t("Keep the stronger file and preserve item metadata"))
                     .shortcut("dup.smartMerge", cx),
             )
             .on_click(cx.listener(|this, _, _, cx| this.decide(Decision::Smart, cx)))
@@ -489,10 +501,10 @@ impl DuplicatesScreen {
         let entity = cx.weak_entity();
         let difference = button("duplicates-difference", Look::Standard)
             .icon("toolbar-difference", 16.)
-            .label("Show Difference")
+            .label(t("Show Difference"))
             // `.differenceButton`'s padding, gap and type lose to the shared
             // `.btn` in the built stylesheet, so it looks like its neighbours.
-            .tip(ui::tip("Show differences while held"))
+            .tip(ui::tip(t("Show differences while held")))
             .on_hover(move |hovered, _, cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.difference_hovered != hovered {
@@ -510,7 +522,7 @@ impl DuplicatesScreen {
                 .whitespace_nowrap()
                 .child(compare::similarity_label(shown.distance)),
             ("duplicates-similarity", 1usize),
-            ui::tip("Perceptual similarity is not pixel equality"),
+            ui::tip(t("Perceptual similarity is not pixel equality")),
             theme::TEXT_SM + 2.,
             window,
             cx,
@@ -762,13 +774,13 @@ impl Render for DuplicatesToolbar {
                 .child(
                     ui::icon_button("duplicates-fit", "toolbar-fit")
                         .toggled(model.fit)
-                        .tip(ui::tip("Zoom to fit").shortcut("view.fitWindow", cx))
+                        .tip(ui::tip(t("Zoom to fit")).shortcut("view.fitWindow", cx))
                         .on_click(act(DuplicatesScreen::fit)),
                 )
                 .child(
                     ui::icon_button("duplicates-actual", "toolbar-actual-size")
                         .toggled(model.actual)
-                        .tip(ui::tip("Actual pixels").shortcut("view.actualSize", cx))
+                        .tip(ui::tip(t("Actual pixels")).shortcut("view.actualSize", cx))
                         .on_click(act(DuplicatesScreen::actual)),
                 )
                 .child(
@@ -779,13 +791,13 @@ impl Render for DuplicatesToolbar {
                         .child(
                             ui::icon_button("duplicates-previous", "toolbar-chevron-left")
                                 .disabled(!model.can_previous || model.disabled)
-                                .tip(ui::tip("Previous pair").shortcut("dup.prevPair", cx))
+                                .tip(ui::tip(t("Previous pair")).shortcut("dup.prevPair", cx))
                                 .on_click(act(|screen, cx| screen.step(-1, cx))),
                         )
                         .child(
                             ui::icon_button("duplicates-next", "toolbar-chevron-right")
                                 .disabled(!model.can_next || model.disabled)
-                                .tip(ui::tip("Next pair").shortcut("dup.nextPair", cx))
+                                .tip(ui::tip(t("Next pair")).shortcut("dup.nextPair", cx))
                                 .on_click(act(|screen, cx| screen.step(1, cx))),
                         ),
                 ),

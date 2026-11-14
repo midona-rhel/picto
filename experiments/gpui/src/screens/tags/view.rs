@@ -6,6 +6,7 @@ use super::model::{Row, Rows};
 use super::{
     Browse, LOAD_AHEAD, RAIL_WIDTH, SEARCH_WIDTH, TagsScreen, TagsToolbar, ViewFade, dialogs, model,
 };
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::{self, field::Look};
 use crate::{motion, theme};
@@ -99,7 +100,7 @@ impl TagsScreen {
                     "tags-all",
                     "tags-bookmarks",
                     theme.text(),
-                    "All".into(),
+                    t("All").into(),
                     total,
                     showing(Browse::All),
                     cx,
@@ -111,7 +112,7 @@ impl TagsScreen {
                     "tags-general",
                     "pin-bookmark",
                     theme.text(),
-                    "General".into(),
+                    t("General").into(),
                     general,
                     showing(Browse::Group(String::new())),
                     cx,
@@ -125,7 +126,7 @@ impl TagsScreen {
                     "tags-starred",
                     "star",
                     theme.text(),
-                    "Starred".into(),
+                    t("Starred").into(),
                     self.preferences.starred.len() as u64,
                     showing(Browse::Starred),
                     cx,
@@ -145,13 +146,13 @@ impl TagsScreen {
                     .justify_between()
                     .text_color(theme.text_tertiary())
                     .text(theme::TEXT_SM)
-                    .child(format!("Groups({})", groups.len()))
+                    .child(format!("{}{})", t("Groups("), groups.len()))
                     .child(
                         ui::icon_button("create-tag-group", "tags-plus")
                             .size(20.)
                             .glyph(15.)
                             .disabled(self.busy)
-                            .tip(ui::tip("Create tag group"))
+                            .tip(ui::tip(t("Create tag group")))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let dialog = dialogs::create_group(cx);
                                 this.push(dialog, cx);
@@ -216,7 +217,7 @@ impl TagsScreen {
                         }
                     }),
             )
-            .child("Delete Unused")
+            .child(t("Delete Unused"))
             .child(count_label(self.unused, cx));
         cleanup = if enabled {
             cleanup
@@ -540,7 +541,7 @@ impl TagsScreen {
                     .justify_center()
                     .text_color(theme.text_secondary())
                     .text(theme::TEXT_MD)
-                    .child("No tags")
+                    .child(t("No tags"))
             }))
             .child(ui::scrollbar(
                 "tag-list-scrollbar",

@@ -8,6 +8,7 @@ use super::{Shell, view_menu};
 use crate::grid::menu::{
     self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, Status, Surface,
 };
+use crate::i18n::t;
 use crate::ui::{self, menu::Menu};
 use crate::viewer::{MenuRequested, surface::MediaSurface};
 use gpui::*;
@@ -314,7 +315,7 @@ impl Shell {
             move |_, path, cx| {
                 let Ok(Some(path)) = path else {
                     let _ = menu.update(cx, |menu, cx| {
-                        menu.replace_entry("Open With Other", Vec::new(), cx)
+                        menu.replace_entry(t("Open With Other"), Vec::new(), cx)
                     });
                     return;
                 };
@@ -329,7 +330,7 @@ impl Shell {
                         this.items.actions.extend(rows::actions(&rows));
                         let _ = menu.update(cx, |menu, cx| {
                             let entries = rows::entries(rows, &mut |_| ui::menu::Entry::Separator);
-                            menu.replace_entry("Open With Other", entries, cx);
+                            menu.replace_entry(t("Open With Other"), entries, cx);
                         });
                     });
                 })
@@ -800,7 +801,7 @@ impl Shell {
                         "group-organizer-cancel",
                         ui::action_button::Look::Standard,
                     )
-                    .label("Cancel")
+                    .label(t("Cancel"))
                     .disabled(saving)
                     .on_click(move |_, window, cx| cancel(&(), window, cx)),
                 )

@@ -1,6 +1,7 @@
 //! The folder picker's drawing: the tree's guide lines, the folder rows and
 //! the Library row, the new-folder dialog and the picker itself.
 use super::{FolderPicker, HEIGHT, ROW, Row, View, WIDTH};
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -267,7 +268,7 @@ impl FolderPicker {
                 check::Size::Compact,
             ))
             .child(ui::icon("picker-folder", 14., theme.text()).flex_none())
-            .child(div().flex_1().min_w_0().truncate().child("Library"))
+            .child(div().flex_1().min_w_0().truncate().child(t("Library")))
             .on_click(cx.listener(|this, _, _, cx| {
                 if let Some(mode) = &mut this.parent_mode {
                     mode.root = true;
@@ -306,14 +307,14 @@ impl FolderPicker {
                 .child(ui::field("folder-picker-name", &create.name, Look::Modal))
                 .footer(
                     ui::action_button("folder-picker-cancel", ButtonLook::Standard)
-                        .label("Cancel")
+                        .label(t("Cancel"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.create.close(cx);
                         })),
                 )
                 .footer(
                     ui::action_button("folder-picker-submit", ButtonLook::Primary)
-                        .label("Create")
+                        .label(t("Create"))
                         .disabled(!typed || busy)
                         .on_click(cx.listener(|this, _, _, cx| this.submit_create(cx))),
                 )
@@ -356,9 +357,9 @@ impl Render for FolderPicker {
         let tabs = overlay_shell::view_tabs(
             "folder-picker-view",
             &[
-                ("picker-folders", "All folders"),
-                ("picker-history", "Recent folders"),
-                ("picker-checks", "Selected folders"),
+                ("picker-folders", t("All folders")),
+                ("picker-history", t("Recent folders")),
+                ("picker-checks", t("Selected folders")),
             ],
             match self.view {
                 View::All => 0,
@@ -384,7 +385,7 @@ impl Render for FolderPicker {
                 .justify_center()
                 .text(theme::TEXT_SM)
                 .text_color(theme.text_tertiary())
-                .child("No folders")
+                .child(t("No folders"))
                 .into_any_element()
         } else {
             let mut tree = div().w_full().p(px(4.)).flex().flex_col();
@@ -418,23 +419,23 @@ impl Render for FolderPicker {
             hints
                 .child(
                     overlay_shell::hint(cx)
-                        .child("Select")
-                        .child(overlay_shell::kbd("L-Click", cx)),
+                        .child(t("Select"))
+                        .child(overlay_shell::kbd(t("L-Click"), cx)),
                 )
                 .child(
                     overlay_shell::hint(cx)
-                        .child("Exclude")
-                        .child(overlay_shell::kbd("R-Click", cx)),
+                        .child(t("Exclude"))
+                        .child(overlay_shell::kbd(t("R-Click"), cx)),
                 )
         } else {
             hints
                 .child(
                     overlay_shell::hint(cx)
-                        .child("Switch ")
+                        .child(t("Switch "))
                         .child(overlay_shell::tab_key(cx)),
                 )
                 .child(
-                    overlay_shell::hint(cx).child("Move ").child(
+                    overlay_shell::hint(cx).child(t("Move ")).child(
                         div()
                             .flex()
                             .items_center()
@@ -445,7 +446,7 @@ impl Render for FolderPicker {
                 )
                 .child(
                     overlay_shell::hint(cx)
-                        .child("Select ")
+                        .child(t("Select "))
                         .child(overlay_shell::kbd("↵", cx)),
                 )
         };
@@ -457,9 +458,9 @@ impl Render for FolderPicker {
                 "folder-picker-logic",
                 ui::segmented::Look::Logic,
                 vec![
-                    ui::segmented::segment("logic-any", "Match any"),
-                    ui::segmented::segment("logic-all", "Match all"),
-                    ui::segmented::segment("logic-exact", "Match exactly"),
+                    ui::segmented::segment("logic-any", t("Match any")),
+                    ui::segmented::segment("logic-all", t("Match all")),
+                    ui::segmented::segment("logic-exact", t("Match exactly")),
                 ],
                 modes.iter().position(|mode| *mode == filter.mode),
             )
@@ -506,14 +507,14 @@ impl Render for FolderPicker {
             .footer(if self.parent_mode.is_some() {
                 div().ml_auto().flex_none().child(
                     ui::action_button("folder-picker-move", ButtonLook::Primary)
-                        .label("Move")
+                        .label(t("Move"))
                         .on_click(cx.listener(|this, _, window, cx| this.apply_parent(window, cx))),
                 )
             } else {
                 div().ml_auto().flex_none().child(
                     overlay_shell::hint(cx)
-                        .child("Close ")
-                        .child(overlay_shell::kbd("Esc", cx)),
+                        .child(t("Close "))
+                        .child(overlay_shell::kbd(t("Esc"), cx)),
                 )
             });
         div()

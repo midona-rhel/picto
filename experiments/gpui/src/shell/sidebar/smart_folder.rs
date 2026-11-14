@@ -5,6 +5,7 @@
 //! saved after each change, 100 ms later, so the grid shows what they match,
 //! and Cancel writes the rules it opened with back.
 use super::rules::{self, Group, Rule, ValueType};
+use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -132,6 +133,7 @@ impl SmartFolderEditor {
     ) -> Self {
         let (name, icon, color, notes, view) = match &target {
             Target::Create { .. } => (
+                // i18n: the new smart folder's name, English as production's
                 "New Smart Folder".to_owned(),
                 None,
                 None,
@@ -238,9 +240,9 @@ impl SmartFolderEditor {
 
     fn title(&self) -> &'static str {
         match (&self.target, self.part) {
-            (Target::Create { .. }, _) => "New Smart Folder",
-            (_, Part::Rules) => "Edit Rules",
-            _ => "Edit Smart Folder",
+            (Target::Create { .. }, _) => t("New Smart Folder"),
+            (_, Part::Rules) => crate::i18n::en("Edit Rules"),
+            _ => crate::i18n::en("Edit Smart Folder"),
         }
     }
 
@@ -258,12 +260,12 @@ impl SmartFolderEditor {
         let value = field(
             rule.value.clone(),
             match rules::field(rule.field).kind {
-                ValueType::FileSize => "Size",
-                _ => "Value",
+                ValueType::FileSize => t("Size"),
+                _ => t("Value"),
             },
             cx,
         );
-        let value2 = field(rule.value2.clone().unwrap_or_default(), "Max", cx);
+        let value2 = field(rule.value2.clone().unwrap_or_default(), t("Max"), cx);
         let color = rule
             .values
             .first()
@@ -407,7 +409,7 @@ impl SmartFolderEditor {
             };
             let _ = session.update(cx, |session, cx| {
                 session.edit_reporting(
-                    Report::failure("Could not preview smart folder rules"),
+                    Report::failure(t("Could not preview smart folder rules")),
                     move |library| library.update_smart_folder(id, input),
                     Reread::RESULTS_ONLY,
                     cx,
@@ -448,7 +450,7 @@ impl SmartFolderEditor {
                     Ok(Ok(_)) => this.presence.close(),
                     // The previewed rules are still saved, so the dialog stays.
                     Ok(Err(error)) => ui::notify::error(
-                        "Could not restore smart folder rules",
+                        t("Could not restore smart folder rules"),
                         error.to_string(),
                         cx,
                     ),
@@ -469,7 +471,7 @@ impl SmartFolderEditor {
         let input = match self.input(cx) {
             Ok(input) => input,
             Err(error) => {
-                ui::notify::error("Could not save smart folder", error, cx);
+                ui::notify::error(t("Could not save smart folder"), error, cx);
                 return;
             }
         };
@@ -505,7 +507,7 @@ impl SmartFolderEditor {
                         this.presence.close();
                     }
                     Err(error) => {
-                        ui::notify::error("Could not save smart folder", error.to_string(), cx)
+                        ui::notify::error(t("Could not save smart folder"), error.to_string(), cx)
                     }
                 }
                 cx.notify();
@@ -831,7 +833,7 @@ impl SmartFolderEditor {
                 .min_w_0()
                 .child(ui::field(key(name), input, Look::ModalSmall))
         };
-        let and = || inline_label("and", cx);
+        let and = || inline_label(t("and"), cx);
         let value = row.value.read(cx).value();
         let value_element: AnyElement = match def.kind {
             ValueType::Tags => row.tags.clone().into_any_element(),
@@ -860,6 +862,7 @@ impl SmartFolderEditor {
                 })
                 .child(choice(
                     Slot::Unit,
+                    // i18n: a rule's value, not shown
                     rule.unit.unwrap_or("MB").into(),
                     rules::FILE_SIZE_UNITS,
                     116.,
@@ -927,7 +930,7 @@ impl SmartFolderEditor {
             }
             ValueType::Text => text_field(&row.value, "text").into_any_element(),
         };
-        let remove = condition_button(key("remove"), false, "Remove rule", can_remove, cx).when(
+        let remove = condition_button(key("remove"), false, t("Remove rule"), can_remove, cx).when(
             can_remove,
             |button| {
                 button
@@ -938,9 +941,9 @@ impl SmartFolderEditor {
             key("add"),
             true,
             if can_add {
-                "Add rule"
+                t("Add rule")
             } else {
-                "Maximum 10 rules"
+                t("Maximum 10 rules")
             },
             can_add,
             cx,
@@ -985,7 +988,9 @@ impl SmartFolderEditor {
             let entity = entity.clone();
             ui::select(
                 SharedString::from(format!("group-{index}-match")),
+                // i18n: the choice's value
                 if group.any { "any" } else { "all" },
+                // i18n: the choices' values
                 vec![ui::choice("all", "all"), ui::choice("any", "any")],
             )
             .width(72.)
@@ -1018,7 +1023,7 @@ impl SmartFolderEditor {
         let remove = condition_button(
             SharedString::from(format!("group-{index}-remove")),
             false,
-            "Remove group",
+            t("Remove group"),
             can_remove_group,
             cx,
         )
@@ -1029,9 +1034,9 @@ impl SmartFolderEditor {
             SharedString::from(format!("group-{index}-add")),
             true,
             if can_add {
-                "Add group"
+                t("Add group")
             } else {
-                "Maximum 10 rules"
+                t("Maximum 10 rules")
             },
             can_add,
             cx,
@@ -1050,9 +1055,9 @@ impl SmartFolderEditor {
                     .gap(px(6.))
                     .min_h(px(26.))
                     .px(px(2.))
-                    .child(inline_label("Match", cx))
+                    .child(inline_label(t("Match"), cx))
                     .child(match_select)
-                    .child(inline_label("of the following", cx))
+                    .child(inline_label(t("of the following"), cx))
                     .child(negate_select),
             )
             .child(
@@ -1107,11 +1112,11 @@ impl SmartFolderEditor {
             .hover(move |style| style.bg(theme.surface_hover()))
             .child(ui::icon(glyph, 16., theme.text()).flex_none())
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(self.icon.clone().unwrap_or("Default".into())),
+                div().flex_1().min_w_0().truncate().child(
+                    self.icon
+                        .clone()
+                        .unwrap_or(crate::i18n::en("Default").into()),
+                ),
             )
             .child(ui::icon("chevron-down", 14., theme.text_tertiary()).flex_none())
             .child(
@@ -1310,7 +1315,7 @@ impl Render for SmartFolderEditor {
         if self.shows_details() {
             let editor = cx.entity().downgrade();
             form = form
-                .child(section(true).child(label("Name", cx)).child(ui::field(
+                .child(section(true).child(label(t("Name"), cx)).child(ui::field(
                     "smart-folder-name",
                     &self.name,
                     Look::Modal,
@@ -1324,11 +1329,11 @@ impl Render for SmartFolderEditor {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .child(label("Icon", cx))
+                                    .child(label(t("Icon"), cx))
                                     .child(self.icon_trigger(cx)),
                             )
                             .child(
-                                div().flex_1().min_w_0().child(label("Color", cx)).child(
+                                div().flex_1().min_w_0().child(label(t("Color"), cx)).child(
                                     ui::color_picker::color_picker(
                                         "smart-folder-color",
                                         self.color.clone(),
@@ -1345,7 +1350,7 @@ impl Render for SmartFolderEditor {
                             ),
                     ),
                 )
-                .child(section(false).child(label("Notes", cx)).child(
+                .child(section(false).child(label(t("Notes"), cx)).child(
                     // A `<textarea>` sits on its line's baseline, so the
                     // line's descent (5px at 13px) shows below it.
                     div().pb(px(5.)).child(ui::field(
@@ -1380,13 +1385,17 @@ impl Render for SmartFolderEditor {
             .child(form)
             .footer(
                 ui::action_button("smart-folder-save", ButtonLook::Primary)
-                    .label(if create { "Create" } else { "Save Changes" })
+                    .label(if create {
+                        t("Create")
+                    } else {
+                        t("Save Changes")
+                    })
                     .disabled(!can_save)
                     .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
             )
             .footer(
                 ui::action_button("smart-folder-cancel", ButtonLook::Standard)
-                    .label("Cancel")
+                    .label(t("Cancel"))
                     .on_click(cx.listener(|this, _, window, cx| this.cancel(window, cx))),
             );
         if self.part == Part::Rules {

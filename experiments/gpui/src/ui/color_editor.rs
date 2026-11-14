@@ -4,6 +4,7 @@
 //! the colour is committed; a preset commits at once.
 use super::field::{self, Look};
 use super::text_input::{Kind, TextInput};
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{grid::filters, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -431,7 +432,7 @@ impl Render for ColorEditor {
                             .items_center()
                             .justify_between()
                             .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_BODY))
-                            .child("Tolerance")
+                            .child(t("Tolerance"))
                             .child(
                                 div()
                                     .font_family(theme::FONT_MONO)

@@ -5,6 +5,7 @@
 use super::SettingsModel;
 use super::panels::{self, PANELS};
 use super::registry::Slot;
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::{
     self,
@@ -72,6 +73,7 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
                 window_min_size: Some(size(px(900.), px(650.))),
                 // The section list's title and the panel's header move the
                 // window; the controls in them do not.
+                // i18n: the window's title, English as settings.html's <title>
                 ..ui::window_chrome::frameless("Settings", None)
             },
             move |window, cx| cx.new(|cx| SettingsWindow::new(model, window, cx)),
@@ -237,7 +239,7 @@ impl SettingsWindow {
             .text_color(theme.text())
             .cursor_pointer()
             .child(ui::icon(nav_icon(panel.icon), 18., theme.text()))
-            .child(panel.label)
+            .child(t(panel.label))
             .on_hover(set_hover)
             .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
         // A `<button>`: Enter and Space choose it. It draws no ring.
@@ -300,14 +302,14 @@ impl SettingsWindow {
                             .text(theme::TEXT_MD)
                             .line_height(px(theme::TEXT_MD * 1.55))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(panel.label),
+                            .child(t(panel.label)),
                     )
                     .child(
                         div()
                             .text(theme::TEXT_SM)
                             .line_height(px(theme::TEXT_SM * 1.4))
                             .text_color(theme.text_secondary())
-                            .child(panel.description),
+                            .child(t(panel.description)),
                     ),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
@@ -421,7 +423,7 @@ impl Render for SettingsWindow {
                                     .text(theme::TEXT_LG)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text())
-                                    .child("Preferences"),
+                                    .child(t("Preferences")),
                             )
                             .child(
                                 div().mb(px(8.)).flex_none().child(
@@ -450,9 +452,9 @@ impl Render for SettingsWindow {
         // ── The chosen section, or what the search found ──
         let panel = &PANELS[self.selected];
         let heading: SharedString = if searching {
-            format!("Search results for \"{typed}\"").into()
+            crate::tf!("Search results for \"{value0}\"", typed).into()
         } else {
-            panel.label.into()
+            t(panel.label).into()
         };
         let header = ui::drag_region("settings-header", window, cx)
             .min_h(px(theme::TITLEBAR_HEIGHT))
@@ -505,7 +507,8 @@ impl Render for SettingsWindow {
                         .line_height(px(theme::TEXT_SM * 1.55))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary())
-                        .child("CATEGORIES"),
+                        // `text-transform: uppercase`
+                        .child(t("Categories").to_uppercase()),
                 );
                 for (at, index) in matched.iter().enumerate() {
                     group = group.child(self.result(*index, at == 0, window, cx));
@@ -563,16 +566,20 @@ impl Render for SettingsWindow {
             )
             .child(
                 ui::action_button("settings-save", Look::SettingsPrimary)
-                    .label(if saving { "Saving…" } else { "Save & Close" })
+                    .label(if saving {
+                        t("Saving…")
+                    } else {
+                        t("Save & Close")
+                    })
                     .disabled(saving)
-                    .tip(ui::tip("Save settings and close Preferences"))
+                    .tip(ui::tip(t("Save settings and close Preferences")))
                     .on_click(cx.listener(|this, _, window, cx| this.save(true, window, cx))),
             )
             .child(
                 ui::action_button("settings-apply", Look::Settings)
-                    .label("Apply")
+                    .label(t("Apply"))
                     .disabled(saving)
-                    .tip(ui::tip("Save settings and keep Preferences open"))
+                    .tip(ui::tip(t("Save settings and keep Preferences open")))
                     .on_click(cx.listener(|this, _, window, cx| this.save(false, window, cx))),
             );
         let content = div()
@@ -611,7 +618,7 @@ impl Render for SettingsWindow {
             .text(theme::TEXT_MD)
             .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
-            .key_context("Settings")
+            .key_context("Settings") // i18n: a key context
             .child(sidebar)
             .child(content);
         root.children(ui::window_chrome::resize_edges(window))

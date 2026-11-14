@@ -2,6 +2,7 @@
 //! presented.
 use crate::grid::layout::ViewMode;
 use crate::grid::prefs;
+use crate::i18n::t;
 use crate::settings::pieces::{
     block, card, control, edit, hint, label, number, pick, row, separator, title, two_columns,
     value_label,
@@ -23,9 +24,9 @@ impl SettingsWindow {
         // "Mouse wheel" is read by the grid's wheel handler on each turn:
         // "Adjust thumbnail size" zooms the tiles (`grid::nav::wheel_zoom`).
         let mouse = {
-            let mut content = card(theme).child(title(theme, "Mouse")).child(row(
+            let mut content = card(theme).child(title(theme, t("Mouse"))).child(row(
                 theme,
-                "Mouse wheel",
+                t("Mouse wheel"),
                 ui::select(
                     "wheel",
                     app.grid_wheel_action,
@@ -42,7 +43,7 @@ impl SettingsWindow {
             if cfg!(target_os = "macos") {
                 content = content.child(separator(theme)).child(row(
                     theme,
-                    "Media view gestures",
+                    t("Media view gestures"),
                     ui::select(
                         "gestures",
                         if app.viewer_trackpad_gestures {
@@ -65,7 +66,7 @@ impl SettingsWindow {
                 .child(separator(theme))
                 .child(row(
                     theme,
-                    "Double-click",
+                    t("Double-click"),
                     ui::select(
                         "double-click",
                         app.grid_double_click_action,
@@ -82,7 +83,7 @@ impl SettingsWindow {
                 .child(separator(theme))
                 .child(row(
                     theme,
-                    "Middle-click",
+                    t("Middle-click"),
                     ui::select(
                         "middle-click",
                         app.grid_middle_click_action,
@@ -101,7 +102,7 @@ impl SettingsWindow {
         let fit = grid.thumbnail_fit.as_deref() == Some("cover");
         let flag = |value: Option<bool>, fallback: bool| value.unwrap_or(fallback);
         let labels: [(&str, bool, fn(&mut super::model::GridDefaults)); 6] = [
-            ("Fit thumbnails", fit, |grid| {
+            (t("Fit thumbnails"), fit, |grid| {
                 grid.thumbnail_fit = Some(
                     if grid.thumbnail_fit.as_deref() == Some("cover") {
                         "contain"
@@ -111,22 +112,24 @@ impl SettingsWindow {
                     .into(),
                 )
             }),
-            ("Show name", flag(grid.show_name, true), |grid| {
+            (t("Show name"), flag(grid.show_name, true), |grid| {
                 grid.show_name = Some(!grid.show_name.unwrap_or(true))
             }),
             (
-                "Show resolution",
+                t("Show resolution"),
                 flag(grid.show_resolution, false),
                 |grid| grid.show_resolution = Some(!grid.show_resolution.unwrap_or(false)),
             ),
-            ("Show extension", flag(grid.show_extension, false), |grid| {
-                grid.show_extension = Some(!grid.show_extension.unwrap_or(false))
-            }),
-            ("Show label", flag(grid.show_label, false), |grid| {
+            (
+                t("Show extension"),
+                flag(grid.show_extension, false),
+                |grid| grid.show_extension = Some(!grid.show_extension.unwrap_or(false)),
+            ),
+            (t("Show label"), flag(grid.show_label, false), |grid| {
                 grid.show_label = Some(!grid.show_label.unwrap_or(false))
             }),
             (
-                "Show item count",
+                t("Show item count"),
                 flag(grid.show_item_count, true),
                 |grid| grid.show_item_count = Some(!grid.show_item_count.unwrap_or(true)),
             ),
@@ -149,10 +152,10 @@ impl SettingsWindow {
                 .child(control().child(child))
         };
         let grid_defaults = card(theme)
-            .child(title(theme, "Grid Defaults"))
+            .child(title(theme, t("Grid Defaults")))
             .child(row(
                 theme,
-                "Default layout",
+                t("Default layout"),
                 ui::select(
                     "layout",
                     SharedString::from(
@@ -167,7 +170,7 @@ impl SettingsWindow {
             .child(separator(theme))
             .child(row(
                 theme,
-                "Thumbnail size",
+                t("Thumbnail size"),
                 div()
                     .flex()
                     .items_center()
@@ -184,7 +187,7 @@ impl SettingsWindow {
             .child(separator(theme))
             .child(row(
                 theme,
-                "Grid spacing",
+                t("Grid spacing"),
                 ui::select(
                     "spacing",
                     app.grid_spacing,
@@ -198,7 +201,7 @@ impl SettingsWindow {
                     .flex()
                     .min_w_0()
                     .child(half(
-                        "Sort by",
+                        t("Sort by"),
                         ui::select(
                             "sort-field",
                             SharedString::from(
@@ -234,7 +237,7 @@ impl SettingsWindow {
                             .bg(theme.border_secondary()),
                     )
                     .child(half(
-                        "Order",
+                        t("Order"),
                         ui::select(
                             "sort-order",
                             SharedString::from(
@@ -243,9 +246,9 @@ impl SettingsWindow {
                                 }),
                             ),
                             vec![
-                                choice(prefs::direction_value(SortDirection::Ascending), "Ascending")
+                                choice(prefs::direction_value(SortDirection::Ascending), t("Ascending"))
                                     .icon("select-sort-ascending"),
-                                choice(prefs::direction_value(SortDirection::Descending), "Descending")
+                                choice(prefs::direction_value(SortDirection::Descending), t("Descending"))
                                     .icon("select-sort-descending"),
                             ],
                         )
@@ -260,8 +263,8 @@ impl SettingsWindow {
             .child(separator(theme))
             .child(row(
                 theme,
-                "View overrides",
-                ui::action_button("reset-views", Look::Settings).label("Reset all views")
+                t("View overrides"),
+                ui::action_button("reset-views", Look::Settings).label(t("Reset all views"))
                     .disabled(resetting)
                     .on_click({
                         let model = model.clone();
@@ -275,15 +278,15 @@ impl SettingsWindow {
             ))
             .child(hint(
                 theme,
-                "Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox resets to oldest items first.",
+                t("Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox resets to oldest items first."),
             ));
         vec![
             block().child(mouse).into_any_element(),
             block()
                 .child(
-                    card(theme).child(title(theme, "Keyboard")).child(row(
+                    card(theme).child(title(theme, t("Keyboard"))).child(row(
                         theme,
-                        "Space key",
+                        t("Space key"),
                         ui::select(
                             "space-key",
                             app.space_key_action,

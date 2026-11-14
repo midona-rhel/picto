@@ -1,0 +1,87 @@
+# Texts with no key in production's en.json: they stay English in every
+# language. Nearly all are texts production also writes in English without
+# t(); this app's own are Could not copy file, Could not copy file path and
+# This font cannot be previewed. One per line, as written in the code
+# (a line break as \n). The guard (guard.rs) keeps this list exact.
+
+Edit Rules
+Edit Smart Folder
+New Smart Folder or Group
+No library is open.
+Pause all subscriptions
+Resume all subscriptions
+Select a media item from this library, then adjust its position and zoom.
+This library has no media available for a cover.
+Choose date
+Compact
+F
+Fit Thumbnails
+Folder Order
+M
+Not
+S
+Search results
+Show Extension
+Show File Type
+Show Inspector
+Show Item Count
+Show Name
+Show Resolution
+Show Sidebar
+Show Subfolder Content
+T
+W
+All your images are already assigned to folders
+All your images have been tagged
+Choose the Group to Keep
+Could not copy file
+Could not copy file path
+Create Group
+Drag and drop files here, or click the button below to import
+Drag and drop files here, or import them below
+Inbox is empty
+Merge Groups
+No images
+No items use this media
+No matching images
+No results found
+No uncategorized images
+No untagged images
+Run subscriptions to add new images to your inbox
+The media will return to the library as separate items. Files and metadata will not be deleted.
+This folder is empty
+This media is no longer used by another library item
+Try adjusting the rules for this smart folder
+Try different search terms or clear filters
+Back to grid
+Back to group
+This font cannot be previewed.
+Downloaded files stay in your library. The selected subscriptions and their queries are removed.
+Downloaded files stay in your library. The subscription and its queries are removed.
+No images have been added yet.
+Picto will clear this subscription's handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again.
+Run interrupted
+Select one of the images downloaded that has been added to the library.
+Sign in again
+This query stops syncing. Downloaded files stay in your library.
+Left candidate
+No clear quality winner. Choose left or right, or keep both.
+No duplicate pairs
+Review complete
+Right candidate
+Scan complete - no new review pairs
+Scan the library to find similar images.
+Auto
+Blue
+Check for a newer version of Picto.
+Choose a cloud folder in Libraries
+Dark
+Gray
+Light
+Light Gray
+Purple
+100% similar
+Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.
+Invalid empty name
+Use default folder icon
+Default

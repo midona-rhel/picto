@@ -2,6 +2,7 @@
 //! as production reports them, and followed by the reads they need.
 use super::{Change, Session, Visit};
 use crate::backend;
+use crate::i18n::t;
 use gpui::*;
 use picto_library::RootId;
 
@@ -213,9 +214,9 @@ impl Session {
     /// ("Could not undo").
     pub fn step_history_entry(&mut self, undo: bool, cx: &mut Context<Self>) {
         let failure = if undo {
-            "Could not undo"
+            t("Could not undo")
         } else {
-            "Could not redo"
+            t("Could not redo")
         };
         let answer = self.edit_reporting(
             Report::failure(failure),
@@ -327,7 +328,7 @@ impl Report {
 
     pub fn folder_depth() -> Self {
         Self {
-            failure: Some("Folder depth limit".into()),
+            failure: Some(t("Folder depth limit").into()),
             folder_depth: true,
             ..Self::default()
         }

@@ -7,6 +7,7 @@
 //! for the top level, among the folders the moving ones can go under.
 use super::membership;
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::ui::{
     self,
@@ -650,8 +651,8 @@ impl FolderPicker {
                 return;
             };
             match action {
-                "new-subfolder" => this.start_create("New Subfolder", Some(folder.id), cx),
-                "new-sibling" => this.start_create("New Sibling Folder", folder.parent, cx),
+                "new-subfolder" => this.start_create(t("New Subfolder"), Some(folder.id), cx),
+                "new-sibling" => this.start_create(t("New Sibling Folder"), folder.parent, cx),
                 _ => {}
             }
         });
