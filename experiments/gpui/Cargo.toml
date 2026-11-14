@@ -94,6 +94,18 @@ symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "w
 rustfft = "6"
 # Round caps and joins for the visualizer's strokes; the tessellator GPUI uses.
 lyon_tessellation = "1"
+# Site logins (`src/logins/`): OAuth 1 signatures, OAuth 2 states and the
+# token requests, with the versions and features the application core
+# already builds.
+hmac = "0.12"
+sha1 = "0.10"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "cookies", "http2", "json", "rustls-tls", "stream", "system-proxy"] }
+# The sign-in window's web view: WKWebView on macOS, WebView2 on Windows,
+# WebKitGTK on Linux (`src/platform/login_window/`). Pinned exactly, as its
+# platform crates are reached directly for the cookie stores.
+wry = { version = "=0.57.2", default-features = false, features = ["os-webview"] }
 
 [dev-dependencies]
 # The format matrix draws the viewers off-screen through GPUI's headless
@@ -129,6 +141,19 @@ gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12", features = ["test-
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 zbus = "5"
 
+# The sign-in window on Linux: a GTK window holding WebKitGTK, and its
+# cookie manager; the versions wry builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+
+# The sign-in window's cookies on Windows (`ICoreWebView2CookieManager`);
+# the versions wry builds.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation"] }
+windows-core = "0.62"
+
 # The user's id, for the single-instance folder (`opening/instance/unix.rs`);
 # the version the dependencies already build.
 [target.'cfg(unix)'.dependencies]
@@ -140,13 +165,15 @@ core-foundation-sys = "0.8"
 # Video playback through AVFoundation, presented as CoreVideo pixel buffers
 # by GPUI's `surface` element; the same versions GPUI builds.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry", "NSData"] }
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry", "NSData", "NSHTTPCookie", "NSDate"] }
 objc2-core-foundation = "0.3"
 objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
 objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }
 objc2-av-foundation = { version = "0.3", features = ["AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "AVAsset", "AVMediaFormat", "AVTime", "AVVideoSettings", "AVVideoComposition", "block2", "objc2-core-media", "objc2-core-video"] }
 block2 = "0.6"
 objc2-quartz-core = { version = "0.3", features = ["CABase"] }
+# The sign-in window's cookies (`WKHTTPCookieStore`); the version wry builds.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKHTTPCookieStore"] }
 
 # GPUI with a backdrop-blur primitive for the glass panels. Only the crates
 # that change are vendored; `vendor/README.md` lists every change against the

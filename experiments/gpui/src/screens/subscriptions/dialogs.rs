@@ -39,6 +39,8 @@ pub enum Dialog {
     Details(Box<data::Query>),
     Confirm(Confirmation),
     Cover(Box<cover_dialog::Cover>),
+    /// `AccountsModal`: the services' logins.
+    Accounts(Entity<super::accounts::Accounts>),
 }
 
 /// A source being edited: its site and the fields of `QueryEditModal`.
@@ -205,6 +207,50 @@ impl SubscriptionsScreen {
                 }
             }
         });
+    }
+
+    // ── Accounts ────────────────────────────────────────────────
+
+    /// The header's Accounts, a source's login chip and a login problem's
+    /// Fix login: the Accounts dialog, on the service that owns `site`'s
+    /// login when one is given.
+    pub(super) fn open_accounts(&mut self, site: Option<&str>, cx: &mut Context<Self>) {
+        let focus = site.map(|site| {
+            format::site(site).map_or_else(
+                || site.to_owned(),
+                |entry| entry.credential_owner_site_id.to_owned(),
+            )
+        });
+        if let Some(Dialog::Accounts(accounts)) = self.dialog.content() {
+            let accounts = accounts.clone();
+            accounts.update(cx, |accounts, cx| accounts.focus(focus, cx));
+            return;
+        }
+        let usage = self
+            .list
+            .iter()
+            .flatten()
+            .map(|subscription| {
+                (
+                    subscription.id,
+                    subscription
+                        .queries
+                        .iter()
+                        .map(|query| query.site_id.clone())
+                        .collect(),
+                )
+            })
+            .collect();
+        let session = self.session.clone();
+        let accounts = cx.new(|cx| super::accounts::Accounts::new(session, usage, focus, cx));
+        self.show_dialog(Dialog::Accounts(accounts), None, cx);
+    }
+
+    /// Closing the Accounts dialog reads the subscriptions and their logins
+    /// again (`refreshSubscriptionsWorkspace`).
+    fn close_accounts(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_dialog(cx);
+        self.reload(cx);
     }
 
     // ── Gallery ─────────────────────────────────────────────────
@@ -519,6 +565,18 @@ impl SubscriptionsScreen {
         let dialog = self.dialog.content()?;
         let theme = theme::theme(cx);
         let element = match dialog {
+            Dialog::Accounts(accounts) => {
+                let close = view.clone();
+                ui::modal("subscription-accounts", t("Site accounts"), presence)
+                    .size(Size::ExtraLarge)
+                    .flush()
+                    .focus(&focus)
+                    .on_close(move |_, cx| {
+                        let _ = close.update(cx, |this, cx| this.close_accounts(cx));
+                    })
+                    .child(accounts.clone())
+                    .into_any_element()
+            }
             Dialog::Create { name, .. } => {
                 let typed = !name.read(cx).value().trim().is_empty();
                 ui::modal("subscription-create", t("Add subscription"), presence)

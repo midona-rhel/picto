@@ -98,6 +98,8 @@ pub struct Issue {
     pub last_seen_at: String,
     pub target: Option<String>,
     pub url: Option<String>,
+    /// The source the problem is about, when it is one source's.
+    pub query: Option<i64>,
 }
 
 /// A page of open issues, newest first.
@@ -440,7 +442,8 @@ fn issues(
     let mut statement = connection.prepare(
         "SELECT issue.issue_id, issue.issue_kind, issue.message,
                 issue.last_seen_at, item.item_key, post.post_key, post.title,
-                COALESCE(post.canonical_url, item.canonical_url), issue.detail
+                COALESCE(post.canonical_url, item.canonical_url), issue.detail,
+                issue.query_id
          FROM subscription_issue issue
          LEFT JOIN source_item item ON item.source_item_id = CASE
              WHEN issue.issue_kind = 'download_item'
@@ -473,6 +476,7 @@ fn issues(
                     .or(item_key),
                 url: row.get(7)?,
                 detail: row.get(8)?,
+                query: row.get(9)?,
             })
         },
     )?;

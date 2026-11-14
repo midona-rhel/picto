@@ -15,6 +15,7 @@ mod i18n;
 mod imports;
 mod inspector;
 mod keymap;
+mod logins;
 mod meter;
 mod motion;
 // Pictures of the app drawn off-screen, for checks without a screen.
@@ -189,6 +190,7 @@ fn remember_window(window: &Window, cx: &mut App) {
 }
 
 fn main() {
+    logins::keep_credentials_in_process();
     diagnostics::install_logger();
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();

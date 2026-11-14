@@ -321,13 +321,13 @@ impl SubscriptionsScreen {
                             .disabled(gallery_running)
                             .on_click(cx.listener(|this, _, _, cx| this.open_gallery(cx))),
                     )
-                    // TODO: the accounts window, for site logins.
                     .child(
                         ui::action_button("subscription-accounts", Look::Standard)
                             .label(t("Accounts"))
                             .icon("shield-lock", 14.)
                             .padding(padding)
-                            .gap(gap),
+                            .gap(gap)
+                            .on_click(cx.listener(|this, _, _, cx| this.open_accounts(None, cx))),
                     ),
             )
     }
