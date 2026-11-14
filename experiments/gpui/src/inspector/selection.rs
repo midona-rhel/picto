@@ -6,6 +6,7 @@ use super::stack::{self, Pose, Stack};
 use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
 use crate::grid::format;
+use crate::i18n::t;
 use crate::session::{Report, Reread};
 use crate::theme;
 use crate::theme::Text as _;
@@ -100,7 +101,7 @@ impl SelectionState {
         Self {
             notes: cx.new(|cx| {
                 TextInput::new(Kind::Inspector, cx)
-                    .placeholder("Notes")
+                    .placeholder(t("Notes"))
                     .commits_on_blur(window, cx)
                     .expanding()
             }),
@@ -288,7 +289,7 @@ impl Inspector {
 
     pub(super) fn rate_selection(&mut self, rating: Rating, cx: &mut Context<Self>) {
         self.edit_selection_as(
-            Report::failure("Could not change rating"),
+            Report::failure(t("Could not change rating")),
             move |library, target| library.set_rating(target, rating),
             cx,
         );
@@ -673,10 +674,10 @@ impl Inspector {
                             .text_color(theme.primary())
                             .child(format::grouped(count)),
                     )
-                    .child("items selected"),
+                    .child(t("items selected")),
             )
             .child(div().mb(px(8.)).child(if loading {
-                ui::field::read_only("Notes", cx).into_any_element()
+                ui::field::read_only(t("Notes"), cx).into_any_element()
             } else {
                 ui::field("selection-notes", &self.selection.notes, Look::Inspector)
                     .into_any_element()
@@ -701,14 +702,16 @@ impl Inspector {
             .as_ref()
             .map_or_else(Vec::new, |summary| summary.shared_folders.clone());
         if loading {
-            for title in ["Folders", "Tags"] {
+            for title in [t("Folders"), t("Tags")] {
                 let pending = self.pending(window, cx).into_any_element();
                 panel = panel.child(self.section(title, Some(pending), cx));
             }
         } else {
             let folders = self.folder_chips(&entries, &shared_folders, window, cx);
+            // i18n: the section's English title; picker_section shows it in the language
             panel = panel.child(self.picker_section("Folders", folders, cx));
             let tags = self.tag_chips(tags, false, window, cx);
+            // i18n: the section's English title; picker_section shows it in the language
             panel = panel.child(self.picker_section("Tags", tags, cx));
         }
 
@@ -718,7 +721,7 @@ impl Inspector {
             .map_or(0, |rating| rating.bitmap_key() as usize);
         let mut properties = if loading {
             let mut properties = div().child(self.pending(window, cx));
-            for label in ["Media", "Size"] {
+            for label in [t("Media"), t("Size")] {
                 properties = properties
                     .child(Self::property(label, String::new(), cx).loading(self.loading_since()));
             }
@@ -729,12 +732,12 @@ impl Inspector {
         if let Some(summary) = &summary {
             properties = properties
                 .child(Self::property(
-                    "Media",
+                    t("Media"),
                     format::grouped(summary.media_count as u64),
                     cx,
                 ))
                 .child(Self::property(
-                    "Size",
+                    t("Size"),
                     crate::text::size_to_gigabytes(summary.total_size_bytes as u64),
                     cx,
                 ));
@@ -749,7 +752,7 @@ impl Inspector {
                 cx,
             )));
         }
-        panel = panel.child(self.section("Properties", Some(properties.into_any_element()), cx));
+        panel = panel.child(self.section(t("Properties"), Some(properties.into_any_element()), cx));
         let taggable = summary
             .as_ref()
             .map_or(0, |summary| summary.taggable_root_count);
@@ -762,7 +765,11 @@ impl Inspector {
         );
         panel = panel.child(auto_tag);
         if summary.is_none() && !loading {
-            panel = panel.child(Self::status("Could not load selection details.", true, cx));
+            panel = panel.child(Self::status(
+                t("Could not load selection details."),
+                true,
+                cx,
+            ));
         }
         self.scroller().child(panel)
     }

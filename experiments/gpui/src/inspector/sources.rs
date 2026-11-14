@@ -3,6 +3,7 @@
 //! button that opens the list of addresses for editing, with a row each
 //! (open, Edit, Delete), an edit field and "Add URL".
 use super::Inspector;
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -83,7 +84,7 @@ impl SourcesState {
             editing: None,
             input: cx.new(|cx| {
                 TextInput::new(Kind::Inspector, cx)
-                    .placeholder("https://...")
+                    .placeholder(t("https://..."))
                     .submits()
             }),
             field: Rc::new(Cell::new(Bounds::default())),
@@ -192,7 +193,7 @@ impl Inspector {
         } else {
             match &first {
                 Some(url) => label(url),
-                None => div().text_color(theme.text_tertiary()).child("http://"),
+                None => div().text_color(theme.text_tertiary()).child(t("http://")),
             }
         };
         let field_bounds = self.sources.field.clone();
@@ -370,14 +371,14 @@ impl Inspector {
             let (edited, kept) = (url.clone(), urls.to_vec());
             row = row
                 .child(
-                    row_button(("source-edit", index), "source-edit", "Edit URL").on_click(
+                    row_button(("source-edit", index), "source-edit", t("Edit URL")).on_click(
                         cx.listener(move |this, _, window, cx| {
                             this.edit_source(index, edited.clone(), window, cx)
                         }),
                     ),
                 )
                 .child(
-                    row_button(("source-delete", index), "source-trash", "Delete URL").on_click(
+                    row_button(("source-delete", index), "source-trash", t("Delete URL")).on_click(
                         cx.listener(move |this, _, _, cx| {
                             if this.sources.editing == Some(index) {
                                 this.sources.editing = None;
@@ -413,7 +414,7 @@ impl Inspector {
                 .cursor_pointer()
                 .hover(move |style| style.text_color(theme.text()))
                 .child(ui::icon("source-plus", 13., theme.text_tertiary()))
-                .child("Add URL")
+                .child(t("Add URL"))
                 .on_click(cx.listener(|this, _, window, cx| this.add_source(window, cx))),
         );
         let field = self.sources.field.get();

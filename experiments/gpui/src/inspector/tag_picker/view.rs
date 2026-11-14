@@ -2,6 +2,7 @@
 //! create row, the list, the settings panel and the picker itself.
 use super::model::display_name;
 use super::{HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, TagPicker, View};
+use crate::i18n::t;
 use crate::tags::{Preferences, record_name as name};
 use crate::theme::Text as _;
 use crate::ui::{
@@ -110,7 +111,7 @@ impl TagPicker {
                 "rail-all",
                 0,
                 bookmark(self.view == View::All),
-                "All".into(),
+                t("All").into(),
                 total,
                 View::All,
                 cx,
@@ -158,7 +159,7 @@ impl TagPicker {
             "rail-selected",
             0,
             bookmark(self.view == View::Selected),
-            "Selected".into(),
+            t("Selected").into(),
             self.entity.len() as u64,
             View::Selected,
             cx,
@@ -171,7 +172,7 @@ impl TagPicker {
                     .flex_none()
                     .mx(px(6.))
                     .into_any_element(),
-                "Starred".into(),
+                t("Starred").into(),
                 settings.starred_tags.len() as u64,
                 View::Starred,
                 cx,
@@ -342,7 +343,7 @@ impl TagPicker {
                     .flex()
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .child("Create \"")
+                    .child(t("Create \""))
                     .child(
                         div()
                             .font_weight(FontWeight::BOLD)
@@ -433,9 +434,9 @@ impl TagPicker {
                     .text(theme::TEXT_SM)
                     .text_color(theme.text_tertiary())
                     .child(if self.view == View::Selected {
-                        "No tags on this entity"
+                        t("No tags on this entity")
                     } else {
-                        "No tags found"
+                        t("No tags found")
                     }),
             )
         } else if empty {
@@ -480,8 +481,8 @@ impl TagPicker {
         let tabs = overlay_shell::view_tabs(
             "picker-layout",
             &[
-                ("picker-layout-list", "List"),
-                ("picker-layout-grid", "Grid"),
+                ("picker-layout-list", t("List")),
+                ("picker-layout-grid", t("Grid")),
             ],
             if layout == Layout::List { 0 } else { 1 },
             move |index, _, cx| {
@@ -525,13 +526,13 @@ impl TagPicker {
             .right(px(32.))
             .w(px(240.))
             .p(px(16.))
-            .child(row().child("Layout").child(tabs))
+            .child(row().child(t("Layout")).child(tabs))
             .child(
                 row()
                     .id("picker-counts")
                     .cursor_pointer()
                     .hover(move |style| style.bg(theme.surface_hover()))
-                    .child("Show counts")
+                    .child(t("Show counts"))
                     .child(check::check_box(
                         if self.counts {
                             Mark::Checked
@@ -593,9 +594,9 @@ impl Render for TagPicker {
             "picker-sidebar",
             "picker-layout-sidebar",
             ui::tip(if sidebar {
-                "Hide sidebar"
+                t("Hide sidebar")
             } else {
-                "Show sidebar"
+                t("Show sidebar")
             }),
         )
         .on_click(cx.listener(|this, _, _, cx| {
@@ -618,7 +619,7 @@ impl Render for TagPicker {
         let settings = overlay_shell::header_button(
             "picker-settings-button",
             "picker-adjustments",
-            ui::tip("Tag picker settings"),
+            ui::tip(t("Tag picker settings")),
         )
         .on_click(cx.listener(|this, _, _, cx| {
             this.settings_open = !this.settings_open;
@@ -632,9 +633,9 @@ impl Render for TagPicker {
                 "picker-pin"
             },
             ui::tip(if self.pinned {
-                "Unpin"
+                t("Unpin")
             } else {
-                "Pin (keep open)"
+                t("Pin (keep open)")
             }),
         )
         .on_click(cx.listener(|this, _, _, cx| {
@@ -652,7 +653,7 @@ impl Render for TagPicker {
         }
 
         let mut footer_move = overlay_shell::hint(cx)
-            .child("Move ")
+            .child(t("Move "))
             .child(overlay_shell::kbd("↑", cx))
             .child(overlay_shell::kbd("↓", cx));
         if self.layout == Layout::Grid {
@@ -661,7 +662,7 @@ impl Render for TagPicker {
                 .child(overlay_shell::kbd("→", cx));
         }
         footer_move = footer_move
-            .child("Select ")
+            .child(t("Select "))
             .child(overlay_shell::kbd("↵", cx));
         let mut shell = overlay_shell::overlay_shell(
             "tag-picker",
@@ -696,9 +697,9 @@ impl Render for TagPicker {
                         "tag-picker-logic",
                         ui::segmented::Look::Logic,
                         vec![
-                            ui::segmented::segment("logic-any", "Match any"),
-                            ui::segmented::segment("logic-all", "Match all"),
-                            ui::segmented::segment("logic-exact", "Match exactly"),
+                            ui::segmented::segment("logic-any", t("Match any")),
+                            ui::segmented::segment("logic-all", t("Match all")),
+                            ui::segmented::segment("logic-exact", t("Match exactly")),
                         ],
                         modes.iter().position(|mode| *mode == filter.mode),
                     )
@@ -710,13 +711,13 @@ impl Render for TagPicker {
                 .child(body)
                 .footer(
                     overlay_shell::hint(cx)
-                        .child("Select")
-                        .child(overlay_shell::kbd("L-Click", cx)),
+                        .child(t("Select"))
+                        .child(overlay_shell::kbd(t("L-Click"), cx)),
                 )
                 .footer(
                     overlay_shell::hint(cx)
-                        .child("Exclude")
-                        .child(overlay_shell::kbd("R-Click", cx)),
+                        .child(t("Exclude"))
+                        .child(overlay_shell::kbd(t("R-Click"), cx)),
                 );
         } else {
             shell = shell
@@ -727,7 +728,7 @@ impl Render for TagPicker {
             if self.sidebar {
                 shell = shell.footer(
                     overlay_shell::hint(cx)
-                        .child("Switch ")
+                        .child(t("Switch "))
                         .child(overlay_shell::tab_key(cx)),
                 );
             }
@@ -735,8 +736,8 @@ impl Render for TagPicker {
         }
         shell = shell.footer(
             overlay_shell::hint(cx)
-                .child("Close ")
-                .child(overlay_shell::kbd("Esc", cx)),
+                .child(t("Close "))
+                .child(overlay_shell::kbd(t("Esc"), cx)),
         );
         div().child(shell).children(menu).into_any_element()
     }

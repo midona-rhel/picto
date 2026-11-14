@@ -4,6 +4,7 @@
 //! on the items or takes it off at once. A search for a tag that does not
 //! exist offers to create it.
 use super::membership;
+use crate::i18n::t;
 use crate::motion;
 use crate::session::Session;
 use crate::session::{Report, Reread};
@@ -116,7 +117,7 @@ pub struct TagPicker {
 
 impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder(t("Search...")));
         // The keyboard goes back to the search once a row's menu has gone.
         let menu = menu::Host::deferred(
             crate::ui::layer::MENU,
@@ -635,7 +636,7 @@ impl TagPicker {
                 let (id, previous, target) = (tag.tag_id, name(&tag), next.clone());
                 crate::session::edit_then(
                     &self.session,
-                    Report::failure("Unable to move tag"),
+                    Report::failure(t("Unable to move tag")),
                     Reread::NOTHING,
                     move |library| crate::tags::rename_or_merge(library, id, &target),
                     cx,

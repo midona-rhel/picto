@@ -7,6 +7,7 @@
 //! for the top level, among the folders the moving ones can go under.
 use super::membership;
 use crate::backend::Navigation;
+use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::ui::{
     self,
@@ -249,7 +250,7 @@ pub struct FolderPicker {
 
 impl FolderPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder(t("Search...")));
         let menu = menu::Host::deferred(
             crate::ui::layer::MENU,
             menu::Return::To(search.read(cx).focus_handle(cx)),
@@ -650,8 +651,8 @@ impl FolderPicker {
                 return;
             };
             match action {
-                "new-subfolder" => this.start_create("New Subfolder", Some(folder.id), cx),
-                "new-sibling" => this.start_create("New Sibling Folder", folder.parent, cx),
+                "new-subfolder" => this.start_create(t("New Subfolder"), Some(folder.id), cx),
+                "new-sibling" => this.start_create(t("New Sibling Folder"), folder.parent, cx),
                 _ => {}
             }
         });
@@ -666,7 +667,7 @@ impl FolderPicker {
     ) {
         let name = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder("Folder name")
+                .placeholder(t("Folder name"))
                 .submits()
         });
         let subscriptions = vec![

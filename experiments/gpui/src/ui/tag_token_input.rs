@@ -5,6 +5,7 @@
 //! adds what was typed, Backspace in the empty search removes the last tag.
 use super::popover::{Placement, Side, floating, place};
 use super::text_input::{EmptyBackspace, Submitted, TextInput};
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use futures::channel::oneshot;
@@ -70,7 +71,7 @@ impl TagTokenInput {
     pub fn new(values: Vec<String>, search: Search, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| {
             TextInput::new(super::text_input::Kind::Form, cx)
-                .placeholder("Search tags...")
+                .placeholder(t("Search tags..."))
                 .submits()
         });
         let subscriptions = vec![
@@ -185,7 +186,7 @@ impl Render for TagTokenInput {
         let focused = self.input.focus_handle(cx).contains_focused(window, cx);
         // The search offers its placeholder only while no tag is chosen.
         let placeholder = if self.values.is_empty() {
-            "Search tags..."
+            t("Search tags...")
         } else {
             ""
         };

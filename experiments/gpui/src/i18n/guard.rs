@@ -58,6 +58,12 @@ const CONVERTED: &[&str] = &[
     "shell/shortcuts.rs",
     "shell/menu_commands.rs",
     "ui/empty_state.rs",
+    "inspector/",
+    "ui/property_row.rs",
+    "ui/chip.rs",
+    "ui/panel_section.rs",
+    "ui/tag_token_input.rs",
+    "tags.rs",
 ];
 
 /// Calls whose literal argument is drawn.

@@ -7,6 +7,7 @@
 use super::folder_picker::{Folder, Row, folders, rows};
 use super::membership;
 use crate::grid::format;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::{
@@ -73,7 +74,8 @@ pub struct FolderDialog {
 
 impl FolderDialog {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search folders..."));
+        let search =
+            cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder(t("Search folders...")));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {
@@ -183,14 +185,14 @@ impl FolderDialog {
         shell::rail(RAIL, cx)
             .child(item(
                 "folder-dialog-recent",
-                "Recent",
+                t("Recent"),
                 recent,
                 View::Recent,
                 cx,
             ))
             .child(item(
                 "folder-dialog-members",
-                "Members",
+                t("Members"),
                 self.members.len(),
                 View::Members,
                 cx,
@@ -198,7 +200,7 @@ impl FolderDialog {
             .child(shell::rail_separator(cx))
             .child(item(
                 "folder-dialog-all",
-                "All",
+                t("All"),
                 folders.len(),
                 View::All,
                 cx,
@@ -328,9 +330,9 @@ impl FolderDialog {
             Some(flat) if flat.is_empty() => {
                 list = list.child(shell::empty_state(
                     if self.view == View::Recent {
-                        "No recently used folders"
+                        t("No recently used folders")
                     } else {
-                        "Not a member of any folders"
+                        t("Not a member of any folders")
                     },
                     cx,
                 ));
@@ -341,7 +343,7 @@ impl FolderDialog {
                 }
             }
             None if folders.is_empty() => {
-                list = list.child(shell::empty_state("No folders", cx));
+                list = list.child(shell::empty_state(t("No folders"), cx));
             }
             None => {
                 for (index, line) in rows(folders, &self.collapsed, &self.query)
@@ -417,17 +419,17 @@ impl Render for FolderDialog {
         );
         let mut buttons = div().flex().items_center().gap(px(6.)).child(
             ui::action_button("folder-dialog-cancel", Look::Standard)
-                .label("Cancel")
+                .label(t("Cancel"))
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
         );
         if pending > 0 {
             buttons = buttons.child(
                 ui::action_button("folder-dialog-apply", Look::Primary)
-                    .label(format!("Apply ({pending})"))
+                    .label(format!("{}{pending})", t("Apply (")))
                     .on_click(cx.listener(|this, _, _, cx| this.apply(cx))),
             );
         }
-        ui::modal("folder-dialog", "Folders", presence)
+        ui::modal("folder-dialog", t("Folders"), presence)
             .size(Size::Medium)
             .flush()
             .focus(&focus)

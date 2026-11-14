@@ -4,6 +4,7 @@
 //! folder whether it tags and watches.
 use super::{Inspector, PREVIEW};
 use crate::grid::format;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
 use crate::ui::{
@@ -135,13 +136,13 @@ impl ScopeState {
         Self {
             name: cx.new(|cx| {
                 TextInput::new(text_input::Kind::Inspector, cx)
-                    .placeholder("Name")
+                    .placeholder(t("Name"))
                     .commits_on_blur(window, cx)
                     .expanding()
             }),
             notes: cx.new(|cx| {
                 TextInput::new(text_input::Kind::Inspector, cx)
-                    .placeholder("Notes")
+                    .placeholder(t("Notes"))
                     .commits_on_blur(window, cx)
                     .expanding()
             }),
@@ -641,9 +642,9 @@ impl Inspector {
         };
 
         let mut properties = div()
-            .child(Self::property("Items", format::grouped(view.total), cx))
+            .child(Self::property(t("Items"), format::grouped(view.total), cx))
             .child(Self::property(
-                "Size",
+                t("Size"),
                 crate::text::size_to_gigabytes(view.size as u64),
                 cx,
             ));
@@ -669,22 +670,22 @@ impl Inspector {
                 cx,
             )));
         }
-        panel = panel.child(self.section("Properties", Some(properties.into_any_element()), cx));
+        panel = panel.child(self.section(t("Properties"), Some(properties.into_any_element()), cx));
 
         let mut details = Vec::new();
         if !view.search.is_empty() {
-            details.push(("Search", view.search.clone()));
+            details.push((t("Search"), view.search.clone()));
         }
         if let Some((auto_tags, watch)) = view.folder {
-            let answer = |on: bool| if on { "Yes" } else { "No" }.to_owned();
-            details.push(("Auto tags", answer(auto_tags)));
-            details.push(("Watch", answer(watch)));
+            let answer = |on: bool| if on { t("Yes") } else { t("No") }.to_owned();
+            details.push((t("Auto tags"), answer(auto_tags)));
+            details.push((t("Watch"), answer(watch)));
         }
         if !details.is_empty() {
             let rows = details.into_iter().fold(div(), |rows, (label, value)| {
                 rows.child(Self::property(label, value, cx))
             });
-            panel = panel.child(self.section("Details", Some(rows.into_any_element()), cx));
+            panel = panel.child(self.section(t("Details"), Some(rows.into_any_element()), cx));
         }
         self.scroller().child(panel)
     }
