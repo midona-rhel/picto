@@ -80,19 +80,15 @@ On macOS, `run.sh` copies a library, builds the app and opens it:
 experiments/gpui/run.sh /path/to/Main.library
 ```
 
-It copies the database with SQLite's online backup from a read-only
-connection (`sqlite3 -readonly … .backup`, which includes committed WAL data
-and never touches the live files), then clones everything else in the library
-folder with APFS `clonefile` (`cp -Rc`), which takes no space until either
-side changes a file. It refuses, copying nothing, when the library and `/tmp`
-are on different volumes or the volume is not APFS. The copy goes to
-`/tmp/picto-gpui-library.XXXXXX/<Name>.library`. It then builds the debug
-binary, wraps it as `experiments/gpui/target/Picto GPUI.app` (bundle id
+It refuses, copying nothing, when the library and the system's temporary
+folder (`$TMPDIR`) are on different volumes or the volume is not APFS, then
+builds the debug binary and makes the copy with its `--make-copy` (below),
+which on APFS clones every file but the database with `clonefile`, taking no
+space until either side changes a file. It then wraps the binary as
+`experiments/gpui/target/Picto GPUI.app` (bundle id
 `dev.picto.gpui-experiment`; the bundle is needed for system notifications),
 writes the copy's path to `target/last-snapshot` and opens the bundle on the
-copy. It needs the `sqlite3` command. It does not look for symbolic links;
-the app refuses such a copy when it opens it. `PICTO_GPUI_COPY_ONLY=1` makes
-the copy, prints its path and stops.
+copy. `PICTO_GPUI_COPY_ONLY=1` makes the copy, prints its path and stops.
 
 On every platform the app makes the copy itself:
 
