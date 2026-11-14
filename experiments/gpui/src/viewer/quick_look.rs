@@ -404,13 +404,11 @@ impl Render for QuickLook {
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                let flash = this.surface.read(cx).flash();
                 // A member peeked at by itself: `QuickLook`'s menu for a
                 // file with no item to edit.
                 if let Some(member) = this.member.or(this.opened) {
                     cx.emit(MenuRequested {
                         position: event.position,
-                        flash,
                         member: true,
                         members: vec![member],
                         alone: true,
@@ -423,13 +421,10 @@ impl Render for QuickLook {
                 }
                 cx.emit(MenuRequested {
                     position: event.position,
-                    flash,
                     ..Default::default()
                 });
             }),
         )
-        // TODO: the copy shortcut (`edit.copy`) puts the file on the
-        // clipboard.
         .child(frame.child(if collection && self.opened.is_none() {
             self.group.clone().into_any_element()
         } else {

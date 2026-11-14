@@ -297,9 +297,26 @@ impl MediaSurface {
         }
     }
 
-    /// Whether a Flash movie is playing in the pane.
-    pub fn flash(&self) -> bool {
+    /// Whether the picture shown now can become the thumbnail: a Flash
+    /// movie's or a video's.
+    pub fn can_capture(&self, cx: &App) -> bool {
         self.flash.is_some()
+            || self
+                .player
+                .as_ref()
+                .is_some_and(|player| player.read(cx).is_video())
+    }
+
+    /// The picture shown now: the Flash movie's stage as last drawn, or
+    /// the video's frame at its own size.
+    pub fn current_picture(&self, cx: &App) -> Option<Result<super::capture::Picture, String>> {
+        if self.flash.is_some() {
+            return Some(match &self.full {
+                Some(image) => super::capture::Picture::from_image(image),
+                None => Err("The Flash frame is not ready yet.".into()),
+            });
+        }
+        self.player.as_ref()?.read(cx).capture_frame()
     }
 
     /// Whether the Flash movie plays and is muted, while one is shown.

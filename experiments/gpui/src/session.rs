@@ -108,7 +108,8 @@ impl SubscriptionActivity {
 /// `subscriptionsSettle.ts`: progress is read again this often while a run
 /// is going.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
-/// How often the session takes in what the library's thread has sent.
+/// How often the session looks for the application's events (replies from
+/// the library's thread wake it at once).
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 /// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
 /// this long.
@@ -297,6 +298,8 @@ pub struct Session {
     /// The disposable copy the application opened.
     root: PathBuf,
     pub library_cover: Option<PathBuf>,
+    /// The grid draws its thumbnails without colour.
+    pub grayscale: bool,
     /// A disposable folder that holds the demo media and is the scratch
     /// space the library cover's crops are written to.
     pub scratch: tempfile::TempDir,
@@ -354,10 +357,24 @@ impl Session {
                 .unwrap_or_default();
             (folders, kept.recent_tags.clone())
         };
-        let (sender, receiver) = backend::start(application.clone());
+        let (sender, receiver, woken) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
+            use futures::{StreamExt as _, future::Either};
+            let mut woken = Some(woken);
             loop {
-                cx.background_executor().timer(RECEIVE_INTERVAL).await;
+                // A reply is taken in as soon as it is sent; the application's
+                // events at the next look.
+                let tick = std::pin::pin!(cx.background_executor().timer(RECEIVE_INTERVAL));
+                match &mut woken {
+                    Some(wake) => {
+                        let first = futures::future::select(tick, wake.next());
+                        // The library's thread has stopped: looks alone.
+                        if let Either::Right((None, _)) = first.await {
+                            woken = None;
+                        }
+                    }
+                    None => tick.await,
+                }
                 if session
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()
@@ -436,6 +453,7 @@ impl Session {
             blobs,
             root,
             library_cover,
+            grayscale: false,
             scratch,
             place_label: None,
             refreshing: false,
@@ -618,6 +636,20 @@ impl Session {
     }
 
     // ── The application's events ────────────────────────────────
+
+    /// Grayscale on or off for the grid's thumbnails (`gridGrayscaleAtom`,
+    /// kept for the session only).
+    pub fn toggle_grayscale(&mut self, cx: &mut Context<Self>) {
+        self.grayscale = !self.grayscale;
+        cx.emit(Change::Results);
+    }
+
+    /// Tells the views that the thumbnail of `hash` was written again by
+    /// this app (regenerated, or a captured frame), as the application's
+    /// `picto:thumbnail-changed` does for what it writes.
+    pub fn thumbnail_written(&mut self, hash: String, cx: &mut Context<Self>) {
+        cx.emit(Event::Thumbnail(hash));
+    }
 
     /// Takes what the application reported since the last look, merged into
     /// one invalidation, does what the Electron runtime stores do with it,
@@ -893,6 +925,20 @@ impl Session {
         tags: Vec<TagRecord>,
         cx: &mut Context<Self>,
     ) {
+        // A media-matches destination has no row of its own: it stays while
+        // it is open or in the history.
+        let mut nav = nav;
+        nav.extend(
+            self.nav
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.scope,
+                        picto_library::query::ItemScope::MediaMatches { .. }
+                    )
+                })
+                .cloned(),
+        );
         let old = std::mem::replace(&mut self.nav, nav);
         let positions = self
             .nav
@@ -1451,6 +1497,37 @@ impl Session {
     /// Opens a sidebar destination and records it for Back and Forward.
     /// Choosing the destination already showing does nothing, unless the
     /// viewer is over it, which this closes.
+    /// `navigateToNode('media-matches:<id>')`: every item that uses the
+    /// media of `item` (Find Items with This Media), a destination with no
+    /// sidebar row, titled "Items with This Media".
+    pub fn open_media_matches(&mut self, item: RootId, cx: &mut Context<Self>) {
+        let scope = picto_library::query::ItemScope::MediaMatches { item_id: item.0 };
+        let index = match self
+            .nav
+            .iter()
+            .position(|entry| entry.screen.is_none() && entry.scope == scope)
+        {
+            Some(index) => index,
+            None => {
+                self.nav.push(Navigation {
+                    label: "Items with This Media".into(),
+                    count: None,
+                    scope,
+                    screen: None,
+                    random: false,
+                    icon: None,
+                    tint: None,
+                    group: false,
+                    watched: false,
+                    depth: 0,
+                    parent: None,
+                });
+                self.nav.len() - 1
+            }
+        };
+        self.navigate(index, cx);
+    }
+
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
             // Choosing a screen from inside one of its places goes to its top.

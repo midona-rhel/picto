@@ -202,7 +202,16 @@ impl Menu {
                     .flex()
                     .items_center()
                     .children(icon.map(|icon| {
-                        super::icon(icon, 16., color).opacity(if current { 1. } else { 0.8 })
+                        super::icon(icon, 16., color)
+                            .opacity(if current { 1. } else { 0.8 })
+                            .into_any_element()
+                    }))
+                    .children(item.and_then(|item| item.image.clone()).map(|image| {
+                        img(image)
+                            .size(px(16.))
+                            .flex_none()
+                            .opacity(if current { 1. } else { 0.8 })
+                            .into_any_element()
                     })),
             );
         }

@@ -302,6 +302,50 @@ mod tests {
         assert!(!misses(Placement::whole(3_000.), 20, 0., 800.));
     }
 
+    /// A guard that a grid frame's work depends on the window and the
+    /// viewport, never on how many items the destination has: at the top,
+    /// the middle and the end of 3,000, a million and fifty million items,
+    /// the window asked for, the tiles laid out and the tiles drawn are the
+    /// same in number.
+    #[test]
+    fn a_frame_does_the_same_work_whatever_the_library_size() {
+        use crate::grid::layout::{Layout, ViewMode};
+        let viewport = 800.;
+        let mut work = Vec::new();
+        for total in [3_000, 1_000_000, 50_000_000] {
+            for share in [0., 0.5, 1.] {
+                let ordinal = ((total - 1) as f64 * share) as usize;
+                let start = start_at(ordinal, total);
+                let count = WINDOW.min(total - start);
+                // Waterfall, the layout that does the most per item.
+                let aspects = (0..count)
+                    .map(|index| [0.5, 1.5, 0.75, 2.][index % 4])
+                    .collect::<Vec<_>>();
+                let layout = Layout::compute(&aspects, 600., 200., 8., ViewMode::Waterfall, 20.);
+                let placed = place(layout.total_height, start, count, total, 40., None, |_| {
+                    None
+                });
+                assert!(placed.height <= MAX_HEIGHT.max(layout.total_height));
+                let tops = layout
+                    .tiles
+                    .iter()
+                    .map(|tile| tile.y + placed.top)
+                    .collect::<Vec<_>>();
+                let middle = placed.top + layout.total_height / 2.;
+                destination(placed, start, &tops, total, middle, viewport);
+                let local = layout.total_height / 2.;
+                let drawn = layout.visible(local, local + viewport).len();
+                work.push((count, layout.tiles.len(), drawn));
+            }
+        }
+        // Every window but those of the short destination is a full one.
+        assert!(work[3..].iter().all(|frame| *frame == work[3]), "{work:?}");
+        assert!(
+            work.iter()
+                .all(|(count, laid, drawn)| { *count <= WINDOW && laid == count && *drawn < 100 })
+        );
+    }
+
     #[test]
     fn the_height_per_item_is_the_sample_shared_out() {
         assert_eq!(density(20_000., 500), Some(40.));

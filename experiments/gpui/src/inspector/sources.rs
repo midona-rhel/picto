@@ -242,7 +242,7 @@ impl Inspector {
                             return;
                         }
                         match &first {
-                            Some(address) => cx.open_url(address),
+                            Some(address) => crate::desktop::open_link(address, cx),
                             None => this.add_source(window, cx),
                         }
                     })),
@@ -356,7 +356,7 @@ impl Inspector {
                         .hover(move |style| style.bg(theme.control_surface()))
                         // `.urlDropdown .urlLabel { transform: translateY(-1px) }`
                         .child(label(url).mt(px(-2.)))
-                        .on_click(move |_, _, cx| cx.open_url(&address)),
+                        .on_click(move |_, _, cx| crate::desktop::open_link(&address, cx)),
                 )
             };
             let (edited, kept) = (url.clone(), urls.to_vec());
