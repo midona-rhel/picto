@@ -15,7 +15,14 @@ use picto_library::selection::{SelectionSummary, SelectionTarget};
 use picto_library::{Library, MutationReceipt, Rating, RootId};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// A new selection's summary that takes longer than this gives way to the
+/// loading state (`useSelectionSummary`'s 250 ms timer); until then the rail
+/// keeps what it showed.
+const LOADING_AFTER: Duration = Duration::from_millis(250);
+/// `.summarySpinner`'s turn.
+const SPIN: Duration = Duration::from_millis(650);
 
 /// A stack card may be leaving while six others show.
 const STACK_PINS: [&str; stack::CARDS + 1] = [
@@ -45,6 +52,10 @@ pub(super) struct SelectionState {
     pub(super) shown: Option<Shown>,
     /// The selection whose summary is on its way.
     asked: Option<Vec<RootId>>,
+    /// The selection shown loading, since when, once its summary has taken
+    /// longer than [`LOADING_AFTER`].
+    loading: Option<(Vec<RootId>, Instant)>,
+    waiting: Option<Task<()>>,
     stack: Stack,
     /// Each stacked cover's size, kept while it leaves the selection.
     sizes: HashMap<String, Option<(u32, u32)>>,
@@ -89,6 +100,8 @@ impl SelectionState {
             order: Vec::new(),
             shown: None,
             asked: None,
+            loading: None,
+            waiting: None,
             stack: Stack::default(),
             sizes: HashMap::new(),
             turned: HashMap::new(),
@@ -102,6 +115,21 @@ impl SelectionState {
         self.shown
             .as_ref()
             .is_some_and(|shown| shown.ids == self.order)
+    }
+
+    /// Whether the current selection is shown loading.
+    pub(super) fn loading(&self) -> bool {
+        !self.ready()
+            && self
+                .loading
+                .as_ref()
+                .is_some_and(|(ids, _)| *ids == self.order)
+    }
+
+    /// Whether the rail can show the current selection: its summary, or
+    /// the loading state.
+    pub(super) fn showable(&self) -> bool {
+        self.ready() || self.loading()
     }
 }
 
@@ -164,6 +192,23 @@ impl Inspector {
 
     fn read_summary_of(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
         self.selection.asked = Some(ids.clone());
+        let refreshing = |shown: &Option<Shown>, ids: &[RootId]| {
+            shown.as_ref().is_some_and(|shown| shown.ids == ids)
+        };
+        // A summary read again stays up meanwhile; a new selection's shows
+        // the loading state if it is slow.
+        if !refreshing(&self.selection.shown, &ids) {
+            let waited = ids.clone();
+            self.selection.waiting = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(LOADING_AFTER).await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.selection.asked.as_ref() == Some(&waited) {
+                        this.selection.loading = Some((waited, Instant::now()));
+                        cx.notify();
+                    }
+                });
+            }));
+        }
         let target = self.session.read(cx).target_for(ids.clone());
         let job = self
             .session
@@ -177,14 +222,12 @@ impl Inspector {
                 if this.selection.asked.as_ref() == Some(&ids) {
                     this.selection.asked = None;
                 }
-                let refreshing = this
-                    .selection
-                    .shown
-                    .as_ref()
-                    .is_some_and(|shown| shown.ids == ids);
+                let refreshing = refreshing(&this.selection.shown, &ids);
                 if this.selection.order != ids && !refreshing {
                     return;
                 }
+                this.selection.waiting = None;
+                this.selection.loading = None;
                 if let Err(error) = &result {
                     eprintln!("inspector: reading the selection failed: {error}");
                 }
@@ -543,18 +586,51 @@ impl Inspector {
             .map(|(_, _, turned)| (turned.card.clone(), turned.mask.clone(), turned.size))
     }
 
-    /// The multi-select state's column.
+    /// `.summarySpinner`: a 10px ring open on its right, turning once every
+    /// 650 ms while the selection loads.
+    fn spinner(&self, window: &mut Window, cx: &App) -> Svg {
+        window.request_animation_frame();
+        let since = self
+            .selection
+            .loading
+            .as_ref()
+            .map_or_else(Instant::now, |(_, since)| *since);
+        let turn = since.elapsed().as_secs_f32() / SPIN.as_secs_f32();
+        let mut color = theme::theme(cx).text_secondary();
+        color.a *= 0.65;
+        ui::icon("inspector-spinner", 10., color).with_transformation(Transformation::rotate(
+            radians(turn.fract() * std::f32::consts::TAU),
+        ))
+    }
+
+    /// `.pendingSection` and `.pendingRating`: a 20px line with the spinner
+    /// at its end, in place of what the selection shares.
+    fn pending(&self, window: &mut Window, cx: &App) -> Div {
+        div()
+            .min_h(px(20.))
+            .flex()
+            .items_center()
+            .justify_end()
+            .child(self.spinner(window, cx))
+    }
+
+    /// The multi-select state's column: the summary on display, or while a
+    /// new selection's loads, its count and spinners where the shared values
+    /// go (`summaryPending`).
     pub(super) fn selection_body(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let Some((summary, selected)) = self
-            .selection
-            .shown
-            .as_ref()
-            .map(|shown| (shown.summary.clone(), shown.ids.len() as u64))
-        else {
+        let loading = self.selection.loading();
+        let Some((summary, selected)) = (if loading {
+            Some((None, self.session.read(cx).selection_count()))
+        } else {
+            self.selection
+                .shown
+                .as_ref()
+                .map(|shown| (shown.summary.clone(), shown.ids.len() as u64))
+        }) else {
             return self.scroller();
         };
         let theme = theme::theme(cx);
@@ -595,12 +671,13 @@ impl Inspector {
                     )
                     .child("items selected"),
             )
-            .child(div().mb(px(8.)).child(ui::field(
-                "selection-notes",
-                &self.selection.notes,
-                Look::Inspector,
-            )))
-            .child(self.source(Some(&sources), cx));
+            .child(div().mb(px(8.)).child(if loading {
+                ui::field::read_only("Notes", cx).into_any_element()
+            } else {
+                ui::field("selection-notes", &self.selection.notes, Look::Inspector)
+                    .into_any_element()
+            }))
+            .child(self.source((!loading).then_some(&sources[..]), cx));
 
         let (entries, tags) = {
             let session = self.session.read(cx);
@@ -616,16 +693,46 @@ impl Inspector {
         let shared_folders = summary
             .as_ref()
             .map_or_else(Vec::new, |summary| summary.shared_folders.clone());
-        let folders = self.folder_chips(&entries, &shared_folders, window, cx);
-        panel = panel.child(self.picker_section("Folders", folders, cx));
-        let tags = self.tag_chips(tags, false, window, cx);
-        panel = panel.child(self.picker_section("Tags", tags, cx));
+        if loading {
+            for title in ["Folders", "Tags"] {
+                let pending = self.pending(window, cx).into_any_element();
+                panel = panel.child(self.section(title, Some(pending), cx));
+            }
+        } else {
+            let folders = self.folder_chips(&entries, &shared_folders, window, cx);
+            panel = panel.child(self.picker_section("Folders", folders, cx));
+            let tags = self.tag_chips(tags, false, window, cx);
+            panel = panel.child(self.picker_section("Tags", tags, cx));
+        }
 
         let rating = summary
             .as_ref()
             .and_then(|summary| summary.shared_rating)
             .map_or(0, |rating| rating.bitmap_key() as usize);
-        let mut properties = div().child(self.rating(Rate::Selection, rating, cx));
+        let mut properties = if loading {
+            let mut properties = div().child(self.pending(window, cx));
+            for label in ["Media", "Size"] {
+                // `PropertyRow` with `loading`: the spinner as its value.
+                properties = properties.child(
+                    div()
+                        .relative()
+                        .child(Self::property(label, String::new(), cx))
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .h(px(20.))
+                                .flex()
+                                .items_center()
+                                .child(self.spinner(window, cx)),
+                        ),
+                );
+            }
+            properties
+        } else {
+            div().child(self.rating(Rate::Selection, rating, cx))
+        };
         if let Some(summary) = &summary {
             properties = properties
                 .child(Self::property(
@@ -661,7 +768,7 @@ impl Inspector {
             cx,
         );
         panel = panel.child(auto_tag);
-        if summary.is_none() {
+        if summary.is_none() && !loading {
             panel = panel.child(Self::status("Could not load selection details.", true, cx));
         }
         self.scroller().child(panel)

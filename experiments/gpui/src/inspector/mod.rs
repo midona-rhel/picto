@@ -430,13 +430,14 @@ impl Inspector {
 
     /// Takes the selected item's details once they are there and the rail
     /// is to describe it. `edited` takes them even when they are for the
-    /// item already shown, after an edit.
-    fn sync_item(&mut self, edited: bool, cx: &mut Context<Self>) {
+    /// item already shown, after an edit. True when it took them, which
+    /// changed the name and notes fields and the open pickers.
+    fn sync_item(&mut self, edited: bool, cx: &mut Context<Self>) -> bool {
         if self.holds() || self.wanted(cx) != Mode::Item {
-            return;
+            return false;
         }
         let Some(details) = self.session.read(cx).selected_details() else {
-            return;
+            return false;
         };
         let id = details.root.root_id;
         if !edited
@@ -445,7 +446,7 @@ impl Inspector {
                 .as_ref()
                 .is_some_and(|item| item.root.root_id == id && item.revision == details.revision)
         {
-            return;
+            return false;
         }
         let details = details.clone();
         let key = id.0 as u64;
@@ -457,11 +458,12 @@ impl Inspector {
         });
         self.item = Some(details);
         self.sync_pickers(cx);
+        true
     }
 
     /// What to draw: the state wanted once its data is there, else the one
     /// shown so far, else (`None`) the wanted state's skeleton.
-    fn decide(&mut self, cx: &mut Context<Self>) -> (Mode, bool) {
+    fn decide(&mut self, window: &mut Window, cx: &mut Context<Self>) -> (Mode, bool) {
         if self.holds() {
             let held = match self.shown {
                 Mode::Empty => true,
@@ -478,12 +480,16 @@ impl Inspector {
                 Mode::Empty => true,
                 Mode::Scope => self.scope.ready(session),
                 Mode::Item => session.demo.is_some() || session.selected_details().is_some(),
-                Mode::Selection => self.selection.ready(),
+                Mode::Selection => self.selection.showable(),
             }
         };
         if ready {
-            if wanted == Mode::Item {
-                self.sync_item(false, cx);
+            // The session's own changes take the details first; when the
+            // rail only learns of them here (a screen closing onto a
+            // selected item), the fields and pickers it changes are drawn
+            // in the next frame, as nothing else asks for one.
+            if wanted == Mode::Item && self.sync_item(false, cx) {
+                window.request_animation_frame();
             }
             self.shown = wanted;
             return (wanted, true);
@@ -1334,7 +1340,7 @@ impl Inspector {
 impl Render for Inspector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Inspector);
-        let (mode, ready) = self.decide(cx);
+        let (mode, ready) = self.decide(window, cx);
         // A state that is not drawn gives back the thumbnails it kept.
         if (mode, ready) != (Mode::Item, true) {
             self.thumbnails.update(cx, |thumbnails, _| {

@@ -43,6 +43,8 @@ impl Inspector {
                     folders: item.folder_ids.clone(),
                 })
             }
+            // While a new selection's summary loads there is nothing to edit.
+            Mode::Selection if self.selection.loading() => None,
             Mode::Selection => {
                 let shown = self.selection.shown.as_ref()?;
                 let summary = shown.summary.as_ref()?;
@@ -722,9 +724,11 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let confirm = self.confirm.layer(window, cx)?;
-        // It keeps the keyboard while it is open.
+        // It keeps the keyboard while it is open. Taken while the rail is
+        // drawn, the focus shows in the next frame, which this asks for.
         if !confirm.focus.contains_focused(window, cx) && !confirm.presence.closing() {
             window.focus(&confirm.focus, cx);
+            window.request_animation_frame();
         }
         let (title, label, what) = match confirm.content.overwrite {
             Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),
