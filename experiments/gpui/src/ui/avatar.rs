@@ -67,8 +67,8 @@ impl RenderOnce for LibraryAvatar {
             )
         });
         ring.update(cx, |(highlight, hover), _| {
-            highlight.set(self.highlighted, motion::SIDEBAR_HOVER);
-            hover.set(self.hovered, motion::SIDEBAR_HOVER);
+            highlight.set(self.highlighted, motion::FAST);
+            hover.set(self.hovered, motion::FAST);
         });
         let (highlight, hover, animating) = {
             let (highlight, hover) = ring.read(cx);

@@ -31,8 +31,8 @@ impl Sidebar {
             ui::tooltip::Hover::default()
         });
         state.update(cx, |state, _| {
-            state.lit.set(state.hovered || open, motion::SIDEBAR_HOVER);
-            state.open.set(open, motion::SIDEBAR_HOVER);
+            state.lit.set(state.hovered || open, motion::FAST);
+            state.open.set(open, motion::FAST);
         });
         let (lit, active) = {
             let state = state.read(cx);

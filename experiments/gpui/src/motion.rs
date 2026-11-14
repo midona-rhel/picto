@@ -102,12 +102,12 @@ impl CubicBezier {
     }
 }
 
-/// `--sidebar-list-highlight-transition`: a sidebar row's highlight fade.
-pub const SIDEBAR_HOVER: Duration = Duration::from_millis(50);
+/// `--duration-fast`: a sidebar row's highlight
+/// (`--sidebar-list-highlight-transition`), the library avatar's ring, the
+/// sidebar sliding in and out, and a form field's border on focus.
+pub const FAST: Duration = Duration::from_millis(50);
 /// `iconButton.module.css`: an icon button's hover fade.
 pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
-/// `.sidebar { transition: transform var(--duration-fast) }`.
-pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
@@ -142,8 +142,7 @@ pub const NORMAL: Duration = Duration::from_millis(200);
 /// A settings row's or check row's highlight (`background 100ms ease`), and
 /// a theme swatch's outline.
 pub const ROW_HOVER: Duration = Duration::from_millis(100);
-/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`), and
-/// `GlassInput`'s border on focus.
+/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`).
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
@@ -174,6 +173,21 @@ pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
 /// `modalIn` / `modalOut`: the panel's scale and drop when hidden.
 pub const MODAL_SCALE: f32 = 0.97;
 pub const MODAL_DROP: f32 = 4.;
+
+/// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
+/// before going back once the pointer leaves it.
+pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
+
+/// `notifications.ts`: a notification stays this long unless it says
+/// otherwise.
+pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
+/// `NotificationHost.module.css` `.notification`'s `transition` and
+/// `EXIT_DURATION_MS`: it rises and fades out over 400 ms, on
+/// `cubic-bezier(0, 1.1, 0.79, 1.03)`, which overshoots a little.
+pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
+pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
+/// `.hidden`: how far above its place a leaving notification ends.
+pub const NOTIFICATION_RISE: f32 = 48.;
 
 /// `ScrollToTopButton`: its rise and fade wait this long before starting.
 pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
@@ -574,18 +588,3 @@ mod tests {
         assert_eq!(progress(Duration::from_secs(1), duration), 1.);
     }
 }
-
-/// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
-/// before going back once the pointer leaves it.
-pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
-
-/// `notifications.ts`: a notification stays this long unless it says
-/// otherwise.
-pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
-/// `NotificationHost.module.css` `.notification`'s `transition` and
-/// `EXIT_DURATION_MS`: it rises and fades out over 400 ms, on
-/// `cubic-bezier(0, 1.1, 0.79, 1.03)`, which overshoots a little.
-pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
-pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
-/// `.hidden`: how far above its place a leaving notification ends.
-pub const NOTIFICATION_RISE: f32 = 48.;

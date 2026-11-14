@@ -374,7 +374,7 @@ impl RenderOnce for SidebarRow {
             .pr(px(2.))
             .on_hover(move |hovered, _, cx| {
                 row_state.update(cx, |state, cx| {
-                    state.hover.set(*hovered, motion::SIDEBAR_HOVER);
+                    state.hover.set(*hovered, motion::FAST);
                     cx.notify();
                 })
             })

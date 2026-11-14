@@ -1117,7 +1117,7 @@ impl VideoPlayer {
                                 .font_family(theme::FONT_MONO)
                                 .text_size(px(theme::TEXT_XL))
                                 // The player's inherited `line-height`.
-                                .line_height(px(theme::TEXT_XL * theme::LINE_HEIGHT_INHERITED))
+                                .line_height(px(theme::TEXT_XL * theme::LINE_HEIGHT_BODY))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(format!("{}%", (effective * 100.).round() as i32)),
                         ),

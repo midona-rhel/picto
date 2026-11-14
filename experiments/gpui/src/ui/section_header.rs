@@ -179,7 +179,7 @@ impl RenderOnce for SectionHeader {
             .cursor_pointer()
             .on_hover(move |hovered, _, cx| {
                 header_state.update(cx, |state, cx| {
-                    state.hover.set(*hovered, motion::SIDEBAR_HOVER);
+                    state.hover.set(*hovered, motion::FAST);
                     state.reveal.set(*hovered, motion::NORMAL);
                     cx.notify();
                 })

@@ -4,6 +4,7 @@
 //! every tag context menu starts with and what they do, and the starred
 //! tags and group colours kept in the library's application settings.
 use crate::session::Session;
+use crate::theme;
 use crate::ui::menu;
 use gpui::{App, ClipboardItem, Context, Entity, SharedString, Task};
 use picto_library::{Library, TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
@@ -73,25 +74,25 @@ pub fn chip_shows_namespace(namespace: &str) -> bool {
 /// more namespaces than the groups' presets below.
 pub fn chip_color(namespace: &str) -> u32 {
     match namespace.to_lowercase().as_str() {
-        "creator" | "studio" => 0xff6667,
-        "character" | "person" => 0x30d159,
-        "series" => 0xc499ff,
-        "species" => 0x00aaff,
-        "rating" => 0xffd60a,
-        "system" => 0xff9f0a,
-        _ => 0xbdbec0,
+        "creator" | "studio" => theme::TAG_CREATOR,
+        "character" | "person" => theme::TAG_CHARACTER,
+        "series" => theme::TAG_SERIES,
+        "species" => theme::TAG_SPECIES,
+        "rating" => theme::TAG_RATING,
+        "system" => theme::TAG_SYSTEM,
+        _ => theme::TAG_GENERAL,
     }
 }
 
 /// `tagGroupPresentation`: a group's preset colour and where it sorts.
 fn preset(namespace: &str) -> (u32, u8) {
     match namespace.to_lowercase().as_str() {
-        "creator" => (0xff6667, 0),
-        "series" => (0xc499ff, 1),
-        "character" => (0x30d159, 2),
-        "species" => (0x00aaff, 3),
-        "rating" => (0xffd60a, 4),
-        _ => (0xbdbec0, 10),
+        "creator" => (theme::TAG_CREATOR, 0),
+        "series" => (theme::TAG_SERIES, 1),
+        "character" => (theme::TAG_CHARACTER, 2),
+        "species" => (theme::TAG_SPECIES, 3),
+        "rating" => (theme::TAG_RATING, 4),
+        _ => (theme::TAG_GENERAL, 10),
     }
 }
 

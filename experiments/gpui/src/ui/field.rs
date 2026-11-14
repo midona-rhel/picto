@@ -229,7 +229,7 @@ impl Look {
                 border: (theme.border(), theme.primary_at(60.)),
                 fill: (rgba(theme::BLACK_25), rgba(theme::BLACK_25)),
                 // `transition: border-color var(--duration-fast)`.
-                focus: Duration::from_millis(50),
+                focus: motion::FAST,
                 curve: motion::EASE_DEFAULT,
                 left: 8.,
                 right: 8.,

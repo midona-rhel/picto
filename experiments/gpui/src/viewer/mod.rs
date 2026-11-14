@@ -199,7 +199,7 @@ impl Boundary {
                 .rounded(px(theme::RADIUS_MD))
                 .bg(rgba(theme::VIEWER_NOTICE_BACKGROUND))
                 .text_size(px(theme::TEXT_MD))
-                .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_INHERITED))
+                .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_BODY))
                 .text_color(theme.text_secondary())
                 .whitespace_nowrap()
                 .opacity(fade.value_with(motion::EASE))

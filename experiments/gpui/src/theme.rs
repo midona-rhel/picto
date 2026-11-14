@@ -464,6 +464,33 @@ pub fn tabular_figures() -> FontFeatures {
     ]))
 }
 
+// A tag group's colour, the same in `TagChip.tsx`'s `NS_COLORS` and
+// `tagGroupPresentation.ts`'s presets (which knows fewer groups).
+/// `creator` and `studio`.
+pub const TAG_CREATOR: u32 = 0xff6667;
+/// `character` and `person`.
+pub const TAG_CHARACTER: u32 = 0x30d159;
+pub const TAG_SERIES: u32 = 0xc499ff;
+pub const TAG_SPECIES: u32 = 0x00aaff;
+pub const TAG_RATING: u32 = 0xffd60a;
+/// `system`: `NS_COLORS` only.
+pub const TAG_SYSTEM: u32 = 0xff9f0a;
+/// Every other group, `general` among them.
+pub const TAG_GENERAL: u32 = 0xbdbec0;
+
+/// A folder chip without a colour of its own.
+pub const FOLDER_DEFAULT: u32 = 0x868e96;
+
+/// The smart-folder dialog's `.colorSwatch` highlight:
+/// `inset 0 1px 0 rgba(255, 255, 255, 0.18)`.
+pub const COLOR_SWATCH_HIGHLIGHT: u32 = 0xffffff2e;
+
+/// The audio visualizer's gradient (`AudioVisualizer.tsx`): cyan, violet
+/// and pink.
+pub const VISUALIZER_CYAN: u32 = 0x31d7ff;
+pub const VISUALIZER_VIOLET: u32 = 0x735cff;
+pub const VISUALIZER_PINK: u32 = 0xff4fa3;
+
 /// A set star in `StarRating.module.css`.
 pub const RATING: u32 = 0xff9f0a;
 
@@ -740,6 +767,20 @@ pub fn sheet_shadow() -> Vec<BoxShadow> {
     vec![BoxShadow::new(px(0.), px(4.), rgba(0x00000052).into()).blur_radius(px(18.))]
 }
 
+// A notification's status glyphs are fixed colours, not themed
+// (`NotificationHost.module.css`); the information glyph takes
+// `--color-primary`.
+/// `.success .statusIcon`
+pub const NOTIFICATION_SUCCESS: u32 = 0x30d159;
+/// `.warning .statusIcon`
+pub const NOTIFICATION_WARNING: u32 = 0xff9f0a;
+/// `.error .statusIcon`
+pub const NOTIFICATION_ERROR: u32 = 0xff453a;
+/// `.notification`'s `top`: below the titlebar.
+pub const NOTIFICATION_TOP: f32 = 76.;
+/// `.notification`'s `height`.
+pub const NOTIFICATION_HEIGHT: f32 = 36.;
+
 /// `WindowControls.module.css` `.btn.destructiveClose:hover` and `:active`:
 /// the system's red behind the close cross.
 pub const CAPTION_CLOSE_HOVER: u32 = 0xe81123ff;
@@ -780,13 +821,10 @@ pub const TEXT_SM: f32 = 12.;
 pub const TEXT_MD: f32 = 13.;
 /// `--font-size-lg`
 pub const TEXT_LG: f32 = 14.;
-/// Mantine's body `line-height` (`--mantine-line-height`), which text with
-/// no line height of its own inherits: 13px text sits on a 20.15px line.
-pub const LINE_HEIGHT_INHERITED: f32 = 1.55;
 /// `--line-height-md`
 pub const LINE_HEIGHT_MD: f32 = 20.;
-/// Mantine's `--mantine-line-height`, which text inherits from the body
-/// where no rule sets a line height (the Subscriptions screen's cards).
+/// Mantine's body `line-height` (`--mantine-line-height`), which text with
+/// no line height of its own inherits: 13px text sits on a 20.15px line.
 pub const LINE_HEIGHT_BODY: f32 = 1.55;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
@@ -935,17 +973,3 @@ mod tests {
         assert_eq!(parse_css_color("blue"), None);
     }
 }
-
-// A notification's status glyphs are fixed colours, not themed
-// (`NotificationHost.module.css`); the information glyph takes
-// `--color-primary`.
-/// `.success .statusIcon`
-pub const NOTIFICATION_SUCCESS: u32 = 0x30d159;
-/// `.warning .statusIcon`
-pub const NOTIFICATION_WARNING: u32 = 0xff9f0a;
-/// `.error .statusIcon`
-pub const NOTIFICATION_ERROR: u32 = 0xff453a;
-/// `.notification`'s `top`: below the titlebar.
-pub const NOTIFICATION_TOP: f32 = 76.;
-/// `.notification`'s `height`.
-pub const NOTIFICATION_HEIGHT: f32 = 36.;
