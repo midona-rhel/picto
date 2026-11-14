@@ -6,7 +6,7 @@
 use super::membership;
 use crate::motion;
 use crate::session::Session;
-use crate::tags::record_name as name;
+use crate::tags::{TagPager, View, record_name as name};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -22,7 +22,7 @@ use std::time::Duration;
 mod model;
 mod view;
 
-use model::{Sources, create_candidate, display_tags, next_view, rail_groups, step};
+use model::{Sources, create_candidate, display_tags, step};
 
 /// `PAGE_SIZE`
 const PAGE: usize = 100;
@@ -36,16 +36,6 @@ const ROW: f32 = 25.;
 const SEARCH_DELAY: Duration = Duration::from_millis(150);
 /// More tags load once the list is scrolled this near its end.
 const LOAD_AHEAD: f32 = 200.;
-
-/// What the list shows (`SidebarMode`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum View {
-    All,
-    Group(String),
-    /// The tags the items have.
-    Selected,
-    Starred,
-}
 
 /// `TagLayout`: two columns, or one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,12 +93,7 @@ pub struct TagPicker {
     counts: bool,
     settings_open: bool,
     query: String,
-    /// The search and group the loaded tags answer, once one has arrived.
-    settled: Option<(String, Option<String>)>,
-    tags: Vec<TagRecord>,
-    cursor: Option<usize>,
-    loading_more: bool,
-    generation: u64,
+    pager: TagPager,
     namespaces: Vec<TagNamespaceRecord>,
     /// The items' tags.
     entity: Vec<TagRecord>,
@@ -159,11 +144,7 @@ impl TagPicker {
             counts: true,
             settings_open: false,
             query: String::new(),
-            settled: None,
-            tags: Vec::new(),
-            cursor: None,
-            loading_more: false,
-            generation: 0,
+            pager: TagPager::new(PAGE),
             namespaces: Vec::new(),
             entity: Vec::new(),
             selected: BTreeSet::new(),
@@ -299,7 +280,7 @@ impl TagPicker {
         );
         self.query.clear();
         self.search.update(cx, |search, cx| search.clear(cx));
-        self.settled = None;
+        self.pager.settled = None;
         self.settings_open = false;
         let names = entity.iter().map(name).collect::<Vec<_>>();
         self.selected = names.iter().cloned().collect();
@@ -344,127 +325,55 @@ impl TagPicker {
     // ── Loading ─────────────────────────────────────────────────
 
     fn load_groups(&mut self, cx: &mut Context<Self>) {
-        let answer = self
-            .session
-            .read(cx)
-            .run(|library| library.tag_namespaces());
-        cx.spawn(async move |this, cx| {
-            let Ok(Ok(namespaces)) = answer.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                this.namespaces = namespaces;
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn browsed_group(&self) -> Option<String> {
-        match &self.view {
-            View::Group(group) => Some(group.clone()),
-            _ => None,
-        }
+        crate::tags::read_groups(&self.session, cx, |this, namespaces, cx| {
+            this.namespaces = namespaces;
+            cx.notify();
+        });
     }
 
     /// One request for each search and view: at once without a search, else
-    /// once typing pauses; an older answer never replaces a newer one.
+    /// once typing pauses; an older answer never replaces a newer one. The
+    /// Selected and Starred views list what is at hand.
     fn request(&mut self, cx: &mut Context<Self>) {
         if !self.is_open() {
             return;
         }
-        self.generation += 1;
-        self.loading_more = false;
         self.search_timer = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
-        if matches!(self.view, View::Selected | View::Starred) {
-            cx.notify();
-            return;
-        }
-        let generation = self.generation;
-        let query = self.query.clone();
-        let group = self.browsed_group();
-        if query.trim().is_empty() {
-            self.fetch(query, group, generation, cx);
-        } else {
-            self.search_timer = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(SEARCH_DELAY).await;
-                let _ = this.update(cx, |this, cx| this.fetch(query, group, generation, cx));
-            }));
+        let page = self.pager.begin(&self.query, self.view.group());
+        if !matches!(self.view, View::Selected | View::Starred) {
+            let delay = (!self.query.trim().is_empty()).then_some(SEARCH_DELAY);
+            self.search_timer = Some(crate::tags::fetch_page(
+                &self.session,
+                page,
+                delay,
+                cx,
+                |this, page, answer, cx| {
+                    match answer {
+                        Ok((tags, next)) => {
+                            if !this.pager.first(&page, tags, next) {
+                                return;
+                            }
+                            this.focus_index = None;
+                        }
+                        Err(error) => eprintln!("tag picker: {error}"),
+                    }
+                    cx.notify();
+                },
+            ));
         }
         cx.notify();
     }
 
-    fn fetch(
-        &mut self,
-        query: String,
-        group: Option<String>,
-        generation: u64,
-        cx: &mut Context<Self>,
-    ) {
-        let (search, namespace) = (query.trim().to_owned(), group.clone());
-        let answer = self.session.read(cx).run(move |library| {
-            let search = (!search.is_empty()).then_some(search.as_str());
-            library.tag_page(namespace.as_deref(), search, 0, PAGE)
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this, cx| {
-                if generation != this.generation {
-                    return;
-                }
-                match result {
-                    Ok((tags, next, _)) => {
-                        this.tags = tags;
-                        this.cursor = next;
-                        this.settled = Some((query, group));
-                        this.focus_index = None;
-                    }
-                    Err(error) => eprintln!("tag picker: {error}"),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// The next page, once the list nears its end.
     fn load_more(&mut self, cx: &mut Context<Self>) {
-        let Some(offset) = self.cursor.filter(|_| !self.loading_more) else {
+        let Some(page) = self.pager.next() else {
             return;
         };
-        let Some((query, group)) = self.settled.clone() else {
-            return;
-        };
-        if query != self.query || group != self.browsed_group() {
-            return;
-        }
-        self.loading_more = true;
-        let generation = self.generation;
-        let (search, namespace) = (query.trim().to_owned(), group);
-        let answer = self.session.read(cx).run(move |library| {
-            let search = (!search.is_empty()).then_some(search.as_str());
-            library.tag_page(namespace.as_deref(), search, offset, PAGE)
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this, cx| {
-                this.loading_more = false;
-                if generation != this.generation {
-                    return;
-                }
-                if let Ok((tags, next, _)) = result {
-                    let known = this
-                        .tags
-                        .iter()
-                        .map(|tag| tag.tag_id)
-                        .collect::<BTreeSet<_>>();
-                    this.tags
-                        .extend(tags.into_iter().filter(|tag| !known.contains(&tag.tag_id)));
-                    this.cursor = next.filter(|next| *next != offset);
-                }
+        crate::tags::fetch_page(&self.session, page, None, cx, |this, page, answer, cx| {
+            if this.pager.more(&page, answer) {
                 cx.notify();
-            });
+            }
         })
         .detach();
     }
@@ -481,7 +390,12 @@ impl TagPicker {
             self.request(cx);
             return;
         }
-        let ids = self.tags.iter().map(|tag| tag.tag_id).collect::<Vec<_>>();
+        let ids = self
+            .pager
+            .tags
+            .iter()
+            .map(|tag| tag.tag_id)
+            .collect::<Vec<_>>();
         let answer = self
             .session
             .read(cx)
@@ -491,7 +405,7 @@ impl TagPicker {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                for tag in &mut this.tags {
+                for tag in &mut this.pager.tags {
                     if let Some(fresh) = records.iter().find(|fresh| fresh.tag_id == tag.tag_id) {
                         *tag = fresh.clone();
                     }
@@ -505,8 +419,11 @@ impl TagPicker {
     // ── Choosing ────────────────────────────────────────────────
 
     fn sources_rows(&self, starred: &[String]) -> (Option<TagRecord>, Vec<TagRecord>) {
-        let (settled, settled_group) =
-            self.settled.as_ref().map_or(("", None), |(query, group)| {
+        let (settled, settled_group) = self
+            .pager
+            .settled
+            .as_ref()
+            .map_or(("", None), |(query, group)| {
                 (query.as_str(), group.as_deref())
             });
         let entity = self.entity.iter().map(name).collect::<Vec<_>>();
@@ -517,11 +434,11 @@ impl TagPicker {
             entity: &entity,
             entity_records: &self.entity,
             opening: &self.opening_names,
-            tags: &self.tags,
+            tags: &self.pager.tags,
             starred,
         });
         // The filter mode offers only tags that exist.
-        let create = create_candidate(&self.view, settled, settled_group, &self.tags)
+        let create = create_candidate(&self.view, settled, settled_group, &self.pager.tags)
             .filter(|_| self.filter.is_none());
         (create, rows)
     }
@@ -644,7 +561,7 @@ impl TagPicker {
             Nav::Next => {
                 if self.sidebar {
                     let groups = self.group_names(cx);
-                    let next = next_view(&self.view, &groups);
+                    let next = crate::tags::next_view(&self.view, &groups, &View::Starred);
                     self.show_view(next, cx);
                 }
                 true
@@ -673,7 +590,7 @@ impl TagPicker {
         if !crate::settings::current(cx).show_tag_groups {
             return Vec::new();
         }
-        rail_groups(&self.namespaces)
+        crate::tags::rail_groups(&self.namespaces, false)
             .into_iter()
             .map(|group| group.name)
             .collect()

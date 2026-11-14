@@ -1,6 +1,6 @@
 //! The tag picker's drawing: the rail of groups, the tag rows and the
 //! create row, the list, the settings panel and the picker itself.
-use super::model::{display_name, rail_groups};
+use super::model::display_name;
 use super::{HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, TagPicker, View};
 use crate::tags::{Preferences, record_name as name};
 use crate::theme::Text as _;
@@ -116,7 +116,10 @@ impl TagPicker {
                 cx,
             ));
         if settings.show_tag_groups {
-            for (index, group) in rail_groups(&self.namespaces).into_iter().enumerate() {
+            for (index, group) in crate::tags::rail_groups(&self.namespaces, false)
+                .into_iter()
+                .enumerate()
+            {
                 let view = View::Group(group.name.clone());
                 let hovered = SharedString::from(format!("rail-group-{index}"));
                 let dot = div()
@@ -376,15 +379,16 @@ impl TagPicker {
         let shown_query = if local {
             self.query.clone()
         } else {
-            self.settled
+            self.pager
+                .settled
                 .as_ref()
                 .map_or(String::new(), |(query, _)| query.clone())
         };
-        let can_show_empty = local || self.settled.is_some();
+        let can_show_empty = local || self.pager.settled.is_some();
         // Near the end of what is loaded, the next page.
         let max = f32::from(self.scroll.max_offset().y);
         let scrolled = -f32::from(self.scroll.offset().y);
-        if self.cursor.is_some() && !self.loading_more && max - scrolled < LOAD_AHEAD {
+        if max - scrolled < LOAD_AHEAD {
             self.load_more(cx);
         }
         let mut content = div().w_full().p(px(4.)).flex().flex_col();

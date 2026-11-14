@@ -3,10 +3,12 @@
 //! tag picker and the Tags screen: their views, rail and paging), the rows
 //! every tag context menu starts with and what they do, and the starred
 //! tags and group colours kept in the library's application settings.
+use crate::session::Session;
 use crate::ui::menu;
-use gpui::App;
-use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
+use gpui::{App, Context, Entity, Task};
+use picto_library::{Library, TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 // ── Names ───────────────────────────────────────────────────────
 
@@ -119,6 +121,262 @@ pub fn inspector_order(namespace: &str) -> u8 {
         "" | "general" => 99,
         other => group_order(other),
     }
+}
+
+// ── Browsing ────────────────────────────────────────────────────
+
+/// What a tag browser lists (`SidebarMode` with the group browsed): every
+/// tag, one group, the items' tags, and the Add Tags dialog's recent or the
+/// picker's starred tags.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum View {
+    All,
+    Group(String),
+    Selected,
+    Recent,
+    Starred,
+}
+
+impl View {
+    /// The group the library is asked for, when one is browsed.
+    pub fn group(&self) -> Option<String> {
+        match self {
+            View::Group(group) => Some(group.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Tab: All, each of `groups`, Selected, then `last` (the dialog's Recent or
+/// the picker's Starred), then All again.
+pub fn next_view(view: &View, groups: &[String], last: &View) -> View {
+    match view {
+        View::All => groups
+            .first()
+            .map_or(View::Selected, |group| View::Group(group.clone())),
+        View::Group(current) => {
+            let at = groups.iter().position(|group| group == current);
+            match at.and_then(|at| groups.get(at + 1)) {
+                Some(next) => View::Group(next.clone()),
+                None => View::Selected,
+            }
+        }
+        View::Selected => last.clone(),
+        View::Recent | View::Starred => View::All,
+    }
+}
+
+/// `nsGroups`: the groups a rail lists, in their preset order. The Add Tags
+/// dialog lists General among them; the picker's All stands for it.
+pub fn rail_groups(namespaces: &[TagNamespaceRecord], general: bool) -> Vec<TagNamespaceRecord> {
+    let mut groups = namespaces
+        .iter()
+        .filter(|group| general || group_of(&group.name).is_some())
+        .cloned()
+        .collect::<Vec<_>>();
+    groups.sort_by_key(|group| group_order(&group.name));
+    groups
+}
+
+/// The Selected view: the items' tags by name, by group and then by name.
+pub fn records_by_group<'a>(names: impl IntoIterator<Item = &'a String>) -> Vec<TagRecord> {
+    let mut records = names
+        .into_iter()
+        .map(|name| record(name))
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.namespace
+            .to_lowercase()
+            .cmp(&right.namespace.to_lowercase())
+            .then_with(|| crate::text::natural_order(&left.subname, &right.subname))
+    });
+    records
+}
+
+/// The library's tag groups with their counts, handed to `then` on the view
+/// once read.
+pub fn read_groups<V: 'static>(
+    session: &Entity<Session>,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Vec<TagNamespaceRecord>, &mut Context<V>) + 'static,
+) {
+    let answer = session.read(cx).run(|library| library.tag_namespaces());
+    cx.spawn(async move |view, cx| {
+        if let Ok(Ok(namespaces)) = answer.await {
+            let _ = view.update(cx, |view, cx| then(view, namespaces, cx));
+        }
+    })
+    .detach();
+}
+
+// ── Paging ──────────────────────────────────────────────────────
+
+/// A page of a listing: a search within a group, or every tag.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Page {
+    generation: u64,
+    pub query: String,
+    pub group: Option<String>,
+    offset: usize,
+    size: usize,
+}
+
+/// A page's tags and where the next one starts, if there is one.
+pub type Answer = Result<(Vec<TagRecord>, Option<usize>), String>;
+
+impl Page {
+    /// The page from the library's sorted tag list.
+    pub fn fetch(&self, library: &Library) -> Answer {
+        let search = self.query.trim();
+        library
+            .tag_page(
+                self.group.as_deref(),
+                (!search.is_empty()).then_some(search),
+                self.offset,
+                self.size,
+            )
+            .map(|(tags, next, _)| (tags, next))
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The tags a browser has loaded of its listing, page by page. A new
+/// listing makes every answer still on its way for an older one count for
+/// nothing; each tag is listed once.
+#[derive(Debug)]
+pub struct TagPager {
+    pub tags: Vec<TagRecord>,
+    /// Where the next page starts, while there is one.
+    pub cursor: Option<usize>,
+    pub loading_more: bool,
+    /// The search and group of the listing shown, once its first page is in.
+    pub settled: Option<(String, Option<String>)>,
+    asked: Option<(String, Option<String>)>,
+    generation: u64,
+    size: usize,
+}
+
+impl TagPager {
+    /// Pages of `size` tags (`PAGE_SIZE`).
+    pub fn new(size: usize) -> Self {
+        Self {
+            tags: Vec::new(),
+            cursor: None,
+            loading_more: false,
+            settled: None,
+            asked: None,
+            generation: 0,
+            size,
+        }
+    }
+
+    /// Starts a listing: the first page to ask for.
+    pub fn begin(&mut self, query: &str, group: Option<String>) -> Page {
+        self.generation += 1;
+        self.loading_more = false;
+        self.asked = Some((query.to_owned(), group.clone()));
+        Page {
+            generation: self.generation,
+            query: query.to_owned(),
+            group,
+            offset: 0,
+            size: self.size,
+        }
+    }
+
+    /// Whether `page` is of the listing last asked for.
+    pub fn current(&self, page: &Page) -> bool {
+        page.generation == self.generation
+    }
+
+    /// Takes a listing's first page in place of what was loaded, unless a
+    /// newer listing was asked for since; true when it was taken.
+    pub fn first(&mut self, page: &Page, tags: Vec<TagRecord>, next: Option<usize>) -> bool {
+        if !self.current(page) {
+            return false;
+        }
+        self.tags = merge_unique(Vec::new(), tags);
+        self.cursor = next;
+        self.settled = Some((page.query.clone(), page.group.clone()));
+        true
+    }
+
+    /// The page after those loaded, when there is one, none is on its way
+    /// and what is shown is the listing last asked for.
+    pub fn next(&mut self) -> Option<Page> {
+        let offset = self.cursor.filter(|_| !self.loading_more)?;
+        let (query, group) = self
+            .settled
+            .clone()
+            .filter(|_| self.settled == self.asked)?;
+        self.loading_more = true;
+        Some(Page {
+            generation: self.generation,
+            query,
+            group,
+            offset,
+            size: self.size,
+        })
+    }
+
+    /// Adds a further page to what is loaded, unless the listing changed
+    /// since it was asked for; true when the answer still counted.
+    pub fn more(&mut self, page: &Page, answer: Answer) -> bool {
+        if !self.current(page) {
+            return false;
+        }
+        self.loading_more = false;
+        if let Ok((tags, next)) = answer {
+            self.tags = merge_unique(std::mem::take(&mut self.tags), tags);
+            // A page that does not move on would be asked for for ever.
+            self.cursor = next.filter(|next| *next != page.offset);
+        }
+        true
+    }
+}
+
+/// Asks the library for `page`, once `delay` has passed when there is one,
+/// and hands the answer to `then` on the view if it is still there.
+/// Dropping the task forgets the request.
+pub fn fetch_page<V: 'static>(
+    session: &Entity<Session>,
+    page: Page,
+    delay: Option<Duration>,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Page, Answer, &mut Context<V>) + 'static,
+) -> Task<()> {
+    let session = session.clone();
+    cx.spawn(async move |view, cx| {
+        if let Some(delay) = delay {
+            cx.background_executor().timer(delay).await;
+        }
+        let job = page.clone();
+        let answer = session.read_with(cx, |session, _| {
+            session.run(move |library| job.fetch(library))
+        });
+        let Ok(answer) = answer.await else { return };
+        let _ = view.update(cx, |view, cx| then(view, page, answer, cx));
+    })
+}
+
+/// `mergeUniqueTags`: `incoming` after `current`, each tag once, a tag
+/// already listed updated where it stands.
+pub fn merge_unique(mut current: Vec<TagRecord>, incoming: Vec<TagRecord>) -> Vec<TagRecord> {
+    let mut position = current
+        .iter()
+        .enumerate()
+        .map(|(index, tag)| (tag.tag_id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    for tag in incoming {
+        match position.get(&tag.tag_id) {
+            Some(index) => current[*index] = tag,
+            None => {
+                position.insert(tag.tag_id, current.len());
+                current.push(tag);
+            }
+        }
+    }
+    current
 }
 
 // ── The common tag menu ─────────────────────────────────────────
@@ -330,6 +588,138 @@ pub fn rename_star(previous: &str, next: &str, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tag(id: u32, namespace: &str, subname: &str) -> TagRecord {
+        TagRecord {
+            tag_id: TagId(id),
+            namespace_id: TagNamespaceId(0),
+            namespace: namespace.into(),
+            subname: subname.into(),
+            active_count: 0,
+            assignment_count: 0,
+        }
+    }
+
+    fn group(name: &str) -> TagNamespaceRecord {
+        TagNamespaceRecord {
+            namespace_id: TagNamespaceId(0),
+            name: name.into(),
+            tag_count: 1,
+        }
+    }
+
+    #[test]
+    fn tab_steps_through_all_the_groups_selected_and_the_last_view() {
+        let groups = ["creator".to_owned(), "series".to_owned()];
+        for last in [View::Recent, View::Starred] {
+            let mut view = View::All;
+            let mut seen = Vec::new();
+            for _ in 0..5 {
+                view = next_view(&view, &groups, &last);
+                seen.push(view.clone());
+            }
+            assert_eq!(
+                seen,
+                [
+                    View::Group("creator".into()),
+                    View::Group("series".into()),
+                    View::Selected,
+                    last.clone(),
+                    View::All
+                ]
+            );
+            assert_eq!(next_view(&View::All, &[], &last), View::Selected);
+        }
+        assert_eq!(View::Group("x".into()).group().as_deref(), Some("x"));
+        assert_eq!(View::Selected.group(), None);
+    }
+
+    #[test]
+    fn the_rails_list_the_groups_in_their_order_with_general_last_or_not_at_all() {
+        let namespaces = ["character", "creator", "", "rating", "series", "species"].map(group);
+        let names = |general| {
+            rail_groups(&namespaces, general)
+                .into_iter()
+                .map(|group| group.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(true),
+            ["creator", "series", "character", "species", "rating", ""]
+        );
+        assert_eq!(
+            names(false),
+            ["creator", "series", "character", "species", "rating"]
+        );
+    }
+
+    #[test]
+    fn the_selected_view_lists_by_group_then_name() {
+        let names = ["zeta", "series:x", "alpha", "creator:b", "item10", "item9"].map(String::from);
+        let records = records_by_group(&names);
+        assert_eq!(
+            records.iter().map(record_name).collect::<Vec<_>>(),
+            ["creator:b", "alpha", "item9", "item10", "zeta", "series:x"]
+        );
+    }
+
+    #[test]
+    fn a_pager_keeps_the_newest_listing_and_lists_each_tag_once() {
+        let mut pager = TagPager::new(2);
+        let old = pager.begin("ca", None);
+        let page = pager.begin("cat", Some("species".into()));
+        assert_eq!(
+            (page.query.as_str(), page.group.as_deref()),
+            ("cat", Some("species"))
+        );
+        // An answer for the older listing counts for nothing.
+        assert!(!pager.first(&old, vec![tag(9, "", "x")], Some(2)));
+        assert!(pager.tags.is_empty() && pager.settled.is_none());
+        assert!(pager.first(
+            &page,
+            vec![tag(1, "species", "cat"), tag(2, "species", "cats")],
+            Some(2)
+        ));
+        assert_eq!(pager.settled, Some(("cat".into(), Some("species".into()))));
+        // One further page at a time.
+        let more = pager.next().unwrap();
+        assert!(pager.loading_more && pager.next().is_none());
+        assert!(pager.more(
+            &more,
+            Ok((
+                vec![tag(2, "species", "cats!"), tag(3, "species", "catx")],
+                Some(4)
+            ))
+        ));
+        assert_eq!(
+            pager
+                .tags
+                .iter()
+                .map(|tag| tag.subname.as_str())
+                .collect::<Vec<_>>(),
+            ["cat", "cats!", "catx"]
+        );
+        assert_eq!(pager.cursor, Some(4));
+        // A page that does not move on ends the listing.
+        let stuck = pager.next().unwrap();
+        assert!(pager.more(&stuck, Ok((Vec::new(), Some(4)))));
+        assert_eq!(pager.cursor, None);
+        assert!(pager.next().is_none());
+    }
+
+    #[test]
+    fn a_pager_asks_for_no_more_until_the_new_listing_is_in() {
+        let mut pager = TagPager::new(2);
+        let page = pager.begin("", None);
+        assert!(pager.first(&page, vec![tag(1, "", "a")], Some(2)));
+        let more = pager.next().unwrap();
+        // The search changed while the page was on its way.
+        let fresh = pager.begin("b", None);
+        assert!(!pager.loading_more && pager.next().is_none());
+        assert!(!pager.more(&more, Ok((vec![tag(2, "", "b")], None))));
+        assert!(pager.first(&fresh, vec![tag(2, "", "b")], None));
+        assert!(pager.next().is_none());
+    }
 
     #[test]
     fn names_leave_out_the_general_group() {
