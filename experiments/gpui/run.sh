@@ -37,6 +37,11 @@ if [[ "$(filesystem_of "$temporary")" != "apfs" ]]; then
 	fail "the volume holding $source_library is not APFS, so the library cannot be cloned. Nothing was copied."
 fi
 
+# The pinned toolchain, when it is unpacked beside this script (README,
+# "Building"): another compiler on the PATH rebuilds everything, or fails.
+for bin in .toolchain/*/bin; do
+	[[ -x "$bin/cargo" ]] && PATH="$PWD/$bin:$PATH"
+done
 cargo build --locked >&2
 copy="$(target/debug/picto-gpui-spike --make-copy "$source_library" | tail -n 1)"
 [[ -n "$copy" ]] || fail "no copy was made"

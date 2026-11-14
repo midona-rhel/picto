@@ -25,7 +25,18 @@ pub fn frameless(
         }),
         app_owns_titlebar_drag: true,
         window_decorations: DECORATIONS,
+        // `PICTO_GPUI_BACKGROUND`: no window of the app takes the keyboard.
+        focus: !crate::seams::background(),
         ..Default::default()
+    }
+}
+
+/// Brings a window of the app forward with the keyboard, unless
+/// `PICTO_GPUI_BACKGROUND` asks every window to stay behind whatever the
+/// user is working in.
+pub fn activate(window: &mut Window) {
+    if !crate::seams::background() {
+        window.activate_window();
     }
 }
 

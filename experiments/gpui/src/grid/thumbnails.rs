@@ -23,6 +23,9 @@ pub struct Thumbnails {
     pins: HashMap<&'static str, Resource>,
     /// What the grid's visible band wants.
     wanted: HashSet<Resource>,
+    /// The view that planned `wanted` (the grid), whose thumbnails wait
+    /// their turn in the plan.
+    planner: Option<EntityId>,
     /// Missing thumbnails being made.
     renders: Renders,
 }
@@ -308,6 +311,7 @@ impl Thumbnails {
             entries: HashMap::new(),
             clock: 0,
             pins: HashMap::new(),
+            planner: None,
             wanted: HashSet::new(),
             renders: Renders::default(),
         }
@@ -453,6 +457,7 @@ impl Thumbnails {
     /// go, oldest first, never one that is wanted or pinned.
     pub fn plan(&mut self, wanted: Vec<Resource>, window: &mut Window, cx: &mut App) {
         self.wanted = wanted.iter().cloned().collect();
+        self.planner = Some(window.current_view());
         // Dropping an unfinished entry cancels its read and decode.
         let abandoned = self
             .entries
@@ -536,8 +541,12 @@ impl ImageCache for Thumbnails {
             return image;
         }
         // A grid thumbnail waits for its turn in the plan. Anything else,
-        // such as the inspector's preview, loads as soon as it is asked for.
-        if !self.wanted.contains(resource) {
+        // such as the inspector's preview, loads as soon as it is asked for,
+        // even when the grid wants it too: only the view that starts a load
+        // is told when it is ready, so another view left waiting on the
+        // grid's turn would show its placeholder until something else
+        // repainted it.
+        if !self.wanted.contains(resource) || self.planner != Some(window.current_view()) {
             self.start(resource, window, cx);
         }
         None
@@ -547,6 +556,7 @@ impl ImageCache for Thumbnails {
 #[cfg(test)]
 mod tests {
     use super::{Thumbnails, budget, fallback, load_order, primary};
+    use gpui::prelude::FluentBuilder as _;
     use gpui::{
         AnyWindowHandle, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
         RenderImage, Resource, Styled as _, TestAppContext, Window, div, img, px, size,
@@ -653,6 +663,120 @@ mod tests {
             held > BAND && held * each <= budget((300., 300.)) + BAND * each,
             "{held} in the atlas"
         );
+    }
+
+    /// The grid and, in a view of its own, the first of its covers that
+    /// waits for its turn in the grid's plan (as the inspector's collage
+    /// shows the first covers of a destination just opened).
+    struct Cover {
+        thumbnails: Entity<Thumbnails>,
+        shown: PathBuf,
+        renders: usize,
+    }
+
+    impl Render for Cover {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.renders += 1;
+            img(self.shown.clone())
+                .image_cache(&self.thumbnails)
+                .w(px(20.))
+                .h(px(15.))
+        }
+    }
+
+    struct Shell {
+        band: Entity<Band>,
+        cover: Entity<Cover>,
+        /// The cover is shown once the grid has planned.
+        cover_shown: bool,
+    }
+
+    impl Render for Shell {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Cached, as the shell holds its grid and inspector: a view
+            // draws again only when it is told to.
+            let fill = || gpui::StyleRefinement::default().size_full();
+            div()
+                .size_full()
+                .child(self.band.clone().cached(fill()))
+                .when(self.cover_shown, |shell| {
+                    shell.child(self.cover.clone().cached(fill()))
+                })
+        }
+    }
+
+    /// A view outside the grid asking for a thumbnail the grid wants but
+    /// has not started yet has it loaded and is told when it is ready: a
+    /// real window draws only when told, so otherwise it would show its
+    /// placeholder until something else repainted it.
+    #[test]
+    fn another_view_is_not_left_waiting_on_the_grids_turn() {
+        let folder = tempfile::tempdir().unwrap();
+        let paths = (0..super::CONCURRENCY + 1)
+            .map(|index| {
+                let path = folder.path().join(format!("{index}.jpg"));
+                image::RgbImage::from_pixel(8, 6, image::Rgb([200, 90, 20]))
+                    .save(&path)
+                    .unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let last = paths.last().unwrap().clone();
+        let mut cx = TestAppContext::single();
+        let window = cx.open_window(size(px(300.), px(300.)), |_, cx| {
+            let thumbnails = cx.new(Thumbnails::new);
+            let band = cx.new(|_| Band {
+                thumbnails: thumbnails.clone(),
+                shown: paths.clone(),
+            });
+            let cover = cx.new(|_| Cover {
+                thumbnails,
+                shown: last.clone(),
+                renders: 0,
+            });
+            Shell {
+                band,
+                cover,
+                cover_shown: false,
+            }
+        });
+        let handle: AnyWindowHandle = window.into();
+        let draw_if_told = |cx: &mut TestAppContext| {
+            cx.update_window(handle, |_, window, cx| {
+                if window.is_dirty() {
+                    window.draw(cx).clear(cx);
+                }
+            })
+            .unwrap();
+        };
+        // The grid draws and plans first; the cover then asks for the
+        // thumbnail the grid has not started.
+        window
+            .update(&mut cx, |shell, _, cx| {
+                shell.cover_shown = true;
+                cx.notify();
+            })
+            .unwrap();
+        draw_if_told(&mut cx);
+        // Every load finishes and the window draws each frame it is told to,
+        // as a real one does.
+        for _ in 0..4 {
+            cx.run_until_parked();
+            draw_if_told(&mut cx);
+        }
+        let (loaded, renders) = window
+            .read_with(&cx, |shell, cx| {
+                let cover = shell.cover.read(cx);
+                let loaded = cover
+                    .thumbnails
+                    .read(cx)
+                    .image(&Resource::Path(last.clone().into()))
+                    .is_some();
+                (loaded, cover.renders)
+            })
+            .unwrap();
+        assert!(loaded, "the cover was not loaded");
+        assert!(renders > 1, "the cover was never drawn again once loaded");
     }
 
     #[test]

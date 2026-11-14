@@ -402,7 +402,9 @@ pub fn open(cx: &mut App) {
     }
     if let Some(handle) = cx.global::<SettingsGlobal>().window
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| {
+                crate::ui::window_chrome::activate(window)
+            })
             .is_ok()
     {
         return;
