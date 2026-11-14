@@ -281,8 +281,6 @@ pub struct Session {
     pub viewer: bool,
     /// Which member of a collection the viewer shows.
     pub member: usize,
-    /// A bundled sample shown in the viewer instead of a library item.
-    pub demo: Option<(&'static str, &'static str)>,
     search_text: String,
     pub filter: Option<FilterExpr>,
     /// The filter bar's filters, which `filter` is built from.
@@ -303,9 +301,9 @@ pub struct Session {
     pub library_cover: Option<PathBuf>,
     /// The grid draws its thumbnails without colour.
     pub grayscale: bool,
-    /// A disposable folder that holds the demo media and is the scratch
-    /// space the library cover's crops are written to.
-    pub scratch: tempfile::TempDir,
+    /// A folder of the session's own, removed when it ends, that the library
+    /// cover's crops are written to.
+    scratch: Option<tempfile::TempDir>,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
     /// Folders items were added to, newest first, for the folder picker's
@@ -388,10 +386,19 @@ impl Session {
             }
         })
         .detach();
-        let scratch = crate::demo::fixtures().expect("create disposable media fixtures");
-        let library_cover = blobs
+        // In the copy's own temporary folder, beside it, else the system's.
+        let scratch = root
             .parent()
-            .and_then(|library| crate::cover::prepare(library, scratch.path()));
+            .and_then(|holder| {
+                tempfile::Builder::new()
+                    .prefix("scratch.")
+                    .tempdir_in(holder)
+                    .ok()
+            })
+            .or_else(|| tempfile::tempdir().ok());
+        let library_cover = scratch
+            .as_ref()
+            .and_then(|scratch| crate::cover::prepare(&root, scratch.path()));
         Self {
             sender,
             receiver,
@@ -447,7 +454,6 @@ impl Session {
             details: None,
             viewer: false,
             member: 0,
-            demo: None,
             search_text: String::new(),
             filter: None,
             filters: Filters::default(),
@@ -484,6 +490,16 @@ impl Session {
     /// The disposable copy's canonical root.
     pub fn root(&self) -> &std::path::Path {
         &self.root
+    }
+
+    /// The session's scratch folder, for the library cover's crops: its own
+    /// temporary folder, or, when none could be made, the folder that holds
+    /// the copy.
+    pub fn scratch(&self) -> &std::path::Path {
+        match &self.scratch {
+            Some(scratch) => scratch.path(),
+            None => self.root.parent().unwrap_or(&self.root),
+        }
     }
 
     /// The library's blob store.
@@ -1672,7 +1688,6 @@ impl Session {
         self.transition = Transition::FadingIn(Instant::now());
         let showing = self.selected_details().map(|details| details.root.root_id);
         self.focus = saved.focus;
-        self.demo = None;
         match self.selected_item().map(|item| item.root_id) {
             Some(id) if showing != Some(id) => {
                 self.member = 0;
@@ -1836,7 +1851,6 @@ impl Session {
     /// previous item's details stay up until this one's arrive, and
     /// choosing the item already shown asks for nothing.
     fn focus_on(&mut self, ordinal: Option<usize>, cx: &mut Context<Self>) {
-        self.demo = None;
         self.folder_selection.clear();
         let showing = self.selected_details().map(|details| details.root.root_id);
         self.focus = ordinal.and_then(|ordinal| {
@@ -2013,7 +2027,6 @@ impl Session {
         self.focus = None;
         self.member = 0;
         self.details = None;
-        self.demo = None;
         self.folder_selection = chosen;
         cx.emit(Change::Selection);
     }
@@ -2135,13 +2148,6 @@ impl Session {
             .member
             .saturating_add_signed(delta)
             .min(count.saturating_sub(1));
-        cx.emit(Change::Viewer);
-    }
-
-    pub fn show_demo(&mut self, name: &'static str, mime: &'static str, cx: &mut Context<Self>) {
-        self.demo = Some((name, mime));
-        self.viewer = true;
-        cx.emit(Change::Selection);
         cx.emit(Change::Viewer);
     }
 

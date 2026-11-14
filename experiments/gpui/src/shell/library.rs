@@ -281,7 +281,7 @@ impl LibraryPopover {
             (
                 session.library_root().map(Path::to_path_buf),
                 session.library_cover.clone(),
-                session.scratch.path().to_path_buf(),
+                session.scratch().to_path_buf(),
             )
         };
         let task = cx

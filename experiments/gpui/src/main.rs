@@ -5,7 +5,6 @@ mod atlas;
 mod backend;
 mod cover;
 mod covered;
-mod demo;
 mod desktop;
 mod export;
 mod grid;

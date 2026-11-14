@@ -62,9 +62,6 @@ next run. Data the application keeps outside a library (AI models) goes to
 
 `PICTO_GPUI_COPY_ONLY=1 run.sh …` makes the copy, prints its path and stops;
 the checks below use it. Delete `/tmp/picto-gpui-library.*` when done.
-`PICTO_GPUI_DEMOS=1 run.sh …` adds a Media Examples menu that opens the
-bundled samples of each viewer's formats; production has no such menu, so it
-is hidden otherwise.
 
 The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
 
@@ -1096,9 +1093,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   - Every other type, Word and PowerPoint included by decision: its
     thumbnail, "Preview is not available for <type>." and Open with Default
     App.
-  - The Media Examples menu (with `PICTO_GPUI_DEMOS=1`) has a sample of
+  - The format matrix test (`viewer/document/matrix.rs`) draws a sample of
     each (PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, a font, JPEG XL)
-    next to SVG and Flash.
+    off-screen from `assets/fixtures/`, which only the tests read.
 - Animated GIFs and animated WebP play in the viewer (GPUI's image element
   animates a multi-frame image that has an id); the grid keeps the still
   thumbnail, as production does.

@@ -891,7 +891,7 @@ pub fn accelerators(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Accele
 }
 
 /// The menus as GPUI sets them.
-fn gpui_menus(context: &MenuContext, demos: bool) -> Vec<Menu> {
+fn gpui_menus(context: &MenuContext) -> Vec<Menu> {
     fn convert(entry: &Entry) -> MenuItem {
         match entry {
             Entry::Separator => MenuItem::Separator,
@@ -914,33 +914,14 @@ fn gpui_menus(context: &MenuContext, demos: bool) -> Vec<Menu> {
             },
         }
     }
-    let mut menus: Vec<Menu> = model(context, Platform::CURRENT)
+    model(context, Platform::CURRENT)
         .iter()
         .map(|menu| Menu {
             name: menu.title.into(),
             items: menu.entries.iter().map(convert).collect(),
             disabled: false,
         })
-        .collect();
-    if demos {
-        // Before Window and Help, as an app's own menus are.
-        let at = menus.len() - 2;
-        menus.insert(
-            at,
-            Menu {
-                name: "Media Examples".into(),
-                items: [
-                    MenuItem::action("SVG", crate::shell::DemoSvg),
-                    MenuItem::action("Flash (Ruffle)", crate::shell::DemoFlash),
-                ]
-                .into_iter()
-                .chain(crate::viewer::document::demos::menu_items())
-                .collect(),
-                disabled: false,
-            },
-        );
-    }
-    menus
+        .collect()
 }
 
 /// Whether the window carries the application menu button
@@ -1046,12 +1027,6 @@ pub fn in_window_action(path: &str, cx: &App) -> Option<Box<dyn Action>> {
     }
 }
 
-/// `PICTO_GPUI_DEMOS=1` adds the Media Examples menu, which opens bundled
-/// samples of each viewer's formats. Production has no such menu.
-fn demos() -> bool {
-    std::env::var_os("PICTO_GPUI_DEMOS").is_some_and(|value| !value.is_empty())
-}
-
 /// The menu's state: the context it was last set for, and the main window,
 /// which Close Window hides rather than closes.
 #[derive(Default)]
@@ -1087,7 +1062,7 @@ pub fn set_context(context: MenuContext, cx: &mut App) -> bool {
 /// Sets the application menu for the current context and key bindings.
 pub fn set_menus(cx: &mut App) {
     let context = context(cx);
-    cx.set_menus(gpui_menus(&context, demos()));
+    cx.set_menus(gpui_menus(&context));
 }
 
 /// The main window, for what other windows send to it.

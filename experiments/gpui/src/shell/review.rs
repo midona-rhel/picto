@@ -74,11 +74,8 @@ impl Shell {
         if !self.viewing(cx) {
             return None;
         }
-        let session = self.session.read(cx);
-        if session.demo.is_some() {
-            return None;
-        }
-        session
+        self.session
+            .read(cx)
             .selected_item()
             .filter(|item| item.lifecycle == Lifecycle::Inbox)
             .map(|item| item.root_id)

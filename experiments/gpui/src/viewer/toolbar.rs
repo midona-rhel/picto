@@ -190,12 +190,7 @@ impl Render for ViewerToolbar {
                         .map_or(0, |details| details.media.len() as u64),
                 )
             } else {
-                (
-                    session
-                        .focus_ordinal()
-                        .filter(|_| session.demo.is_none() && !editing),
-                    session.total,
-                )
+                (session.focus_ordinal().filter(|_| !editing), session.total)
             }
         };
         let (zoomable, percent) = {

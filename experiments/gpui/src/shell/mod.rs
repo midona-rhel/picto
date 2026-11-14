@@ -60,9 +60,7 @@ actions!(
         TogglePanels,
         Undo,
         Redo,
-        Quit,
-        DemoSvg,
-        DemoFlash
+        Quit
     ]
 );
 
@@ -1091,17 +1089,6 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
-            .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.show_demo("vector.svg", "image/svg+xml", cx)
-                });
-            }))
-            .on_action(cx.listener(|this, _: &DemoFlash, _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.show_demo("interactive.swf", "application/x-shockwave-flash", cx)
-                });
-            }))
-            .map(|root| crate::viewer::document::demos::handle(root, &self.session))
             .child(titlebar)
             .child(body)
             .children(sidebar_edge)

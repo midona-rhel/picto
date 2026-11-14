@@ -251,19 +251,9 @@ impl Media {
     }
 }
 
-/// What the session's viewer shows: the bundled sample, or the shown member
-/// of the selected item once its details have arrived.
+/// What the session's viewer shows: the shown member of the selected item,
+/// once its details have arrived.
 fn session_media(session: &Session) -> Option<Media> {
-    if let Some((name, mime)) = session.demo {
-        return Some(Media {
-            name: name.into(),
-            key: name.to_owned(),
-            thumbnail: PathBuf::new(),
-            natural: None,
-            path: session.scratch.path().join(name),
-            mime: mime.to_owned(),
-        });
-    }
     Media::of(session, session.details.as_ref()?, session.member)
 }
 
@@ -701,7 +691,7 @@ impl Viewer {
             let viewing = session
                 .selected_item()
                 .map(|item| item.root_id)
-                .filter(|_| session.viewer && session.demo.is_none());
+                .filter(|_| session.viewer);
             if let Some(root) = viewing.filter(|root| self.recorded != Some(*root))
                 && !browsing_recent(session)
             {
@@ -827,9 +817,6 @@ impl Viewer {
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let (index, total) = {
             let session = self.session.read(cx);
-            if session.demo.is_some() {
-                return;
-            }
             let Some(index) = session.focus_ordinal() else {
                 return;
             };
@@ -853,10 +840,9 @@ impl Viewer {
 
 /// Whether the selected item is a collection.
 pub fn collection_selected(session: &Session) -> bool {
-    session.demo.is_none()
-        && session
-            .selected_item()
-            .is_some_and(|item| item.kind == picto_library::RootKind::Collection)
+    session
+        .selected_item()
+        .is_some_and(|item| item.kind == picto_library::RootKind::Collection)
 }
 
 /// The selected collection's details, once they have arrived.
