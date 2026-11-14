@@ -199,9 +199,16 @@ impl Theme {
     pub fn selection(&self) -> Rgba {
         translucent(self.primary, 30.)
     }
-    /// `--glass-bg`: floating surfaces.
+    /// `--glass-bg`: floating surfaces. GPUI's DirectX renderer (Windows)
+    /// draws no backdrop blur, so there the glass is the more opaque fill a
+    /// panel takes where nothing blurs what is behind it.
     pub fn glass(&self) -> Rgba {
-        translucent(self.background, if self.light { 90. } else { 92. })
+        let glass = translucent(self.background, if self.light { 90. } else { 92. });
+        if cfg!(target_os = "windows") {
+            crate::ui::fill_without_blur(glass)
+        } else {
+            glass
+        }
     }
     /// `LibraryAvatar`: `color-mix(currentColor 10%, control-surface)` with
     /// the secondary text colour.
@@ -871,6 +878,16 @@ mod tests {
         assert_eq!(blend(DARK.border(), DARK.primary(), 1.), DARK.primary());
     }
 
+    /// The glass as this system draws it: the CSS value, made more opaque
+    /// on Windows, which cannot blur behind it.
+    fn glass_here(css: gpui::Rgba) -> gpui::Rgba {
+        if cfg!(target_os = "windows") {
+            crate::ui::fill_without_blur(css)
+        } else {
+            css
+        }
+    }
+
     #[test]
     fn derived_surfaces_match_the_resolved_css() {
         // "Inspector surface over the dark base resolves to rgb(31 32 35)."
@@ -879,7 +896,7 @@ mod tests {
         assert_eq!(DARK.border(), rgba(0xf8f9fb1a));
         assert_eq!(DARK.border_secondary(), rgba(0xf8f9fb14));
         assert_eq!(DARK.text_tertiary(), rgba(0xf8f9fb99));
-        assert_eq!(DARK.glass(), rgba(0x18191ceb));
+        assert_eq!(DARK.glass(), glass_here(rgba(0x18191ceb)));
     }
 
     #[test]
@@ -900,7 +917,7 @@ mod tests {
         assert_eq!(LIGHT.border(), rgba(0x2c2f3226));
         assert_eq!(LIGHT.border_secondary(), rgba(0x2c2f321a));
         assert_eq!(LIGHT.control_surface(), rgba(0xffffff80));
-        assert_eq!(LIGHT_GRAY.glass(), rgba(0xe3e4e6e6));
+        assert_eq!(LIGHT_GRAY.glass(), glass_here(rgba(0xe3e4e6e6)));
         assert_eq!(BLUE.rail(), rgb(0x141d36));
     }
 

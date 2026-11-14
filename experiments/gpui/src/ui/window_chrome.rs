@@ -330,14 +330,14 @@ pub fn order_out(window: &Window) {
     let _ = window;
 }
 
-/// Whether [`system_blur_behind`] blurs what is behind a pop-up window on
-/// this system, kept to its panel: on macOS (an `NSVisualEffectView`
-/// beneath the panel) and Windows (acrylic, with the window cut to the
-/// panel). On Linux GPUI's blur (`ext-background-effect` or KDE's protocol
-/// on Wayland; none on X11) covers the whole window, shadow room included,
-/// so it is not asked for and the panel draws a more opaque glass instead.
+/// Whether [`system_blur_behind`] blurs what is behind a pop-up window:
+/// on macOS, the one system whose menus are pop-up windows
+/// (`ui::menu::presentation`), through an `NSVisualEffectView` beneath the
+/// panel. Windows and Linux show menus inside the window, as production's
+/// renderer does, where the window's own backdrop blur (or, on Windows,
+/// the more opaque glass) applies.
 pub const fn system_blurs() -> bool {
-    cfg!(any(target_os = "macos", target_os = "windows"))
+    cfg!(target_os = "macos")
 }
 
 /// Gives a transparent pop-up window the system's blur of what is behind
@@ -368,95 +368,8 @@ pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, al
             appkit::backdrop::place(ns_window, rect, height, radius, alpha)
         });
     }
-    // Acrylic fills the whole window and takes no shape of its own, so the
-    // window is cut to the panel's rounded rectangle; the drawn shadow, in
-    // the room around the panel, is cut away with it. Its fade is the
-    // panel's own opacity.
-    #[cfg(target_os = "windows")]
-    {
-        let _ = alpha;
-        win32::cut_to(window, panel, radius);
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     let _ = (window, panel, radius, alpha);
-}
-
-/// A panel as a Windows window region: left, top, right and bottom in
-/// device pixels (right and bottom one past the panel, where GDI's regions
-/// end) and the corners' diameter.
-#[cfg(any(test, target_os = "windows"))]
-fn panel_region(panel: Bounds<Pixels>, radius: f32, scale: f32) -> [i32; 5] {
-    let at = |value: Pixels| (f32::from(value) * scale).round() as i32;
-    [
-        at(panel.origin.x),
-        at(panel.origin.y),
-        at(panel.origin.x + panel.size.width) + 1,
-        at(panel.origin.y + panel.size.height) + 1,
-        (radius * 2. * scale).round() as i32,
-    ]
-}
-
-/// The window region a pop-up window on Windows is cut to.
-#[cfg(target_os = "windows")]
-mod win32 {
-    use gpui::{Bounds, Pixels, Window};
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::ffi::c_void;
-    use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
-
-    #[link(name = "gdi32")]
-    unsafe extern "system" {
-        fn CreateRoundRectRgn(
-            left: i32,
-            top: i32,
-            right: i32,
-            bottom: i32,
-            width: i32,
-            height: i32,
-        ) -> *mut c_void;
-        fn DeleteObject(object: *mut c_void) -> i32;
-    }
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn SetWindowRgn(window: isize, region: *mut c_void, redraw: i32) -> i32;
-    }
-
-    thread_local! {
-        /// The region each window was last cut to, so it is set again only
-        /// when the panel moves or changes size.
-        static CUT: RefCell<HashMap<u64, [i32; 5]>> = RefCell::new(HashMap::new());
-    }
-
-    pub(super) fn cut_to(window: &Window, panel: Bounds<Pixels>, radius: f32) {
-        let Ok(handle) = HasWindowHandle::window_handle(window) else {
-            return;
-        };
-        let RawWindowHandle::Win32(win32) = handle.as_raw() else {
-            return;
-        };
-        let hwnd = win32.hwnd.get();
-        let wanted = super::panel_region(panel, radius, window.scale_factor());
-        let id = window.window_handle().window_id().as_u64();
-        let unchanged = CUT.with(|cut| cut.borrow_mut().insert(id, wanted) == Some(wanted));
-        if unchanged {
-            return;
-        }
-        let [left, top, right, bottom, diameter] = wanted;
-        // SAFETY: GDI and user32 calls with the arguments they take; once
-        // `SetWindowRgn` succeeds the system owns the region, and it is
-        // deleted here only when it was refused.
-        unsafe {
-            let shape = CreateRoundRectRgn(left, top, right, bottom, diameter, diameter);
-            if shape.is_null() {
-                return;
-            }
-            if SetWindowRgn(hwnd, shape, 1) == 0 {
-                DeleteObject(shape);
-            }
-        }
-    }
 }
 
 /// The Window menu's Bring All to Front (`arrangeInFront:`).
@@ -829,7 +742,7 @@ pub fn close_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{RESIZE_CORNER, RESIZE_EDGE, panel_region, resize_zones};
+    use super::{RESIZE_CORNER, RESIZE_EDGE, resize_zones};
     use gpui::{Bounds, ResizeEdge, Tiling, point, px, size};
 
     #[test]
@@ -864,12 +777,5 @@ mod tests {
             .collect();
         assert_eq!(edges, [ResizeEdge::Right]);
         assert!(resize_zones(size(px(800.), px(600.)), Tiling::tiled()).is_empty());
-    }
-
-    #[test]
-    fn a_panel_is_cut_out_in_device_pixels_with_its_round_corners() {
-        let panel = Bounds::new(point(px(40.), px(40.5)), size(px(270.), px(300.)));
-        assert_eq!(panel_region(panel, 12., 1.), [40, 41, 311, 342, 24]);
-        assert_eq!(panel_region(panel, 12., 1.5), [60, 61, 466, 512, 36]);
     }
 }
