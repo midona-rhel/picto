@@ -1,7 +1,8 @@
 # Pictures of the app for CI, played by the off-screen tool (src/offscreen.rs)
 # into a synthetic library (the million_grid_demo example): the grid, a
-# hovered tile, the grid scrolled, the viewer, an item's menu, the
-# application menu, and the Settings window.
+# hovered tile, the grid scrolled, the viewer, an item's menu, the window's
+# close button hovered and the application menu (both drawn by the app on
+# Windows and Linux only), and the Settings window.
 reload
 size 1213 865
 wait 800
@@ -29,10 +30,24 @@ wait 600
 shot 05-item-menu
 key escape
 wait 400
+move 1191 24
+wait 500
+shot 06-close-hover
+move 22 24
+down 22 24
+up 22 24
+wait 600
+move 60 87
+wait 600
+shot 07-app-menu
+key escape
+wait 300
+key escape
+wait 400
 move 252 24
 down 252 24
 up 252 24
 wait 1500
 window 1
 wait 600
-shot 06-settings
+shot 08-settings
