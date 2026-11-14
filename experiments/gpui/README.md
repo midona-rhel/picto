@@ -855,8 +855,6 @@ Navigation and results
 - A detail window on one item whose details cannot be read keeps the
   thumbnail and never opens the file; production opens the file by its hash
   without reading details.
-- The Tags screen shows changes made elsewhere only when it is opened again,
-  and Undo does not reach tag edits†.
 - Settings reads the library's statistics and cloud state once when it
   opens; the keyboard preset, audio visualization and shortcut edits apply
   only on Save, without production's live preview†; an undo that reverts a
