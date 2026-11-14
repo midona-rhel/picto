@@ -122,160 +122,6 @@ pub fn json(text: &str) -> Vec<Block> {
     }
 }
 
-/// An RTF document's text, one paragraph per `\par`. Character formatting
-/// is not kept.
-pub fn rtf(source: &str) -> Vec<Block> {
-    rtf_text(source)
-        .split('\n')
-        .map(|paragraph| Block::Paragraph(Inline::plain(paragraph)))
-        .collect()
-}
-
-/// The visible text of an RTF document: control words dropped, the
-/// destinations that hold no body text skipped, escapes decoded.
-pub fn rtf_text(source: &str) -> String {
-    const SKIPPED: [&str; 10] = [
-        "fonttbl",
-        "colortbl",
-        "stylesheet",
-        "info",
-        "pict",
-        "header",
-        "footer",
-        "listtable",
-        "listoverridetable",
-        "generator",
-    ];
-    let bytes = source.as_bytes();
-    let mut out = String::new();
-    // For each open group, whether its text is skipped.
-    let mut groups: Vec<bool> = vec![false];
-    // Characters to drop after a `\uN` escape (`\ucN`, default 1).
-    let mut unicode_skip = 1usize;
-    let mut pending_skip = 0usize;
-    let mut index = 0;
-    let skipping = |groups: &Vec<bool>| groups.last().copied().unwrap_or(false);
-    while index < bytes.len() {
-        let byte = bytes[index];
-        match byte {
-            b'{' => {
-                let parent = skipping(&groups);
-                groups.push(parent);
-                index += 1;
-            }
-            b'}' => {
-                groups.pop();
-                if groups.is_empty() {
-                    groups.push(false);
-                }
-                index += 1;
-            }
-            b'\\' => {
-                index += 1;
-                let Some(&next) = bytes.get(index) else { break };
-                if next.is_ascii_alphabetic() {
-                    let start = index;
-                    while index < bytes.len() && bytes[index].is_ascii_alphabetic() {
-                        index += 1;
-                    }
-                    let word = &source[start..index];
-                    let number_start = index;
-                    if index < bytes.len()
-                        && (bytes[index] == b'-' || bytes[index].is_ascii_digit())
-                    {
-                        index += 1;
-                        while index < bytes.len() && bytes[index].is_ascii_digit() {
-                            index += 1;
-                        }
-                    }
-                    let number: Option<i32> = source[number_start..index].parse().ok();
-                    if index < bytes.len() && bytes[index] == b' ' {
-                        index += 1;
-                    }
-                    if SKIPPED.contains(&word)
-                        && let Some(last) = groups.last_mut()
-                    {
-                        *last = true;
-                    }
-                    if skipping(&groups) {
-                        continue;
-                    }
-                    match word {
-                        "par" | "line" | "sect" | "page" => out.push('\n'),
-                        "tab" => out.push('\t'),
-                        "uc" => unicode_skip = number.unwrap_or(1).max(0) as usize,
-                        "u" => {
-                            if let Some(code) = number {
-                                let code = if code < 0 { code + 65536 } else { code } as u32;
-                                if let Some(character) = char::from_u32(code) {
-                                    out.push(character);
-                                }
-                                pending_skip = unicode_skip;
-                            }
-                        }
-                        "emdash" => out.push('—'),
-                        "endash" => out.push('–'),
-                        "lquote" => out.push('‘'),
-                        "rquote" => out.push('’'),
-                        "ldblquote" => out.push('“'),
-                        "rdblquote" => out.push('”'),
-                        "bullet" => out.push('•'),
-                        _ => {}
-                    }
-                } else {
-                    index += 1;
-                    match next {
-                        b'*' => {
-                            if let Some(last) = groups.last_mut() {
-                                *last = true;
-                            }
-                        }
-                        b'\'' => {
-                            let hex = source.get(index..index + 2).unwrap_or("");
-                            index += 2;
-                            if pending_skip > 0 {
-                                pending_skip -= 1;
-                            } else if !skipping(&groups)
-                                && let Ok(code) = u8::from_str_radix(hex, 16)
-                            {
-                                out.push(windows_1252(code));
-                            }
-                        }
-                        b'~' if !skipping(&groups) => out.push('\u{a0}'),
-                        b'\n' | b'\r' if !skipping(&groups) => out.push('\n'),
-                        b'\\' | b'{' | b'}' if !skipping(&groups) => out.push(next as char),
-                        _ => {}
-                    }
-                }
-            }
-            b'\r' | b'\n' => index += 1,
-            _ => {
-                let character = source[index..].chars().next().unwrap_or(' ');
-                index += character.len_utf8();
-                if pending_skip > 0 {
-                    pending_skip -= 1;
-                } else if !skipping(&groups) {
-                    out.push(character);
-                }
-            }
-        }
-    }
-    out.trim_end().to_owned()
-}
-
-/// A byte of the Windows-1252 code page RTF's `\'hh` escapes use.
-fn windows_1252(byte: u8) -> char {
-    const HIGH: [char; 32] = [
-        '€', '\u{81}', '‚', 'ƒ', '„', '…', '†', '‡', 'ˆ', '‰', 'Š', '‹', 'Œ', '\u{8d}', 'Ž',
-        '\u{8f}', '\u{90}', '‘', '’', '“', '”', '•', '–', '—', '˜', '™', 'š', '›', 'œ', '\u{9d}',
-        'ž', 'Ÿ',
-    ];
-    match byte {
-        0x80..=0x9f => HIGH[(byte - 0x80) as usize],
-        other => other as char,
-    }
-}
-
 // ── Building blocks ─────────────────────────────────────────────
 
 enum Container {
@@ -303,7 +149,19 @@ struct Builder {
     marks: Marks,
     /// Whether whitespace collapses as HTML's does.
     collapse: bool,
+    /// Quotes, lists and items opened past [`MAX_NESTING`], which add no
+    /// level: their content joins the deepest one.
+    flattened: usize,
+    /// How deep the XHTML walk is.
+    depth: usize,
 }
+
+/// The deepest quotes and lists nest. A file can nest them without end;
+/// laid out and dropped recursively, they would run out of stack.
+const MAX_NESTING: usize = 32;
+/// The deepest the XHTML walk descends; below it a node's text is taken
+/// as it is.
+const MAX_DEPTH: usize = 128;
 
 impl Builder {
     fn new(collapse: bool) -> Self {
@@ -313,7 +171,30 @@ impl Builder {
             cell: None,
             marks: Marks::default(),
             collapse,
+            flattened: 0,
+            depth: 0,
         }
+    }
+
+    /// Whether a quote, list or item starting now adds no level, and if so
+    /// counts it, so its end is matched.
+    fn flatten(&mut self) -> bool {
+        let flatten = self.flattened > 0 || self.stack.len() > MAX_NESTING;
+        if flatten {
+            self.close_inline();
+            self.flattened += 1;
+        }
+        flatten
+    }
+
+    /// Whether an end closes one of the starts [`Self::flatten`] counted.
+    fn flattened_end(&mut self) -> bool {
+        let flattened = self.flattened > 0;
+        if flattened {
+            self.close_inline();
+            self.flattened -= 1;
+        }
+        flattened
     }
 
     fn blocks(&mut self) -> &mut Vec<Block> {
@@ -405,11 +286,17 @@ impl Builder {
     }
 
     fn start_quote(&mut self) {
+        if self.flatten() {
+            return;
+        }
         self.close_inline();
         self.stack.push(Container::Quote(Vec::new()));
     }
 
     fn end_quote(&mut self) {
+        if self.flattened_end() {
+            return;
+        }
         self.close_inline();
         self.close_items();
         if let Some(Container::Quote(blocks)) = self.stack.pop() {
@@ -418,6 +305,9 @@ impl Builder {
     }
 
     fn start_list(&mut self, start: Option<u64>) {
+        if self.flatten() {
+            return;
+        }
         self.close_inline();
         self.stack.push(Container::List {
             start,
@@ -426,6 +316,9 @@ impl Builder {
     }
 
     fn end_list(&mut self) {
+        if self.flattened_end() {
+            return;
+        }
         self.close_inline();
         if matches!(self.stack.last(), Some(Container::Item(_))) {
             self.end_item();
@@ -436,6 +329,9 @@ impl Builder {
     }
 
     fn start_item(&mut self) {
+        if self.flatten() {
+            return;
+        }
         self.close_inline();
         if matches!(self.stack.last(), Some(Container::Item(_))) {
             self.end_item();
@@ -450,6 +346,9 @@ impl Builder {
     }
 
     fn end_item(&mut self) {
+        if self.flattened_end() {
+            return;
+        }
         self.close_inline();
         if let Some(Container::Item(blocks)) = self.stack.pop() {
             if let Some(Container::List { items, .. }) = self.stack.last_mut() {
@@ -521,6 +420,7 @@ impl Builder {
     }
 
     fn finish(mut self) -> Vec<Block> {
+        self.flattened = 0;
         self.close_inline();
         self.end_cell();
         while self.stack.len() > 1 {
@@ -694,6 +594,25 @@ fn walk(
     picture: &mut dyn FnMut(&str) -> Option<Picture>,
     preformatted: bool,
 ) {
+    if builder.depth >= MAX_DEPTH {
+        let text: String = node
+            .descendants()
+            .filter_map(|node| node.text().filter(|_| node.is_text()))
+            .collect();
+        builder.text(&text);
+        return;
+    }
+    builder.depth += 1;
+    walk_children(node, builder, picture, preformatted);
+    builder.depth -= 1;
+}
+
+fn walk_children(
+    node: roxmltree::Node,
+    builder: &mut Builder,
+    picture: &mut dyn FnMut(&str) -> Option<Picture>,
+    preformatted: bool,
+) {
     for child in node.children() {
         if child.is_text() {
             let text = child.text().unwrap_or("");
@@ -856,7 +775,7 @@ pub fn text_of(blocks: &[Block]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, Inline, Marks, json, markdown, plain_text, rtf_text, text_of, xhtml};
+    use super::{Block, Inline, Marks, json, markdown, plain_text, text_of, xhtml};
 
     #[test]
     fn plain_text_keeps_every_line_in_pieces() {
@@ -881,12 +800,6 @@ mod tests {
             )]
         );
         assert_eq!(json("{nope"), vec![Block::Preformatted("{nope".into())]);
-    }
-
-    #[test]
-    fn rtf_keeps_the_body_text() {
-        let source = r"{\rtf1\ansi{\fonttbl{\f0 Helvetica;}}{\colortbl;\red0\green0\blue0;}\f0\fs24 Hello \b bold\b0  world\par Caf\'e9 \u8364? end\par{\*\generator Picto}}";
-        assert_eq!(rtf_text(source), "Hello bold world\nCafé € end");
     }
 
     #[test]
@@ -961,5 +874,47 @@ mod tests {
         assert_eq!(paragraph.text, "It was a dark night.");
         assert!(matches!(&blocks[2], Block::List { start: Some(1), items } if items.len() == 2));
         assert!(!text_of(&blocks).contains("alert"));
+    }
+
+    /// How deep quotes and lists nest in `blocks`.
+    fn nesting(blocks: &[Block]) -> usize {
+        blocks
+            .iter()
+            .map(|block| match block {
+                Block::Quote(inner) => 1 + nesting(inner),
+                Block::List { items, .. } => {
+                    1 + items.iter().map(|item| nesting(item)).max().unwrap_or(0)
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn nesting_without_end_is_flattened_and_keeps_the_text() {
+        let quotes = format!("{} deep", ">".repeat(20_000));
+        let blocks = markdown(&quotes);
+        assert!(nesting(&blocks) <= 33, "{}", nesting(&blocks));
+        assert!(text_of(&blocks).contains("deep"));
+        let lists: String = (0..5_000)
+            .map(|level| format!("{}- {level}\n", "  ".repeat(level)))
+            .collect();
+        let blocks = markdown(&lists);
+        assert!(nesting(&blocks) <= 33);
+        assert!(text_of(&blocks).contains("4999"));
+        // A chapter nested past the walk's depth keeps its text, in order.
+        let chapter = format!(
+            "<html><body>{}<p>end</p>{}</body></html>",
+            "<div><blockquote>".repeat(10_000),
+            "</blockquote></div>".repeat(10_000)
+        );
+        let blocks = xhtml(
+            &format!("{}x", chapter.replace("<p>end", "<p>start</p><p>end")),
+            &mut |_| None,
+        );
+        let text = text_of(&blocks);
+        assert!(text.contains("start") && text.contains("end"), "{text}");
+        assert!(nesting(&blocks) <= 33);
     }
 }

@@ -12,6 +12,7 @@ pub mod paged;
 pub mod pages;
 pub mod reader;
 pub mod rich;
+pub mod rtf;
 mod shell;
 pub mod unsupported;
 
@@ -67,20 +68,22 @@ pub fn scroll_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// The font preview's Cmd+= and Cmd+−, which `FontViewer.tsx` handles
-/// itself rather than through the shortcut registry, in each host that shows
-/// a document. The registry's J and L pages are bound by `crate::keymap`.
+/// The font preview's Cmd+= and Cmd+− (Ctrl off macOS), which
+/// `FontViewer.tsx` handles itself rather than through the shortcut
+/// registry, in each host that shows a document. The registry's J and L
+/// pages are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
+    let (larger, smaller) = if cfg!(target_os = "macos") {
+        ("cmd-=", "cmd--")
+    } else {
+        ("ctrl-=", "ctrl--")
+    };
     let mut bindings = Vec::new();
     for scope in [Scope::Viewer, Scope::DetailWindow] {
         let predicate = scope.predicate();
+        bindings.push(KeyBinding::new(larger, PreviewLarger, predicate.as_deref()));
         bindings.push(KeyBinding::new(
-            "cmd-=",
-            PreviewLarger,
-            predicate.as_deref(),
-        ));
-        bindings.push(KeyBinding::new(
-            "cmd--",
+            smaller,
             PreviewSmaller,
             predicate.as_deref(),
         ));
@@ -333,6 +336,14 @@ impl Document {
     }
 }
 
+/// Runs a parser on a file that came from outside. A panic in it fails
+/// like any other error: on GPUI's background threads a panic would end the
+/// app, as it unwinds into the platform's thread pool, which cannot unwind.
+pub fn guarded<T>(parse: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("Could not read this file.")))
+}
+
 /// A decoded picture in the BGRA order GPUI draws.
 pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in image.chunks_exact_mut(4) {
@@ -341,4 +352,16 @@ pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         image
     )]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::guarded;
+
+    #[test]
+    fn a_parser_that_panics_fails_like_any_other() {
+        let result: anyhow::Result<()> = guarded(|| panic!("a damaged file"));
+        assert_eq!(result.unwrap_err().to_string(), "Could not read this file.");
+        assert_eq!(guarded(|| Ok(7)).unwrap(), 7);
+    }
 }

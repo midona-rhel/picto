@@ -72,7 +72,7 @@ pub fn load_text(path: &std::path::Path, mime: &str) -> Result<(Vec<Block>, bool
     let blocks = match mime {
         "text/markdown" => rich::markdown(&text),
         "application/json" if !truncated => rich::json(&text),
-        "application/rtf" | "text/rtf" => rich::rtf(&text),
+        "application/rtf" | "text/rtf" => super::rtf::rtf(&text),
         _ => rich::plain_text(&text),
     };
     Ok((blocks, truncated))
@@ -126,30 +126,33 @@ impl ReaderViewer {
         let chapters = self.chapters.clone();
         let page = self.page;
         let work = cx.background_executor().spawn(async move {
-            if style == PageStyle::Book {
-                let chapters = if chapters.is_empty() {
-                    super::epub::chapters(&path)?
+            super::guarded(|| {
+                if style == PageStyle::Book {
+                    let chapters = if chapters.is_empty() {
+                        super::epub::chapters(&path)?
+                    } else {
+                        chapters
+                    };
+                    let chapter = chapters
+                        .get(page)
+                        .ok_or_else(|| anyhow!("No page {}", page + 1))?;
+                    let blocks = super::epub::chapter(&path, chapter)?;
+                    Ok::<_, anyhow::Error>((chapters, blocks, false))
                 } else {
-                    chapters
-                };
-                let chapter = chapters
-                    .get(page)
-                    .ok_or_else(|| anyhow!("No page {}", page + 1))?;
-                let blocks = super::epub::chapter(&path, chapter)?;
-                Ok::<_, anyhow::Error>((chapters, blocks, false))
-            } else {
-                let (blocks, truncated) = load_text(&path, &mime)?;
-                Ok((Vec::new(), blocks, truncated))
-            }
+                    let (blocks, truncated) = load_text(&path, &mime)?;
+                    Ok((Vec::new(), blocks, truncated))
+                }
+            })
         });
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = work.await;
             let _ = this.update(cx, |this, cx| {
+                // A chapter the reader has already left.
+                if this.page != page {
+                    return;
+                }
                 match result {
                     Ok((chapters, blocks, truncated)) => {
-                        if this.page != page {
-                            return;
-                        }
                         this.chapters = chapters;
                         this.blocks = Some(Arc::new(blocks));
                         this.truncated = truncated;
