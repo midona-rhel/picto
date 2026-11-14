@@ -7,16 +7,14 @@ use crate::ui::{self, action_button::Look};
 use gpui::*;
 
 /// `formatCloudDate`: a stored timestamp in the local time, as
-/// `toLocaleString` writes it in English.
+/// `toLocaleString` writes it.
 fn cloud_date(value: Option<&str>) -> String {
     let Some(value) = value else {
         return "Never".into();
     };
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|date| {
-            date.with_timezone(&chrono::Local)
-                .format(crate::text::date_format::LOCALE_DATE_TIME)
-                .to_string()
+            crate::i18n::format::date_time(date.with_timezone(&chrono::Local).naive_local())
         })
         .unwrap_or_else(|_| value.to_owned())
 }

@@ -9,6 +9,7 @@ mod desktop;
 mod export;
 mod grid;
 mod history;
+mod i18n;
 mod imports;
 mod inspector;
 mod keymap;

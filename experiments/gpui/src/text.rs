@@ -227,21 +227,12 @@ pub fn truncate_to(
 
 // ── Dates ───────────────────────────────────────────────────────
 
-/// The `chrono` formats the views write dates in, each named for what it
+/// The `chrono` formats the views write dates in that are not the
+/// system's (those are `crate::i18n::format`), each named for what it
 /// ports.
 pub mod date_format {
     /// The inspector's date rows: `YYYY/MM/DD HH:MM`.
     pub const INSPECTOR: &str = "%Y/%m/%d %H:%M";
-    /// `toLocaleDateString()` in en-US: month/day/year without zeros.
-    pub const LOCALE_DATE: &str = "%-m/%-d/%Y";
-    /// `toLocaleString()` in en-US: the date, then the time with seconds.
-    pub const LOCALE_DATE_TIME: &str = "%-m/%-d/%Y, %-I:%M:%S %p";
-    /// `formatDateTime`: en-US medium date and short time.
-    pub const MEDIUM_DATE_TIME: &str = "%b %-d, %Y, %-I:%M %p";
-    /// The date picker's field: en-US medium date.
-    pub const MEDIUM_DATE: &str = "%b %-d, %Y";
-    /// The calendar's heading: month and year.
-    pub const MONTH_YEAR: &str = "%B %Y";
     /// A day as date fields store it (`YYYY-MM-DD`).
     pub const DAY: &str = "%Y-%m-%d";
 }

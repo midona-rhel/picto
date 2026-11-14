@@ -139,7 +139,8 @@ pub struct State {
     pub keyboard_preset: String,
     /// `picto-shortcut-overrides`, by shortcut id.
     pub shortcut_overrides: BTreeMap<String, Binding>,
-    /// `picto:locale`.
+    /// `picto:locale`; empty until a language is chosen, when the system's
+    /// is shown.
     pub locale: String,
     /// `picto:audio-visualization`.
     pub audio_visualization: String,
@@ -164,7 +165,7 @@ impl Default for State {
             recent_folders: BTreeMap::new(),
             keyboard_preset: "us".into(),
             shortcut_overrides: BTreeMap::new(),
-            locale: "en".into(),
+            locale: String::new(),
             audio_visualization: "spectrum".into(),
         }
     }
@@ -363,7 +364,9 @@ impl State {
                     .collect(),
             ),
         );
-        put("locale", json!(self.locale));
+        if !self.locale.is_empty() {
+            put("locale", json!(self.locale));
+        }
         put("audioVisualization", json!(self.audio_visualization));
         Value::Object(object)
     }
@@ -518,6 +521,7 @@ pub fn init(cx: &mut App) {
     let folder = location();
     let (state, extra) = folder.as_deref().map(load).unwrap_or_default();
     let on_disk = state.to_value(&extra);
+    crate::i18n::init(&state.locale);
     cx.set_global(Store {
         folder,
         state,
@@ -650,7 +654,7 @@ mod tests {
         assert_eq!(state.pinned_filters, ["size"]);
         assert_eq!(state.recent_folders["a"], [1, 7]);
         assert_eq!(state.window, None);
-        assert_eq!(state.locale, "en");
+        assert_eq!(state.locale, "");
     }
 
     #[test]

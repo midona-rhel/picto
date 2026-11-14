@@ -1,0 +1,3 @@
+# Texts only this app shows, with no key in production's en.json: they
+# stay English in every language. One per line, as written in the code
+# (a line break as \n). The guard (guard.rs) keeps this list exact.

@@ -69,10 +69,12 @@ pub struct Item {
     pub(super) context_action: Option<&'static str>,
 }
 
+/// A row. Its label is shown in the interface's language, as production's
+/// `ContextMenu` shows every label through `translateMessage`.
 pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
     Item {
         action,
-        label: label.into(),
+        label: crate::i18n::t_shared(label.into()),
         keywords: Vec::new(),
         icon: None,
         image: None,
@@ -90,6 +92,13 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
 impl Item {
     /// What [`Menu::chosen_value`] gives when this row is chosen, for rows
     /// that share an action, such as one row per group.
+    /// Shows `label` as it is, in English: the application menu's rows,
+    /// which production's main process builds without translating them.
+    pub fn english(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
+    }
+
     pub fn value(mut self, value: impl Into<SharedString>) -> Self {
         self.value = Some(value.into());
         self
@@ -165,9 +174,10 @@ pub struct Submenu {
     pub(super) children: Vec<Entry>,
 }
 
+/// A row opening `children`; its label is translated as [`item`]'s is.
 pub fn submenu(label: impl Into<SharedString>, children: Vec<Entry>) -> Submenu {
     Submenu {
-        label: label.into(),
+        label: crate::i18n::t_shared(label.into()),
         icon: None,
         children,
     }

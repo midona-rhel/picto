@@ -1,6 +1,7 @@
 //! What the Subscriptions screen says about a subscription: its status, its
 //! times and counts, as `subscriptionUtils.ts` and the components word them.
 use super::data::{Query, Run, Subscription};
+use crate::i18n::format::{Unit, relative};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use picto_core::subscriptions::sites::{SITES, SiteEntry};
 
@@ -374,26 +375,8 @@ fn round(value: f64) -> i64 {
     (value + 0.5).floor() as i64
 }
 
-/// `Intl.RelativeTimeFormat` in English with `numeric: 'auto'`.
-fn relative(amount: i64, unit: &str) -> String {
-    match (amount, unit) {
-        (0, "minute") => "this minute".to_owned(),
-        (1, "day") => "tomorrow".to_owned(),
-        (-1, "day") => "yesterday".to_owned(),
-        (1, "month") => "next month".to_owned(),
-        (-1, "month") => "last month".to_owned(),
-        _ => {
-            let plural = if amount.abs() == 1 { "" } else { "s" };
-            if amount < 0 {
-                format!("{} {unit}{plural} ago", -amount)
-            } else {
-                format!("in {amount} {unit}{plural}")
-            }
-        }
-    }
-}
-
-/// `formatRelativeTime`, relative to `now`.
+/// `formatRelativeTime`, relative to `now`, in the system's language as
+/// `Intl.RelativeTimeFormat` without a locale writes it.
 pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     let Some(value) = value.filter(|value| !value.is_empty()) else {
         return "Never".to_owned();
@@ -403,17 +386,17 @@ pub fn relative_time(value: Option<&str>, now: DateTime<Local>) -> String {
     };
     let minutes = round((time - now).num_milliseconds() as f64 / 60_000.);
     if minutes.abs() < 60 {
-        return relative(minutes, "minute");
+        return relative(minutes, Unit::Minute);
     }
     let hours = round(minutes as f64 / 60.);
     if hours.abs() < 48 {
-        return relative(hours, "hour");
+        return relative(hours, Unit::Hour);
     }
     let days = round(hours as f64 / 24.);
     if days.abs() < 30 {
-        return relative(days, "day");
+        return relative(days, Unit::Day);
     }
-    relative(round(days as f64 / 30.), "month")
+    relative(round(days as f64 / 30.), Unit::Month)
 }
 
 /// `formatDateTime`: the medium date and short time, as en-US writes them.
@@ -423,10 +406,7 @@ pub fn date_time(value: Option<&str>) -> String {
     };
     parse_time(value).map_or_else(
         || value.to_owned(),
-        |time| {
-            time.format(crate::text::date_format::MEDIUM_DATE_TIME)
-                .to_string()
-        },
+        |time| crate::i18n::format::medium_date_time(time.naive_local()),
     )
 }
 

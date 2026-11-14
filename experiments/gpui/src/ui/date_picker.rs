@@ -148,10 +148,7 @@ impl RenderOnce for DatePicker {
             (state.open, state.month, state.bounds.clone())
         };
         let display = selected
-            .map(|day| {
-                day.format(crate::text::date_format::MEDIUM_DATE)
-                    .to_string()
-            })
+            .map(crate::i18n::format::short_month_date)
             .unwrap_or_else(|| "Choose date".into());
         let toggle = state.clone();
         let mut trigger = div()
@@ -282,11 +279,7 @@ impl RenderOnce for DatePicker {
                     .truncate()
                     .text(theme::TEXT_MD)
                     .font_weight(FontWeight::MEDIUM)
-                    .child(
-                        month
-                            .format(crate::text::date_format::MONTH_YEAR)
-                            .to_string(),
-                    ),
+                    .child(crate::i18n::format::month_year(month)),
             )
             .child(step(1, "date-next-month", "date-next"));
         let weekdays = div()

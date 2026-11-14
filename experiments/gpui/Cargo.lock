@@ -6557,6 +6557,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "symphonia",
+ "sys-locale",
  "tempfile",
  "tokio",
  "ttf-parser 0.25.1",

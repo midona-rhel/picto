@@ -67,10 +67,7 @@ pub fn short_date(milliseconds: i64) -> String {
         .single()
         .map_or_else(
             || "Unknown".into(),
-            |date| {
-                date.format(crate::text::date_format::LOCALE_DATE)
-                    .to_string()
-            },
+            |date| crate::i18n::format::date(date.date_naive()),
         )
 }
 

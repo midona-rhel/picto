@@ -58,6 +58,9 @@ jpeg-decoder = { version = "0.3", default-features = false }
 smallvec = "1"
 url = "2"
 chrono = "0.4"
+# The system's language, for the interface's default and how numbers and
+# dates are written; the version wgpu's dependencies already build.
+sys-locale = "0.3"
 ruffle_core = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", features = ["audio", "mp3", "aac", "lzma"] }
 ruffle_frontend_utils = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f", default-features = false, features = ["cpal"] }
 ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }

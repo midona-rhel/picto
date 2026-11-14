@@ -17,10 +17,12 @@ pub struct Choice {
     pub icon: Option<(&'static str, bool)>,
 }
 
+/// A choice; its label is shown in the interface's language, as
+/// `CmSelect` shows each through `translateMessage`.
 pub fn choice(value: &'static str, label: impl Into<SharedString>) -> Choice {
     Choice {
         value,
-        label: label.into(),
+        label: crate::i18n::t_shared(label.into()),
         icon: None,
     }
 }

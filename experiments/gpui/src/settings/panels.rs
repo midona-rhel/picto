@@ -147,23 +147,21 @@ impl SettingsWindow {
                         .child(row(
                             theme,
                             "Language",
-                            // TODO: translate the interface; the strings are English only.
                             ui::select(
                                 "language",
                                 locale,
-                                vec![
-                                    choice("en", "English"),
-                                    choice("de", "Deutsch"),
-                                    choice("es", "Español"),
-                                    choice("pt", "Português"),
-                                    choice("fr", "Français"),
-                                    choice("zh-CN", "简体中文"),
-                                    choice("ja", "日本語"),
-                                    choice("fi", "Suomi"),
-                                ],
+                                crate::i18n::Locale::ALL
+                                    .iter()
+                                    .map(|locale| choice(locale.code(), locale.label()))
+                                    .collect(),
                             )
                             .width(220.)
-                            .on_change(pick(model, |draft, value| draft.locale = value)),
+                            .on_change({
+                                let model = model.clone();
+                                move |value, _, cx| {
+                                    model.update(cx, |model, cx| model.choose_locale(value, cx))
+                                }
+                            }),
                         ))
                         .child(separator(theme))
                         .child(
