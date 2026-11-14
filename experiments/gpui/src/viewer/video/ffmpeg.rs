@@ -19,10 +19,43 @@ const AUDIO_RATE: u32 = 48_000;
 /// Decoded frames held ahead of the clock.
 const FRAMES_AHEAD: usize = 3;
 
+/// How often a scrub may restart the decoders: a seek that comes sooner
+/// waits and is applied once this has passed (the last one wins).
+const SEEK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// [`find_binary`], looked up once per name: a scrub starts processes
+/// often, and the search walks folders and `PATH`.
+pub fn binary(name: &str) -> Option<PathBuf> {
+    static FOUND: Mutex<Vec<(String, Option<PathBuf>)>> = Mutex::new(Vec::new());
+    let mut found = FOUND
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_, path)) = found.iter().find(|(known, _)| known == name) {
+        return path.clone();
+    }
+    let path = find_binary(name);
+    found.push((name.to_owned(), path.clone()));
+    path
+}
+
+/// A command for a bundled binary that opens no console window on Windows
+/// (`CREATE_NO_WINDOW`, as the application core's own ffmpeg calls do).
+fn command(program: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 /// Where the bundled binaries are, by the rules of `ffmpeg_path.rs`:
 /// `PICTO_FFMPEG_DIR`, then `vendor/ffmpeg/` in the working directory or
 /// above the executable, then `PATH`.
-pub fn binary(name: &str) -> Option<PathBuf> {
+fn find_binary(name: &str) -> Option<PathBuf> {
     let name = if cfg!(target_os = "windows") {
         format!("{name}.exe")
     } else {
@@ -131,7 +164,7 @@ pub fn parse_probe(json: &str) -> Result<Info, String> {
 
 fn probe(path: &Path) -> Result<Info, String> {
     let ffprobe = binary("ffprobe").ok_or("Picto's bundled ffprobe was not found")?;
-    let output = Command::new(ffprobe)
+    let output = command(&ffprobe)
         .args([
             "-v",
             "error",
@@ -164,7 +197,7 @@ impl Process {
         after: &[String],
     ) -> Result<(Self, ChildStdout), String> {
         let ffmpeg = binary("ffmpeg").ok_or("Picto's bundled ffmpeg was not found")?;
-        let mut child = Command::new(ffmpeg)
+        let mut child = command(&ffmpeg)
             .args(["-v", "error", "-nostdin"])
             .args(arguments)
             .arg("-i")
@@ -369,6 +402,11 @@ impl Clock {
     }
 }
 
+/// Whether the decoders may restart, `since` the last restart (none yet).
+fn seek_due(since: Option<std::time::Duration>) -> bool {
+    since.is_none_or(|since| since >= SEEK_INTERVAL)
+}
+
 /// Video through the bundled `ffmpeg`.
 pub struct FfmpegPlayer {
     path: PathBuf,
@@ -385,6 +423,10 @@ pub struct FfmpegPlayer {
     rate: f32,
     /// A new stream's first frame is shown whatever its time.
     awaiting_first: bool,
+    /// A position asked for that the decoders have not been restarted at
+    /// yet, and when they last were.
+    pending_seek: Option<f64>,
+    last_restart: Option<Instant>,
 }
 
 impl FfmpegPlayer {
@@ -415,6 +457,8 @@ impl FfmpegPlayer {
             volume: 0.,
             rate: 1.,
             awaiting_first: true,
+            pending_seek: None,
+            last_restart: None,
         })
     }
 
@@ -445,6 +489,9 @@ impl FfmpegPlayer {
                     self.audio = Some(engine);
                 }
                 self.info = Some(info);
+                // Both start where the last seek asked.
+                self.pending_seek = None;
+                self.last_restart = Some(Instant::now());
                 self.restart_video(self.target);
                 true
             }
@@ -452,6 +499,27 @@ impl FfmpegPlayer {
                 self.error = Some(error);
                 false
             }
+        }
+    }
+
+    /// Restarts the sound and the pictures at the position last asked for,
+    /// unless they were restarted less than [`SEEK_INTERVAL`] ago; then it
+    /// waits for a later call (each frame makes one), so a scrub runs at
+    /// most ten restarts a second and always ends at its last position.
+    fn apply_seek(&mut self) {
+        let Some(seconds) = self.pending_seek else {
+            return;
+        };
+        if !seek_due(self.last_restart.map(|at| at.elapsed())) {
+            return;
+        }
+        self.pending_seek = None;
+        self.last_restart = Some(Instant::now());
+        if let Some(audio) = &self.audio {
+            audio.seek(seconds);
+        }
+        if self.info.is_some() {
+            self.restart_video(seconds);
         }
     }
 
@@ -523,12 +591,8 @@ impl Backend for FfmpegPlayer {
     fn seek(&mut self, seconds: f64) {
         self.target = seconds;
         self.clock.set(seconds, self.playing);
-        if let Some(audio) = &self.audio {
-            audio.seek(seconds);
-        }
-        if self.info.is_some() {
-            self.restart_video(seconds);
-        }
+        self.pending_seek = Some(seconds);
+        self.apply_seek();
     }
 
     fn set_rate(&mut self, rate: f32) {
@@ -550,6 +614,7 @@ impl Backend for FfmpegPlayer {
 
     fn status(&mut self) -> Status {
         self.ready();
+        self.apply_seek();
         let ended = self.ended();
         if ended && self.playing {
             // Stopped at the end, as a media element is.
@@ -591,7 +656,14 @@ impl Backend for FfmpegPlayer {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, FfmpegPlayer, Frame, Info, parse_probe};
+    use super::{Backend, FfmpegPlayer, Frame, Info, SEEK_INTERVAL, parse_probe, seek_due};
+
+    #[test]
+    fn a_scrub_restarts_the_decoders_at_most_every_interval() {
+        assert!(seek_due(None));
+        assert!(!seek_due(Some(SEEK_INTERVAL / 2)));
+        assert!(seek_due(Some(SEEK_INTERVAL)));
+    }
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
