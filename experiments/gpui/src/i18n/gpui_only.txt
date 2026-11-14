@@ -70,3 +70,12 @@ Review complete
 Right candidate
 Scan complete - no new review pairs
 Scan the library to find similar images.
+Auto
+Blue
+Check for a newer version of Picto.
+Choose a cloud folder in Libraries
+Dark
+Gray
+Light
+Light Gray
+Purple

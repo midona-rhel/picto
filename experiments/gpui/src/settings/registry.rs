@@ -378,11 +378,12 @@ pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
                 .items
                 .into_iter()
                 .filter(|item| {
-                    item.label.to_lowercase().contains(&query)
-                        || item.group.to_lowercase().contains(&query)
-                        || item
-                            .description
-                            .is_some_and(|text| text.to_lowercase().contains(&query))
+                    // As shown, in the interface's language.
+                    crate::i18n::t(item.label).to_lowercase().contains(&query)
+                        || crate::i18n::t(item.group).to_lowercase().contains(&query)
+                        || item.description.is_some_and(|text| {
+                            crate::i18n::t(text).to_lowercase().contains(&query)
+                        })
                         || display(&item.keys).to_lowercase().contains(&query)
                 })
                 .collect(),

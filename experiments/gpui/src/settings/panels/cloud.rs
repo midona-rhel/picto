@@ -1,5 +1,6 @@
 //! The Cloud section: the library's sync state, its pending work and
 //! recovery, and the reading of that state from the library.
+use crate::i18n::t;
 use crate::settings::pieces::{block, card, hint, row, separator, title, value};
 use crate::settings::window::{CloudInfo, SettingsWindow};
 use crate::theme;
@@ -10,7 +11,7 @@ use gpui::*;
 /// `toLocaleString` writes it.
 fn cloud_date(value: Option<&str>) -> String {
     let Some(value) = value else {
-        return "Never".into();
+        return t("Never").into();
     };
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|date| {
@@ -27,9 +28,9 @@ impl SettingsWindow {
         };
         let configured = info.provider.is_some();
         let provider = match info.provider.as_deref() {
-            Some("google_drive") => "Google Drive",
-            Some("dropbox") => "Dropbox",
-            _ => "Not configured",
+            Some("google_drive") => t("Google Drive"),
+            Some("dropbox") => t("Dropbox"),
+            _ => t("Not configured"),
         };
         let state = if info.message.is_empty() {
             info.state.clone()
@@ -37,25 +38,25 @@ impl SettingsWindow {
             info.message.clone()
         };
         let mut sync = card(theme)
-            .child(title(theme, "Library Sync"))
-            .child(row(theme, "Provider", value(theme, provider)))
+            .child(title(theme, t("Library Sync")))
+            .child(row(theme, t("Provider"), value(theme, provider)))
             .child(separator(theme))
             .child(row(
                 theme,
-                "Folder",
+                t("Folder"),
                 value(
                     theme,
-                    info.root_path
-                        .clone()
-                        .unwrap_or_else(|| "Choose a cloud folder in Libraries".into()),
+                    info.root_path.clone().unwrap_or_else(|| {
+                        crate::i18n::en("Choose a cloud folder in Libraries").into()
+                    }),
                 ),
             ))
             .child(separator(theme))
-            .child(row(theme, "State", value(theme, state)))
+            .child(row(theme, t("State"), value(theme, state)))
             .child(separator(theme))
             .child(row(
                 theme,
-                "Last sync",
+                t("Last sync"),
                 value(theme, cloud_date(info.last_sync_at.as_deref())),
             ))
             .child(separator(theme))
@@ -69,56 +70,56 @@ impl SettingsWindow {
                     .gap(px(8.))
                     .child(
                         ui::action_button("cloud-sync", Look::Settings)
-                            .label("Sync now")
+                            .label(t("Sync now"))
                             .disabled(!configured),
                     )
                     .child(
                         ui::action_button("cloud-pause", Look::Settings)
                             .label(if info.state == "paused" {
-                                "Resume"
+                                t("Resume")
                             } else {
-                                "Pause"
+                                t("Pause")
                             })
                             .disabled(!configured),
                     )
                     .child(
                         ui::action_button("cloud-snapshot", Look::Settings)
-                            .label("Create snapshot")
+                            .label(t("Create snapshot"))
                             .disabled(!configured),
                     ),
             );
         if !configured {
             sync = sync.child(hint(
                 theme,
-                "Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device.",
+                t("Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device."),
             ));
         }
         let retention = info.retention;
         // TODO: write retention through `cloud.retention.update` and enable
         // the fields; until then they show the stored values, disabled.
         let retention_card = card(theme)
-            .child(title(theme, "Recovery Retention"))
+            .child(title(theme, t("Recovery Retention")))
             .child(row(
                 theme,
-                "Daily snapshots",
+                t("Daily snapshots"),
                 ui::number_input("retention-daily", retention[0], 2, 365).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
-                "Weekly snapshots",
+                t("Weekly snapshots"),
                 ui::number_input("retention-weekly", retention[1], 0, 260).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
-                "Yearly snapshots",
+                t("Yearly snapshots"),
                 ui::number_input("retention-yearly", retention[2], 0, 100).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
-                "Keep deleted files",
+                t("Keep deleted files"),
                 div()
                     .flex()
                     .items_center()
@@ -126,33 +127,33 @@ impl SettingsWindow {
                     .child(
                         ui::number_input("retention-deleted", retention[3], 0, 3650).disabled(true),
                     )
-                    .child(value(theme, "days")),
+                    .child(value(theme, t("days"))),
             ))
             .child(hint(
                 theme,
-                "Recently deleted cloud files can be restored immediately during this period.",
+                t("Recently deleted cloud files can be restored immediately during this period."),
             ));
         vec![
             block().child(sync).into_any_element(),
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Pending Work"))
+                        .child(title(theme, t("Pending Work")))
                         .child(row(
                             theme,
-                            "Mutations",
+                            t("Mutations"),
                             value(theme, info.pending_mutations.to_string()),
                         ))
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Files",
+                            t("Files"),
                             value(theme, info.pending_blobs.to_string()),
                         ))
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Unavailable files",
+                            t("Unavailable files"),
                             value(theme, info.missing_blobs.to_string()),
                         )),
                 )
@@ -161,11 +162,11 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Restore History"))
+                        .child(title(theme, t("Restore History")))
                         // TODO: list the recovery snapshots of a configured
                         // provider (`cloud.restore.list`) with their Restore
                         // buttons. An unconfigured library has none.
-                        .child(hint(theme, "No recovery snapshots are available yet.")),
+                        .child(hint(theme, t("No recovery snapshots are available yet."))),
                 )
                 .into_any_element(),
         ]

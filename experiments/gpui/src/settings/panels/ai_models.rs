@@ -1,5 +1,6 @@
 //! The AI Models section (`AiTaggingPanel.tsx`): the models production
 //! registers, the confidence thresholds and automatic tagging.
+use crate::i18n::t;
 use crate::settings::model::Threshold;
 use crate::settings::pieces::{
     block, card, control, edit, hint, label, number, row, separator, title, value, value_label,
@@ -68,6 +69,7 @@ const MODELS: [ModelInfo; 4] = [
     },
 ];
 
+// i18n: translated where drawn
 const THRESHOLDS: [(Threshold, &str, &str); 6] = [
     (Threshold::General, "General", "general"),
     (Threshold::Character, "Character", "character"),
@@ -112,7 +114,7 @@ impl SettingsWindow {
         // runtime's status and download, optimize and delete through it.
         // Until then every model shows as not downloaded; only the storage
         // they take is read.
-        let mut models = card(theme).child(title(theme, "Models"));
+        let mut models = card(theme).child(title(theme, t("Models")));
         for (index, info) in MODELS.iter().enumerate() {
             if index > 0 {
                 models = models.child(separator(theme));
@@ -182,7 +184,7 @@ impl SettingsWindow {
                             .gap(px(10.))
                             .child(
                                 ui::action_button(("model-download", index), Look::Standard)
-                                    .label("Download")
+                                    .label(t("Download"))
                                     .width(92.)
                                     .padding(0.),
                             ),
@@ -191,11 +193,11 @@ impl SettingsWindow {
         }
         let models = models.child(separator(theme)).child(row(
             theme,
-            "Model storage",
+            t("Model storage"),
             value(theme, self.ai_storage.map_or("—".into(), model_size)),
         ));
 
-        let mut confidence = card(theme).child(title(theme, "Confidence"));
+        let mut confidence = card(theme).child(title(theme, t("Confidence")));
         for (index, (key, name, namespace)) in THRESHOLDS.iter().enumerate() {
             if index > 0 {
                 confidence = confidence.child(separator(theme));
@@ -220,7 +222,7 @@ impl SettingsWindow {
                                     .bg(rgb(crate::tags::group_preset_color(namespace)))
                                     .opacity(0.75),
                             )
-                            .child(*name),
+                            .child(t(name)),
                     )
                     .child(
                         control()
@@ -242,20 +244,20 @@ impl SettingsWindow {
         }
         let confidence = confidence.child(hint(
             theme,
-            "Tags below these confidence levels are hidden by default. You can adjust the cutoff for an individual run.",
+            t("Tags below these confidence levels are hidden by default. You can adjust the cutoff for an individual run."),
         ));
 
         let auto = app.ai_tagger_auto_on_import;
         let downloaded = false;
-        let mut behavior = card(theme).child(title(theme, "Behavior")).child(
+        let mut behavior = card(theme).child(title(theme, t("Behavior"))).child(
             div()
                 .flex()
                 .items_center()
                 .min_h(px(26.))
                 .child(copy(
                     theme,
-                    "Auto-tag new imports",
-                    "Run selected models after import and apply tags above the confidence levels.",
+                    t("Auto-tag new imports"),
+                    t("Run selected models after import and apply tags above the confidence levels."),
                 ))
                 .child(
                     control().child(
@@ -286,8 +288,8 @@ impl SettingsWindow {
                 .min_h(px(26.))
                 .child(copy(
                     theme,
-                    "Write rating tags",
-                    "Store general, sensitive, questionable, or explicit as a rating tag.",
+                    t("Write rating tags"),
+                    t("Store general, sensitive, questionable, or explicit as a rating tag."),
                 ))
                 .child(control().child(
                     ui::toggle("write-rating", app.ai_tagger_write_rating).on_toggle(edit(
@@ -303,7 +305,7 @@ impl SettingsWindow {
                 .child(models)
                 .child(hint(
                     theme,
-                    "Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.",
+                    t("Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging."),
                 ))
                 .into_any_element(),
             block().child(confidence).into_any_element(),

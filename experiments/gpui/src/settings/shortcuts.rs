@@ -3,6 +3,7 @@
 //! that capture the next key pressed.
 use super::registry::{self, KeyboardPreset, Slot};
 use super::window::SettingsWindow;
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, choice, field::Look};
@@ -129,11 +130,11 @@ impl SettingsWindow {
             Some((_, _, captured)) => (
                 captured
                     .clone()
-                    .unwrap_or_else(|| "Press keys".into())
+                    .unwrap_or_else(|| t("Press keys").into())
                     .into(),
                 false,
             ),
-            None if keys.is_empty() => ("Click to bind".into(), true),
+            None if keys.is_empty() => (t("Click to bind").into(), true),
             None => (registry::display(keys).into(), false),
         };
         let border = if conflict {
@@ -275,7 +276,7 @@ impl SettingsWindow {
                         .text(theme::TEXT_MD)
                         .line_height(px(26.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Keyboard"),
+                        .child(t("Keyboard")),
                 )
                 .child(
                     div()
@@ -289,7 +290,7 @@ impl SettingsWindow {
                                 .text(theme::TEXT_MD)
                                 .line_height(px(theme::TEXT_MD * 1.3))
                                 .text_color(theme.text_secondary())
-                                .child("Keyboard layout"),
+                                .child(t("Keyboard layout")),
                         )
                         .child(
                             div().ml_auto().flex().items_center().child(
@@ -319,7 +320,7 @@ impl SettingsWindow {
                         .text(theme::TEXT_SM)
                         .line_height(px(20.))
                         .text_color(theme.text_secondary())
-                        .child("EU mode adds alternatives for shortcuts that use backtick, backslash, and brackets."),
+                        .child(t("EU mode adds alternatives for shortcuts that use backtick, backslash, and brackets.")),
                 ),
         );
 
@@ -332,7 +333,7 @@ impl SettingsWindow {
                     .justify_center()
                     .text(theme::TEXT_MD)
                     .text_color(theme.text_tertiary())
-                    .child("No shortcuts match your search."),
+                    .child(t("No shortcuts match your search.")),
             );
         }
         for group in &groups {
@@ -346,7 +347,7 @@ impl SettingsWindow {
                     .line_height(px(theme::TEXT_SM * 1.55))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary())
-                    .child(format!("{} ", group.name))
+                    .child(format!("{} ", t(group.name)))
                     .child(
                         div()
                             .ml(px(4.))
@@ -380,7 +381,7 @@ impl SettingsWindow {
                             .line_height(px(theme::TEXT_MD * 1.55))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text())
-                            .child(item.label),
+                            .child(t(item.label)),
                     );
                 if let Some(description) = item.description {
                     label = label.child(
@@ -390,7 +391,7 @@ impl SettingsWindow {
                             .line_height(px(theme::TEXT_CAPTION * 1.55))
                             .text_color(theme.text_secondary())
                             .opacity(0.8)
-                            .child(description),
+                            .child(t(description)),
                     );
                 }
                 let mut row = div()

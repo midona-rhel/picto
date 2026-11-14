@@ -25,9 +25,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Files that draw no interface text of their own: the test tool, the
-/// tests, and the application menu, which production leaves in English
-/// (`electron/windows/menu.mjs` is not localized).
-const NOT_SHOWN: [&str; 3] = ["offscreen.rs", "i18n/tests.rs", "app_menu.rs"];
+/// tests, the application menu, which production leaves in English
+/// (`electron/windows/menu.mjs` is not localized), and the shortcut
+/// registry, data whose labels, groups and descriptions Settings draws
+/// through `t()` and whose key names stay English as production writes
+/// them.
+const NOT_SHOWN: [&str; 4] = [
+    "offscreen.rs",
+    "i18n/tests.rs",
+    "app_menu.rs",
+    "settings/registry.rs",
+];
 
 /// The files converted so far (path prefixes); the findings of the others
 /// are printed (`--nocapture`), not failed on.
@@ -71,6 +79,7 @@ const CONVERTED: &[&str] = &[
     "ui/status_badge.rs",
     "ui/progress_bar.rs",
     "screens/duplicates/",
+    "settings/",
 ];
 
 /// Calls whose literal argument is drawn.

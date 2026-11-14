@@ -9,6 +9,7 @@ pub mod registry;
 mod shortcuts;
 mod window;
 
+use crate::i18n::t;
 use crate::session::Session;
 use gpui::*;
 use model::{AppSettings, GridDefaults};
@@ -296,7 +297,7 @@ impl SettingsModel {
             let mut result = match written.await {
                 Ok(Ok(())) => Ok(()),
                 Ok(Err(error)) => Err(error.to_string()),
-                Err(_) => Err("Unable to save settings.".to_string()),
+                Err(_) => Err(t("Unable to save settings.").to_string()),
             };
             if reset && result.is_ok() {
                 let answer = this.update(cx, |this, cx| {
@@ -308,7 +309,7 @@ impl SettingsModel {
                     Ok(answer) => match answer.await {
                         Ok(Ok(_)) => Ok(()),
                         Ok(Err(error)) => Err(error),
-                        Err(_) => Err("Unable to save settings.".to_string()),
+                        Err(_) => Err(t("Unable to save settings.").to_string()),
                     },
                     Err(_) => return false,
                 };

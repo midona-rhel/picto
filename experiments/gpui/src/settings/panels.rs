@@ -8,6 +8,7 @@ use super::pieces::{
 };
 use super::window::SettingsWindow;
 use crate::grid::format::grouped;
+use crate::i18n::{en, t};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look, choice};
@@ -35,13 +36,13 @@ const ZOOM: [(&str, &str); 7] = [
 
 /// `THEMES`: the name, stored value and swatch colour of each theme.
 const THEMES: [(&str, &str, Option<u32>); 7] = [
-    ("Auto", "auto", None),
-    ("Light", "light", Some(0xffffff)),
-    ("Light Gray", "lightgray", Some(0xc8cacd)),
-    ("Gray", "gray", Some(0x444444)),
-    ("Dark", "dark", Some(0x010101)),
-    ("Blue", "blue", Some(0x28356e)),
-    ("Purple", "purple", Some(0x463275)),
+    (en("Auto"), "auto", None),
+    (en("Light"), "light", Some(0xffffff)),
+    (en("Light Gray"), "lightgray", Some(0xc8cacd)),
+    (en("Gray"), "gray", Some(0x444444)),
+    (en("Dark"), "dark", Some(0x010101)),
+    (en("Blue"), "blue", Some(0x28356e)),
+    (en("Purple"), "purple", Some(0x463275)),
 ];
 
 /// The installed version, from the app's `package.json`.
@@ -116,12 +117,12 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Appearance"))
-                        .child(row(theme, "Theme", swatches))
+                        .child(title(theme, t("Appearance")))
+                        .child(row(theme, t("Theme"), swatches))
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Zoom Level",
+                            t("Zoom Level"),
                             // TODO: production saves this factor without applying
                             // it (its zoom is the separate ⌘+ and ⌘- renderer
                             // zoom), so the window is not scaled here either;
@@ -143,10 +144,10 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Interface"))
+                        .child(title(theme, t("Interface")))
                         .child(row(
                             theme,
-                            "Language",
+                            t("Language"),
                             ui::select(
                                 "language",
                                 locale,
@@ -165,27 +166,30 @@ impl SettingsWindow {
                         ))
                         .child(separator(theme))
                         .child(
-                            ui::check("sidebar-counts", "Show item counts in the sidebar", counts)
-                                .on_toggle(edit(model, |draft| {
-                                    draft.app.show_sidebar_counts = !draft.app.show_sidebar_counts
-                                })),
+                            ui::check(
+                                "sidebar-counts",
+                                t("Show item counts in the sidebar"),
+                                counts,
+                            )
+                            .on_toggle(edit(model, |draft| {
+                                draft.app.show_sidebar_counts = !draft.app.show_sidebar_counts
+                            })),
                         ),
                 )
                 .into_any_element(),
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Tags"))
+                        .child(title(theme, t("Tags")))
                         .child(
-                            ui::check("hide-prefixes", "Hide group prefixes", !prefixes).on_toggle(
-                                edit(model, |draft| {
+                            ui::check("hide-prefixes", t("Hide group prefixes"), !prefixes)
+                                .on_toggle(edit(model, |draft| {
                                     draft.app.show_tag_prefixes = !draft.app.show_tag_prefixes
-                                }),
-                            ),
+                                })),
                         )
                         .child(hint(
                             theme,
-                            "Show shorter tag names without changing their underlying group.",
+                            t("Show shorter tag names without changing their underlying group."),
                         )),
                 )
                 .into_any_element(),
@@ -195,26 +199,28 @@ impl SettingsWindow {
     fn updates(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = theme::theme(cx);
         let description = if cfg!(target_os = "macos") {
-            "On macOS, Picto opens the release download because this build is not signed for automatic installation."
+            t(
+                "On macOS, Picto opens the release download because this build is not signed for automatic installation.",
+            )
         } else {
-            "Updates download in the background and install after Picto closes."
+            t("Updates download in the background and install after Picto closes.")
         };
         vec![
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Software Update"))
-                        .child(row(theme, "Installed version", div().child(version())))
+                        .child(title(theme, t("Software Update")))
+                        .child(row(theme, t("Installed version"), div().child(version())))
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Check for a newer version of Picto.",
+                            en("Check for a newer version of Picto."),
                             div().flex().gap(px(8.)).child(
                                 // TODO: check the release feed and offer the
                                 // download; disabled until then, as the
                                 // application menu's Check for Updates is.
                                 ui::action_button("check-updates", Look::Settings)
-                                    .label("Check Now")
+                                    .label(t("Check Now"))
                                     .disabled(true),
                             ),
                         ))
@@ -249,46 +255,46 @@ impl SettingsWindow {
         };
         vec![
             section(
-                "Overview",
+                t("Overview"),
                 vec![
                     (
-                        "Library items",
+                        t("Library items"),
                         count(stats.active_items + stats.inbox_items + stats.trash_items),
                     ),
-                    ("Media assets", count(stats.media_assets)),
+                    (t("Media assets"), count(stats.media_assets)),
                     (
-                        "Size",
+                        t("Size"),
                         crate::text::size_to_terabytes(stats.original_bytes.max(0) as u64),
                     ),
                 ],
             ),
             section(
-                "Library Items",
+                t("Library Items"),
                 vec![
-                    ("All", count(stats.active_items)),
-                    ("Inbox", count(stats.inbox_items)),
-                    ("Trash", count(stats.trash_items)),
-                    ("Standalone", count(stats.standalone_items)),
-                    ("Groups", count(stats.collections)),
+                    (t("All"), count(stats.active_items)),
+                    (t("Inbox"), count(stats.inbox_items)),
+                    (t("Trash"), count(stats.trash_items)),
+                    (t("Standalone"), count(stats.standalone_items)),
+                    (t("Groups"), count(stats.collections)),
                 ],
             ),
             section(
-                "Media and Storage",
+                t("Media and Storage"),
                 vec![
-                    ("Images", count(stats.image_assets)),
-                    ("Videos", count(stats.video_assets)),
-                    ("Audio", count(stats.audio_assets)),
-                    ("Other media", count(stats.other_assets)),
-                    ("Physical files", count(stats.physical_files)),
+                    (t("Images"), count(stats.image_assets)),
+                    (t("Videos"), count(stats.video_assets)),
+                    (t("Audio"), count(stats.audio_assets)),
+                    (t("Other media"), count(stats.other_assets)),
+                    (t("Physical files"), count(stats.physical_files)),
                 ],
             ),
             section(
-                "Organization",
+                t("Organization"),
                 vec![
-                    ("Tags", count(stats.tags)),
-                    ("Folders", count(stats.folders)),
-                    ("Smart folders", count(stats.smart_folders)),
-                    ("Subscriptions", count(stats.subscriptions)),
+                    (t("Tags"), count(stats.tags)),
+                    (t("Folders"), count(stats.folders)),
+                    (t("Smart folders"), count(stats.smart_folders)),
+                    (t("Subscriptions"), count(stats.subscriptions)),
                 ],
             ),
         ]
@@ -315,16 +321,16 @@ impl SettingsWindow {
         };
         let mut rows = three_columns();
         for (index, (name, key)) in [
-            ("All", "system:active"),
-            ("Uncategorized", "system:uncategorized"),
-            ("Untagged", "system:untagged"),
-            ("Inbox", "system:inbox"),
-            ("Random", "system:random"),
-            ("Tag Manager", "system:tag_manager"),
-            ("Recently Viewed", "system:recent_viewed"),
-            ("Subscriptions", "system:subscriptions"),
-            ("Duplicates", "system:duplicates"),
-            ("Trash", "system:trash"),
+            (t("All"), "system:active"),
+            (t("Uncategorized"), "system:uncategorized"),
+            (t("Untagged"), "system:untagged"),
+            (t("Inbox"), "system:inbox"),
+            (t("Random"), "system:random"),
+            (t("Tag Manager"), "system:tag_manager"),
+            (t("Recently Viewed"), "system:recent_viewed"),
+            (t("Subscriptions"), "system:subscriptions"),
+            (t("Duplicates"), "system:duplicates"),
+            (t("Trash"), "system:trash"),
         ]
         .into_iter()
         .enumerate()
@@ -333,9 +339,9 @@ impl SettingsWindow {
         }
         let mut section_rows = three_columns();
         for (index, (name, key)) in [
-            ("Quick Access", "section:quick_access"),
-            ("Smart Folders", "section:smart_folders"),
-            ("Folders", "section:folders"),
+            (t("Quick Access"), "section:quick_access"),
+            (t("Smart Folders"), "section:smart_folders"),
+            (t("Folders"), "section:folders"),
         ]
         .into_iter()
         .enumerate()
@@ -345,17 +351,17 @@ impl SettingsWindow {
         vec![
             block()
                 .child(
-                    card(theme).child(title(theme, "Double Click")).child(
+                    card(theme).child(title(theme, t("Double Click"))).child(
                         three_columns()
                             .child(
-                                ui::check("double-click-rename", "Rename", rename)
+                                ui::check("double-click-rename", t("Rename"), rename)
                                     .radio()
                                     .on_toggle(edit(model, |draft| {
                                         draft.app.sidebar_double_click_action = "rename"
                                     })),
                             )
                             .child(
-                                ui::check("double-click-collapse", "Expand/Collapse", !rename)
+                                ui::check("double-click-collapse", t("Expand/Collapse"), !rename)
                                     .radio()
                                     .on_toggle(edit(model, |draft| {
                                         draft.app.sidebar_double_click_action = "collapse"
@@ -367,7 +373,7 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Show these items in the sidebar:"))
+                        .child(title(theme, t("Show these items in the sidebar:")))
                         .child(rows)
                         .child(separator(theme))
                         .child(section_rows),
@@ -375,11 +381,12 @@ impl SettingsWindow {
                 .into_any_element(),
             block()
                 .child(
-                    card(theme).child(title(theme, "Folder Tree")).child(
-                        ui::check("tree-guides", "Show hierarchy guides", guides)
-                            .on_toggle(edit(model, |draft| {
+                    card(theme).child(title(theme, t("Folder Tree"))).child(
+                        ui::check("tree-guides", t("Show hierarchy guides"), guides).on_toggle(
+                            edit(model, |draft| {
                                 draft.app.show_tree_guides = !draft.app.show_tree_guides
-                            })),
+                            }),
+                        ),
                     ),
                 )
                 .into_any_element(),
@@ -395,10 +402,10 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Image"))
+                        .child(title(theme, t("Image")))
                         .child(row(
                             theme,
-                            "Scaling",
+                            t("Scaling"),
                             ui::select(
                                 "image-rendering",
                                 app.image_rendering,
@@ -411,7 +418,7 @@ impl SettingsWindow {
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Default zoom",
+                            t("Default zoom"),
                             ui::select(
                                 "image-zoom",
                                 app.image_default_zoom,
@@ -428,7 +435,7 @@ impl SettingsWindow {
                         .child(
                             ui::check(
                                 "transparency",
-                                "Show transparency grid",
+                                t("Show transparency grid"),
                                 app.show_transparency_grid,
                             )
                             .on_toggle(edit(model, |draft| {
@@ -439,25 +446,29 @@ impl SettingsWindow {
                 .into_any_element(),
             block()
                 .child(
-                    card(theme).child(title(theme, "Video")).child(
+                    card(theme).child(title(theme, t("Video"))).child(
                         two_columns()
                             .child(
-                                ui::check("autoplay", "Autoplay videos", app.video_auto_play)
+                                ui::check("autoplay", t("Autoplay videos"), app.video_auto_play)
                                     .on_toggle(edit(model, |draft| {
                                         draft.app.video_auto_play = !draft.app.video_auto_play
                                     })),
                             )
-                            .child(ui::check("loop", "Loop videos", app.video_loop).on_toggle(
-                                edit(model, |draft| draft.app.video_loop = !draft.app.video_loop),
-                            )),
+                            .child(
+                                ui::check("loop", t("Loop videos"), app.video_loop).on_toggle(
+                                    edit(model, |draft| {
+                                        draft.app.video_loop = !draft.app.video_loop
+                                    }),
+                                ),
+                            ),
                     ),
                 )
                 .into_any_element(),
             block()
                 .child(
-                    card(theme).child(title(theme, "Audio")).child(row(
+                    card(theme).child(title(theme, t("Audio"))).child(row(
                         theme,
-                        "Visualization",
+                        t("Visualization"),
                         ui::select(
                             "audio-visualization",
                             draft.audio_visualization,
@@ -483,7 +494,7 @@ impl SettingsWindow {
         let app = &model.read(cx).draft.app;
         let enabled = app.notification_popups_enabled;
         let mut content = card(theme).child(
-            title(theme, "Pop-ups").child(div().ml_auto().flex().items_center().child(
+            title(theme, t("Pop-ups")).child(div().ml_auto().flex().items_center().child(
                 ui::toggle("popups", enabled).on_toggle(edit(model, |draft| {
                     draft.app.notification_popups_enabled = !draft.app.notification_popups_enabled
                 })),
@@ -491,10 +502,10 @@ impl SettingsWindow {
         );
         if enabled {
             let names = [
-                ("success", "Successful actions"),
-                ("info", "Information"),
-                ("warning", "Warnings"),
-                ("error", "Errors"),
+                ("success", t("Successful actions")),
+                ("info", t("Information")),
+                ("warning", t("Warnings")),
+                ("error", t("Errors")),
             ];
             let mut grid = two_columns();
             for (tone_index, (tone, name)) in names.into_iter().enumerate() {
@@ -530,7 +541,7 @@ impl SettingsWindow {
                 .child(
                     card(theme)
                         .child(
-                            title(theme, "Auto-Import").child(
+                            title(theme, t("Auto-Import")).child(
                                 div().ml_auto().flex().items_center().child(
                                     ui::toggle("auto-import", app.auto_import_enabled).on_toggle(
                                         edit(model, |draft| {
@@ -542,17 +553,17 @@ impl SettingsWindow {
                         )
                         .child(hint(
                             theme,
-                            "Import new files into Inbox from watched folders configured in the folder context menu.",
+                            t("Import new files into Inbox from watched folders configured in the folder context menu."),
                         )),
                 )
                 .into_any_element(),
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Manual Imports"))
+                        .child(title(theme, t("Manual Imports")))
                         .child(row(
                             theme,
-                            "Multiple files",
+                            t("Multiple files"),
                             ui::select(
                                 "multi-file",
                                 app.multi_file_import_behavior,
@@ -568,7 +579,7 @@ impl SettingsWindow {
                         ))
                         .child(hint(
                             theme,
-                            "Choose whether batches become one collection, stay separate, or ask each time.",
+                            t("Choose whether batches become one collection, stay separate, or ask each time."),
                         )),
                 )
                 .into_any_element(),
@@ -583,10 +594,10 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Rejecting"))
+                        .child(title(theme, t("Rejecting")))
                         .child(row(
                             theme,
-                            "Rejected items",
+                            t("Rejected items"),
                             ui::select(
                                 "reject-action",
                                 app.reject_action,
@@ -596,24 +607,24 @@ impl SettingsWindow {
                         ))
                         .child(hint(
                             theme,
-                            "Deleting skips Trash. Only deletes within the undo limit below can be undone.",
+                            t("Deleting skips Trash. Only deletes within the undo limit below can be undone."),
                         )),
                 )
                 .into_any_element(),
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Undoing deletes"))
+                        .child(title(theme, t("Undoing deletes")))
                         .child(row(
                             theme,
-                            "Undo limit (media items)",
+                            t("Undo limit (media items)"),
                             ui::number_input("undo-limit", app.undo_delete_limit, 0, 100_000).on_commit(
                                 number(model, |draft, value: i64| draft.app.undo_delete_limit = value),
                             ),
                         ))
                         .child(hint(
                             theme,
-                            "Counts media items, including collection members. Set to 0 to disable delete undo. Deletes within the limit can be undone until Picto closes. Larger deletes ask for confirmation and cannot be undone.",
+                            t("Counts media items, including collection members. Set to 0 to disable delete undo. Deletes within the limit can be undone until Picto closes. Larger deletes ask for confirmation and cannot be undone."),
                         )),
                 )
                 .into_any_element(),
@@ -629,10 +640,10 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Defaults for New Subscriptions"))
+                        .child(title(theme, t("Defaults for New Subscriptions")))
                         .child(row(
                             theme,
-                            "Schedule",
+                            t("Schedule"),
                             ui::select(
                                 "schedule",
                                 app.subscription_default_schedule,
@@ -650,7 +661,7 @@ impl SettingsWindow {
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            "Posts per run",
+                            t("Posts per run"),
                             ui::number_input("posts-per-run", app.subscription_default_posts_per_run, 1, 10_000)
                                 .on_commit(number(model, |draft, value: i64| {
                                     draft.app.subscription_default_posts_per_run = value
@@ -658,7 +669,7 @@ impl SettingsWindow {
                         ))
                         .child(separator(theme))
                         .child(
-                            ui::check("group-posts", "Group multi-media posts", app.subscription_default_group_posts)
+                            ui::check("group-posts", t("Group multi-media posts"), app.subscription_default_group_posts)
                                 .on_toggle(edit(model, |draft| {
                                     draft.app.subscription_default_group_posts =
                                         !draft.app.subscription_default_group_posts
@@ -669,10 +680,10 @@ impl SettingsWindow {
             block()
                 .child(
                     card(theme)
-                        .child(title(theme, "Inbox Capacity"))
+                        .child(title(theme, t("Inbox Capacity")))
                         .child(row(
                             theme,
-                            "Maximum Inbox items",
+                            t("Maximum Inbox items"),
                             ui::number_input("inbox-limit", app.subscription_inbox_item_limit, 1, 1_000_000)
                                 .on_commit(number(model, |draft, value: i64| {
                                     draft.app.subscription_inbox_item_limit = value
@@ -680,7 +691,7 @@ impl SettingsWindow {
                         ))
                         .child(hint(
                             theme,
-                            "Subscription work waits when the Inbox reaches this many top-level items.",
+                            t("Subscription work waits when the Inbox reaches this many top-level items."),
                         )),
                 )
                 .into_any_element(),
