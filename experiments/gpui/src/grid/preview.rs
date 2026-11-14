@@ -144,7 +144,7 @@ pub fn overlay(shown: &Shown, window: &Window) -> (Option<AnyElement>, bool) {
             ),
     )
     // Over everything in the window but its rim.
-    .with_priority(50)
+    .with_priority(crate::ui::layer::PREVIEW)
     .into_any_element();
     (Some(element), strength < 1.)
 }

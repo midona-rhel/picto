@@ -52,7 +52,7 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(100);
 /// `.rulesModal`: `min(760px, 100vw - 48px)`.
 const RULES_WIDTH: f32 = 760.;
 /// The pop-ups the dialog opens draw above it.
-const POPOVER_LAYER: usize = 20;
+const POPOVER_LAYER: usize = ui::layer::POPOVER;
 /// `.colorPickerPopover`: its width and the height it is placed by.
 const COLOR_POPOVER_WIDTH: f32 = 230.;
 const COLOR_POPOVER_HEIGHT: f32 = 286.;

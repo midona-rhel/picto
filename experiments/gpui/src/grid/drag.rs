@@ -160,7 +160,7 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
             .position(drag.position - point(px(24.), px(24.)))
             .child(frame),
     )
-    .with_priority(30)
+    .with_priority(crate::ui::layer::DRAG)
 }
 
 /// Which side of a tile dragged items go to.

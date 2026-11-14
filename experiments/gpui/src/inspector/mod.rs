@@ -362,7 +362,7 @@ impl Inspector {
             folder_dialog,
             places: Rc::new(RefCell::new(HashMap::new())),
             sources,
-            menu: menu::Host::deferred(30, menu::Return::Opener),
+            menu: menu::Host::deferred(crate::ui::layer::MENU, menu::Return::Opener),
             menu_target: None,
             copied: None,
             confirm: modal::Host::default(),

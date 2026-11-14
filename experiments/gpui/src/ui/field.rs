@@ -631,7 +631,7 @@ impl Field {
             .w_full()
             .h(px(frame.height))
             .flex_none()
-            .child(deferred(anchored().child(overlay)).with_priority(2))
+            .child(deferred(anchored().child(overlay)).with_priority(super::layer::OVERLAY))
     }
 }
 

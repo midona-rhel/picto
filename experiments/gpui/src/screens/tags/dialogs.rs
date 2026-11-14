@@ -343,7 +343,7 @@ impl TagsScreen {
             ui::modal(("tags-dialog", index), title, layer.presence)
                 .size(size)
                 .focus(&focus)
-                .layer(10 + index)
+                .layer(ui::layer::DIALOG + index)
                 .on_close(move |window, cx| dismiss(&(), window, cx))
         };
         // `ConfirmModal`, run by this screen: Cancel takes it away at once,
@@ -370,7 +370,7 @@ impl TagsScreen {
             .danger(danger)
             .busy(busy)
             .focus(&focus)
-            .layer(10 + index)
+            .layer(ui::layer::DIALOG + index)
             .on_close(move |window, cx| dismiss(&(), window, cx))
             .on_cancel(move |window, cx| cancel(&(), window, cx))
             .on_confirm(move |window, cx| accept(&(), window, cx))

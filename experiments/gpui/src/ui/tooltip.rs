@@ -11,12 +11,7 @@ pub struct Tip {
     /// Opens above the control, where Mantine flips a tooltip that would
     /// leave the window below it.
     above: bool,
-    /// The drawing layer, above the control's own when that is raised.
-    layer: usize,
 }
-
-/// The layer tooltips draw on: above the page and its popovers.
-const LAYER: usize = 3;
 
 pub fn tip(label: impl Into<SharedString>) -> Tip {
     Tip::new(label)
@@ -49,20 +44,12 @@ impl Tip {
             label: label.into(),
             keys: Vec::new(),
             above: false,
-            layer: LAYER,
         }
     }
 
     /// Opens above the control: for controls along the window's bottom edge.
     pub fn above(mut self) -> Self {
         self.above = true;
-        self
-    }
-
-    /// Draws above `layer`, for a control that is itself drawn on a raised
-    /// layer (over the dialogs).
-    pub fn over(mut self, layer: usize) -> Self {
-        self.layer = self.layer.max(layer + 1);
         self
     }
 
@@ -202,7 +189,7 @@ impl Hover {
                         .snap_to_window_with_margin(px(5.))
                         .child(bubble),
                 )
-                .with_priority(tip.layer),
+                .with_priority(super::layer::TOOLTIP),
             )
             .into_any_element(),
         )

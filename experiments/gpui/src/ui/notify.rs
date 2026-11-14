@@ -314,7 +314,7 @@ pub struct Host {
 
 /// The layer notifications are drawn on, above every other deferred layer
 /// (menus, pickers, tooltips, dialogs).
-const LAYER: usize = 100;
+const LAYER: usize = super::layer::NOTIFICATION;
 
 impl Host {
     pub fn new(cx: &mut Context<Self>) -> Self {

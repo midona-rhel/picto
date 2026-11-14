@@ -394,7 +394,7 @@ impl Shell {
             inspector_available: None,
             inspector_presence: motion::Fade::at(true),
             viewer_exit: false,
-            menu: ui::menu::Host::inline(ui::menu::Return::To(focus.clone())),
+            menu: ui::menu::Host::deferred(ui::layer::MENU, ui::menu::Return::To(focus.clone())),
             filter_bar,
             view_panels: Vec::new(),
             _view_panels: Vec::new(),

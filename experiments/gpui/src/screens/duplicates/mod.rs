@@ -276,7 +276,10 @@ impl DuplicatesScreen {
         let focus = cx.focus_handle();
         Self {
             session,
-            menu: ui::menu::Host::deferred(2, ui::menu::Return::To(focus.clone())),
+            menu: ui::menu::Host::deferred(
+                crate::ui::layer::MENU,
+                ui::menu::Return::To(focus.clone()),
+            ),
             focus,
             return_focus: None,
             controls,

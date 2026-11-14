@@ -118,7 +118,10 @@ impl TagPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::menu_search);
         // The keyboard goes back to the search once a row's menu has gone.
-        let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
+        let menu = menu::Host::deferred(
+            crate::ui::layer::MENU,
+            menu::Return::To(search.read(cx).focus_handle(cx)),
+        );
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {
@@ -158,7 +161,7 @@ impl TagPicker {
             menu,
             menu_tag: None,
             filter: None,
-            layer: 5,
+            layer: crate::ui::layer::PANEL,
             _subscriptions: subscriptions,
         }
     }
@@ -203,7 +206,7 @@ impl TagPicker {
         cx: &mut Context<Self>,
     ) {
         self.filter = None;
-        self.layer = 5;
+        self.layer = crate::ui::layer::PANEL;
         self.show(anchor, entity, window, cx);
     }
 
@@ -217,7 +220,7 @@ impl TagPicker {
         cx: &mut Context<Self>,
     ) {
         self.filter = None;
-        self.layer = 15;
+        self.layer = crate::ui::layer::OVER_DIALOG;
         self.show(None, entity, window, cx);
         let view = window.viewport_size();
         self.geometry = overlay_shell::place_above(
@@ -249,7 +252,7 @@ impl TagPicker {
                 .collect(),
         });
         self.pinned = false;
-        self.layer = 5;
+        self.layer = crate::ui::layer::PANEL;
         self.show(None, include, window, cx);
         let view = window.viewport_size();
         self.geometry = overlay_shell::place_below(

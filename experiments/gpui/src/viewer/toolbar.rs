@@ -72,7 +72,7 @@ impl ViewerToolbar {
             viewer,
             surface,
             zoom,
-            menu: menu::Host::deferred(2, menu::Return::Opener),
+            menu: menu::Host::deferred(crate::ui::layer::MENU, menu::Return::Opener),
             _subscriptions: subscriptions,
         }
     }

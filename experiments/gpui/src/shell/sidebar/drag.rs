@@ -442,7 +442,7 @@ impl Sidebar {
                         .child(ghost),
                 ),
             )
-            .with_priority(30)
+            .with_priority(crate::ui::layer::DRAG)
             .into_any_element(),
         )
     }

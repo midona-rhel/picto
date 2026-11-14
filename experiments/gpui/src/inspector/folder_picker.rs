@@ -250,7 +250,10 @@ pub struct FolderPicker {
 impl FolderPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
         let search = cx.new(TextInput::menu_search);
-        let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
+        let menu = menu::Host::deferred(
+            crate::ui::layer::MENU,
+            menu::Return::To(search.read(cx).focus_handle(cx)),
+        );
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {

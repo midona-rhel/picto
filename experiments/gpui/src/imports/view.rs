@@ -134,7 +134,7 @@ impl Imports {
             .child(panel);
         Some(
             deferred(anchored().position(point(px(0.), px(0.))).child(layer))
-                .with_priority(10)
+                .with_priority(crate::ui::layer::DIALOG)
                 .into_any_element(),
         )
     }

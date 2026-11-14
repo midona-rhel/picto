@@ -192,7 +192,7 @@ impl TagsScreen {
             rail_scroll: ScrollHandle::new(),
             bounds: Bounds::default(),
             clock: Instant::now(),
-            menu: menu::Host::deferred(30, menu::Return::To(focus)),
+            menu: menu::Host::deferred(crate::ui::layer::MENU, menu::Return::To(focus)),
             menu_target: None,
             layers: Vec::new(),
             refocus: false,

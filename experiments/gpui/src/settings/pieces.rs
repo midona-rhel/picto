@@ -279,9 +279,12 @@ pub(super) fn swatch(
                 .bg(theme.contrast(15.)),
         )
         .child(name);
-        cell = cell.child(div().absolute().top(px(-6.)).left(relative(0.5)).child(
-            deferred(anchored().anchor(Anchor::BottomCenter).child(bubble)).with_priority(3),
-        ));
+        cell = cell.child(
+            div().absolute().top(px(-6.)).left(relative(0.5)).child(
+                deferred(anchored().anchor(Anchor::BottomCenter).child(bubble))
+                    .with_priority(ui::layer::TOOLTIP),
+            ),
+        );
     }
     cell
 }

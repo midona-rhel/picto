@@ -350,7 +350,7 @@ impl SubscriptionsScreen {
             tab: SOURCES,
             // Over the window as the shell lays the grid's. The keyboard goes
             // back to the screen unless the action moved it.
-            menu: menu::Host::deferred(2, menu::Return::To(focus)),
+            menu: menu::Host::deferred(crate::ui::layer::MENU, menu::Return::To(focus)),
             menu_targets: Vec::new(),
             dialog: modal::Host::default(),
             tag_picker,

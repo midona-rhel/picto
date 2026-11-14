@@ -296,7 +296,7 @@ impl FolderPicker {
             ui::modal("folder-picker-create", create.title, dialog.presence)
                 .size(Size::Small)
                 .focus(&dialog.focus)
-                .layer(11)
+                .layer(crate::ui::layer::DIALOG + 1)
                 .on_close({
                     let this = cx.entity().downgrade();
                     move |_, cx| {

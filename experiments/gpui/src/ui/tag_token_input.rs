@@ -337,7 +337,7 @@ impl Render for TagTokenInput {
                         .position(point(area.left(), area.bottom() + px(2.)))
                         .child(list),
                 )
-                .with_priority(40),
+                .with_priority(super::layer::OVER_DIALOG),
             );
         }
         root

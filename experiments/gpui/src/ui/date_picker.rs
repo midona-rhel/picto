@@ -35,7 +35,7 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
         id: id.into(),
         value: value.into(),
         on_change: None,
-        layer: 3,
+        layer: super::layer::POPOVER,
     }
 }
 

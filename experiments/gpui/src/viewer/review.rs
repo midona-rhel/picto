@@ -175,7 +175,7 @@ const DIVIDER_MARGIN: f32 = 9.;
 const PILL_RISE: f32 = 7.;
 const PILL_SCALE: f32 = 0.96;
 /// The pill's drawing layer: just above the dialogs'.
-const LAYER: usize = 11;
+const LAYER: usize = crate::ui::layer::REVIEW;
 /// `outline-offset: -3px`.
 const RING_INSET: f32 = 3.;
 /// `.glow`'s hovered opacity.
@@ -485,7 +485,7 @@ fn half(
             Half::Reject => outline.rounded_r(px(round)),
         }
     });
-    let tip = Tip::new(label).shortcut(shortcut, cx).above().over(LAYER);
+    let tip = Tip::new(label).shortcut(shortcut, cx).above();
     let layer = hint.read(cx).layer(&tip, HEIGHT, cx);
     let on_review = controls.on_review.clone();
     let mut element = div()

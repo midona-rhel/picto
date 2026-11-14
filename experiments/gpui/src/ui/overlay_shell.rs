@@ -212,7 +212,7 @@ pub fn overlay_shell(
         on_close: Rc::new(on_close),
         on_move: None,
         on_nav: None,
-        layer: 5,
+        layer: super::layer::PANEL,
     }
 }
 

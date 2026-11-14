@@ -16,6 +16,7 @@ pub mod focus;
 mod glass;
 pub mod icon_button;
 pub mod icon_picker;
+pub mod layer;
 pub mod menu;
 pub mod modal;
 pub mod notify;

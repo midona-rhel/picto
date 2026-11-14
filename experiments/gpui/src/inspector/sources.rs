@@ -445,7 +445,7 @@ impl Inspector {
             .absolute()
             .top_0()
             .left_0()
-            .child(deferred(anchored().child(dropdown)).with_priority(2))
+            .child(deferred(anchored().child(dropdown)).with_priority(ui::layer::OVERLAY))
     }
 }
 

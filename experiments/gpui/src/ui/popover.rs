@@ -212,7 +212,8 @@ impl RenderOnce for Popover {
                     .overflow_hidden()
                     .children(self.children),
             );
-        deferred(anchored().position(point(px(left), px(top))).child(panel)).with_priority(1)
+        deferred(anchored().position(point(px(left), px(top))).child(panel))
+            .with_priority(super::layer::MENU)
     }
 }
 

@@ -234,7 +234,7 @@ pub fn modal(
         footer: Vec::new(),
         on_close: None,
         focus: None,
-        priority: 10,
+        priority: super::layer::DIALOG,
         flush: false,
     }
 }
