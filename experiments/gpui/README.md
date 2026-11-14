@@ -770,7 +770,6 @@ re-checked by reading the code; the rest were checked against it.
   dragged.
 - "Ungroup N Collections..." names no count when the whole destination is
   selected and not all loaded.
-- Selecting the new group after Group..., the organizer or a merge.
 - Reduced motion: the system setting is not read.
 - File choosers take every file type (GPUI's prompt has no type filter).
 

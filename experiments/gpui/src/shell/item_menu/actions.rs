@@ -739,23 +739,27 @@ impl Shell {
             &self.session,
             Report::failure("Could not create group").and_announce("collections.organize"),
             Reread::NOTHING,
-            move |library: &Library| -> picto_library::Result<Option<super::organizer::Request>> {
+            // The merged group, or what the organizer is to ask.
+            move |library: &Library| -> picto_library::Result<
+                Result<picto_library::RootId, super::organizer::Request>,
+            > {
                 let summary = library.selection_summary(&selection)?;
                 let notes = library.collection_note_draft(&selection)?;
                 if let ([group], 0) = (summary.collection_candidates.as_slice(), notes.source_count)
                 {
-                    library.organize_into_collection(&picto_library::GroupRequest {
-                        target: selection,
-                        cover_root_id: cover,
-                        winning_collection_id: Some(group.collection_id),
-                        name: None,
-                        notes: None,
-                        modified_at_ms: crate::now_ms(),
-                    })?;
-                    Ok(None)
+                    let (merged, _) =
+                        library.organize_into_collection(&picto_library::GroupRequest {
+                            target: selection,
+                            cover_root_id: cover,
+                            winning_collection_id: Some(group.collection_id),
+                            name: None,
+                            notes: None,
+                            modified_at_ms: crate::now_ms(),
+                        })?;
+                    Ok(Ok(merged))
                 } else {
                     // Anything else is the organizer's to decide.
-                    Ok(Some(super::organizer::Request {
+                    Ok(Err(super::organizer::Request {
                         target: selection,
                         cover,
                         groups: summary.collection_candidates,
@@ -766,16 +770,15 @@ impl Shell {
             },
             cx,
             |this, decide, cx| match decide {
-                Ok(None) => {
-                    // `clearSelection`, then the merged group's results.
-                    // TODO: select the merged group once the results hold
-                    // it, as production does.
+                Ok(Ok(merged)) => {
+                    // `clearSelection`, then the merged group alone
+                    // (`replace_items`) once the results hold it.
                     this.session.update(cx, |session, cx| {
                         session.clear_selection(cx);
-                        session.reread(Reread::RESULTS, cx)
+                        session.select_when_listed(merged, cx)
                     });
                 }
-                Ok(Some(request)) => this.open_organizer(request, cx),
+                Ok(Err(request)) => this.open_organizer(request, cx),
                 Err(_) => {}
             },
         );

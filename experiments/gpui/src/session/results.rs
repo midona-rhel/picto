@@ -5,7 +5,7 @@ use super::{
     VIEW_SAVE_DELAY, Visit,
 };
 use crate::backend::{self, Arrived, Fetch, Reply, Request};
-use crate::grid::selection::End;
+use crate::grid::selection::{End, Selection};
 use crate::grid::{filters::Filters, prefs::ViewPrefs, window};
 use gpui::*;
 use picto_library::RootId;
@@ -88,6 +88,7 @@ impl Session {
         let mut tracked = self.selection.tracked();
         tracked.extend(self.selected_item().map(|item| item.root_id));
         tracked.extend(self.anchor.map(|anchor| anchor.id));
+        tracked.extend(self.pending_select);
         tracked.sort_unstable();
         tracked.dedup();
         // The same window, as many items as it holds (`reconcileSnapshot`).
@@ -118,6 +119,7 @@ impl Session {
         self.window_active = None;
         self.window_queued = None;
         self.pending_focus = None;
+        self.pending_select = None;
         let _ = self.sender.send(Request::Query(
             self.generation,
             entry.scope.clone(),
@@ -592,6 +594,17 @@ impl Session {
                     .and_then(|item| self.position_of(item.root_id));
                 self.focus_on(last, cx);
             }
+        }
+        if let Some(id) = self.pending_select.take()
+            && let Some(Some(ordinal)) = places.get(&id)
+        {
+            let end = End {
+                id,
+                ordinal: *ordinal,
+            };
+            self.selection = Selection::only(end);
+            self.anchor = Some(end);
+            self.focus_on(Some(*ordinal), cx);
         }
         cx.emit(Change::Results);
     }

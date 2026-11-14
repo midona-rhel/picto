@@ -291,6 +291,9 @@ pub struct Session {
     /// An item moved to by the keyboard or a viewer outside the window: it
     /// is selected (with `true`, as a range) once its window arrives.
     pending_focus: Option<(usize, bool)>,
+    /// An item to select alone once a refresh finds where it is, such as a
+    /// group just made (`replace_items` with the new collection).
+    pending_select: Option<RootId>,
     /// An ordinal the grid should bring into view once it is laid out.
     pub reveal: Option<usize>,
     /// The height per item the grid measured, kept with the results so
@@ -510,6 +513,7 @@ impl Session {
             window_active: None,
             window_queued: None,
             pending_focus: None,
+            pending_select: None,
             reveal: None,
             density: None,
             window_top: 0.,

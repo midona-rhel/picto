@@ -170,9 +170,13 @@ impl Organizer {
             cx,
             |this, result, cx| {
                 match result {
-                    // TODO: select the new group once the results hold it
-                    // (`onComplete`), as production does.
-                    Ok(_) => cx.emit(Organized),
+                    // `onComplete`: the new group alone, once the results
+                    // hold it.
+                    Ok((group, _)) => {
+                        this.session
+                            .update(cx, |session, cx| session.select_when_listed(group, cx));
+                        cx.emit(Organized);
+                    }
                     Err(error) => {
                         this.error = Some(error.to_string().into());
                         this.saving = false;
