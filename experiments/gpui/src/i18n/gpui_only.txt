@@ -11,3 +11,22 @@ Pause all subscriptions
 Resume all subscriptions
 Select a media item from this library, then adjust its position and zoom.
 This library has no media available for a cover.
+Choose date
+Compact
+F
+Fit Thumbnails
+Folder Order
+M
+Not
+S
+Search results
+Show Extension
+Show File Type
+Show Inspector
+Show Item Count
+Show Name
+Show Resolution
+Show Sidebar
+Show Subfolder Content
+T
+W

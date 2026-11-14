@@ -42,6 +42,16 @@ const CONVERTED: &[&str] = &[
     "ui/section_header.rs",
     "ui/menu",
     "ui/select.rs",
+    "shell/toolbar.rs",
+    "shell/view_menu.rs",
+    "grid/filter",
+    "grid/prefs.rs",
+    "ui/date_picker.rs",
+    "ui/color_editor.rs",
+    "ui/filter_control.rs",
+    "ui/color_picker.rs",
+    "ui/zoom.rs",
+    "ui/segmented.rs",
 ];
 
 /// Calls whose literal argument is drawn.

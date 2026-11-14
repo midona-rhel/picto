@@ -2,6 +2,7 @@
 //! calendar below it (above it without room), with Today and Clear. Days
 //! are local `YYYY-MM-DD` keys; an empty key is no day.
 use super::popover::{Dismissal, Flip, Placement, Side, floating, place};
+use crate::i18n::{en, t};
 use crate::theme;
 use crate::theme::Text as _;
 use chrono::{Datelike, Duration as Days, Local, NaiveDate};
@@ -149,7 +150,7 @@ impl RenderOnce for DatePicker {
         };
         let display = selected
             .map(crate::i18n::format::short_month_date)
-            .unwrap_or_else(|| "Choose date".into());
+            .unwrap_or_else(|| en("Choose date").into());
         let toggle = state.clone();
         let mut trigger = div()
             .id(self.id.clone())
@@ -290,9 +291,18 @@ impl RenderOnce for DatePicker {
             .line_height(px(22.))
             .text_color(theme.text_tertiary())
             .children(
-                ["S", "M", "T", "W", "T", "F", "S"]
-                    .into_iter()
-                    .map(|day| div().flex_1().flex().justify_center().child(day)),
+                // Production writes the initials in English.
+                [
+                    en("S"),
+                    en("M"),
+                    en("T"),
+                    en("W"),
+                    en("T"),
+                    en("F"),
+                    en("S"),
+                ]
+                .into_iter()
+                .map(|day| div().flex_1().flex().justify_center().child(day)),
             );
         let mut outside = theme.text_tertiary();
         outside.a *= 0.48;
@@ -382,7 +392,7 @@ impl RenderOnce for DatePicker {
                         .border_color(theme.contrast(22.))
                         .bg(theme.contrast(11.))
                 })
-                .child("Today")
+                .child(t("Today"))
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     today_pick(Some(today), window, cx)
@@ -411,7 +421,7 @@ impl RenderOnce for DatePicker {
                         clear_pick(None, window, cx)
                     })
             })
-            .child("Clear");
+            .child(t("Clear"));
         // Disabled with no day, and then no stop.
         if selected.is_some() {
             clear_button = calendar_button(

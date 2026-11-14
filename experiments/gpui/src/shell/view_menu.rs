@@ -5,6 +5,7 @@
 use crate::grid::layout::ViewMode;
 use crate::grid::menu::Panel;
 use crate::grid::prefs::{self, fixed_order};
+use crate::i18n::{en, t};
 use crate::session::{Change, Session};
 use crate::theme;
 use crate::theme::Text as _;
@@ -67,18 +68,18 @@ const PANEL_INSET: f32 = 2. * 6. + 2. * 4.;
 /// The display panel's labels for a destination, in order.
 fn display_labels(folder: bool) -> Vec<&'static str> {
     let mut labels = vec![
-        "Show Name",
-        "Show Resolution",
-        "Show Extension",
-        "Show File Type",
-        "Show Item Count",
-        "Compact",
-        "Fit Thumbnails",
+        en("Show Name"),
+        en("Show Resolution"),
+        en("Show Extension"),
+        en("Show File Type"),
+        en("Show Item Count"),
+        en("Compact"),
+        en("Fit Thumbnails"),
     ];
     if folder {
-        labels.push("Show Subfolder Content");
+        labels.push(en("Show Subfolder Content"));
     }
-    labels.extend(["Show Sidebar", "Show Inspector"]);
+    labels.extend([en("Show Sidebar"), en("Show Inspector")]);
     labels
 }
 
@@ -261,7 +262,7 @@ impl ViewOptions {
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(label("Layout"))
+                .child(label(t("Layout")))
                 .child(
                     ui::select("view-layout", mode, choices)
                         .width(130.)
@@ -304,8 +305,8 @@ impl ViewOptions {
                         "view-direction",
                         segmented::Look::Direction,
                         vec![
-                            segment("select-sort-ascending", "Ascending"),
-                            segment("select-sort-descending", "Descending"),
+                            segment("select-sort-ascending", t("Ascending")),
+                            segment("select-sort-descending", t("Descending")),
                         ],
                         directions.iter().position(|value| *value == direction),
                     )
@@ -325,7 +326,7 @@ impl ViewOptions {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(label("Sort by"))
+                    .child(label(t("Sort by")))
                     .child(controls),
             );
         }
@@ -352,37 +353,37 @@ impl ViewOptions {
         }
         let mut toggles: Vec<(&'static str, bool, Flip, bool)> = vec![
             (
-                "Show Name",
+                en("Show Name"),
                 prefs.show_name,
                 Flip::View(json!({ "show_name": !prefs.show_name }), false),
                 false,
             ),
             (
-                "Show Resolution",
+                en("Show Resolution"),
                 prefs.show_resolution,
                 Flip::View(json!({ "show_resolution": !prefs.show_resolution }), false),
                 false,
             ),
             (
-                "Show Extension",
+                en("Show Extension"),
                 prefs.show_extension,
                 Flip::View(json!({ "show_extension": !prefs.show_extension }), false),
                 false,
             ),
             (
-                "Show File Type",
+                en("Show File Type"),
                 prefs.show_extension_label,
                 Flip::View(json!({ "show_label": !prefs.show_extension_label }), false),
                 false,
             ),
             (
-                "Show Item Count",
+                en("Show Item Count"),
                 prefs.show_item_count,
                 Flip::View(json!({ "show_item_count": !prefs.show_item_count }), false),
                 false,
             ),
             (
-                "Compact",
+                en("Compact"),
                 prefs.gap == 8.,
                 Flip::View(
                     json!({ "spacing": if prefs.gap == 8. { "wide" } else { "tight" } }),
@@ -391,7 +392,7 @@ impl ViewOptions {
                 false,
             ),
             (
-                "Fit Thumbnails",
+                en("Fit Thumbnails"),
                 prefs.fit_cover,
                 Flip::View(
                     json!({ "thumbnail_fit": if prefs.fit_cover { "contain" } else { "cover" } }),
@@ -402,7 +403,7 @@ impl ViewOptions {
         ];
         if is_folder(&scope) {
             toggles.push((
-                "Show Subfolder Content",
+                en("Show Subfolder Content"),
                 prefs.show_subfolders,
                 Flip::View(json!({ "show_subfolders": !prefs.show_subfolders }), true),
                 false,
@@ -410,12 +411,12 @@ impl ViewOptions {
         }
         let rails = [
             (
-                "Show Sidebar",
+                en("Show Sidebar"),
                 self.sidebar_shown,
                 Flip::Rail(|| RailToggled::Sidebar),
             ),
             (
-                "Show Inspector",
+                en("Show Inspector"),
                 self.inspector_shown,
                 Flip::Rail(|| RailToggled::Inspector),
             ),

@@ -7,6 +7,7 @@ use super::filter_editors::{
     SaveFilterEditor, SaveRequested,
 };
 use super::filters::{self, Field, Filters, TagChoice};
+use crate::i18n::t;
 use crate::inspector::{
     FolderPicker, TagPicker, folder_picker::Event as FolderEvent, tag_picker::Event as TagEvent,
 };
@@ -377,14 +378,14 @@ impl FilterBar {
                     (
                         filters.min_duration_ms,
                         filters.max_duration_ms,
-                        vec![("s", 1000), ("m", 60_000), ("h", 3_600_000)],
+                        vec![(t("s"), 1000), (t("m"), 60_000), (t("h"), 3_600_000)],
                         0,
                     )
                 } else {
                     (
                         filters.min_size_bytes,
                         filters.max_size_bytes,
-                        vec![("KB", 1000), ("MB", 1_000_000)],
+                        vec![(t("KB"), 1000), (t("MB"), 1_000_000)],
                         1,
                     )
                 };
@@ -407,7 +408,7 @@ impl FilterBar {
                 self.editors.range = Some(editor);
             }
             MenuKind::Resolution => {
-                let pixels = || vec![("px", 1)];
+                let pixels = || vec![(t("px"), 1)];
                 let width = cx.new(|cx| {
                     RangeEditor::new(filters.min_width, filters.max_width, pixels(), 0, cx)
                 });
@@ -490,7 +491,7 @@ impl FilterBar {
                 .into_iter()
                 .map(|stars| {
                     let label = if stars == 0 {
-                        "Unrated".to_owned()
+                        t("Unrated").to_owned()
                     } else {
                         format!(
                             "{}{}",
@@ -868,7 +869,7 @@ impl Render for FilterBar {
         let pin = cx.entity().downgrade();
         items = items.child(
             filter_action("filter-add", "filter-plus")
-                .tip(ui::tip("Add or remove filter fields"))
+                .tip(ui::tip(t("Add or remove filter fields")))
                 .on_click(move |bounds, _, cx| {
                     let _ = pin.update(cx, |this, cx| this.open_menu(MenuKind::Pin, bounds, cx));
                 }),
@@ -926,7 +927,7 @@ impl Render for FilterBar {
             )
             .child(
                 filter_action("filter-saved", "filter-floppy")
-                    .tip(ui::tip("Save or apply a filter"))
+                    .tip(ui::tip(t("Save or apply a filter")))
                     .on_click(move |bounds, _, cx| {
                         let _ = saved
                             .update(cx, |this, cx| this.open_menu(MenuKind::Saved, bounds, cx));
@@ -943,9 +944,9 @@ impl Render for FilterBar {
                 )
                 .active(locked)
                 .tip(ui::tip(if locked {
-                    "Keep filters on navigation: on"
+                    t("Keep filters on navigation: on")
                 } else {
-                    "Keep filters on navigation"
+                    t("Keep filters on navigation")
                 }))
                 .on_click(move |_, _, cx| {
                     let _ = lock.update(cx, |this, cx| {
@@ -957,7 +958,7 @@ impl Render for FilterBar {
             .child(
                 filter_action("filter-clear-all", "filter-restore")
                     .disabled(count == 0)
-                    .tip(ui::tip("Clear all filters"))
+                    .tip(ui::tip(t("Clear all filters")))
                     .on_click(move |_, _, cx| {
                         let _ = reset.update(cx, |this, cx| {
                             this.session.update(cx, |session, cx| {

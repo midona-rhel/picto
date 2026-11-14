@@ -24,6 +24,7 @@ pub struct ViewPrefs {
 }
 
 /// `LAYOUT_OPTIONS`: each layout, its `view_mode` value and its label.
+// i18n: translated where drawn (select choices)
 pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
     (ViewMode::Waterfall, "waterfall", "Waterfall"),
     (ViewMode::Grid, "grid", "Grid"),
@@ -32,6 +33,7 @@ pub const LAYOUTS: [(ViewMode, &str, &str); 3] = [
 
 /// `SORT_OPTIONS` of the view panel, in its order: each sort, its
 /// `sort_field` value and its label.
+// i18n: translated where drawn (select choices)
 pub const SORTS: [(SortField, &str, &str); 6] = [
     (SortField::ImportedAt, "imported_at", "Date Added"),
     (SortField::CapturedAt, "captured_at", "Date Created"),
@@ -62,7 +64,7 @@ pub fn sort_label(field: SortField) -> &'static str {
     SORTS
         .iter()
         .find(|(each, _, _)| *each == field)
-        .map_or("Folder Order", |(_, _, label)| label)
+        .map_or(crate::i18n::en("Folder Order"), |(_, _, label)| label)
 }
 
 /// A direction's `sort_order` value.
