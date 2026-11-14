@@ -671,10 +671,18 @@ stays above every application until Escape or a press elsewhere closes it,
 so keep such checks short.
 
 What a window driven this way shows differs from what a person sees in
-three ways. A window without the keyboard draws at most 30 frames a second
-(GPUI's `inactive_frame_interval`), so frame gaps from `PICTO_GPUI_STATS`
-read about 33 ms there; while the display sleeps the system slows the frame
-source further (4 frames a second were seen). Lines written together are
+three ways. A window fully covered by another application's (which is where
+`PICTO_GPUI_BACKGROUND` keeps it) still draws, but the system takes its
+finished frames back slowly: after about three frames in a row the next
+waits up to a second for a drawable (`CAMetalDisplayLink` delivers no
+update until one is free). A change can therefore show up to a second
+late, an animation advances in steps, and a capture taken sooner shows the
+frame before; leave 1.5 s before a capture. The app had already drawn the
+change: its views render within 10 ms of the input. (The 30-frame limit
+GPUI puts on a window without the keyboard is switched off for every
+window of the app, as Electron's windows keep their rate.) While the
+display sleeps the system slows the frame source further (4 frames a
+second were seen). Lines written together are
 played in one tick, before the next frame: a click right after the move
 that reveals a control (a detail window's toolbar, a fading button) is
 tested against the frame before it and goes to what was under it, so leave
@@ -872,12 +880,23 @@ re-checked by reading the code; the rest were checked against it.
 - **System dialogs with the pointer.** Paste Import, the file and folder
   choosers, the export and Picto Pack dialogs and the empty states' import
   buttons have been driven only off-screen with `answer`.
-- **Not checked in any window:** the filter bar's range editors; the font
-  viewer, EPUB and text viewers and Flash controls with a pointer; the
-  volume drag; Set as Thumbnail end to end; the collection editor and its
-  rubber band. (Seen in a real window: the calendar and saved filters, a PDF
-  collection scrolled, the media player's seek, hover time, rate list, loop
-  and controls' fade, the audio visualizer.)
+- **Not checked in any window:** a value typed into the filter bar's range
+  editors (the Resolution editor was seen opening below its chip); the
+  volume drag; Set as Thumbnail end to end; Settings' language choice, the
+  interface zoom's other levels (80%, 125%) and every screen zoomed or in
+  German and Japanese; the log window; the AI tagger in a real window; the
+  pop-up menus' and glass panels' shadows in a light theme; a second launch
+  handing over; a pack on the command line; `dropdata` drops. (Seen in a
+  real window: the calendar and saved filters, a PDF collection scrolled,
+  the media player's seek, hover time, rate list, loop and controls' fade,
+  the audio visualizer; EPUB pages and their buttons, text and Markdown
+  pages, the font viewer's preview, an edit of its sample, waterfall,
+  glyphs and page colours; a Flash movie's button and Pause; a collection
+  made with Group…, its reader scrolled, and its editor's drag reorder with
+  the insertion mark, rubber band, Sort by menu, Remove from Group and Undo;
+  Delete Permanently's confirmation and the delete; text and Markdown
+  thumbnails appearing in the grid by themselves after a drop; the filter
+  bar's field menu adding Resolution, Duration and File Size.)
 - **Performance.** No frame-time or decode-latency benchmark has been
   completed. One real-window session on this library (2,673 items, debug
   build) measured: physical footprint 308 MB after opening, 754 MB after
@@ -885,20 +904,11 @@ re-checked by reading the code; the rest were checked against it.
   the top, 542 MB after opening and closing fifty media views (peak 884 MB),
   538 MB after ten minutes idle; no view repainted and CPU read 0.0% while
   idle; a scroll in an active state of the window drew a frame every 8 ms.
-  Frame timing of a window without the keyboard is GPUI's 30 frames a
-  second (section 6). Do not call the app faster or flicker-free on this
+  A covered window's frames are paced by the system (section 6). Do not call the app faster or flicker-free on this
   evidence.
 
 ### Seen wrong in a real window, not fixed
 
-- The first frame after clicking a theme swatch in the Settings window still
-  shows the old theme there (with the new swatch ringed); the new theme
-  arrives 0.15–0.3 s later. The main window changes in the same frame.
-- Twice, the first list a Settings select opened (Language) was drawn but
-  did not appear until another frame was drawn; seven later attempts showed
-  it at once. GPUI's own warnings go through the `log` crate, for which the
-  app installs no logger, so a renderer warning (a skipped frame, say) is
-  never seen; install one before chasing this further.
 - With a video playing, Playback speed's tooltip covers the bottom row (3x)
   of the speed list while the pointer stays on the button, as in production.
 - A sidebar drag that moves a smart folder under another is two undo steps
