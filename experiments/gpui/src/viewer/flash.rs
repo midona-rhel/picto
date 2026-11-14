@@ -8,6 +8,11 @@ use std::{
 };
 
 pub type Frame = Result<image::RgbaImage, String>;
+
+/// The movie's stage, in pixels: Ruffle draws every movie at this size and
+/// the viewer fits it to the pane.
+pub const STAGE: (u32, u32) = (960, 720);
+
 pub fn key_descriptor(key: &str) -> ruffle_core::events::KeyDescriptor {
     use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey};
     let (physical_key, logical_key) = match key {
@@ -105,7 +110,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         };
         let first = next_frame();
-        assert_eq!(first.dimensions(), (960, 720));
+        assert_eq!(first.dimensions(), STAGE);
         flash.toggle_play();
         flash.set_volume(0.5);
         flash.stop();
@@ -119,7 +124,7 @@ mod tests {
             assert!(Instant::now() < deadline, "no frame after Stop");
             std::thread::sleep(Duration::from_millis(20));
         };
-        assert_eq!(reloaded.dimensions(), (960, 720));
+        assert_eq!(reloaded.dimensions(), STAGE);
     }
     #[test]
     #[ignore = "Requires a native GPU adapter"]
@@ -146,7 +151,7 @@ mod tests {
         initial
             .save(output.path().join("ruffle-first-frame.png"))
             .unwrap();
-        assert_eq!(initial.dimensions(), (960, 720));
+        assert_eq!(initial.dimensions(), STAGE);
         assert!(
             initial.pixels().any(|p| p != initial.get_pixel(0, 0)),
             "Ruffle frame is blank"
@@ -251,7 +256,7 @@ impl Flash {
                 let build = |autoplay: bool, volume: f32| -> anyhow::Result<_> {
                     let movie = SwfMovie::from_data(&data, url.clone(), None, None)?;
                     let renderer = WgpuRenderBackend::<TextureTarget>::for_offscreen(
-                        (960, 720),
+                        STAGE,
                         wgpu::Backends::PRIMARY,
                         wgpu::PowerPreference::LowPower,
                     )
@@ -261,7 +266,7 @@ impl Flash {
                         .with_log(TraceLog(trace_output.clone()))
                         .with_movie(movie)
                         .with_renderer(renderer)
-                        .with_viewport_dimensions(960, 720, 1.)
+                        .with_viewport_dimensions(STAGE.0, STAGE.1, 1.)
                         .with_max_execution_duration(Duration::from_millis(250))
                         .with_autoplay(autoplay);
                     match ruffle_frontend_utils::backends::audio::CpalAudioBackend::new(None) {

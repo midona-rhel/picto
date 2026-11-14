@@ -19,7 +19,6 @@ pub mod unsupported;
 #[cfg(test)]
 pub(crate) mod matrix;
 
-use super::surface::MediaSurface;
 use crate::keymap::Scope;
 use font::FontViewer;
 use gpui::*;
@@ -89,46 +88,6 @@ pub fn bind(cx: &mut App) {
         ));
     }
     cx.bind_keys(bindings);
-}
-
-/// Hands the document keys to the media surface. A host puts this on the
-/// element that has the keyboard, since the surface itself never does.
-pub fn handle_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSurface>) -> E {
-    let (previous, next, larger, smaller) = (
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-    );
-    let (start, end, up, down) = (
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-    );
-    element
-        .on_action(move |_: &ScrollToStart, _, cx| {
-            start.update(cx, |surface, cx| surface.scroll_pages(Scroll::Start, cx))
-        })
-        .on_action(move |_: &ScrollToEnd, _, cx| {
-            end.update(cx, |surface, cx| surface.scroll_pages(Scroll::End, cx))
-        })
-        .on_action(move |_: &ScrollPageUp, _, cx| {
-            up.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageUp, cx))
-        })
-        .on_action(move |_: &ScrollPageDown, _, cx| {
-            down.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageDown, cx))
-        })
-        .on_action(move |_: &PreviousPage, _, cx| {
-            previous.update(cx, |surface, cx| surface.previous_page(cx))
-        })
-        .on_action(move |_: &NextPage, _, cx| next.update(cx, |surface, cx| surface.next_page(cx)))
-        .on_action(move |_: &PreviewLarger, _, cx| {
-            larger.update(cx, |surface, cx| surface.preview_size(true, cx))
-        })
-        .on_action(move |_: &PreviewSmaller, _, cx| {
-            smaller.update(cx, |surface, cx| surface.preview_size(false, cx))
-        })
 }
 
 /// A scroll of a document's pages by a key.

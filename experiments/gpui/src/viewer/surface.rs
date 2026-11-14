@@ -161,6 +161,7 @@ pub struct MediaSurface {
     /// short delay before it appears.
     overflowing_since: Option<Instant>,
     options: Options,
+    _settings: Option<Subscription>,
     /// Pictures replaced since the last frame, let go of GPUI's sprite
     /// atlas once nothing draws them.
     retired: Vec<Arc<RenderImage>>,
@@ -191,6 +192,32 @@ impl MediaSurface {
             options,
             ..Self::default()
         }
+    }
+
+    /// A host's surface, which follows the preview settings
+    /// (`usePreviewPreferences`) as they change; `navigator` and
+    /// `follows_resize` are the host's own.
+    pub fn for_host(navigator: bool, follows_resize: bool, cx: &mut Context<Self>) -> Self {
+        let mut surface = Self::new(super::options(cx, navigator, follows_resize), cx);
+        surface._settings = Some(cx.subscribe(
+            &crate::settings::model(cx),
+            move |this, _, _: &crate::settings::Applied, cx| {
+                let options = super::options(cx, navigator, follows_resize);
+                this.set_options(options, cx);
+            },
+        ));
+        surface
+    }
+
+    /// The host's key context: `base`, with the player's keys while it
+    /// shows and, when the host lets them, the document's scrolling keys
+    /// while pages show.
+    pub fn key_context(&self, base: &'static str, pages: bool) -> KeyContext {
+        let mut context = super::video::key_context(base, self.player.is_some());
+        if pages && self.shows_pages() {
+            context.add(document::PAGES_CONTEXT);
+        }
+        context
     }
 
     /// Lets go of a picture that was replaced, once nothing draws it.
@@ -310,15 +337,9 @@ impl MediaSurface {
                 let picture = self.full.clone().or_else(|| self.thumbnail.clone())?;
                 let size = picture.size(0);
                 let natural = (size.width.0 as f32, size.height.0 as f32);
-                let fitted = document::geometry::fit_page(pane, natural)?;
                 Some(Held::Image {
                     image: picture,
-                    rect: (
-                        (pane.0 - fitted.0) / 2.,
-                        (pane.1 - fitted.1) / 2.,
-                        fitted.0,
-                        fitted.1,
-                    ),
+                    rect: camera::contain(natural, pane)?,
                     pixelated: false,
                 })
             }
@@ -1489,16 +1510,65 @@ impl Render for MediaSurface {
     }
 }
 
+/// The keys every host of a surface handles, on the element that has the
+/// keyboard (the surface itself never does): the zoom, a document's pages
+/// and font size, and the player's.
+pub fn host_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSurface>) -> E {
+    use super::{ActualSize, FitToWindow, ZoomIn, ZoomOut};
+    use document::{Scroll, *};
+    type Run = fn(&mut MediaSurface, &mut Context<MediaSurface>);
+    fn forward<A: Action, E: InteractiveElement>(
+        element: E,
+        surface: &Entity<MediaSurface>,
+        run: Run,
+    ) -> E {
+        let surface = surface.downgrade();
+        element.on_action(move |_: &A, _, cx| {
+            let _ = surface.update(cx, run);
+        })
+    }
+    let element = forward::<FitToWindow, _>(element, surface, |this, cx| this.fit(cx));
+    let element = forward::<ActualSize, _>(element, surface, |this, cx| this.actual_size(cx));
+    let element = forward::<ZoomIn, _>(element, surface, |this, cx| this.step_zoom(true, cx));
+    let element = forward::<ZoomOut, _>(element, surface, |this, cx| this.step_zoom(false, cx));
+    let element = forward::<PreviousPage, _>(element, surface, |this, cx| this.previous_page(cx));
+    let element = forward::<NextPage, _>(element, surface, |this, cx| this.next_page(cx));
+    let element =
+        forward::<PreviewLarger, _>(element, surface, |this, cx| this.preview_size(true, cx));
+    let element =
+        forward::<PreviewSmaller, _>(element, surface, |this, cx| this.preview_size(false, cx));
+    let element = forward::<ScrollToStart, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::Start, cx)
+    });
+    let element = forward::<ScrollToEnd, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::End, cx)
+    });
+    let element = forward::<ScrollPageUp, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::PageUp, cx)
+    });
+    let element = forward::<ScrollPageDown, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::PageDown, cx)
+    });
+    let surface = surface.downgrade();
+    super::video::on_actions(element, move |cx| {
+        surface
+            .upgrade()
+            .and_then(|surface| surface.read(cx).player())
+    })
+}
+
 impl MediaSurface {
+    /// A window position on the movie's stage, which is fitted to the pane.
     fn flash_position(&self, position: Point<Pixels>) -> (f64, f64) {
-        let width = f32::from(self.bounds.size.width);
-        let height = f32::from(self.bounds.size.height);
-        let scale = (width / 960.).min(height / 720.).max(0.001);
-        let x =
-            (f32::from(position.x - self.bounds.origin.x) - (width - 960. * scale) / 2.) / scale;
-        let y =
-            (f32::from(position.y - self.bounds.origin.y) - (height - 720. * scale) / 2.) / scale;
-        (x as f64, y as f64)
+        let stage = (super::flash::STAGE.0 as f32, super::flash::STAGE.1 as f32);
+        let (left, top, width, _) =
+            camera::contain(stage, self.pane()).unwrap_or((0., 0., stage.0, stage.1));
+        let scale = width / stage.0;
+        let local = position - self.bounds.origin;
+        (
+            ((f32::from(local.x) - left) / scale) as f64,
+            ((f32::from(local.y) - top) / scale) as f64,
+        )
     }
 }
 

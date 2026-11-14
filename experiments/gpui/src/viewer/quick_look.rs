@@ -6,13 +6,12 @@
 //! selection: stepping moves the grid's selection, which keeps it in view.
 //! It has the viewer's keys (`Viewer`), so Space, Enter and Escape close it.
 use super::{
-    ActualSize, Close, FitToWindow, Media, MenuRequested, NextItem, PreviousItem, ZoomIn, ZoomOut,
-    browsing_recent, collection_selected, group, options, record_view, show_selection, strip,
-    surface::MediaSurface,
+    Close, Media, MenuRequested, NextItem, PreviousItem, browsing_recent, collection_selected,
+    group, point_at_member, record_view, show_selection, step_within, strip,
+    surface::{self, MediaSurface},
 };
 use crate::session::{Change, Session};
 use crate::{theme, ui};
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::{RootId, RootKind};
 
@@ -55,22 +54,12 @@ impl EventEmitter<MenuRequested> for QuickLook {}
 impl QuickLook {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // No navigator in Quick Look.
-        let surface = cx.new(|cx| MediaSurface::new(options(cx, false, false), cx));
+        let surface = cx.new(|cx| MediaSurface::for_host(false, false, cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
         let subscriptions = vec![
             cx.subscribe(&group, |this, _, event: &group::MemberMenu, cx| {
-                this.session.update(cx, |session, cx| {
-                    let delta = event.member as isize - session.member as isize;
-                    if delta != 0 {
-                        session.step_member(delta, cx);
-                    }
-                });
-                cx.emit(MenuRequested {
-                    position: event.position,
-                    member: true,
-                    members: vec![event.member],
-                    ..Default::default()
-                });
+                point_at_member(&this.session, event.member, cx);
+                cx.emit(MenuRequested::member(event.position, event.member));
             }),
             cx.subscribe(&group, |this, _, event: &group::MemberOpened, cx| {
                 this.opened = Some(event.0);
@@ -114,14 +103,6 @@ impl QuickLook {
                     _ => {}
                 }
             }),
-            cx.subscribe(
-                &crate::settings::model(cx),
-                |this, _, _: &crate::settings::Applied, cx| {
-                    let options = options(cx, false, false);
-                    this.surface
-                        .update(cx, |surface, cx| surface.set_options(options, cx));
-                },
-            ),
         ];
         Self {
             session,
@@ -252,8 +233,6 @@ impl QuickLook {
         }
     }
 
-    /// `navigate`: steps through the results by moving the grid's selection;
-    /// a step past either end does nothing.
     /// Escape, Space and Enter: a member opened by itself goes back to its
     /// collection; otherwise Quick Look closes.
     fn close_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -269,9 +248,8 @@ impl QuickLook {
     /// `MediaView` steps, stopping at either end; otherwise as the strip.
     fn arrow(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(opened) = self.opened {
-            let target = opened as isize + delta;
-            if target >= 0 && (target as usize) < self.member_count(cx) {
-                self.opened = Some(target as usize);
+            if let Ok(target) = step_within(opened, delta, self.member_count(cx)) {
+                self.opened = Some(target);
                 self.present(cx);
                 cx.notify();
             }
@@ -280,13 +258,14 @@ impl QuickLook {
         self.step(delta, window, cx);
     }
 
+    /// `navigate`: steps through the results by moving the grid's selection;
+    /// a step past either end does nothing.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         // Through the members of the collection a member is peeked from,
         // stopping at either end.
         if let Some(member) = self.member {
-            let target = member as isize + delta;
-            if target >= 0 && (target as usize) < self.member_count(cx) {
-                self.member = Some(target as usize);
+            if let Ok(target) = step_within(member, delta, self.member_count(cx)) {
+                self.member = Some(target);
                 self.present(cx);
                 cx.notify();
             }
@@ -299,8 +278,7 @@ impl QuickLook {
             };
             (index, session.total as usize)
         };
-        let target = index as isize + delta;
-        if target < 0 || target as usize >= total {
+        if step_within(index, delta, total).is_err() {
             return;
         }
         // The grid's move reads the item's window first when it is not
@@ -360,109 +338,77 @@ impl Render for QuickLook {
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, window, cx| this.step(delta, window, cx)))
         };
-        let media = self.surface.read(cx).player().is_some();
-        let surface = self.surface.downgrade();
+        // Quick Look's keys are the viewer's; Space closes it, even over
+        // pages.
+        let context = self.surface.read(cx).key_context("Viewer", false);
         let quick_look = div()
             .id("quick-look")
             .track_focus(&self.focus)
-            .key_context(super::video::key_context("Viewer", media));
-        super::video::on_actions(quick_look, move |cx| {
-            surface
-                .upgrade()
-                .and_then(|surface| surface.read(cx).player())
-        })
-        .occlude()
-        .absolute()
-        .inset_0()
-        .bg(theme.background())
-        // Space, Enter and Escape: the viewer's close keys.
-        .on_action(cx.listener(|this, _: &Close, window, cx| this.close_key(window, cx)))
-        .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.arrow(-1, window, cx)))
-        .on_action(cx.listener(|this, _: &NextItem, window, cx| this.arrow(1, window, cx)))
-        .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
-            this.surface.update(cx, |surface, cx| surface.fit(cx));
-        }))
-        .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
-            this.surface
-                .update(cx, |surface, cx| surface.actual_size(cx));
-        }))
-        .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-            this.surface
-                .update(cx, |surface, cx| surface.step_zoom(true, cx));
-        }))
-        .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
-            this.surface
-                .update(cx, |surface, cx| surface.step_zoom(false, cx));
-        }))
-        .map(|pane| super::document::handle_actions(pane, &self.surface))
-        // The viewer's context menu (`useViewerEntityContextMenu`), which
-        // the shell shows.
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                // A member peeked at by itself: `QuickLook`'s menu for a
-                // file with no item to edit.
-                if let Some(member) = this.member.or(this.opened) {
-                    cx.emit(MenuRequested {
-                        position: event.position,
-                        member: true,
-                        members: vec![member],
-                        alone: true,
-                        ..Default::default()
-                    });
-                    return;
-                }
-                if collection_selected(this.session.read(cx)) {
-                    return;
-                }
-                cx.emit(MenuRequested {
-                    position: event.position,
-                    ..Default::default()
-                });
-            }),
-        )
-        .child(frame.child(if collection && self.opened.is_none() {
-            self.group.clone().into_any_element()
-        } else {
-            self.surface.clone().into_any_element()
-        }))
-        .child(
-            div()
-                .absolute()
-                .top(px(CLOSE_INSET))
-                .right(px(CLOSE_INSET))
-                .child(
-                    strip::strip_button(
-                        "quick-look-close",
-                        "toolbar-close",
-                        ui::tip("Close").shortcut("view.quicklook", cx),
-                    )
-                    .width(CLOSE_SIZE)
-                    .glyph(rgb(theme::QUICK_LOOK_GLYPH))
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                ),
-        )
-        .child(
-            strip::strip()
-                .child(step(
-                    "quick-look-previous",
-                    "toolbar-chevron-left",
-                    "Previous",
-                    "view.prevImage",
-                    -1,
-                    index > 0,
-                    cx,
-                ))
-                .child(strip::counter(index + 1, total, cx))
-                .child(step(
-                    "quick-look-next",
-                    "toolbar-chevron-right",
-                    "Next",
-                    "view.nextImage",
-                    1,
-                    index + 1 < total,
-                    cx,
-                )),
-        )
+            .key_context(context);
+        surface::host_actions(quick_look, &self.surface)
+            .occlude()
+            .absolute()
+            .inset_0()
+            .bg(theme.background())
+            // Space, Enter and Escape: the viewer's close keys.
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.close_key(window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.arrow(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &NextItem, window, cx| this.arrow(1, window, cx)))
+            // The viewer's context menu (`useViewerEntityContextMenu`), which
+            // the shell shows; a member peeked at by itself has `QuickLook`'s
+            // menu for a file with no item to edit.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    let alone = this.member.or(this.opened);
+                    let session = this.session.read(cx);
+                    if let Some(menu) = MenuRequested::on_host(event.position, alone, session) {
+                        cx.emit(menu);
+                    }
+                }),
+            )
+            .child(frame.child(if collection && self.opened.is_none() {
+                self.group.clone().into_any_element()
+            } else {
+                self.surface.clone().into_any_element()
+            }))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(CLOSE_INSET))
+                    .right(px(CLOSE_INSET))
+                    .child(
+                        strip::strip_button(
+                            "quick-look-close",
+                            "toolbar-close",
+                            ui::tip("Close").shortcut("view.quicklook", cx),
+                        )
+                        .width(CLOSE_SIZE)
+                        .glyph(rgb(theme::QUICK_LOOK_GLYPH))
+                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    ),
+            )
+            .child(
+                strip::strip()
+                    .child(step(
+                        "quick-look-previous",
+                        "toolbar-chevron-left",
+                        "Previous",
+                        "view.prevImage",
+                        -1,
+                        index > 0,
+                        cx,
+                    ))
+                    .child(strip::counter(index + 1, total, cx))
+                    .child(step(
+                        "quick-look-next",
+                        "toolbar-chevron-right",
+                        "Next",
+                        "view.nextImage",
+                        1,
+                        index + 1 < total,
+                        cx,
+                    )),
+            )
     }
 }
