@@ -192,6 +192,10 @@ pub struct DetailWindow {
     /// reader, and the toolbar has only the pin and close buttons.
     group: bool,
     reader: Entity<GroupReader>,
+    /// A member of the collection opened by itself with a double-click
+    /// (`viewerIndex`): Escape goes back to the collection, the arrows
+    /// step through its members.
+    opened: Option<usize>,
     /// The shown entry's details, once they have arrived.
     details: Option<RootDetails>,
     loading: Option<Task<()>>,
@@ -248,12 +252,24 @@ impl DetailWindow {
         ];
         let group = entries.get(index).is_some_and(|entry| entry.collection);
         let reader = cx.new(|_| GroupReader::new(session.clone()));
+        let opened = cx.subscribe(
+            &reader,
+            |this, _, event: &super::group::MemberOpened, cx| {
+                this.opened = Some(event.0);
+                this.boundary.clear();
+                this.surface.update(cx, |surface, _| surface.refit());
+                this.present(cx);
+            },
+        );
+        let mut subscriptions = subscriptions;
+        subscriptions.push(opened);
         let mut this = Self {
             session,
             entries,
             index,
             group,
             reader,
+            opened: None,
             details: None,
             loading: None,
             surface,
@@ -313,7 +329,7 @@ impl DetailWindow {
     }
 
     fn present(&mut self, cx: &mut Context<Self>) {
-        if self.group {
+        if self.group && self.opened.is_none() {
             if let Some(details) = &self.details {
                 self.reader
                     .update(cx, |reader, cx| reader.show(details, cx));
@@ -321,10 +337,11 @@ impl DetailWindow {
             cx.notify();
             return;
         }
+        let member = self.opened.unwrap_or_else(|| self.entry_member());
         let media = self
             .details
             .as_ref()
-            .and_then(|details| Media::of(self.session.read(cx), details, 0));
+            .and_then(|details| Media::of(self.session.read(cx), details, member));
         if let Some(media) = media {
             self.surface
                 .update(cx, |surface, cx| media.open(surface, cx));
@@ -332,8 +349,25 @@ impl DetailWindow {
         cx.notify();
     }
 
-    /// `navigate`: the previous or next entry, or the end's notice.
+    /// `navigate`: the previous or next entry, or the end's notice; with a
+    /// member opened by itself, the previous or next member.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(opened) = self.opened {
+            let count = self
+                .details
+                .as_ref()
+                .map_or(0, |details| details.media.len());
+            let target = opened as isize + delta;
+            if target < 0 || target as usize >= count {
+                let end = if target < 0 { End::First } else { End::Last };
+                self.boundary.show(end, cx, |this| &mut this.boundary);
+                return;
+            }
+            self.boundary.clear();
+            self.opened = Some(target as usize);
+            self.present(cx);
+            return;
+        }
         let target = self.index as isize + delta;
         if target < 0 || target as usize >= self.entries.len() {
             let end = if target < 0 { End::First } else { End::Last };
@@ -396,10 +430,30 @@ impl DetailWindow {
         }
     }
 
+    /// The file of its item the entry names: a collection member opened in
+    /// a window of its own is its collection's file of that hash; any
+    /// other item shows its first.
+    fn entry_member(&self) -> usize {
+        let hash = self.entry().map(|entry| entry.hash.as_str());
+        self.details
+            .as_ref()
+            .and_then(|details| {
+                details
+                    .media
+                    .iter()
+                    .position(|media| Some(media.facts.content_hash.as_str()) == hash)
+            })
+            .unwrap_or(0)
+    }
+
     /// The shown file: its path, content hash, type and name.
     fn shown_file(&self) -> Option<(String, String, String, String)> {
         let entry = self.entry()?;
-        let media = self.details.as_ref()?.media.first()?;
+        let media = self
+            .details
+            .as_ref()?
+            .media
+            .get(self.opened.unwrap_or_else(|| self.entry_member()))?;
         Some((
             media.file_path.clone(),
             media.facts.content_hash.clone(),
@@ -652,15 +706,25 @@ impl Render for DetailWindow {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     // TODO: a collection's members have the tile menu on the
-                    // collection (`openMemberMenu`).
-                    if !this.group {
+                    // collection (`openMemberMenu`), and the space between
+                    // them the collection's (`openEmptyMenu`).
+                    if !this.group || this.opened.is_some() {
                         this.open_menu(event.position, window, cx);
                     }
                 }),
             )
+            // Escape closes a member opened by itself before the window.
+            .on_action(cx.listener(|this, _: &CloseWindow, _, cx| {
+                if this.opened.take().is_some() {
+                    this.boundary.clear();
+                    this.present(cx);
+                } else {
+                    cx.propagate();
+                }
+            }))
             // TODO: Copy (the file to the clipboard) and the per-image zoom
             // memory (`zoomCache`).
-            .child(if self.group {
+            .child(if self.group && self.opened.is_none() {
                 self.reader.clone().into_any_element()
             } else {
                 self.surface.clone().into_any_element()

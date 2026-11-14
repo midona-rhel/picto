@@ -135,10 +135,186 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
     .with_priority(30)
 }
 
+/// Which side of a tile dragged items go to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+/// `computeReorderTarget`: where items dragged to a layout point (`x`, `y`)
+/// go, beside the tile whose image is under it, else beside the nearest in
+/// its row, else beside the nearest tile of all. The dragged tiles (`skip`)
+/// are never a target.
+pub fn reorder_target(
+    tiles: &[super::layout::Tile],
+    x: f32,
+    y: f32,
+    text_height: f32,
+    skip: &std::collections::HashSet<usize>,
+) -> Option<(usize, Side)> {
+    let side = |tile: &super::layout::Tile| {
+        if x < tile.x + tile.w / 2. {
+            Side::Left
+        } else {
+            Side::Right
+        }
+    };
+    let candidates = || {
+        tiles
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !skip.contains(index))
+    };
+    let in_band = |tile: &super::layout::Tile| y >= tile.y && y <= tile.y + tile.h - text_height;
+    if let Some((index, tile)) =
+        candidates().find(|(_, tile)| in_band(tile) && x >= tile.x && x <= tile.x + tile.w)
+    {
+        return Some((index, side(tile)));
+    }
+    let mut band: Vec<(usize, &super::layout::Tile)> =
+        candidates().filter(|(_, tile)| in_band(tile)).collect();
+    band.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
+    if let (Some(first), Some(last)) = (band.first(), band.last()) {
+        if x < first.1.x {
+            return Some((first.0, Side::Left));
+        }
+        if x > last.1.x + last.1.w {
+            return Some((last.0, Side::Right));
+        }
+        for pair in band.windows(2) {
+            let (left, right) = (pair[0], pair[1]);
+            if x >= left.1.x + left.1.w && x <= right.1.x {
+                let middle = (left.1.x + left.1.w + right.1.x) / 2.;
+                return Some(if x < middle {
+                    (left.0, Side::Right)
+                } else {
+                    (right.0, Side::Left)
+                });
+            }
+        }
+    }
+    let mut best: Option<(f32, usize, Side)> = None;
+    for (index, tile) in candidates() {
+        let (cx, cy) = (tile.x + tile.w / 2., tile.y + (tile.h - text_height) / 2.);
+        let distance = (x - cx).powi(2) + (y - cy).powi(2);
+        if best.is_none_or(|(nearest, _, _)| distance < nearest) {
+            best = Some((distance, index, side(tile)));
+        }
+    }
+    best.map(|(_, index, side)| (index, side))
+}
+
+/// `planFolderReorder`: the order with the dragged items moved, as one block
+/// in their own order, to `side` of the item at `target`. Empty when nothing
+/// moves.
+pub fn plan_reorder<T: Copy + PartialEq>(
+    ordered: &[T],
+    dragged: &[T],
+    target: usize,
+    side: Side,
+) -> Vec<T> {
+    let moved: Vec<T> = ordered
+        .iter()
+        .copied()
+        .filter(|item| dragged.contains(item))
+        .collect();
+    if moved.is_empty() {
+        return Vec::new();
+    }
+    let at = if side == Side::Right {
+        target + 1
+    } else {
+        target
+    };
+    let before = ordered[..at.min(ordered.len())]
+        .iter()
+        .filter(|item| dragged.contains(item))
+        .count();
+    let rest: Vec<T> = ordered
+        .iter()
+        .copied()
+        .filter(|item| !dragged.contains(item))
+        .collect();
+    let insert = at.saturating_sub(before).min(rest.len());
+    let mut next = rest[..insert].to_vec();
+    next.extend(moved);
+    next.extend_from_slice(&rest[insert..]);
+    if next == ordered { Vec::new() } else { next }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::past_threshold;
+    use super::{Side, past_threshold, plan_reorder, reorder_target};
+    use crate::grid::layout::Tile;
     use gpui::{point, px};
+    use std::collections::HashSet;
+
+    #[test]
+    fn a_dragged_block_moves_whole_and_in_order() {
+        assert_eq!(
+            plan_reorder(&[1, 2, 3, 4, 5], &[2, 3], 4, Side::Right),
+            vec![1, 4, 5, 2, 3]
+        );
+        assert_eq!(
+            plan_reorder(&[1, 2, 3, 4, 5], &[4], 0, Side::Left),
+            vec![4, 1, 2, 3, 5]
+        );
+    }
+
+    #[test]
+    fn a_drop_inside_the_dragged_block_changes_nothing() {
+        assert!(plan_reorder(&[1, 2, 3, 4], &[2, 3], 2, Side::Right).is_empty());
+        assert!(plan_reorder(&[1, 2, 3], &[9], 0, Side::Left).is_empty());
+    }
+
+    fn tile(x: f32, y: f32) -> Tile {
+        Tile {
+            x,
+            y,
+            w: 100.,
+            h: 120.,
+        }
+    }
+
+    #[test]
+    fn the_target_is_the_image_under_the_pointer_by_its_half() {
+        let tiles = [tile(0., 0.), tile(110., 0.), tile(0., 130.)];
+        let none = HashSet::new();
+        assert_eq!(
+            reorder_target(&tiles, 140., 50., 20., &none),
+            Some((1, Side::Left))
+        );
+        assert_eq!(
+            reorder_target(&tiles, 190., 50., 20., &none),
+            Some((1, Side::Right))
+        );
+        // In the gap between two images of a row: the nearer side of it.
+        assert_eq!(
+            reorder_target(&tiles, 103., 50., 20., &none),
+            Some((0, Side::Right))
+        );
+        assert_eq!(
+            reorder_target(&tiles, 108., 50., 20., &none),
+            Some((1, Side::Left))
+        );
+        // Past the row's end, after its last image.
+        assert_eq!(
+            reorder_target(&tiles, 400., 50., 20., &none),
+            Some((1, Side::Right))
+        );
+        // Under the name row: the nearest image of all.
+        assert_eq!(
+            reorder_target(&tiles, 20., 115., 20., &none),
+            Some((0, Side::Left))
+        );
+        // A dragged tile is never the target.
+        let skip = HashSet::from([1]);
+        assert_eq!(
+            reorder_target(&tiles, 140., 50., 20., &skip),
+            Some((0, Side::Right))
+        );
+    }
 
     #[test]
     fn a_press_drags_only_after_five_pixels() {

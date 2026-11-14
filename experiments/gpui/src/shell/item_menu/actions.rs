@@ -36,6 +36,31 @@ impl Shell {
                     self.with_path(file, |path, cx| cx.reveal_path(&path), window, cx);
                 }
             }
+            Action::OpenInNewWindow if target.member => {
+                // The member's file by itself (`openDetailWindow({ hash })`).
+                if let (Some(file), Some(item)) = (file, target.items.first()) {
+                    let size = self
+                        .session
+                        .read(cx)
+                        .selected_details()
+                        .and_then(|details| {
+                            details
+                                .media
+                                .iter()
+                                .find(|media| media.facts.content_hash == file.hash)
+                                .map(|media| (media.facts.width, media.facts.height))
+                        });
+                    let entry = crate::viewer::detail::Entry {
+                        root: item.root_id,
+                        hash: file.hash,
+                        name: file.name,
+                        width: size.and_then(|size| size.0),
+                        height: size.and_then(|size| size.1),
+                        collection: false,
+                    };
+                    crate::viewer::detail::open(self.session.clone(), vec![entry], 0, cx);
+                }
+            }
             Action::OpenInNewWindow => {
                 // The item alone, as production's detail window opens it
                 // from a single selection, the viewer and the preview.
@@ -75,6 +100,34 @@ impl Shell {
             Action::CopyLink => {
                 if let Some(file) = file {
                     write_text(media_link(&file.hash, &file.mime), cx);
+                }
+            }
+            // The members a member's menu acts on: their own names and
+            // files (`onCopySelection*` over `selected`).
+            Action::CopySelectionNames
+            | Action::CopySelectionPaths
+            | Action::CopySelectionLinks
+                if target.member =>
+            {
+                let lines: Vec<String> = {
+                    let session = self.session.read(cx);
+                    let details = session.selected_details();
+                    target
+                        .members
+                        .iter()
+                        .filter_map(|index| details.and_then(|details| details.media.get(*index)))
+                        .map(|media| match action {
+                            Action::CopySelectionNames if media.media_name.is_empty() => {
+                                "Untitled".to_owned()
+                            }
+                            Action::CopySelectionNames => media.media_name.clone(),
+                            Action::CopySelectionPaths => media.file_path.clone(),
+                            _ => media_link(&media.facts.content_hash, &media.facts.mime),
+                        })
+                        .collect()
+                };
+                if !lines.is_empty() {
+                    write_text(lines.join("\n"), cx);
                 }
             }
             Action::CopySelectionNames => {
@@ -133,10 +186,10 @@ impl Shell {
             }
             // ── Lifecycle ──
             Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
-            Action::MoveToTrash if target.member => {
-                // TODO: move the member out of its collection into the
-                // Trash (`detachItems` with `target_lifecycle: 'trash'`).
-            }
+            // A member leaves its collection into the Trash
+            // (`detachMembers(selected, 'trash')`).
+            Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
+            Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
             Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
@@ -210,6 +263,22 @@ impl Shell {
                     );
                 }
             }
+            Action::SortContents(field) if target.group => {
+                if target.quick_look {
+                    let details = self.session.read(cx).selected_details().cloned();
+                    if let Some(details) = details {
+                        drop(crate::viewer::group::sort(
+                            &self.session,
+                            &details,
+                            field,
+                            cx,
+                        ));
+                    }
+                } else {
+                    self.viewer
+                        .update(cx, |viewer, cx| viewer.sort_collection(field, cx));
+                }
+            }
             Action::SortContents(field) => {
                 if let Some(folder) = target.folder {
                     self.sort_folder(folder, field, cx);
@@ -217,9 +286,16 @@ impl Shell {
             }
             // ── Groups ──
             Action::Group => self.group(target, window, cx),
+            Action::Ungroup if target.group => self.confirm_ungroup_shown(target, cx),
             Action::Ungroup => self.confirm_ungroup(target, cx),
             Action::EditGroup => {
-                // TODO: open the collection editor on this group.
+                // `openGridItem(item, items, 'editor')`: the collection opens
+                // in the media view, in its editor.
+                self.viewer
+                    .update(cx, |viewer, cx| viewer.edit_collection(window, cx));
+                self.session
+                    .update(cx, |session, cx| session.open_viewer(cx));
+                return;
             }
             // ── Names and tags ──
             Action::Rename => {
@@ -487,21 +563,114 @@ impl Shell {
                         notes: None,
                         modified_at_ms: crate::now_ms(),
                     })?;
-                    Ok(true)
+                    Ok(None)
                 } else {
-                    Ok(false)
+                    // Anything else is the organizer's to decide.
+                    Ok(Some(super::organizer::Request {
+                        target: selection,
+                        cover,
+                        groups: summary.collection_candidates,
+                        notes: notes.notes,
+                        maximum_bytes: notes.maximum_bytes,
+                    }))
                 }
             }),
-            |this, grouped, _, cx| {
-                if grouped {
-                    this.session
-                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
+            |this, decide, _, cx| match decide {
+                None => {
+                    // `clearSelection`, then the merged group's results.
+                    // TODO: select the merged group once the results hold
+                    // it, as production does.
+                    this.session.update(cx, |session, cx| {
+                        session.clear_selection(cx);
+                        session.reread(Reread::RESULTS, cx)
+                    });
                 }
-                // TODO: otherwise open the group organizer
-                // (`GroupOrganizerModal`) with the selection's groups and
-                // notes.
+                Some(request) => this.open_organizer(request, cx),
             },
             window,
+            cx,
+        );
+    }
+
+    /// A member's "Remove from Group" and "Move to Trash": the members the
+    /// menu acts on leave the collection the media view or Quick Look
+    /// shows, which closes once the collection is gone.
+    fn detach_members(
+        &mut self,
+        target: Target,
+        trash: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.quick_look {
+            self.viewer.update(cx, |viewer, cx| {
+                viewer.detach_members(target.members, trash, cx)
+            });
+            return;
+        }
+        let Some(details) = self.session.read(cx).selected_details().cloned() else {
+            return;
+        };
+        let ids: Vec<_> = target
+            .members
+            .iter()
+            .filter_map(|index| details.media.get(*index))
+            .map(|media| media.media_id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let closes = details.media.len() - ids.len() <= 1;
+        let answer =
+            crate::viewer::group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let quick_look = self.quick_look.downgrade();
+        cx.spawn_in(window, async move |_, cx| {
+            if let Ok(Ok(())) = answer.await
+                && closes
+            {
+                let _ =
+                    quick_look.update_in(cx, |quick_look, window, cx| quick_look.close(window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// `confirmUngroup` in the collection's view: on Ungroup the members
+    /// return to the library and the view closes.
+    fn confirm_ungroup_shown(&mut self, target: Target, cx: &mut Context<Self>) {
+        let Some(root) = target.items.first().map(|item| item.root_id) else {
+            return;
+        };
+        let quick_look = target.quick_look;
+        self.ask(
+            "Ungroup?",
+            "The media will return to the library as separate items. Files and metadata will not be deleted.",
+            "Ungroup",
+            false,
+            Rc::new(move |this, window, cx| {
+                let answer = this.session.update(cx, |session, cx| {
+                    session.edit_reporting(
+                        Report::announce("collections.ungroup"),
+                        move |library| library.ungroup_collection(root, crate::now_ms()),
+                        Reread::RESULTS,
+                        cx,
+                    )
+                });
+                cx.spawn_in(window, async move |this, cx| {
+                    if let Ok(Ok(_)) = answer.await {
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            if quick_look {
+                                this.quick_look
+                                    .update(cx, |quick_look, cx| quick_look.close(window, cx));
+                            } else {
+                                this.session
+                                    .update(cx, |session, cx| session.close_viewer(cx));
+                            }
+                        });
+                    }
+                })
+                .detach();
+            }),
             cx,
         );
     }
