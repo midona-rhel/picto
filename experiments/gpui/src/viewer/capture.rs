@@ -83,7 +83,11 @@ pub fn rgba_from_biplanar(
 pub fn from_pixel_buffer(buffer: &objc2_core_video::CVPixelBuffer) -> Result<Picture, String> {
     use objc2_core_video::*;
     let not_ready = || "The video frame is not ready yet.".to_owned();
-    if CVPixelBufferGetPlaneCount(buffer) != 2 {
+    // Only the format the player asks for is read: another biplanar one
+    // (video range, 10-bit) would read in bounds but in wrong colours.
+    if CVPixelBufferGetPlaneCount(buffer) != 2
+        || CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+    {
         return Err(not_ready());
     }
     // SAFETY: the buffer is locked for reading while its planes are read,

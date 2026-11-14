@@ -90,12 +90,10 @@ enum Mode {
     /// Ruffle's frames, fitted to the pane.
     Flash,
     /// A document viewer of its own (`DetailMediaRenderer`'s documents,
-    /// fonts and the unsupported view).
+    /// fonts and the unsupported view, which every other type gets).
     Document,
     /// Video and audio, in the media player.
     Media,
-    /// No renderer yet: the thumbnail, fitted, with a note.
-    Other,
 }
 
 /// A drag of the navigator: where the view is and where it is heading, as
@@ -270,7 +268,7 @@ impl MediaSurface {
     /// document its measured pages with the first one's thumbnail.
     fn ready(&self, cx: &App) -> bool {
         match self.mode {
-            Mode::Image | Mode::Flash | Mode::Other => self.shown == self.key,
+            Mode::Image | Mode::Flash => self.shown == self.key,
             Mode::Document => self
                 .document
                 .as_ref()
@@ -292,7 +290,6 @@ impl MediaSurface {
         match self.mode {
             Mode::Image => self.full_key == self.key,
             Mode::Flash => self.full.is_some() && self.full_key == self.key,
-            Mode::Other => true,
             Mode::Document => self
                 .document
                 .as_ref()
@@ -333,7 +330,7 @@ impl MediaSurface {
                     pixelated: self.options.pixelated,
                 })
             }
-            Mode::Flash | Mode::Other => {
+            Mode::Flash => {
                 let picture = self.full.clone().or_else(|| self.thumbnail.clone())?;
                 let size = picture.size(0);
                 let natural = (size.width.0 as f32, size.height.0 as f32);
@@ -786,8 +783,7 @@ impl MediaSurface {
             RendererKind::Flash => Mode::Flash,
             RendererKind::Image | RendererKind::JpegXl => Mode::Image,
             RendererKind::Video | RendererKind::Audio if media.is_some() => Mode::Media,
-            kind if kind.is_document() => Mode::Document,
-            _ => Mode::Other,
+            _ => Mode::Document,
         };
         self.show(key.clone(), thumbnail.clone(), natural, None, cx);
         self.opened = key.clone();
@@ -897,9 +893,6 @@ impl MediaSurface {
                     },
                 ));
                 self.player = Some(player);
-            }
-            Mode::Other => {
-                self.error = Some(format!("Native preview is not implemented for {mime}"));
             }
         }
     }
@@ -1492,19 +1485,6 @@ impl Render for MediaSurface {
                 self.flash_controls.value_with(motion::EASE),
                 self.flash_controls.on(),
             ));
-        }
-        if let Some(flash) = &self.flash
-            && let Some(trace) = flash.traces.lock().unwrap().back()
-        {
-            surface = surface.child(
-                div()
-                    .absolute()
-                    .bottom_0()
-                    .px_2()
-                    .text_size(px(11.))
-                    .bg(crate::theme::theme(cx).glass())
-                    .child(format!("Ruffle: {trace}")),
-            );
         }
         surface.into_any_element()
     }

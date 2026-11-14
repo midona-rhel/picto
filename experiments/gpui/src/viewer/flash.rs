@@ -55,9 +55,13 @@ pub struct Flash {
     control: mpsc::Sender<Control>,
     pub playback: Playback,
     pub frame: Arc<Mutex<Option<Frame>>>,
+    /// What the movie's ActionScript traced, for the checks that play one.
+    #[cfg(test)]
     pub traces: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
+#[cfg(test)]
 struct TraceLog(Arc<Mutex<std::collections::VecDeque<String>>>);
+#[cfg(test)]
 impl ruffle_core::backend::log::LogBackend for TraceLog {
     fn avm_trace(&self, message: &str) {
         let mut traces = self.0.lock().unwrap();
@@ -236,10 +240,13 @@ impl Flash {
 
 impl Flash {
     pub fn open(path: PathBuf) -> Self {
+        let silent = std::env::var_os("PICTO_GPUI_SILENT").is_some();
         let (input, events) = mpsc::channel();
         let (control, controls) = mpsc::channel::<Control>();
         let frame = Arc::new(Mutex::new(None));
+        #[cfg(test)]
         let traces = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        #[cfg(test)]
         let trace_output = traces.clone();
         let output = frame.clone();
         std::thread::spawn(move || {
@@ -247,7 +254,7 @@ impl Flash {
                 let data = std::fs::read(&path)?;
                 anyhow::ensure!(
                     data.len() <= 64 * 1024 * 1024,
-                    "Flash file exceeds prototype limit"
+                    "This Flash movie is larger than 64 MB."
                 );
                 let url = url::Url::from_file_path(&path)
                     .map_err(|_| anyhow::anyhow!("Invalid Flash path"))?
@@ -263,12 +270,15 @@ impl Flash {
                     .map_err(|e| anyhow::anyhow!("Ruffle renderer: {e}"))?;
                     // Null navigator/storage defaults deliberately deny network and persistent writes.
                     let mut builder = PlayerBuilder::new()
-                        .with_log(TraceLog(trace_output.clone()))
                         .with_movie(movie)
                         .with_renderer(renderer)
                         .with_viewport_dimensions(STAGE.0, STAGE.1, 1.)
                         .with_max_execution_duration(Duration::from_millis(250))
                         .with_autoplay(autoplay);
+                    #[cfg(test)]
+                    {
+                        builder = builder.with_log(TraceLog(trace_output.clone()));
+                    }
                     match ruffle_frontend_utils::backends::audio::CpalAudioBackend::new(None) {
                         Ok(audio) => builder = builder.with_audio(audio),
                         Err(error) => {
@@ -279,7 +289,9 @@ impl Flash {
                     player.lock().unwrap().set_volume(volume);
                     Ok(player)
                 };
-                let mut volume = 1.;
+                // `PICTO_GPUI_SILENT=1` starts the movie muted, as it does
+                // the media player, for checks run while nobody is there.
+                let mut volume = if silent { 0. } else { 1. };
                 let mut player = build(true, volume)?;
                 let mut previous = Instant::now();
                 loop {
@@ -337,11 +349,12 @@ impl Flash {
             input,
             control,
             frame,
+            #[cfg(test)]
             traces,
             playback: Playback {
                 playing: true,
                 volume: 1.,
-                muted: false,
+                muted: silent,
             },
         }
     }
