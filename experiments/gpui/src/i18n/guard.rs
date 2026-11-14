@@ -99,6 +99,10 @@ const CONVERTED: &[&str] = &[
     "application.rs",
     "screens/mod.rs",
     "cover.rs",
+    "imports/",
+    "desktop/",
+    "platform/",
+    "main.rs",
 ];
 
 /// Calls whose literal argument is drawn.

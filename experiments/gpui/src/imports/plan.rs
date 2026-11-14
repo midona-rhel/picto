@@ -178,13 +178,19 @@ pub fn consolidation_message(analysis: &Value) -> Option<String> {
     }
     if retained == 0 {
         return Some(
-            "This Picto folder is already at level 8. Files from the selected folder's subfolders will be added directly here, so no media is skipped because of folder depth."
+            crate::i18n::t("This Picto folder is already at level 8. Files from the selected folder's subfolders will be added directly here, so no media is skipped because of folder depth.")
                 .into(),
         );
     }
-    let label = if retained == 1 { "level" } else { "levels" };
-    Some(format!(
-        "This folder goes past Picto's 8-level folder limit. Picto can keep the first {retained} {label} here. Files from deeper folders will be placed in the nearest kept folder, so no media is skipped because of folder depth."
+    let label = if retained == 1 {
+        crate::i18n::t("level")
+    } else {
+        crate::i18n::t("levels")
+    };
+    Some(crate::tf!(
+        "This folder goes past Picto's 8-level folder limit. Picto can keep the first {value0} {value1} here. Files from deeper folders will be placed in the nearest kept folder, so no media is skipped because of folder depth.",
+        retained,
+        label
     ))
 }
 
