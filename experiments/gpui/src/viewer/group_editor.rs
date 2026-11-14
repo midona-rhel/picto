@@ -743,18 +743,19 @@ impl Render for GroupEditor {
                 Some(marquee) => marquee.shows_selected(index, &selected_now),
                 None => selected_now.contains(&index),
             };
+            let alphas = reveal::alphas(self.reveal.progress(item.root_id.0, now));
             let magnifier = self.hovered == Some(index)
                 && !item.mime.starts_with("video/")
                 && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME;
             let cell = grid::tile_art(
                 grid::TileLook {
                     tile,
-                    item: &item,
+                    item,
                     thumbnail: self.thumbs[index].clone(),
                     selected,
                     thumb,
                     original: None,
-                    alphas: reveal::alphas(self.reveal.progress(item.root_id.0, now)),
+                    alphas,
                     magnifier,
                     // The editor's grid has no Grayscale of its own.
                     grayscale: false,
