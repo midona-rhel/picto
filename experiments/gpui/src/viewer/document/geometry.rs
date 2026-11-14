@@ -4,15 +4,6 @@
 
 pub type PageSize = (f32, f32);
 
-/// `fitDocumentPage`: the page scaled to fit the viewport's content box.
-pub fn fit_page(available: PageSize, natural: PageSize) -> Option<PageSize> {
-    if available.0 <= 0. || available.1 <= 0. || natural.0 <= 0. || natural.1 <= 0. {
-        return None;
-    }
-    let scale = (available.0 / natural.0).min(available.1 / natural.1);
-    Some((natural.0 * scale, natural.1 * scale))
-}
-
 /// `boundDocumentPageWidth`: fixed-width documents scroll instead of
 /// shrinking to the viewport's height.
 pub fn bound_page_width(
@@ -166,13 +157,7 @@ pub fn page_pixels(size: PageSize, pixel_ratio: f32) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Column, ScaleMode, bound_page_width, column, fit_page, keep_drawn, page_pixels};
-
-    #[test]
-    fn fits_tall_pages_from_the_available_height() {
-        assert_eq!(fit_page((1200., 900.), (600., 800.)), Some((675., 900.)));
-        assert_eq!(fit_page((0., 900.), (600., 800.)), None);
-    }
+    use super::{Column, ScaleMode, bound_page_width, column, keep_drawn, page_pixels};
 
     #[test]
     fn keeps_fixed_width_documents_bounded() {

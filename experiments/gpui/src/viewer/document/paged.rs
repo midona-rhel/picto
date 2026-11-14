@@ -102,6 +102,15 @@ impl EventEmitter<Progressed> for PagedViewer {}
 
 impl PagedViewer {
     pub fn new(kind: RendererKind, path: PathBuf, inline: bool, cx: &mut Context<Self>) -> Self {
+        // The pages drawn, and the thumbnail if the surface no longer
+        // draws it either, leave the sprite atlas with the viewer.
+        cx.on_release(|this, cx| {
+            let pages = this.drawn.drain().map(|(_, drawn)| drawn.image);
+            for image in pages.chain(this.thumbnail.take()) {
+                crate::atlas::release(image, cx);
+            }
+        })
+        .detach();
         let opened = PageWorker::open(kind, path);
         let open_task = cx.spawn(async move |this, cx| {
             let result = opened.await;
@@ -444,7 +453,7 @@ impl PagedViewer {
                 .collect();
             for index in far {
                 if let Some(drawn) = self.drawn.remove(&index) {
-                    cx.drop_image(drawn.image, None);
+                    crate::atlas::release(drawn.image, cx);
                 }
             }
         }
@@ -476,7 +485,7 @@ impl PagedViewer {
                 }
                 let image = super::render_image(page.image);
                 if let Some(old) = self.drawn.insert(index, Drawn { pixels, image }) {
-                    cx.drop_image(old.image, None);
+                    crate::atlas::release(old.image, cx);
                 }
                 if !self.first_drawn {
                     self.first_drawn = true;

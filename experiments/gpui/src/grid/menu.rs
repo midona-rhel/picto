@@ -27,13 +27,9 @@ pub enum ScopeKind {
     SmartFolder,
 }
 
-/// `statusFilter`: the lifecycle the menu acts within.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Inbox,
-    Active,
-    Trash,
-}
+/// `statusFilter`: the lifecycle the menu acts within, as the application
+/// menu has it.
+pub use crate::app_menu::Status;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -53,9 +49,25 @@ pub enum OpenWith {
     /// nothing when there are none.
     Applications(Vec<crate::desktop::Application>),
     /// The system's own chooser (Windows): one row.
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Chooser,
 }
+
+// Rows production offers and runs whose feature this app does not have
+// yet: they are drawn where production draws them, disabled, as the
+// application menu's rows for the same features are (`.todo()`).
+
+// TODO: open the AI tagger on the items, beside the inspector
+// (`aiTaggerPortalAtom`); then enable Auto Tag here and in the inspector.
+pub const AUTO_TAG_BUILT: bool = false;
+// TODO: production uploads the original to the engine from a hidden browser
+// window and shows the results page (`runReverseImageSearch`); search by
+// image needs that upload.
+const SEARCH_BY_IMAGE_BUILT: bool = false;
+// Windows' own application chooser on the file (`desktop::open_with_chooser`,
+// `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
+// system that offers "Open With Other..." as a chooser.
+const OPEN_WITH_CHOOSER_BUILT: bool = cfg!(target_os = "windows");
 
 /// The reverse image search providers (`REVERSE_IMAGE_SEARCH_ENGINES`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +111,6 @@ pub enum Panel {
 /// handler is missing is disabled or left out, as production decides.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Handlers {
-    pub open: bool,
     pub open_default: bool,
     pub open_with_application: bool,
     pub open_with_chooser: bool,
@@ -169,7 +180,6 @@ pub struct Description {
     /// `Some(None)` while they are being counted.
     pub collection_count: Option<Option<usize>>,
     pub mixed: bool,
-    pub folders_only: bool,
     pub scope: Option<ScopeKind>,
     pub status: Option<Status>,
     pub grayscale: bool,
@@ -187,7 +197,6 @@ pub struct Description {
 /// What a row does when chosen.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
-    OpenFolder,
     OpenDefault,
     OpenWithOther,
     /// One of "Open With Other"'s applications, named by its row's value.
@@ -251,7 +260,6 @@ impl Action {
     pub fn key(self) -> &'static str {
         use Action::*;
         match self {
-            OpenFolder => "open-folder",
             OpenDefault => "open-default",
             OpenWithOther => "open-with-other",
             OpenWithApplication => "open-with-application",
@@ -453,10 +461,14 @@ impl Builder<'_> {
                 ))
             }
             OpenWith::Chooser if h.open_with_chooser => rows.push(
-                item(Action::OpenWithOther, "Open With Other...", true)
-                    .icon("menu-apps")
-                    .shortcut(self.hint("file.openOtherApp"))
-                    .into(),
+                item(
+                    Action::OpenWithOther,
+                    "Open With Other...",
+                    OPEN_WITH_CHOOSER_BUILT,
+                )
+                .icon("menu-apps")
+                .shortcut(self.hint("file.openOtherApp"))
+                .into(),
             ),
             _ => {}
         }
@@ -558,21 +570,6 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
                     .icon("menu-trash")
                     .into(),
             );
-        }
-        return rows;
-    }
-    if d.folders_only {
-        if d.single
-            && d.single_hash
-                .as_deref()
-                .is_some_and(|hash| hash.starts_with("folder:"))
-        {
-            rows.push(
-                item(Action::OpenFolder, "Open Folder", h.open)
-                    .icon("menu-folder")
-                    .into(),
-            );
-            rows.push(Row::Separator);
         }
         return rows;
     }
@@ -682,7 +679,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             let may_merge = d.contains_group
                 || matches!(d.collection_count, Some(None))
                 || matches!(d.collection_count, Some(Some(n)) if n > 0);
-            rows.push(group_row(may_merge, true));
+            rows.push(group_row(may_merge));
         }
         if d.single && d.single_kind == Some(Kind::Collection) {
             rows.push(
@@ -698,7 +695,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             Some(counted) => counted,
         };
         if collections.is_none_or(|n| n > 0) && h.ungroup {
-            rows.push(ungroup_row(collections, true));
+            rows.push(ungroup_row(collections));
         }
         rows.push(Row::Separator);
     }
@@ -791,7 +788,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             )
             .icon("menu-auto-tag")
             .shortcut(b.hint("organize.autoTag"))
-            .disabled(!ai_tag_enabled)
+            .disabled(!ai_tag_enabled || !AUTO_TAG_BUILT)
             .into(),
         );
         rows.push(
@@ -851,7 +848,14 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             Some("menu-search"),
             ENGINES
                 .iter()
-                .map(|(engine, label)| item(Action::SearchByImage(*engine), *label, true).into())
+                .map(|(engine, label)| {
+                    item(
+                        Action::SearchByImage(*engine),
+                        *label,
+                        SEARCH_BY_IMAGE_BUILT,
+                    )
+                    .into()
+                })
                 .collect(),
         ));
         rows.push(Row::Separator);
@@ -1030,9 +1034,9 @@ pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
     let remove: Row = item(Action::RemoveFromGroup, label, true)
         .icon("menu-group-remove")
         .into();
-    let trash = rows.iter().position(|row| {
-        matches!(row, Row::Item(item) if item.label.starts_with("Move") && item.label.ends_with("to Trash"))
-    });
+    let trash = rows
+        .iter()
+        .position(|row| matches!(row, Row::Item(item) if item.action == Action::MoveToTrash));
     match trash {
         Some(at) => {
             rows.splice(at..at, [Row::Separator, remove]);
@@ -1092,7 +1096,7 @@ pub fn collection_menu() -> Vec<Row> {
 /// playback, and a frame that can become the thumbnail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Playback {
-    /// `Some(playing)` for a Flash movie.
+    /// `Some((playing, muted))` for a Flash movie.
     pub flash: Option<(bool, bool)>,
     /// The current frame can be captured.
     pub capture: bool,
@@ -1212,7 +1216,7 @@ fn library_cover_row() -> Row {
 }
 
 /// `groupMenuEntry`.
-fn group_row(may_merge: bool, handled: bool) -> Row {
+fn group_row(may_merge: bool) -> Row {
     item(
         Action::Group,
         if may_merge {
@@ -1220,20 +1224,20 @@ fn group_row(may_merge: bool, handled: bool) -> Row {
         } else {
             "Group..."
         },
-        handled,
+        true,
     )
     .icon("menu-group-create")
     .into()
 }
 
 /// `ungroupMenuEntry`: `None` while the collections are being counted.
-fn ungroup_row(count: Option<usize>, handled: bool) -> Row {
+fn ungroup_row(count: Option<usize>) -> Row {
     let label = match count {
         None => "Ungroup Collections...".to_owned(),
         Some(n) if n > 1 => format!("Ungroup {} Collections...", grouped(n as u64)),
         Some(_) => "Ungroup...".to_owned(),
     };
-    item(Action::Ungroup, label, handled)
+    item(Action::Ungroup, label, true)
         .icon("menu-group-remove")
         .into()
 }

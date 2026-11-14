@@ -4,7 +4,8 @@
 //! only mark folders to add the items to or take them out of; Apply does
 //! it, Cancel and Escape forget it. The folders checked at first are those
 //! of the item the inspector shows or last showed.
-use crate::backend::Navigation;
+use super::folder_picker::{Folder, Row, folders, rows};
+use super::membership;
 use crate::grid::format;
 use crate::session::Session;
 use crate::theme;
@@ -19,7 +20,6 @@ use crate::ui::{
 };
 use gpui::*;
 use picto_library::FolderId;
-use picto_library::query::ItemScope;
 use std::collections::{BTreeSet, HashSet};
 
 /// `.panelBody`'s height.
@@ -49,127 +49,6 @@ pub enum Event {
 }
 
 impl EventEmitter<Event> for FolderDialog {}
-
-/// A folder as the sidebar lists it (`SidebarNodeDto`).
-#[derive(Clone, Debug, PartialEq)]
-pub struct Folder {
-    pub id: FolderId,
-    pub name: String,
-    pub parent: Option<FolderId>,
-    pub color: Option<u32>,
-    pub count: Option<u64>,
-}
-
-/// The library's folders from the sidebar's destinations, in their order.
-pub fn folders(nav: &[Navigation]) -> Vec<Folder> {
-    let id = |entry: &Navigation| match entry.scope {
-        ItemScope::FolderTree { folder_id } if entry.screen.is_none() => Some(folder_id),
-        _ => None,
-    };
-    nav.iter()
-        .filter_map(|entry| {
-            Some(Folder {
-                id: id(entry)?,
-                name: entry.label.clone(),
-                parent: entry.parent.and_then(|parent| nav.get(parent)).and_then(id),
-                color: entry.tint,
-                count: entry.count,
-            })
-        })
-        .collect()
-}
-
-/// A line of the tree.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Row {
-    pub folder: Folder,
-    pub depth: usize,
-    pub children: bool,
-    pub expanded: bool,
-}
-
-/// `matchesSearch`: the folder's name or a descendant's holds the search.
-fn matches(folders: &[Folder], folder: &Folder, query: &str) -> bool {
-    folder.name.to_lowercase().contains(query)
-        || folders
-            .iter()
-            .filter(|child| child.parent == Some(folder.id))
-            .any(|child| matches(folders, child, query))
-}
-
-/// `renderTreeNode` over `buildTree`: each folder under its parent, the
-/// children of a folded one left out, and while searching only the folders
-/// that match or hold a match.
-pub fn tree(folders: &[Folder], collapsed: &HashSet<FolderId>, query: &str) -> Vec<Row> {
-    let query = query.trim().to_lowercase();
-    let known = folders
-        .iter()
-        .map(|folder| folder.id)
-        .collect::<HashSet<_>>();
-    let mut rows = Vec::new();
-    fn walk(
-        folders: &[Folder],
-        parent: Option<FolderId>,
-        depth: usize,
-        collapsed: &HashSet<FolderId>,
-        query: &str,
-        known: &HashSet<FolderId>,
-        rows: &mut Vec<Row>,
-    ) {
-        let level = folders.iter().filter(|folder| match parent {
-            Some(parent) => folder.parent == Some(parent),
-            None => folder.parent.is_none_or(|parent| !known.contains(&parent)),
-        });
-        for folder in level {
-            if !query.is_empty() && !matches(folders, folder, query) {
-                continue;
-            }
-            let children = folders.iter().any(|child| child.parent == Some(folder.id));
-            let expanded = !collapsed.contains(&folder.id);
-            rows.push(Row {
-                folder: folder.clone(),
-                depth,
-                children,
-                expanded,
-            });
-            if expanded {
-                walk(
-                    folders,
-                    Some(folder.id),
-                    depth + 1,
-                    collapsed,
-                    query,
-                    known,
-                    rows,
-                );
-            }
-        }
-    }
-    walk(folders, None, 0, collapsed, &query, &known, &mut rows);
-    rows
-}
-
-/// `toggleFolder`: a folder the items are in is marked to leave, or no
-/// longer; any other is marked to join, or no longer.
-pub fn toggle(
-    members: &BTreeSet<FolderId>,
-    add: &mut Vec<FolderId>,
-    remove: &mut Vec<FolderId>,
-    folder: FolderId,
-) {
-    let flip = |list: &mut Vec<FolderId>| match list.iter().position(|known| *known == folder) {
-        Some(at) => {
-            list.remove(at);
-        }
-        None => list.push(folder),
-    };
-    if members.contains(&folder) {
-        flip(remove);
-        add.retain(|known| *known != folder);
-    } else {
-        flip(add);
-    }
-}
 
 pub struct FolderDialog {
     session: Entity<Session>,
@@ -243,7 +122,7 @@ impl FolderDialog {
     }
 
     fn toggle(&mut self, folder: FolderId, cx: &mut Context<Self>) {
-        toggle(&self.members, &mut self.add, &mut self.remove, folder);
+        membership::mark(&self.members, &mut self.add, &mut self.remove, folder);
         cx.notify();
     }
 
@@ -465,7 +344,7 @@ impl FolderDialog {
                 list = list.child(shell::empty_state("No folders", cx));
             }
             None => {
-                for (index, line) in tree(folders, &self.collapsed, &self.query)
+                for (index, line) in rows(folders, &self.collapsed, &self.query)
                     .iter()
                     .enumerate()
                 {
@@ -559,74 +438,5 @@ impl Render for FolderDialog {
             .footer(shell::footer_left(summary, false, cx))
             .footer(buttons)
             .into_any_element()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Folder, toggle, tree};
-    use picto_library::FolderId;
-    use std::collections::{BTreeSet, HashSet};
-
-    fn folder(id: u32, name: &str, parent: Option<u32>) -> Folder {
-        Folder {
-            id: FolderId(id),
-            name: name.into(),
-            parent: parent.map(FolderId),
-            color: None,
-            count: Some(0),
-        }
-    }
-
-    fn names(
-        folders: &[Folder],
-        collapsed: &HashSet<FolderId>,
-        query: &str,
-    ) -> Vec<(String, usize)> {
-        tree(folders, collapsed, query)
-            .into_iter()
-            .map(|row| (row.folder.name, row.depth))
-            .collect()
-    }
-
-    #[test]
-    fn the_tree_nests_children_folds_and_keeps_matches_with_their_parents() {
-        let folders = [
-            folder(1, "Alpha", None),
-            folder(2, "Beta", None),
-            folder(3, "Gamma", Some(1)),
-        ];
-        let open = HashSet::new();
-        assert_eq!(
-            names(&folders, &open, ""),
-            [("Alpha".into(), 0), ("Gamma".into(), 1), ("Beta".into(), 0)]
-        );
-        let folded = HashSet::from([FolderId(1)]);
-        assert_eq!(
-            names(&folders, &folded, ""),
-            [("Alpha".into(), 0), ("Beta".into(), 0)]
-        );
-        // A search keeps a parent whose child matches, and only that child.
-        assert_eq!(
-            names(&folders, &open, "gam"),
-            [("Alpha".into(), 0), ("Gamma".into(), 1)]
-        );
-        assert!(names(&folders, &open, "zzz").is_empty());
-        let rows = tree(&folders, &open, "");
-        assert!(rows[0].children && rows[0].expanded && !rows[1].children);
-    }
-
-    #[test]
-    fn a_click_marks_folders_to_join_and_the_items_folders_to_leave() {
-        let members = BTreeSet::from([FolderId(1)]);
-        let (mut add, mut remove) = (Vec::new(), Vec::new());
-        toggle(&members, &mut add, &mut remove, FolderId(2));
-        toggle(&members, &mut add, &mut remove, FolderId(1));
-        assert_eq!(
-            (add.clone(), remove.clone()),
-            (vec![FolderId(2)], vec![FolderId(1)])
-        );
-        toggle(&members, &mut add, &mut remove, FolderId(1));
-        assert!(remove.is_empty());
     }
 }

@@ -232,18 +232,16 @@ impl Summary {
 /// How a notification reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
-    Info,
     Success,
     Warning,
     Error,
 }
 
-/// Shows a notification (`showInfoNotification`, `showSuccessNotification`,
+/// Shows a notification (`showSuccessNotification`, `showWarningNotification`,
 /// `showErrorNotification`).
 pub(crate) fn notify(level: Level, title: &str, message: &str, cx: &mut App) {
     let (title, message) = (title.to_owned(), message.to_owned());
     match level {
-        Level::Info => crate::ui::notify::info(title, message, cx),
         Level::Success => crate::ui::notify::success(title, message, cx),
         Level::Warning => crate::ui::notify::warning(title, message, cx),
         Level::Error => crate::ui::notify::error(title, message, cx),

@@ -1,6 +1,7 @@
 //! The sidebar's dialogs: the confirmations (`ConfirmModal`) before deleting
 //! folders and smart folders and before removing a watched folder.
 use super::{Sidebar, folder_id, tree};
+use crate::session::{Reread, edit_then_in};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look as ButtonLook, menu::Return, modal, modal::Size};
@@ -205,10 +206,7 @@ impl Sidebar {
         else {
             return;
         };
-        let records = tags
-            .iter()
-            .map(|tag| crate::inspector::tag_picker::record(tag))
-            .collect();
+        let records = tags.iter().map(|tag| crate::tags::record(tag)).collect();
         let anchor = add_button.get().origin;
         self.auto_tag_picker.update(cx, |picker, cx| {
             picker.open_above(
@@ -372,18 +370,14 @@ impl Sidebar {
             }
             Ok(())
         };
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(
+        self.session.update(cx, |session, cx| {
+            let _ = session.edit_reporting(
                 crate::session::Report::failure("Could not set folder auto tags"),
                 work,
-                crate::session::Reread::NOTHING,
+                Reread::NOTHING,
                 cx,
-            )
+            );
         });
-        cx.spawn(async move |_, _| {
-            let _ = answer.await;
-        })
-        .detach();
     }
 
     /// "Attach Watched Folder...": the folder's watch as it is stored.
@@ -867,17 +861,19 @@ impl Sidebar {
         if moving.is_empty() {
             return;
         }
-        self.edit_as(
+        edit_then_in(
+            &self.session,
             crate::session::Report::folder_depth(),
-            move |library| {
+            Reread::NOTHING,
+            move |library| -> picto_library::Result<_> {
                 for id in moving {
                     library.move_folder(id, parent)?;
                 }
                 Ok(())
             },
-            |_, (), _, _| {},
             window,
             cx,
+            |_, _, _, _| {},
         );
     }
 }

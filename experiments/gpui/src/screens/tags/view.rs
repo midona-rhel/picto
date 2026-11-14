@@ -411,14 +411,14 @@ impl TagsScreen {
         let width = (f32::from(self.bounds.size.width) - ui::scrollbar::GUTTER).max(0.);
         let columns = model::column_count(width);
         let searching = !self.query.trim().is_empty();
-        let virtual_count = if self.cursor.is_some() || self.loading {
-            self.tags.len().max(self.expected())
+        let virtual_count = if self.pager.cursor.is_some() || self.loading {
+            self.pager.tags.len().max(self.expected())
         } else {
-            self.tags.len()
+            self.pager.tags.len()
         };
         let key = Some((self.tags_epoch, columns, virtual_count, searching));
         if key != self.rows_key {
-            self.rows = Rows::build(&self.tags, searching, columns, virtual_count);
+            self.rows = Rows::build(&self.pager.tags, searching, columns, virtual_count);
             self.rows_key = key;
         }
         let top = -f32::from(self.scroll.offset().y) - model::LIST_TOP;
@@ -426,10 +426,7 @@ impl TagsScreen {
         let visible = self.rows.visible(top, top + viewport);
         // Fetch at the boundary of what is loaded, not at the end of the
         // placeholders' estimate.
-        if visible.end > 0
-            && visible.end - 1 + LOAD_AHEAD >= self.rows.load_boundary()
-            && self.cursor.is_some()
-        {
+        if visible.end > 0 && visible.end - 1 + LOAD_AHEAD >= self.rows.load_boundary() {
             self.load_more(cx);
         }
 
@@ -521,7 +518,7 @@ impl TagsScreen {
         )
         .absolute()
         .size_full();
-        let empty = !self.loading && self.tags.is_empty();
+        let empty = !self.loading && self.pager.tags.is_empty();
         div()
             .relative()
             .flex_1()

@@ -108,53 +108,70 @@ pub fn load(path: &std::path::Path) -> Result<LoadedFont> {
     Ok(LoadedFont { data, families })
 }
 
+/// The most a WOFF file unpacks to, and the most tables it may hold (a
+/// real font has a few dozen).
+const MAX_FONT: usize = 64 << 20;
+const MAX_TABLES: usize = 1024;
+
 /// A WOFF 1.0 file as the sfnt it wraps: the table directory rebuilt and
-/// each table inflated where it was compressed.
+/// each table inflated where it was compressed. Every size is the file's
+/// claim, so each is checked against the file and against [`MAX_FONT`].
 pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     use std::io::Read;
-    let read_u16 = |at: usize| -> Result<u16> {
-        Ok(u16::from_be_bytes(
-            woff.get(at..at + 2)
-                .ok_or_else(|| anyhow!("The WOFF file is cut short."))?
-                .try_into()?,
-        ))
+    let read = |at: usize, width: usize| -> Result<u32> {
+        let bytes = woff
+            .get(at..at + width)
+            .ok_or_else(|| anyhow!("The WOFF file is cut short."))?;
+        Ok(bytes
+            .iter()
+            .fold(0, |value, byte| value << 8 | *byte as u32))
     };
-    let read_u32 = |at: usize| -> Result<u32> {
-        Ok(u32::from_be_bytes(
-            woff.get(at..at + 4)
-                .ok_or_else(|| anyhow!("The WOFF file is cut short."))?
-                .try_into()?,
-        ))
-    };
-    let flavor = read_u32(4)?;
-    let count = read_u16(12)? as usize;
-    let mut entry_selector = 0u16;
-    while (2usize << entry_selector) <= count {
-        entry_selector += 1;
+    let flavor = read(4, 4)?;
+    let count = read(12, 2)? as usize;
+    if count == 0 || count > MAX_TABLES {
+        bail!("This WOFF file has {count} tables.");
     }
-    let search_range = (1u16 << entry_selector) * 16;
+    // The largest power of two not above the count, as the sfnt header's
+    // binary search fields give it.
+    let entry_selector = count.ilog2() as usize;
+    let search_range = (1 << entry_selector) * 16;
     let mut out = Vec::new();
-    out.extend_from_slice(&flavor.to_be_bytes());
-    out.extend_from_slice(&(count as u16).to_be_bytes());
-    out.extend_from_slice(&search_range.to_be_bytes());
-    out.extend_from_slice(&entry_selector.to_be_bytes());
-    out.extend_from_slice(&((count as u16) * 16 - search_range).to_be_bytes());
+    for (value, width) in [
+        (flavor, 4),
+        (count as u32, 2),
+        (search_range as u32, 2),
+        (entry_selector as u32, 2),
+        ((count * 16 - search_range) as u32, 2),
+    ] {
+        out.extend_from_slice(&value.to_be_bytes()[4 - width..]);
+    }
     let mut tables = Vec::with_capacity(count);
+    let mut total = 12 + 16 * count;
     for index in 0..count {
         let at = 44 + index * 20;
         let (tag, offset, compressed, length, checksum) = (
-            read_u32(at)?,
-            read_u32(at + 4)? as usize,
-            read_u32(at + 8)? as usize,
-            read_u32(at + 12)? as usize,
-            read_u32(at + 16)?,
+            read(at, 4)?,
+            read(at + 4, 4)? as usize,
+            read(at + 8, 4)? as usize,
+            read(at + 12, 4)? as usize,
+            read(at + 16, 4)?,
         );
-        let raw = woff
-            .get(offset..offset + compressed)
+        total = total.saturating_add(length.next_multiple_of(4));
+        if total > MAX_FONT {
+            bail!("This WOFF file unpacks to more than a font holds.");
+        }
+        let raw = offset
+            .checked_add(compressed)
+            .and_then(|end| woff.get(offset..end))
             .ok_or_else(|| anyhow!("The WOFF file is cut short."))?;
         let table = if compressed < length {
             let mut inflated = Vec::with_capacity(length);
-            flate2::read::ZlibDecoder::new(raw).read_to_end(&mut inflated)?;
+            flate2::read::ZlibDecoder::new(raw)
+                .take(length as u64 + 1)
+                .read_to_end(&mut inflated)?;
+            if inflated.len() != length {
+                bail!("A table of this WOFF file is damaged.");
+            }
             inflated
         } else {
             raw.to_vec()
@@ -163,10 +180,9 @@ pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     }
     let mut offset = 12 + 16 * count;
     for (tag, checksum, table) in &tables {
-        out.extend_from_slice(&tag.to_be_bytes());
-        out.extend_from_slice(&checksum.to_be_bytes());
-        out.extend_from_slice(&(offset as u32).to_be_bytes());
-        out.extend_from_slice(&(table.len() as u32).to_be_bytes());
+        for value in [*tag, *checksum, offset as u32, table.len() as u32] {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
         offset += table.len().next_multiple_of(4);
     }
     for (_, _, table) in tables {
@@ -176,6 +192,14 @@ pub fn unpack_woff(woff: &[u8]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+
+/// The fonts added to the text system, by file, with the family each
+/// answers to. GPUI cannot take a font out again, so a file viewed again is
+/// not added again.
+#[derive(Default)]
+struct Registered(std::collections::HashMap<PathBuf, SharedString>);
+
+impl Global for Registered {}
 
 enum Status {
     Loading,
@@ -196,27 +220,47 @@ pub struct FontViewer {
 
 impl FontViewer {
     pub fn new(path: PathBuf, name: SharedString, mime: String, cx: &mut Context<Self>) -> Self {
-        let read = cx.background_executor().spawn(async move { load(&path) });
-        let task = cx.spawn(async move |this, cx| {
-            let loaded = read.await;
-            let _ = this.update(cx, |this, cx| {
-                this.status = match loaded.and_then(|font| register(font, cx)) {
-                    Ok(family) => Status::Ready(family),
-                    Err(_) => Status::Failed,
-                };
-                cx.notify();
-            });
-        });
+        let registered = cx
+            .try_global::<Registered>()
+            .and_then(|registered| registered.0.get(&path).cloned());
+        let (status, task) = match registered {
+            Some(family) => (Status::Ready(family), Task::ready(())),
+            None => (Status::Loading, Self::load(path, cx)),
+        };
         Self {
             name,
             mime,
-            status: Status::Loading,
+            status,
             tab: Tab::Preview,
             paper: Paper::Auto,
             scale: 1.,
             scroll: ScrollHandle::new(),
             _task: task,
         }
+    }
+
+    /// Reads the font off the drawing thread and adds it to the text
+    /// system.
+    fn load(path: PathBuf, cx: &mut Context<Self>) -> Task<()> {
+        let file = path.clone();
+        let read = cx
+            .background_executor()
+            .spawn(async move { super::guarded(|| load(&file)) });
+        cx.spawn(async move |this, cx| {
+            let loaded = read.await;
+            let _ = this.update(cx, |this, cx| {
+                this.status = match loaded.and_then(|font| register(font, cx)) {
+                    Ok(family) => {
+                        cx.default_global::<Registered>()
+                            .0
+                            .insert(path, family.clone());
+                        Status::Ready(family)
+                    }
+                    Err(_) => Status::Failed,
+                };
+                cx.notify();
+            });
+        })
     }
 
     /// Cmd+= and Cmd+−: the preview grows or shrinks by 10%.
@@ -649,7 +693,7 @@ impl Render for FontViewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_name, load};
+    use super::{format_name, load, unpack_woff};
 
     #[test]
     fn formats_are_named_as_production_names_them() {
@@ -664,5 +708,65 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/FiraMono.ttf");
         let font = load(&path).unwrap();
         assert!(font.families.iter().any(|family| family == "Fira Mono"));
+    }
+
+    /// A WOFF header claiming `count` tables, followed by `entries`.
+    fn woff(count: u16, entries: &[[u32; 5]], data: &[u8]) -> Vec<u8> {
+        let mut woff = b"wOFF".to_vec();
+        woff.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        woff.extend_from_slice(&[0; 4]);
+        woff.extend_from_slice(&count.to_be_bytes());
+        woff.resize(44, 0);
+        for entry in entries {
+            for value in entry {
+                woff.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+        woff.extend_from_slice(data);
+        woff
+    }
+
+    #[test]
+    fn a_damaged_woff_is_refused_without_overflow_or_a_vast_allocation() {
+        use std::io::Write;
+        // More tables than the sfnt header can count, with or without the
+        // entries behind them.
+        assert!(unpack_woff(&woff(u16::MAX, &[], &[])).is_err());
+        assert!(unpack_woff(&woff(4096, &[[0; 5]; 4096], &[])).is_err());
+        assert!(unpack_woff(&woff(0, &[], &[])).is_err());
+        // A table that claims 4 GB, and one whose place runs past the end
+        // of the file (and of the address space).
+        let huge = [u32::from_be_bytes(*b"glyf"), 64, 4, u32::MAX, 0];
+        assert!(unpack_woff(&woff(1, &[huge], &[0; 4])).is_err());
+        let past = [
+            u32::from_be_bytes(*b"glyf"),
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            0,
+        ];
+        assert!(unpack_woff(&woff(1, &[past], &[])).is_err());
+        // A compressed table that inflates to more than it claims.
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&vec![0; 1 << 20]).unwrap();
+        let bomb = encoder.finish().unwrap();
+        let entry = [
+            u32::from_be_bytes(*b"glyf"),
+            64,
+            bomb.len() as u32,
+            1 << 12,
+            0,
+        ];
+        assert!(unpack_woff(&woff(1, &[entry], &bomb)).is_err());
+        // Cut short anywhere.
+        let whole = woff(
+            1,
+            &[[u32::from_be_bytes(*b"head"), 64, 4, 4, 0]],
+            &[1, 2, 3, 4],
+        );
+        assert!(unpack_woff(&whole).is_ok());
+        for end in 0..whole.len() {
+            assert!(unpack_woff(&whole[..end]).is_err(), "cut at {end}");
+        }
     }
 }

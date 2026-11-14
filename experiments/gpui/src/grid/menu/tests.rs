@@ -159,6 +159,12 @@ fn offers_every_reverse_image_provider_for_images_only() {
         find(search, "Sogou").unwrap().action,
         Action::SearchByImage(Engine::Sogou)
     );
+    // Drawn as production draws them, disabled until the search is built.
+    assert!(
+        labels(search)
+            .iter()
+            .all(|label| find(search, label).unwrap().disabled)
+    );
     d.single_mime = Some("video/mp4".into());
     assert!(!has_submenu(&tile(&d), "Search by Image"));
 }
@@ -423,6 +429,8 @@ fn open_with_other_through_the_system_chooser() {
     let entry = find(&rows, "Open With Other...").unwrap();
     assert_eq!(entry.action, Action::OpenWithOther);
     assert_eq!(entry.shortcut, None);
+    // The chooser is Windows' own; elsewhere the row stays disabled.
+    assert_eq!(entry.disabled, !cfg!(target_os = "windows"));
 }
 
 #[test]
@@ -433,14 +441,6 @@ fn a_mixed_selection_only_moves_to_trash_and_is_not_dangerous() {
     let rows = tile(&d);
     assert_eq!(labels(&rows), ["Move to Trash"]);
     assert!(!find(&rows, "Move to Trash").unwrap().danger);
-}
-
-#[test]
-fn folders_alone_open_the_folder() {
-    let mut d = single("folder:5");
-    d.folders_only = true;
-    d.handlers.open = true;
-    assert_eq!(labels(&tile(&d)), ["Open Folder"]);
 }
 
 #[test]
@@ -507,7 +507,8 @@ fn tag_rows_use_the_bookmark_glyphs() {
     ] {
         let entry = find(&rows, label).unwrap();
         assert_eq!(entry.icon, Some(icon));
-        assert!(!entry.disabled, "{label}");
+        // Auto Tag is disabled until the AI tagger is built.
+        assert_eq!(entry.disabled, label == "Auto Tag", "{label}");
     }
     // Copying and pasting tags have deferred shortcuts, so none is shown.
     assert_eq!(find(&rows, "Copy Tags").unwrap().shortcut, None);
@@ -622,7 +623,6 @@ fn a_group_is_a_library_item_not_its_cover_file() {
     d.contains_group = true;
     d.status = Some(Status::Active);
     d.handlers = Handlers {
-        open: true,
         open_new_window: true,
         edit_group: true,
         ungroup: true,
@@ -795,7 +795,9 @@ fn one_picture_in_all_has_every_row_in_order() {
     .map(display)
     .collect();
     assert_eq!(shortcuts, written);
-    // Paste Tags waits for something copied.
+    // Paste Tags waits for something copied; Auto Tag for a feature this
+    // app does not have yet, and Open With Other for the system's chooser,
+    // which only Windows has.
     assert!(find(&rows, "Paste Tags").unwrap().disabled);
     assert!(
         rows.iter()
@@ -803,7 +805,9 @@ fn one_picture_in_all_has_every_row_in_order() {
                 Row::Item(item) => Some(item),
                 _ => None,
             })
-            .filter(|item| item.label != "Paste Tags")
+            .filter(|item| {
+                !["Paste Tags", "Auto Tag", "Open With Other..."].contains(&item.label.as_str())
+            })
             .all(|item| !item.disabled)
     );
 }

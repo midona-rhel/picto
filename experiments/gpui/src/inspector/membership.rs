@@ -15,6 +15,24 @@ pub fn toggle<T: Ord>(set: &mut BTreeSet<T>, item: T) -> bool {
     }
 }
 
+/// `toggleTag` and `toggleFolder` in the Add Tags and Folders dialogs: a
+/// click on something the items have marks it to come off, or no longer;
+/// on anything else, to go on, or no longer. The marks keep their order.
+pub fn mark<T: Ord>(members: &BTreeSet<T>, add: &mut Vec<T>, remove: &mut Vec<T>, item: T) {
+    let flip = |list: &mut Vec<T>, item: T| match list.iter().position(|known| *known == item) {
+        Some(at) => {
+            list.remove(at);
+        }
+        None => list.push(item),
+    };
+    if members.contains(&item) {
+        add.retain(|known| *known != item);
+        flip(remove, item);
+    } else {
+        flip(add, item);
+    }
+}
+
 /// What an edit changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Touches {
@@ -57,7 +75,7 @@ pub fn changes_results(
 
 #[cfg(test)]
 mod tests {
-    use super::{Touches, changes_results, toggle};
+    use super::{Touches, changes_results, mark, toggle};
     use picto_library::FolderId;
     use picto_library::query::ItemScope;
     use std::collections::BTreeSet;
@@ -75,6 +93,23 @@ mod tests {
         assert!(!toggle(&mut shared, 5));
         let mut names = BTreeSet::new();
         assert!(toggle(&mut names, "species:cat".to_owned()));
+    }
+
+    #[test]
+    fn a_dialog_click_marks_what_to_add_and_what_the_items_lose() {
+        let members = BTreeSet::from(["cat"]);
+        let (mut add, mut remove) = (Vec::new(), Vec::new());
+        mark(&members, &mut add, &mut remove, "dog");
+        mark(&members, &mut add, &mut remove, "cat");
+        mark(&members, &mut add, &mut remove, "bird");
+        assert_eq!(
+            (&add[..], &remove[..]),
+            (&["dog", "bird"][..], &["cat"][..])
+        );
+        // A second click takes the mark back.
+        mark(&members, &mut add, &mut remove, "dog");
+        mark(&members, &mut add, &mut remove, "cat");
+        assert_eq!((&add[..], remove.is_empty()), (&["bird"][..], true));
     }
 
     #[test]

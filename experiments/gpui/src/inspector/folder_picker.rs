@@ -7,7 +7,7 @@
 //! for the top level, among the folders the moving ones can go under.
 use super::membership;
 use crate::backend::Navigation;
-use crate::session::Session;
+use crate::session::{Report, Reread, Session};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -80,13 +80,15 @@ struct FilterMode {
 
 impl EventEmitter<Event> for FolderPicker {}
 
-/// A folder as the tree shows it.
+/// A folder as the sidebar lists it (`SidebarNodeDto`), for the folder
+/// trees of this picker and of the Folders dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Folder {
     pub id: FolderId,
     pub name: String,
     pub parent: Option<FolderId>,
     pub color: Option<u32>,
+    pub count: Option<u64>,
 }
 
 /// The library's folders from the sidebar's destinations, in their order.
@@ -102,6 +104,7 @@ pub fn folders(nav: &[Navigation]) -> Vec<Folder> {
                 name: entry.label.clone(),
                 parent: entry.parent.and_then(|parent| nav.get(parent)).and_then(id),
                 color: entry.tint,
+                count: entry.count,
             })
         })
         .collect()
@@ -121,6 +124,7 @@ pub struct Row {
     pub parent_name: Option<String>,
 }
 
+/// `matchesSearch`: the folder's name or a descendant's holds the search.
 fn matches(folders: &[Folder], folder: &Folder, query: &str) -> bool {
     folder.name.to_lowercase().contains(query)
         || folders
@@ -129,9 +133,11 @@ fn matches(folders: &[Folder], folder: &Folder, query: &str) -> bool {
             .any(|child| matches(folders, child, query))
 }
 
-/// `FolderTree`'s visible rows: each folder under its parent, folded
-/// branches left out. Searching shows the folders whose name holds the text
-/// with their ancestors, every branch open.
+/// The visible rows of a folder tree (`FolderTree`, and `renderTreeNode`
+/// over `buildTree` in the Folders dialog): each folder under its parent,
+/// folded branches left out, and while searching only the folders whose
+/// name holds the text and their ancestors. The picker opens every branch
+/// while it searches by passing no folds.
 pub fn rows(folders: &[Folder], folded: &HashSet<FolderId>, query: &str) -> Vec<Row> {
     let query = query.trim().to_lowercase();
     let known = folders
@@ -160,11 +166,7 @@ pub fn rows(folders: &[Folder], folded: &HashSet<FolderId>, query: &str) -> Vec<
             }
             let last = index + 1 == count;
             let has_children = folders.iter().any(|child| child.parent == Some(folder.id));
-            let expanded = if query.is_empty() {
-                !folded.contains(&folder.id)
-            } else {
-                true
-            };
+            let expanded = !folded.contains(&folder.id);
             let parent_name = folder
                 .parent
                 .and_then(|parent| folders.iter().find(|other| other.id == parent))
@@ -451,8 +453,14 @@ impl FolderPicker {
 
     fn visible(&self, cx: &App) -> Vec<Row> {
         let all = self.all_folders(cx);
+        let open = HashSet::new();
+        let folded = if self.query.trim().is_empty() {
+            &self.folded
+        } else {
+            &open
+        };
         match self.view {
-            View::All => rows(&all, &self.folded, &self.query),
+            View::All => rows(&all, folded, &self.query),
             View::Recent => {
                 let shown = self
                     .session
@@ -462,11 +470,11 @@ impl FolderPicker {
                     .copied()
                     .take(RECENT_SHOWN)
                     .collect::<Vec<_>>();
-                rows(&listed(&all, &shown), &self.folded, &self.query)
+                rows(&listed(&all, &shown), folded, &self.query)
             }
             View::Selected => {
                 let ids = self.selected.iter().copied().collect::<Vec<_>>();
-                rows(&listed(&all, &ids), &self.folded, &self.query)
+                rows(&listed(&all, &ids), folded, &self.query)
             }
         }
     }
@@ -699,13 +707,15 @@ impl FolderPicker {
         }
         create.busy = true;
         let parent = create.parent;
-        let answer = self
-            .session
-            .read(cx)
-            .run(move |library| library.create_folder(&name, parent));
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this, cx| match result {
+        // `foldersController.create` tells of a folder nested too deep;
+        // anything else stays on the console.
+        crate::session::edit_then(
+            &self.session,
+            Report::folder_depth(),
+            Reread::NAVIGATION,
+            move |library| library.create_folder(&name, parent),
+            cx,
+            move |this, result, cx| match result {
                 Ok((folder, _)) => {
                     this.create.close(cx);
                     if let Some(parent) = parent {
@@ -714,21 +724,14 @@ impl FolderPicker {
                     }
                     this.toggle(folder, cx);
                 }
-                Err(error) => {
-                    // `foldersController.create` tells of a folder nested
-                    // too deep; anything else stays on the console.
-                    let message = error.to_string();
-                    if !crate::ui::notify::folder_depth(&message, cx) {
-                        eprintln!("folder picker: {message}");
-                    }
+                Err(_) => {
                     if let Some(dialog) = this.create.get_mut() {
                         dialog.content.busy = false;
                     }
                     cx.notify();
                 }
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     fn dismiss_create(&mut self, cx: &mut Context<Self>) {
@@ -748,6 +751,7 @@ mod tests {
             name: name.into(),
             parent: parent.map(FolderId),
             color: None,
+            count: None,
         }
     }
 
@@ -790,11 +794,17 @@ mod tests {
     }
 
     #[test]
-    fn a_search_keeps_matches_with_their_ancestors_and_opens_them() {
-        let folded = HashSet::from([FolderId(1), FolderId(3)]);
-        let rows = rows(&tree(), &folded, " OIL");
+    fn a_search_keeps_matches_with_their_ancestors() {
+        let rows = rows(&tree(), &HashSet::new(), " OIL");
         assert_eq!(names(&rows), ["Art", "Paintings", "Oils"]);
         assert!(rows.iter().all(|row| row.expanded));
+        // A folded branch stays folded (the Folders dialog keeps its folds).
+        let folded = HashSet::from([FolderId(3)]);
+        assert_eq!(
+            names(&super::rows(&tree(), &folded, "oil")),
+            ["Art", "Paintings"]
+        );
+        assert!(super::rows(&tree(), &HashSet::new(), "zzz").is_empty());
     }
 
     #[test]

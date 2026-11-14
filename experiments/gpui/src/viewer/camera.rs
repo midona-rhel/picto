@@ -41,10 +41,22 @@ fn clamp_scale(scale: f32) -> f32 {
 /// The scale at which the whole image fits the pane. An empty pane or image
 /// leaves it at 1.
 pub fn fit_scale(image: Size, pane: Size) -> f32 {
-    if pane.0 <= 0. || image.0 <= 0. || image.1 <= 0. {
+    if pane.0 <= 0. || pane.1 <= 0. || image.0 <= 0. || image.1 <= 0. {
         return 1.;
     }
     (pane.0 / image.0).min(pane.1 / image.1)
+}
+
+/// The image scaled to fit the pane whole, centred in it: `(left, top,
+/// width, height)`, or `None` for an empty image or pane. The viewer's fit,
+/// a paged document's page, Flash's stage and the navigator's thumbnail.
+pub fn contain(image: Size, pane: Size) -> Option<(f32, f32, f32, f32)> {
+    if pane.0 <= 0. || pane.1 <= 0. || image.0 <= 0. || image.1 <= 0. {
+        return None;
+    }
+    let scale = fit_scale(image, pane);
+    let (width, height) = (image.0 * scale, image.1 * scale);
+    Some(((pane.0 - width) / 2., (pane.1 - height) / 2., width, height))
 }
 
 impl Camera {
@@ -186,14 +198,7 @@ pub fn visible_part(camera: Camera, image: Size, pane: Size) -> Option<(f32, f32
 /// How the image sits in the square navigator: `(left, top, width, height)`,
 /// letterboxed to fit (`useNavigatorRenderer.ts`).
 pub fn navigator_image(image: Size, side: f32) -> (f32, f32, f32, f32) {
-    let aspect = image.0 / image.1;
-    if aspect > 1. {
-        let height = side / aspect;
-        (0., (side - height) / 2., side, height)
-    } else {
-        let width = side * aspect;
-        ((side - width) / 2., 0., width, side)
-    }
+    contain(image, (side, side)).unwrap_or((0., 0., side, side))
 }
 
 /// The point of the image under a press in the navigator, as fractions of
@@ -316,8 +321,23 @@ mod tests {
         assert!(close(fit_scale(IMAGE, PANE), 0.4));
         assert!(close(fit_scale((300., 1200.), PANE), 0.5));
         assert_eq!(fit_scale(IMAGE, (0., 0.)), 1.);
+        // A pane with no height (a window collapsed to a line) fits nothing,
+        // so no later zoom divides by a zero scale.
+        assert_eq!(fit_scale(IMAGE, (800., 0.)), 1.);
+        assert!(
+            Camera::fit(IMAGE, (800., 0.))
+                .zoomed(2., Some((1., 1.)))
+                .tx
+                .is_finite()
+        );
         let fitted = Camera::fit(IMAGE, PANE);
         assert_eq!(fitted.image_rect(IMAGE, PANE), (0., 100., 800., 400.));
+        assert_eq!(contain(IMAGE, PANE), Some((0., 100., 800., 400.)));
+        assert_eq!(
+            contain((600., 800.), (1200., 900.)),
+            Some((262.5, 0., 675., 900.))
+        );
+        assert_eq!(contain(IMAGE, (0., 900.)), None);
         assert_eq!(fitted.percent(), 40.);
     }
 

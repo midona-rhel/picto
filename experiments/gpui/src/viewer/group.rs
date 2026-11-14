@@ -363,7 +363,7 @@ impl GroupReader {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         for member in self.members.drain(..) {
             for image in [member.thumbnail, member.full].into_iter().flatten() {
-                cx.drop_image(image, None);
+                crate::atlas::release(image, cx);
             }
             if let Some(surface) = member.surface {
                 surface.update(cx, |surface, _| surface.stop());
@@ -433,7 +433,7 @@ impl GroupReader {
         for cold in self.warm.iter().filter(|member| !next.contains(member)) {
             if let Some(member) = self.members.get_mut(*cold) {
                 if let Some(image) = member.full.take() {
-                    cx.drop_image(image, None);
+                    crate::atlas::release(image, cx);
                 }
                 member.reveal = motion::Fade::default();
                 member.uncover = motion::Fade::default();
@@ -475,14 +475,13 @@ impl GroupReader {
                 mime: member.media.mime.clone(),
             };
             let surface = cx.new(|cx| {
-                let mut surface = MediaSurface::default();
                 let mut options = super::options(cx, false, true);
                 options.member = true;
                 // `GroupImage` and `GroupDeferredRenderer` follow neither
                 // preview setting: no checkerboard, smooth scaling.
                 options.transparency_grid = false;
                 options.pixelated = false;
-                surface.set_options(options, cx);
+                let mut surface = MediaSurface::new(options, cx);
                 media.open(&mut surface, cx);
                 surface
             });

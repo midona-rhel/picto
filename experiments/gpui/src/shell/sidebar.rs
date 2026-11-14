@@ -31,6 +31,7 @@ mod view;
 
 pub use drag::drop_into_folder;
 use edits::smart_input;
+pub(crate) use edits::{rename_node, set_node_notes};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Section {

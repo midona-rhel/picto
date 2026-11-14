@@ -486,6 +486,7 @@ impl Application {
 #[cfg(test)]
 mod tests {
     use super::{Event, MARKER, coalesce, detach, guard, touches};
+    use std::path::{Path, PathBuf};
 
     use picto_core::dto::LibraryChanged;
 
@@ -795,22 +796,35 @@ mod tests {
 
     #[test]
     fn a_copy_keeps_no_cloud_watch_or_queued_work() {
-        // The library the copy names, written as an absolute path is on
-        // this system.
-        const REAL: &str = if cfg!(windows) {
+        let scratch = tempfile::tempdir().unwrap();
+        // The copy's marker names the library it was made from.
+        // An absolute path of this platform's own form.
+        let source = PathBuf::from(if cfg!(windows) {
             r"C:\Users\me\Pictures\Real.library"
         } else {
             "/Users/me/Pictures/Real.library"
+        });
+        let stored = |library: &Path, hash: &str| {
+            library
+                .join("blobs")
+                .join("f")
+                .join(hash)
+                .join(format!("{hash}.png"))
+                .to_string_lossy()
+                .into_owned()
         };
-        let scratch = tempfile::tempdir().unwrap();
-        // The copy's marker names the library it was made from.
-        std::fs::write(scratch.path().join(MARKER), format!("{REAL}\n")).unwrap();
+        // A folder that only starts with the source's name is not the source.
+        let neighbour = PathBuf::from(format!("{}.bak", source.display()));
+        std::fs::write(
+            scratch.path().join(MARKER),
+            format!("{}\n", source.display()),
+        )
+        .unwrap();
         let mut connection =
             rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
         picto_library::schema::create(&mut connection).unwrap();
         connection
             .execute_batch(
-                &format!(
                 "UPDATE cloud_state SET provider = 'dropbox', account_label = 'me',
                         remote_root = '/Users/me/Dropbox', state = 'idle', paused = 0;
                  INSERT INTO folder_definition (folder_id, stable_key, name, watch_path, watch_enabled, display_order)
@@ -822,14 +836,20 @@ mod tests {
                         (2, 1, 'user', 'succeeded', '2026-01-01T00:00:00Z');
                  INSERT INTO ingest_job (ingest_job_id, job_key, source_kind, source_path, payload_json,
                                          delete_after_ingest, status, available_at, created_at, updated_at)
-                 VALUES (1, 'moving', 'file', '/Users/me/Downloads/only-copy.png', '{{}}', 1, 'pending', 'now', 'now', 'now'),
-                        (2, 'claimed', 'file', '/Users/me/Downloads/claimed.png', '{{}}', 1, 'running', 'now', 'now', 'now'),
-                        (3, 'done', 'file', '/Users/me/Downloads/done.png', '{{}}', 1, 'succeeded', 'now', 'now', 'now');
-                 INSERT INTO media_file (file_id, content_hash, file_path, mime, size_bytes)
-                 VALUES (1, 'aa', '{REAL}/blobs/f/aa/aa.png', 'image/png', 1),
-                        (2, 'bb', '{REAL}.bak/blobs/f/bb/bb.png', 'image/png', 1);"),
+                 VALUES (1, 'moving', 'file', '/Users/me/Downloads/only-copy.png', '{}', 1, 'pending', 'now', 'now', 'now'),
+                        (2, 'claimed', 'file', '/Users/me/Downloads/claimed.png', '{}', 1, 'running', 'now', 'now', 'now'),
+                        (3, 'done', 'file', '/Users/me/Downloads/done.png', '{}', 1, 'succeeded', 'now', 'now', 'now');",
             )
             .unwrap();
+        for (file, hash, library) in [(1, "aa", &source), (2, "bb", &neighbour)] {
+            connection
+                .execute(
+                    "INSERT INTO media_file (file_id, content_hash, file_path, mime, size_bytes)
+                     VALUES (?1, ?2, ?3, 'image/png', 1)",
+                    rusqlite::params![file, hash, stored(library, hash)],
+                )
+                .unwrap();
+        }
         drop(connection);
         detach(scratch.path()).unwrap();
         // An import started in the copy and cut short by quitting is the
@@ -875,16 +895,14 @@ mod tests {
             ),
             "failed,failed,succeeded,pending"
         );
-        // Stored paths lead into the copy; a folder that only starts with
-        // the source's name is not the source.
-        let copy = scratch.path().to_string_lossy().into_owned();
+        // Stored paths lead into the copy; the neighbour's are left alone.
         assert_eq!(
             one("SELECT file_path FROM media_file WHERE file_id = 1"),
-            format!("{copy}/blobs/f/aa/aa.png")
+            stored(scratch.path(), "aa")
         );
         assert_eq!(
             one("SELECT file_path FROM media_file WHERE file_id = 2"),
-            format!("{REAL}.bak/blobs/f/bb/bb.png")
+            stored(&neighbour, "bb")
         );
     }
 }

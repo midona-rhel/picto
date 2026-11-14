@@ -244,16 +244,6 @@ pub fn error(title: impl Into<SharedString>, message: impl Into<SharedString>, c
     show(tone, options, cx);
 }
 
-/// `warnOnFolderDepth`: shows "Folder depth limit" if `message` is the
-/// library's refusal to nest a folder deeper, and says whether it did.
-pub fn folder_depth(message: &str, cx: &mut App) -> bool {
-    let deep = message.contains(FOLDER_DEPTH_LIMIT);
-    if deep {
-        error("Folder depth limit", message.to_owned(), cx);
-    }
-    deep
-}
-
 /// `showWarningNotification`.
 pub fn warning(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     show(Tone::Warning, Options::new(title, message), cx);

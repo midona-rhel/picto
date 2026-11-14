@@ -10,7 +10,7 @@ use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::motion;
 use crate::session::{Change, Report, Reread, Session};
-use crate::tags::Preferences;
+use crate::tags::{Answer, Page, Preferences, TagPager, View as Browse};
 use crate::ui::{
     menu::{self},
     modal::Presence,
@@ -19,6 +19,7 @@ use crate::ui::{
 use dialogs::{Dialog, Layer};
 use gpui::*;
 use model::Rows;
+use picto_library::query::ItemScope;
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
 use std::time::Instant;
 
@@ -30,15 +31,6 @@ const RAIL_WIDTH: f32 = 184.;
 const SEARCH_WIDTH: f32 = 125.;
 /// A load near the end of what is loaded starts this many rows early.
 const LOAD_AHEAD: usize = 4;
-
-/// What the list shows: every tag, one group (`""` is General), or the
-/// starred tags.
-#[derive(Clone, Debug, PartialEq)]
-enum Browse {
-    All,
-    Group(String),
-    Starred,
-}
 
 /// Changing what the list shows, as `handleNamespaceChange` stages it.
 #[derive(Clone, Copy)]
@@ -97,13 +89,10 @@ pub struct TagsScreen {
     namespaces: Vec<TagNamespaceRecord>,
     unused: u64,
     preferences: Preferences,
-    tags: Vec<TagRecord>,
-    /// Where the next page starts, while there is one.
-    cursor: Option<usize>,
+    /// What the list shows: every tag, one group (`""` is General), or the
+    /// starred tags, as loaded so far.
+    pager: TagPager,
     loading: bool,
-    loading_more: bool,
-    /// Counts list loads, so an older answer never replaces a newer one.
-    generation: u64,
     summary_generation: u64,
     /// The browse and search the shown tags are for.
     identity: Option<(Browse, String)>,
@@ -186,11 +175,8 @@ impl TagsScreen {
             namespaces: Vec::new(),
             unused: 0,
             preferences: Preferences::from_settings(crate::settings::current(cx)),
-            tags: Vec::new(),
-            cursor: None,
+            pager: TagPager::new(PAGE_SIZE),
             loading: true,
-            loading_more: false,
-            generation: 0,
             summary_generation: 0,
             identity: None,
             error: None,
@@ -269,107 +255,81 @@ impl TagsScreen {
     /// The first page of what the list shows. When that is a different
     /// browse or search, the rows fade in once it arrives.
     fn load(&mut self, cx: &mut Context<Self>) {
-        self.generation += 1;
-        let generation = self.generation;
-        self.loading_more = false;
         let identity = (self.browse.clone(), self.query.clone());
         let changed = self.identity.as_ref() != Some(&identity);
         self.identity = Some(identity);
         if changed {
             self.loading = true;
         }
-        let query = self.query.trim().to_owned();
-        let answer = match &self.browse {
-            Browse::Starred => {
-                let starred = self.preferences.starred.clone();
-                self.session.read(cx).run(move |library| {
-                    let tags = library.tags().map_err(|e| e.to_string())?;
-                    let found = starred
-                        .iter()
-                        .filter_map(|name| {
-                            tags.iter()
-                                .find(|tag| crate::tags::record_name(tag) == *name)
-                                .cloned()
-                        })
-                        .collect::<Vec<_>>();
-                    Ok((
-                        crate::text::rank_matches(found, &query, |tag| tag.subname.as_str()),
-                        None,
-                    ))
-                })
-            }
-            browse => {
-                let namespace = match browse {
-                    Browse::Group(name) => Some(name.clone()),
-                    _ => None,
-                };
-                self.session
-                    .read(cx)
-                    .run(move |library| page(library, namespace, query, 0))
-            }
+        let page = self.pager.begin(self.query.trim(), self.browse.group());
+        let then = move |this: &mut Self, page, answer, cx: &mut Context<Self>| {
+            this.loaded(page, answer, changed, cx)
         };
+        if self.browse != Browse::Starred {
+            crate::tags::fetch_page(&self.session, page, None, cx, then).detach();
+            return;
+        }
+        let (starred, query) = (self.preferences.starred.clone(), page.query.clone());
+        let answer = self.session.read(cx).run(move |library| {
+            let tags = library.tags().map_err(|e| e.to_string())?;
+            let found = starred
+                .iter()
+                .filter_map(|name| {
+                    tags.iter()
+                        .find(|tag| crate::tags::record_name(tag) == *name)
+                        .cloned()
+                })
+                .collect::<Vec<_>>();
+            Ok((
+                crate::text::rank_matches(found, &query, |tag| tag.subname.as_str()),
+                None,
+            ))
+        });
         cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this: &mut Self, cx| {
-                if generation != this.generation {
-                    return;
-                }
-                match result {
-                    Ok((tags, cursor)) => {
-                        this.tags = merge_unique(Vec::new(), tags);
-                        this.tags_epoch += 1;
-                        this.cursor = cursor;
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                if changed {
-                    // Shown even when the load failed, so the error is not
-                    // left over a hidden list.
-                    this.fade = ViewFade::Entering(Instant::now());
-                    this.list_shown = Instant::now();
-                }
-                this.loading = false;
-                cx.notify();
-            });
+            let Ok(answer) = answer.await else { return };
+            let _ = this.update(cx, |this, cx| then(this, page, answer, cx));
         })
         .detach();
+    }
+
+    /// The first page of what the list shows has arrived.
+    fn loaded(&mut self, page: Page, answer: Answer, changed: bool, cx: &mut Context<Self>) {
+        if !self.pager.current(&page) {
+            return;
+        }
+        match answer {
+            Ok((tags, cursor)) => {
+                self.pager.first(&page, tags, cursor);
+                self.tags_epoch += 1;
+            }
+            Err(error) => self.error = Some(error),
+        }
+        if changed {
+            // Shown even when the load failed, so the error is not left over
+            // a hidden list.
+            self.fade = ViewFade::Entering(Instant::now());
+            self.list_shown = Instant::now();
+        }
+        self.loading = false;
+        cx.notify();
     }
 
     /// The next page, once the list is scrolled near the end of what is
     /// loaded.
     fn load_more(&mut self, cx: &mut Context<Self>) {
-        let Some(offset) = self.cursor.filter(|_| !self.loading_more && !self.loading) else {
+        let Some(page) = self.pager.next().filter(|_| !self.loading) else {
             return;
         };
-        self.loading_more = true;
-        let generation = self.generation;
-        let namespace = match &self.browse {
-            Browse::Group(name) => Some(name.clone()),
-            _ => None,
-        };
-        let query = self.query.trim().to_owned();
-        let answer = self
-            .session
-            .read(cx)
-            .run(move |library| page(library, namespace, query, offset));
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else { return };
-            let _ = this.update(cx, |this: &mut Self, cx| {
-                if generation != this.generation {
-                    return;
-                }
-                match result {
-                    Ok((tags, cursor)) => {
-                        this.tags = merge_unique(std::mem::take(&mut this.tags), tags);
-                        this.tags_epoch += 1;
-                        // A page that does not move on would be fetched for ever.
-                        this.cursor = cursor.filter(|next| *next != offset);
-                    }
-                    Err(error) => this.error = Some(error),
-                }
-                this.loading_more = false;
-                cx.notify();
-            });
+        crate::tags::fetch_page(&self.session, page, None, cx, |this, page, answer, cx| {
+            if !this.pager.current(&page) {
+                return;
+            }
+            match &answer {
+                Ok(_) => this.tags_epoch += 1,
+                Err(error) => this.error = Some(error.clone()),
+            }
+            this.pager.more(&page, answer);
+            cx.notify();
         })
         .detach();
     }
@@ -387,16 +347,16 @@ impl TagsScreen {
             namespaces.iter().map(|ns| ns.tag_count).sum::<u64>() as usize
         };
         if !self.query.trim().is_empty() {
-            self.tags.len()
+            self.pager.tags.len()
         } else {
             match &self.browse {
                 Browse::Starred => self.preferences.starred.len(),
-                Browse::All => total(&self.namespaces),
                 Browse::Group(name) => self
                     .namespaces
                     .iter()
                     .find(|ns| ns.name == *name)
-                    .map_or(self.tags.len(), |ns| ns.tag_count as usize),
+                    .map_or(self.pager.tags.len(), |ns| ns.tag_count as usize),
+                _ => total(&self.namespaces),
             }
         }
     }
@@ -424,9 +384,9 @@ impl TagsScreen {
                 if let Some(browse) = self.pending_browse.take() {
                     // `resetBrowse`
                     self.browse = browse;
-                    self.tags.clear();
+                    self.pager.tags.clear();
                     self.tags_epoch += 1;
-                    self.cursor = None;
+                    self.pager.cursor = None;
                     self.error = None;
                     self.close_editor(cx);
                     self.load(cx);
@@ -441,22 +401,11 @@ impl TagsScreen {
 
     // ── Edits ───────────────────────────────────────────────────
 
-    /// `runMutation`: runs an edit on the library's thread, then reloads.
-    /// On success the editor closes if `close_editor`, or else returns from
-    /// a merge or delete step; `then` follows.
+    /// `runMutation`: runs an edit on the library's thread, telling the user
+    /// what `report` says (a delete is announced with an Undo button), then
+    /// reloads. On success the editor closes if `close_editor`, or else
+    /// returns from a merge or delete step; `then` follows.
     fn mutate(
-        &mut self,
-        work: impl FnOnce(&Library) -> Result<(), String> + Send + 'static,
-        close_editor: bool,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        self.mutate_reporting(Report::default(), work, close_editor, then, cx);
-    }
-
-    /// [`TagsScreen::mutate`] for a change production announces with an
-    /// Undo button (`tagsController`'s deletes).
-    fn mutate_reporting(
         &mut self,
         report: Report,
         work: impl FnOnce(&Library) -> Result<(), String> + Send + 'static,
@@ -466,14 +415,13 @@ impl TagsScreen {
     ) {
         self.busy = true;
         self.error = None;
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(report, work, Reread::NOTHING, cx)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = answer
-                .await
-                .unwrap_or_else(|_| Err("The library stopped".into()));
-            let _ = this.update(cx, |this: &mut Self, cx| {
+        crate::session::edit_then(
+            &self.session,
+            report,
+            Reread::NOTHING,
+            work,
+            cx,
+            move |this, result, cx| {
                 this.busy = false;
                 match result {
                     Ok(()) => {
@@ -488,9 +436,8 @@ impl TagsScreen {
                     Err(error) => this.error = Some(error),
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     /// The tag preferences changed, here or in the Settings window.
@@ -526,11 +473,6 @@ impl TagsScreen {
         self.follow_settings(cx);
     }
 
-    fn set_starred(&mut self, name: String, starred: bool, cx: &mut Context<Self>) {
-        crate::tags::set_starred(&name, starred, cx);
-        self.follow_settings(cx);
-    }
-
     /// Moves a starred tag's star to its new name after a rename.
     fn rename_star(&mut self, previous: &str, next_name: &str, cx: &mut Context<Self>) {
         crate::tags::rename_star(previous, next_name, cx);
@@ -551,7 +493,8 @@ impl TagsScreen {
         let next_name = name.trim().to_owned();
         let star_name = next_name.clone();
         self.mutate(
-            move |library| rename_or_merge(library, id, &next_name),
+            Report::default(),
+            move |library| crate::tags::rename_or_merge(library, id, &next_name),
             close,
             move |this, cx| this.rename_star(&previous, &star_name, cx),
             cx,
@@ -561,6 +504,7 @@ impl TagsScreen {
     fn merge_tag(&mut self, tag: &TagRecord, target: &TagRecord, cx: &mut Context<Self>) {
         let (source, destination) = (tag.tag_id, target.tag_id);
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .merge_tags(source, destination, crate::now_ms())
@@ -574,7 +518,7 @@ impl TagsScreen {
     }
 
     fn delete_tag(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.delete"),
             move |library| {
                 library
@@ -592,6 +536,7 @@ impl TagsScreen {
         let id = group.namespace_id;
         let target = name.clone();
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .rename_or_merge_tag_namespace(id, &target)
@@ -616,7 +561,7 @@ impl TagsScreen {
 
     fn delete_group(&mut self, group: TagNamespaceRecord, cx: &mut Context<Self>) {
         let id = group.namespace_id;
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.group.delete"),
             move |library| {
                 library
@@ -641,6 +586,7 @@ impl TagsScreen {
     fn create_group(&mut self, name: String, cx: &mut Context<Self>) {
         let target = name.clone();
         self.mutate(
+            Report::default(),
             move |library| {
                 library
                     .create_tag_namespace(&target)
@@ -657,7 +603,7 @@ impl TagsScreen {
     }
 
     fn delete_unused(&mut self, cx: &mut Context<Self>) {
-        self.mutate_reporting(
+        self.mutate(
             Report::announce("tags.delete_unused"),
             |library| {
                 library
@@ -697,11 +643,9 @@ impl TagsScreen {
     /// `showTagManagerItems`: the All grid, filtered to items with the tag.
     fn show_items(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
-            let Some(all) = session
-                .nav
-                .iter()
-                .position(|entry| entry.screen.is_none() && !entry.random && entry.label == "All")
-            else {
+            let Some(all) = session.nav.iter().position(|entry| {
+                entry.screen.is_none() && !entry.random && entry.scope == ItemScope::All
+            }) else {
                 return;
             };
             // The filter bar shows the tag, as `showTagItems` sets it.
@@ -776,61 +720,9 @@ impl TagsScreen {
     }
 }
 
-/// `mergeUniqueTags`: `incoming` after `current`, each tag once, a tag
-/// already listed updated where it stands.
-fn merge_unique(mut current: Vec<TagRecord>, incoming: Vec<TagRecord>) -> Vec<TagRecord> {
-    let mut position = current
-        .iter()
-        .enumerate()
-        .map(|(index, tag)| (tag.tag_id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-    for tag in incoming {
-        match position.get(&tag.tag_id) {
-            Some(index) => current[*index] = tag,
-            None => {
-                position.insert(tag.tag_id, current.len());
-                current.push(tag);
-            }
-        }
-    }
-    current
-}
-
-/// One page of tags from the library: the tags and where the next page
-/// starts.
-fn page(
-    library: &Library,
-    namespace: Option<String>,
-    query: String,
-    offset: usize,
-) -> Result<(Vec<TagRecord>, Option<usize>), String> {
-    let search = (!query.is_empty()).then_some(query.as_str());
-    library
-        .tag_page(namespace.as_deref(), search, offset, PAGE_SIZE)
-        .map(|(tags, next, _)| (tags, next))
-        .map_err(|error| error.to_string())
-}
-
-/// Renames a tag, or merges it into the tag that already has the name, as
-/// the application's `tags.rename_or_merge` does.
-fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), String> {
-    let target = library
-        .projections()
-        .snapshot()
-        .tag_ids_by_name
-        .get(name.trim())
-        .copied();
-    match target {
-        Some(target) if target != id => library.merge_tags(id, target, crate::now_ms()),
-        _ => library.rename_tag(id, name),
-    }
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{page, rename_or_merge};
+    use crate::tags::{TagPager, rename_or_merge};
     use picto_library::Library;
     use std::path::PathBuf;
 
@@ -850,19 +742,23 @@ mod tests {
         let general = namespaces.iter().find(|ns| ns.name.is_empty()).unwrap();
 
         // Paging through General reaches exactly its tags.
-        let mut seen = Vec::new();
-        let mut offset = Some(0);
-        while let Some(at) = offset {
-            let (page, next) = page(&library, Some(String::new()), String::new(), at).unwrap();
-            assert!(page.iter().all(|tag| tag.namespace.is_empty()));
-            seen.extend(page);
-            offset = next;
+        let mut pager = TagPager::new(super::PAGE_SIZE);
+        let first = pager.begin("", Some(String::new()));
+        let (page, next) = first.fetch(&library).unwrap();
+        assert!(pager.first(&first, page, next));
+        while let Some(page) = pager.next() {
+            let answer = page.fetch(&library);
+            assert!(pager.more(&page, answer));
         }
-        assert_eq!(seen.len() as u64, general.tag_count);
+        assert!(pager.tags.iter().all(|tag| tag.namespace.is_empty()));
+        assert_eq!(pager.tags.len() as u64, general.tag_count);
 
         // A search puts the exact name first.
         let probe = tags.iter().find(|tag| !tag.subname.is_empty()).unwrap();
-        let (found, _) = page(&library, None, probe.subname.clone(), 0).unwrap();
+        let (found, _) = TagPager::new(super::PAGE_SIZE)
+            .begin(&probe.subname, None)
+            .fetch(&library)
+            .unwrap();
         assert_eq!(
             found[0].subname.to_lowercase(),
             probe.subname.to_lowercase()

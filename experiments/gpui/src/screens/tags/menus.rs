@@ -2,6 +2,7 @@
 //! rows do.
 use super::dialogs::Dialog;
 use super::{Browse, MenuTarget, TagsScreen, dialogs};
+use crate::tags::Common;
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -86,32 +87,23 @@ impl TagsScreen {
         match self.menu_target.as_ref() {
             Some(MenuTarget::Tag(tag)) => {
                 let tag = tag.clone();
-                let name = crate::tags::record_name(&tag);
-                match action {
-                    "filter" => self.show_items(tag.tag_id, cx),
-                    "star" => self.set_starred(name, true, cx),
-                    "unstar" => self.set_starred(name, false, cx),
-                    "move-to-group" => {
-                        if let Some(group) = value {
-                            let next = crate::tags::name_in_group(&tag.subname, Some(&group));
-                            self.rename_tag(&tag, next, false, cx);
+                match crate::tags::run_common(action, value, &tag, cx) {
+                    Some(Common::Filter) => self.show_items(tag.tag_id, cx),
+                    Some(Common::Move(next)) => self.rename_tag(&tag, next, false, cx),
+                    // The preferences shown follow the star at once.
+                    Some(Common::Done) => self.follow_settings(cx),
+                    None => match action {
+                        "edit" => self.open_editor(tag, None, window, cx),
+                        "merge" => {
+                            let merge = dialogs::merge(&tag, cx);
+                            self.open_editor(tag, Some(merge), window, cx);
                         }
-                    }
-                    "remove-from-group" => {
-                        let next = crate::tags::name_in_group(&tag.subname, None);
-                        self.rename_tag(&tag, next, false, cx);
-                    }
-                    "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name)),
-                    "edit" => self.open_editor(tag, None, window, cx),
-                    "merge" => {
-                        let merge = dialogs::merge(&tag, cx);
-                        self.open_editor(tag, Some(merge), window, cx);
-                    }
-                    "delete" => {
-                        let delete = Dialog::DeleteTag { tag: tag.clone() };
-                        self.open_editor(tag, Some(delete), window, cx);
-                    }
-                    _ => {}
+                        "delete" => {
+                            let delete = Dialog::DeleteTag { tag: tag.clone() };
+                            self.open_editor(tag, Some(delete), window, cx);
+                        }
+                        _ => {}
+                    },
                 }
             }
             Some(MenuTarget::Group(group)) => {

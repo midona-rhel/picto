@@ -15,6 +15,7 @@ pub mod group_editor;
 pub mod quick_look;
 pub mod review;
 mod review_art;
+pub mod scaled;
 mod strip;
 pub mod surface;
 pub mod toolbar;
@@ -74,11 +75,62 @@ pub struct MemberQuickLook(pub usize);
 
 impl EventEmitter<MemberQuickLook> for Viewer {}
 
+impl MenuRequested {
+    /// The menu of a collection's member: `member` is the one it acts on.
+    fn member(position: Point<Pixels>, member: usize) -> Self {
+        Self {
+            position,
+            member: true,
+            members: vec![member],
+            ..Default::default()
+        }
+    }
+
+    /// A right click on a host at `position`: on a member open by itself,
+    /// `MediaView`'s menu for a file with no item to edit; on a
+    /// collection's reader none (its members and the space between them
+    /// have their own); otherwise the item's.
+    fn on_host(position: Point<Pixels>, alone: Option<usize>, session: &Session) -> Option<Self> {
+        match alone {
+            Some(member) => Some(Self {
+                alone: true,
+                ..Self::member(position, member)
+            }),
+            None if collection_selected(session) => None,
+            None => Some(Self {
+                position,
+                ..Default::default()
+            }),
+        }
+    }
+}
+
 /// Which end of the results a step ran into.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum End {
     First,
     Last,
+}
+
+/// Where a step of `delta` from `current` lands among `count` places, or
+/// the end it ran into.
+pub fn step_within(current: usize, delta: isize, count: usize) -> Result<usize, End> {
+    match current as isize + delta {
+        target if target < 0 => Err(End::First),
+        target if target as usize >= count => Err(End::Last),
+        target => Ok(target as usize),
+    }
+}
+
+/// Points the session at the open collection's member at `member`, the one
+/// the single-file rows and a member opened by itself show.
+fn point_at_member(session: &Entity<Session>, member: usize, cx: &mut App) {
+    session.update(cx, |session, cx| {
+        let delta = member as isize - session.member as isize;
+        if delta != 0 {
+            session.step_member(delta, cx);
+        }
+    });
 }
 
 /// The "First item" and "Last item" notices of the media view and the
@@ -229,9 +281,7 @@ fn show_selection(session: &Entity<Session>, surface: &Entity<MediaSurface>, cx:
         })
     };
     if let Some((key, thumbnail, natural)) = shown {
-        surface.update(cx, |surface, cx| {
-            surface.show(key, thumbnail, natural, None, cx)
-        });
+        surface.update(cx, |surface, cx| surface.show(key, thumbnail, natural, cx));
     }
 }
 
@@ -299,11 +349,7 @@ pub struct Viewer {
 
 impl Viewer {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let surface = cx.new(|cx| {
-            let mut surface = MediaSurface::default();
-            surface.set_options(options(cx, true, false), cx);
-            surface
-        });
+        let surface = cx.new(|cx| MediaSurface::for_host(true, false, cx));
         let viewer = cx.entity().downgrade();
         let toolbar = cx.new(|cx| ViewerToolbar::new(session.clone(), surface.clone(), viewer, cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
@@ -344,7 +390,7 @@ impl Viewer {
             cx.subscribe(&editor, |this, _, event: &group_editor::MemberMenu, cx| {
                 // The member the single-file rows act on is the first.
                 if let Some(first) = event.members.first() {
-                    this.show_member(*first, cx);
+                    point_at_member(&this.session, *first, cx);
                 }
                 cx.emit(MenuRequested {
                     position: event.position,
@@ -418,14 +464,6 @@ impl Viewer {
                     _ => {}
                 }
             }),
-            cx.subscribe(
-                &crate::settings::model(cx),
-                |this, _, _: &crate::settings::Applied, cx| {
-                    let options = options(cx, true, false);
-                    this.surface
-                        .update(cx, |surface, cx| surface.set_options(options, cx));
-                },
-            ),
         ];
         Self {
             session,
@@ -459,24 +497,8 @@ impl Viewer {
 
     /// A collection member was right-clicked: the viewer's menu for it.
     fn member_menu(&mut self, event: &group::MemberMenu, cx: &mut Context<Self>) {
-        self.show_member(event.member, cx);
-        cx.emit(MenuRequested {
-            position: event.position,
-            member: true,
-            members: vec![event.member],
-            ..Default::default()
-        });
-    }
-
-    /// Points the session at the collection's member at `member`, the one
-    /// the single-file rows and a member opened by itself show.
-    fn show_member(&mut self, member: usize, cx: &mut Context<Self>) {
-        self.session.update(cx, |session, cx| {
-            let delta = member as isize - session.member as isize;
-            if delta != 0 {
-                session.step_member(delta, cx);
-            }
-        });
+        point_at_member(&self.session, event.member, cx);
+        cx.emit(MenuRequested::member(event.position, event.member));
     }
 
     /// The toolbar shows the collection's controls: it draws again once
@@ -515,7 +537,7 @@ impl Viewer {
 
     /// A member opens by itself (`setViewerIndex`).
     fn open_member(&mut self, member: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_member(member, cx);
+        point_at_member(&self.session, member, cx);
         self.member_open = true;
         self.boundary.clear();
         self.surface.update(cx, |surface, _| surface.refit());
@@ -551,15 +573,14 @@ impl Viewer {
                     .map_or(0, |details| details.media.len()),
             )
         };
-        let target = member as isize + delta;
-        if target < 0 || target as usize >= count {
-            let end = if target < 0 { End::First } else { End::Last };
-            self.boundary.show(end, cx, |this| &mut this.boundary);
-            return;
+        match step_within(member, delta, count) {
+            Ok(target) => {
+                self.boundary.clear();
+                point_at_member(&self.session, target, cx);
+                self.refresh_toolbar(cx);
+            }
+            Err(end) => self.boundary.show(end, cx, |this| &mut this.boundary),
         }
-        self.boundary.clear();
-        self.show_member(target as usize, cx);
-        self.refresh_toolbar(cx);
     }
 
     /// `detachMembers`: the members at these places leave the collection,
@@ -579,12 +600,17 @@ impl Viewer {
             return;
         }
         let closes = details.media.len() - ids.len() <= 1;
-        let answer = group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let root = details.root.root_id;
+        let answer = group::detach(&self.session, root, ids, trash, cx);
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
+                // The viewer has moved on to another item since.
+                if !this.shows_collection(root, cx) {
+                    return;
+                }
                 match result {
                     Err(error) => this.error = Some(error.to_string().into()),
                     Ok(()) if closes => {
@@ -616,26 +642,29 @@ impl Viewer {
             return;
         };
         let answer = group::sort(&self.session, &details, field, cx);
-        self.report(answer, cx);
-    }
-
-    /// A failed edit of the collection shows over its members; one that
-    /// went through takes the last failure away.
-    fn report(
-        &mut self,
-        answer: futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>>,
-        cx: &mut Context<Self>,
-    ) {
+        let root = details.root.root_id;
+        // A failed sort shows over the members, while they are still
+        // shown; one that went through takes the last failure away.
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.error = result.err().map(|error| error.to_string().into());
-                cx.notify();
+                if this.shows_collection(root, cx) {
+                    this.error = result.err().map(|error| error.to_string().into());
+                    cx.notify();
+                }
             });
         })
         .detach();
+    }
+
+    /// Whether the viewer still shows the collection `root`, for a reply to
+    /// an edit of it.
+    fn shows_collection(&self, root: RootId, cx: &App) -> bool {
+        let session = self.session.read(cx);
+        session.viewer
+            && shown_collection(session).is_some_and(|details| details.root.root_id == root)
     }
 
     /// The viewer has the keyboard while it is open, so its shortcuts apply,
@@ -806,9 +835,7 @@ impl Viewer {
             };
             (index, session.total as usize)
         };
-        let target = index as isize + delta;
-        if target < 0 || target as usize >= total {
-            let end = if target < 0 { End::First } else { End::Last };
+        if let Err(end) = step_within(index, delta, total) {
             self.boundary.show(end, cx, |this| &mut this.boundary);
             return;
         }
@@ -854,14 +881,12 @@ impl Render for Viewer {
             window.request_animation_frame();
         }
         let collection = collection_selected(self.session.read(cx));
-        // "Media" while the player shows, for its keys.
-        let media = self.surface.read(cx).player().is_some();
-        let mut context = video::key_context("Viewer", media);
-        // A document's pages take the scrolling keys; a collection's reader
-        // is not a document.
-        if (!collection || self.member_open) && self.surface.read(cx).shows_pages() {
-            context.add(document::PAGES_CONTEXT);
-        }
+        // A collection's reader is not a document: its pages do not scroll
+        // by the keys.
+        let context = self
+            .surface
+            .read(cx)
+            .key_context("Viewer", !collection || self.member_open);
         let pane = div()
             .id("viewer")
             .track_focus(&self.focus)
@@ -873,46 +898,15 @@ impl Render for Viewer {
             .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
             .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.arrow(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.arrow(1, window, cx)))
-            .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
-                this.surface.update(cx, |surface, cx| surface.fit(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.actual_size(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(true, cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(false, cx));
-            }))
-            .map(|pane| document::handle_actions(pane, &self.surface))
+            .map(|pane| surface::host_actions(pane, &self.surface))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    if this.member_open {
-                        // `MediaView`'s menu for the member by itself.
-                        let member = this.session.read(cx).member;
-                        cx.emit(MenuRequested {
-                            position: event.position,
-                            member: true,
-                            members: vec![member],
-                            alone: true,
-                            ..Default::default()
-                        });
-                        return;
+                    let session = this.session.read(cx);
+                    let alone = this.member_open.then_some(session.member);
+                    if let Some(menu) = MenuRequested::on_host(event.position, alone, session) {
+                        cx.emit(menu);
                     }
-                    // A collection's members, and the space between them,
-                    // have their own menus.
-                    if collection_selected(this.session.read(cx)) {
-                        return;
-                    }
-                    cx.emit(MenuRequested {
-                        position: event.position,
-                        ..Default::default()
-                    });
                 }),
             )
             .child(
@@ -936,14 +930,24 @@ impl Render for Viewer {
                             self.surface.clone().into_any_element()
                         },
                     )),
-            );
-        let surface = self.surface.downgrade();
-        video::on_actions(pane, move |cx| {
-            surface
-                .upgrade()
-                .and_then(|surface| surface.read(cx).player())
-        })
-        .child(self.boundary.notice(End::First, cx))
-        .child(self.boundary.notice(End::Last, cx))
+            )
+            .child(self.boundary.notice(End::First, cx))
+            .child(self.boundary.notice(End::Last, cx));
+        pane
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{End, step_within};
+
+    #[test]
+    fn a_step_lands_inside_or_names_the_end_it_ran_into() {
+        assert_eq!(step_within(0, 1, 3), Ok(1));
+        assert_eq!(step_within(2, -2, 3), Ok(0));
+        assert_eq!(step_within(0, -1, 3), Err(End::First));
+        assert_eq!(step_within(2, 1, 3), Err(End::Last));
+        // Nothing to step through: every step runs into an end.
+        assert_eq!(step_within(0, 1, 0), Err(End::Last));
     }
 }

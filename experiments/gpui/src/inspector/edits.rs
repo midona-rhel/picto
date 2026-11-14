@@ -7,7 +7,7 @@ use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
 use crate::session::{Report, Reread};
-use crate::tags::record_name as name;
+use crate::tags::{Common, record_name as name};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -43,6 +43,8 @@ impl Inspector {
                     folders: item.folder_ids.clone(),
                 })
             }
+            // While a new selection's summary loads there is nothing to edit.
+            Mode::Selection if self.selection.loading() => None,
             Mode::Selection => {
                 let shown = self.selection.shown.as_ref()?;
                 let summary = shown.summary.as_ref()?;
@@ -77,40 +79,20 @@ impl Inspector {
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
         + Send
         + 'static,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.edit_reading(touches, false, work, then, cx);
+        if let Some(target) = self.target(cx) {
+            let work = move |library: &Library, target: &SelectionTarget| {
+                work(library, target).map(|_| ())
+            };
+            self.edit_items(target.ids, touches, false, work, |_, _| {}, cx);
+        }
     }
 
-    /// [`Inspector::edit`], reading the destination list and the tags with
-    /// the edit when `navigation`: a tag it creates must be among the
-    /// session's tags by the time the item's chips are drawn again.
-    fn edit_reading(
-        &mut self,
-        touches: Touches,
-        navigation: bool,
-        work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
-        + Send
-        + 'static,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(target) = self.target(cx) else {
-            return;
-        };
-        self.edit_items(
-            target.ids,
-            touches,
-            navigation,
-            move |library, target| work(library, target).map(|_| ()),
-            then,
-            cx,
-        );
-    }
-
-    /// [`Inspector::edit_reading`] for the items given rather than those the
-    /// rail describes: the Add Tags and Folders dialogs edit the grid's
+    /// [`Inspector::edit`] for the items given, reading the destination list
+    /// and the tags with the edit when `navigation` (a tag it creates must be
+    /// among the session's tags by the time the chips are drawn again), and
+    /// going on with `then`. The Add Tags and Folders dialogs edit the grid's
     /// selection.
     pub(super) fn edit_items(
         &mut self,
@@ -130,19 +112,17 @@ impl Inspector {
             navigation,
             ..Reread::NOTHING
         };
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit(move |library| work(library, &selection), reread, cx)
-        });
-        cx.spawn(async move |this, cx| {
-            if answer.await.is_err() {
-                return;
-            }
-            let _ = this.update(cx, |this, cx| {
+        crate::session::edit_then(
+            &self.session,
+            crate::session::Report::default(),
+            reread,
+            move |library| work(library, &selection),
+            cx,
+            |this, _, cx| {
                 this.reread_rail(cx);
                 then(this, cx);
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     /// One item's name, as its field commits it.
@@ -271,10 +251,14 @@ impl Inspector {
             self.session
                 .update(cx, |session, _| session.record_tags_use(&added));
         }
-        self.edit_reading(
+        let Some(target) = self.target(cx) else {
+            return;
+        };
+        self.edit_items(
+            target.ids,
             Touches::Tags,
             created,
-            move |library, target| library.apply_tags(target, &[tag_name], add),
+            move |library, target| library.apply_tags(target, &[tag_name], add).map(|_| ()),
             move |this, cx| {
                 this.tag_picker
                     .update(cx, |picker, cx| picker.edited(created, cx))
@@ -294,7 +278,6 @@ impl Inspector {
                     library.remove_from_folder(target, folder)
                 }
             },
-            |_, _| {},
             cx,
         );
     }
@@ -635,12 +618,10 @@ impl Inspector {
 
     fn run_chip_menu(&mut self, action: &str, _: &mut Window, cx: &mut Context<Self>) {
         match self.menu_target.clone() {
-            Some(ChipMenu::Tag(tag)) => match action {
-                "filter" => self.show_tag_items(tag.tag_id, cx),
-                "star" => crate::tags::set_starred(&name(&tag), true, cx),
-                "unstar" => crate::tags::set_starred(&name(&tag), false, cx),
-                "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name(&tag))),
-                "remove" => self.set_tag(name(&tag), false, false, cx),
+            Some(ChipMenu::Tag(tag)) => match crate::tags::run_common(action, None, &tag, cx) {
+                Some(Common::Filter) => self.show_tag_items(tag.tag_id, cx),
+                None if action == "remove" => self.set_tag(name(&tag), false, false, cx),
+                // A chip's menu has no group rows.
                 _ => {}
             },
             Some(ChipMenu::Folder(folder)) => match action {
@@ -668,7 +649,6 @@ impl Inspector {
             Mode::Item => self.edit(
                 Touches::Text,
                 move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
             Mode::Selection => {
@@ -707,13 +687,11 @@ impl Inspector {
             Overwrite::Notes(notes) => self.edit(
                 Touches::Text,
                 move |library, target| library.set_notes(target, Some(notes), crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
             Overwrite::Sources(urls) => self.edit(
                 Touches::Text,
                 move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
         }
@@ -726,9 +704,11 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let confirm = self.confirm.layer(window, cx)?;
-        // It keeps the keyboard while it is open.
+        // It keeps the keyboard while it is open. Taken while the rail is
+        // drawn, the focus shows in the next frame, which this asks for.
         if !confirm.focus.contains_focused(window, cx) && !confirm.presence.closing() {
             window.focus(&confirm.focus, cx);
+            window.request_animation_frame();
         }
         let (title, label, what) = match confirm.content.overwrite {
             Overwrite::Notes(_) => ("Overwrite notes?", "Overwrite Notes", "notes"),

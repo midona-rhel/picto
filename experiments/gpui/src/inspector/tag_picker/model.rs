@@ -1,26 +1,10 @@
 //! The tag picker's pure list model: which tags show and in what order,
-//! the offer to create one, the views Tab steps through, the arrow keys'
-//! steps and the rail's groups.
-use super::View;
-use crate::tags::record_name as name;
+//! the offer to create one and the arrow keys' steps. What it shares with
+//! the other tag browsers is in `crate::tags`.
+use crate::tags::{View, record, record_name as name};
 use crate::ui::overlay_shell::Nav;
-use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
+use picto_library::TagRecord;
 use std::collections::BTreeSet;
-
-/// `tagRecord`: a record for a tag known only by name, in General when the
-/// name has no group.
-pub fn record(name: &str) -> TagRecord {
-    let (namespace, subname) = crate::tags::split(name);
-    let namespace = namespace.unwrap_or("general");
-    TagRecord {
-        tag_id: TagId(0),
-        namespace_id: TagNamespaceId(0),
-        namespace: namespace.to_owned(),
-        subname: subname.to_owned(),
-        active_count: 0,
-        assignment_count: 0,
-    }
-}
 
 /// `displayTagName`: the name, without its group unless prefixes show.
 pub(super) fn display_name(tag: &TagRecord, prefixes: bool) -> String {
@@ -52,20 +36,7 @@ pub struct Sources<'a> {
 pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
     let local = matches!(sources.view, View::Selected | View::Starred);
     let candidates = match sources.view {
-        View::Selected => {
-            let mut records = sources
-                .entity
-                .iter()
-                .map(|name| record(name))
-                .collect::<Vec<_>>();
-            records.sort_by(|left, right| {
-                left.namespace
-                    .to_lowercase()
-                    .cmp(&right.namespace.to_lowercase())
-                    .then_with(|| crate::text::natural_order(&left.subname, &right.subname))
-            });
-            records
-        }
+        View::Selected => crate::tags::records_by_group(sources.entity),
         View::Starred => {
             let mut records = sources
                 .starred
@@ -75,7 +46,7 @@ pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
             records.sort_by(|left, right| crate::text::natural_order(&name(left), &name(right)));
             records
         }
-        View::All | View::Group(_) => {
+        View::All | View::Group(_) | View::Recent => {
             let known = |wanted: &str| {
                 sources
                     .tags
@@ -168,24 +139,6 @@ pub fn create_candidate(
     (!exists).then(|| record(&wanted))
 }
 
-/// Tab: All, then each group, then Selected, then Starred, then All again.
-pub fn next_view(view: &View, groups: &[String]) -> View {
-    match view {
-        View::All => groups
-            .first()
-            .map_or(View::Selected, |group| View::Group(group.clone())),
-        View::Group(current) => {
-            let at = groups.iter().position(|group| group == current);
-            match at.and_then(|at| groups.get(at + 1)) {
-                Some(next) => View::Group(next.clone()),
-                None => View::Selected,
-            }
-        }
-        View::Selected => View::Starred,
-        View::Starred => View::All,
-    }
-}
-
 /// The row the arrow keys move to among `count` rows in `columns`.
 pub fn step(focus: Option<usize>, key: Nav, columns: usize, count: usize) -> Option<usize> {
     if count == 0 {
@@ -204,20 +157,9 @@ pub fn step(focus: Option<usize>, key: Nav, columns: usize, count: usize) -> Opt
     })
 }
 
-/// The groups the rail lists, in their preset order: General is All.
-pub(super) fn rail_groups(namespaces: &[TagNamespaceRecord]) -> Vec<TagNamespaceRecord> {
-    let mut groups = namespaces
-        .iter()
-        .filter(|group| !matches!(group.name.as_str(), "" | "general"))
-        .cloned()
-        .collect::<Vec<_>>();
-    groups.sort_by_key(|group| crate::tags::group_order(&group.name));
-    groups
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Sources, View, create_candidate, display_tags, name, next_view, record, step};
+    use super::{Sources, View, create_candidate, display_tags, name, step};
     use crate::ui::overlay_shell::Nav;
     use picto_library::{TagId, TagNamespaceId, TagRecord};
 
@@ -234,13 +176,6 @@ mod tests {
 
     fn names(tags: &[TagRecord]) -> Vec<String> {
         tags.iter().map(name).collect()
-    }
-
-    #[test]
-    fn records_by_name_fall_in_general_without_a_group() {
-        assert_eq!(name(&record("cat")), "cat");
-        assert_eq!(record("cat").namespace, "general");
-        assert_eq!(name(&record("species:cat")), "species:cat");
     }
 
     #[test]
@@ -358,28 +293,6 @@ mod tests {
         assert_eq!(name(&named.unwrap()), "creator:x");
         assert!(create_candidate(&View::Selected, "dog", None, &tags).is_none());
         assert!(create_candidate(&View::All, "  ", None, &tags).is_none());
-    }
-
-    #[test]
-    fn tab_steps_through_all_the_groups_selected_and_starred() {
-        let groups = ["creator".to_owned(), "series".to_owned()];
-        let mut view = View::All;
-        let mut seen = Vec::new();
-        for _ in 0..5 {
-            view = next_view(&view, &groups);
-            seen.push(view.clone());
-        }
-        assert_eq!(
-            seen,
-            [
-                View::Group("creator".into()),
-                View::Group("series".into()),
-                View::Selected,
-                View::Starred,
-                View::All
-            ]
-        );
-        assert_eq!(next_view(&View::All, &[]), View::Selected);
     }
 
     #[test]

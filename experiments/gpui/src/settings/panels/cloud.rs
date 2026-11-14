@@ -96,41 +96,26 @@ impl SettingsWindow {
             ));
         }
         let retention = info.retention;
-        let entity = cx.entity();
-        let keep = move |change: fn(&mut [i64; 4], i64)| {
-            let entity = entity.clone();
-            move |value: i64, cx: &mut App| {
-                entity.update(cx, |this, cx| {
-                    if let Some(cloud) = &mut this.cloud {
-                        change(&mut cloud.retention, value);
-                        cx.notify();
-                    }
-                })
-            }
-        };
-        // TODO: write retention through `cloud.retention.update`; until then
-        // a change lasts while the window is open.
+        // TODO: write retention through `cloud.retention.update` and enable
+        // the fields; until then they show the stored values, disabled.
         let retention_card = card(theme)
             .child(title(theme, "Recovery Retention"))
             .child(row(
                 theme,
                 "Daily snapshots",
-                ui::number_input("retention-daily", retention[0], 2, 365)
-                    .on_commit(keep(|retention, value| retention[0] = value)),
+                ui::number_input("retention-daily", retention[0], 2, 365).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
                 "Weekly snapshots",
-                ui::number_input("retention-weekly", retention[1], 0, 260)
-                    .on_commit(keep(|retention, value| retention[1] = value)),
+                ui::number_input("retention-weekly", retention[1], 0, 260).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
                 "Yearly snapshots",
-                ui::number_input("retention-yearly", retention[2], 0, 100)
-                    .on_commit(keep(|retention, value| retention[2] = value)),
+                ui::number_input("retention-yearly", retention[2], 0, 100).disabled(true),
             ))
             .child(separator(theme))
             .child(row(
@@ -141,8 +126,7 @@ impl SettingsWindow {
                     .items_center()
                     .gap(px(6.))
                     .child(
-                        ui::number_input("retention-deleted", retention[3], 0, 3650)
-                            .on_commit(keep(|retention, value| retention[3] = value)),
+                        ui::number_input("retention-deleted", retention[3], 0, 3650).disabled(true),
                     )
                     .child(value(theme, "days")),
             ))

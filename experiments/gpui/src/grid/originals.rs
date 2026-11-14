@@ -89,10 +89,10 @@ enum Entry {
 
 impl Entry {
     /// The image this entry has on screen, if any.
-    fn image(self) -> Option<Arc<RenderImage>> {
+    fn image(&self) -> Option<Arc<RenderImage>> {
         match self {
-            Entry::Ready(_, image) => Some(image),
-            Entry::Loading { showing, .. } => showing,
+            Entry::Ready(_, image) => Some(image.clone()),
+            Entry::Loading { showing, .. } => showing.clone(),
             Entry::Failed => None,
         }
     }
@@ -111,7 +111,7 @@ impl Originals {
         cx.on_release(|originals, cx| {
             for (_, entry) in std::mem::take(&mut originals.entries) {
                 if let Some(image) = entry.image() {
-                    cx.drop_image(image, None);
+                    crate::atlas::release(image, cx);
                 }
             }
         })
@@ -125,17 +125,13 @@ impl Originals {
 
     /// The decoded original for a tile, once it is ready.
     pub fn get(&self, hash: &str) -> Option<Arc<RenderImage>> {
-        match self.entries.get(hash)? {
-            Entry::Ready(_, image) => Some(image.clone()),
-            Entry::Loading { showing, .. } => showing.clone(),
-            Entry::Failed => None,
-        }
+        self.entries.get(hash)?.image()
     }
 
     /// The tiles in the viewport that should show their original. One that
     /// has left is let go and its dwell starts over when it returns; one
     /// that has stayed long enough is decoded, a couple at a time.
-    pub fn plan(&mut self, wants: Vec<Want>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn plan(&mut self, wants: Vec<Want>, cx: &mut Context<Self>) {
         let now = Instant::now();
         self.seen
             .retain(|hash, _| wants.iter().any(|want| want.hash == *hash));
@@ -146,8 +142,8 @@ impl Originals {
             .cloned()
             .collect::<Vec<_>>();
         for hash in gone {
-            if let Some(image) = self.entries.remove(&hash).and_then(Entry::image) {
-                cx.drop_image(image, Some(window));
+            if let Some(image) = self.entries.remove(&hash).and_then(|entry| entry.image()) {
+                crate::atlas::release(image, cx);
             }
         }
         let mut loading = self
@@ -179,7 +175,8 @@ impl Originals {
             loading += 1;
             let (hash, path, size) = (want.hash, want.path, want.size);
             let decode = cx.background_executor().spawn(async move {
-                let image = image::open(&path).ok()?;
+                // A JPEG decodes at the tile's size, not its own.
+                let image = crate::viewer::scaled::decode(&path, size, false).ok()?;
                 let mut pixels = image
                     .resize_exact(size.0, size.1, image::imageops::FilterType::CatmullRom)
                     .into_rgba8();
@@ -203,7 +200,7 @@ impl Originals {
                     if !waiting {
                         return;
                     }
-                    let previous = this.entries.remove(&key).and_then(Entry::image);
+                    let previous = this.entries.remove(&key).and_then(|entry| entry.image());
                     let entry = match (decoded, previous.clone()) {
                         (Some(image), _) => Entry::Ready(size, image),
                         // A failed re-decode keeps what was showing.
@@ -213,13 +210,13 @@ impl Originals {
                     if let (Entry::Ready(_, image), Some(previous)) = (&entry, previous)
                         && !Arc::ptr_eq(image, &previous)
                     {
-                        cx.drop_image(previous, None);
+                        crate::atlas::release(previous, cx);
                     }
                     this.entries.insert(key, entry);
                     cx.notify();
                 });
             });
-            let showing = self.entries.remove(&hash).and_then(Entry::image);
+            let showing = self.entries.remove(&hash).and_then(|entry| entry.image());
             self.entries.insert(
                 hash,
                 Entry::Loading {

@@ -50,7 +50,6 @@ actions!(
         CheckForUpdates,
         CloseWindow,
         Rename,
-        // TODO: open the batch rename dialog for the selection.
         BatchRename,
         EditUndo,
         EditRedo,
@@ -61,8 +60,6 @@ actions!(
         CopyPaths,
         CopyNames,
         CopyLinks,
-        // TODO: regenerate the selection's thumbnails, once a thumbnail
-        // generator is linked.
         RegenerateThumbnails,
         DeselectAll,
         Restore,
@@ -186,6 +183,16 @@ pub enum Status {
     Trash,
 }
 
+impl From<picto_library::Lifecycle> for Status {
+    fn from(lifecycle: picto_library::Lifecycle) -> Self {
+        match lifecycle {
+            picto_library::Lifecycle::Inbox => Status::Inbox,
+            picto_library::Lifecycle::Active => Status::Active,
+            picto_library::Lifecycle::Trash => Status::Trash,
+        }
+    }
+}
+
 /// What production's renderer tells the menu (`menuContext`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MenuContext {
@@ -258,8 +265,7 @@ impl MenuContext {
         !matches!(self.scope, ScopeKind::Folder | ScopeKind::SmartFolder)
     }
 
-    /// Rename for one item; several open the batch rename dialog, which
-    /// this app does not have yet.
+    /// Rename for one item; several have Batch Rename… instead.
     pub fn can_rename_one(&self) -> bool {
         self.names && self.selection == 1
     }

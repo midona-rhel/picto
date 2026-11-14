@@ -52,6 +52,9 @@ futures = "0.3"
 same-file = "1"
 tempfile = "3"
 image = "0.25"
+# Reduced-size JPEG decoding (an eighth to half the DCT), for originals shown
+# smaller than they are; `image` decodes JPEG through zune-jpeg, which has none.
+jpeg-decoder = { version = "0.3", default-features = false }
 smallvec = "1"
 url = "2"
 chrono = "0.4"

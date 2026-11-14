@@ -2,7 +2,7 @@
 //! be undone, Empty Trash, and the delete through the library.
 use super::item_menu::{Run, Target};
 use crate::grid::format::grouped;
-use crate::session::Reread;
+use crate::session::{Report, Reread, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -34,18 +34,15 @@ fn cancelled(done: &Option<Done>) -> Option<Run> {
     }))
 }
 
-/// `permanentDeleteMessage`.
-fn permanent_delete_message(media: Option<u128>, undo_limit: i64) -> String {
+/// `permanentDeleteMessage`, for a delete of `media` media items.
+fn permanent_delete_message(media: u128, undo_limit: i64) -> String {
     let limit = grouped(undo_limit.max(0) as u64);
     match media {
         _ if undo_limit == 0 => "Delete undo is disabled. This cannot be undone.".to_owned(),
-        Some(count) if count <= undo_limit as u128 => {
+        count if count <= undo_limit as u128 => {
             "You can undo this until Picto closes. After that the files are removed.".to_owned()
         }
-        None => format!(
-            "Deleting up to {limit} media items, including collection members, can be undone until Picto closes. Larger deletes cannot be undone."
-        ),
-        Some(_) => format!(
+        _ => format!(
             "This exceeds the undo limit of {limit} media items, including collection members, so it cannot be undone."
         ),
     }
@@ -113,9 +110,17 @@ impl Shell {
     ) {
         let undo_limit = crate::settings::current(cx).undo_delete_limit;
         let read = selection.clone();
-        self.library(
-            Box::new(move |library| library.selection_summary(&read)),
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            move |library| library.selection_summary(&read),
+            window,
+            cx,
             move |this, summary, window, cx| {
+                let Ok(summary) = summary else {
+                    return;
+                };
                 let count = summary.selected_count;
                 if count == 0 {
                     if let Some(done) = &done {
@@ -145,7 +150,7 @@ impl Shell {
                     this.delete_permanently(delete, undoable, window, cx);
                     return;
                 }
-                let message = permanent_delete_message(Some(summary.media_count), undo_limit);
+                let message = permanent_delete_message(summary.media_count, undo_limit);
                 this.ask_with(
                     delete.title.clone(),
                     message,
@@ -158,8 +163,6 @@ impl Shell {
                     cx,
                 );
             },
-            window,
-            cx,
         );
     }
 
@@ -194,40 +197,33 @@ impl Shell {
             self.session
                 .update(cx, |session, cx| session.close_viewer(cx));
         }
-        // `deleteTarget` announces what it deleted, with Undo.
+        // `deleteTarget` announces what it deleted, with Undo. The files a
+        // delete that cannot be undone frees are removed from the copy's
+        // blobs by the application's media worker (`drain_blob_cleanup`), as
+        // in production.
         let command = if reject {
             "items.reject"
         } else {
             "items.delete"
         };
-        let answer = self.session.read(cx).run(move |library| {
-            let before = crate::history::newest(library);
-            let deleted = if reject {
-                library.delete_rejected(&selection, crate::now_ms(), undo_limit, require_undoable)
+        let work = move |library: &picto_library::Library| {
+            let now = crate::now_ms();
+            if reject {
+                library.delete_rejected(&selection, now, undo_limit, require_undoable)
             } else {
-                library.permanently_delete(
-                    &selection,
-                    crate::now_ms(),
-                    undo_limit,
-                    require_undoable,
-                )
-            };
-            // The files a delete that cannot be undone frees are removed from
-            // the copy's blobs by the application's media worker
-            // (`drain_blob_cleanup`), as in production.
-            deleted.map(|_| crate::history::announced(library, command, before))
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(result) = answer.await else {
-                return;
-            };
-            let _ = this.update_in(cx, move |this, window, cx| match result {
-                Ok(announced) => {
-                    if let Some(entry) = &announced {
-                        crate::history::announce(entry, this.session.clone(), cx);
-                    }
-                    this.session
-                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
+                library.permanently_delete(&selection, now, undo_limit, require_undoable)
+            }
+        };
+        let report = Report::announce(command);
+        edit_then_in(
+            &self.session,
+            report,
+            Reread::RESULTS,
+            work,
+            window,
+            cx,
+            move |this, deleted, window, cx| match deleted {
+                Ok(_) => {
                     if let Some(done) = &delete.done {
                         done(this, true, window, cx);
                     }
@@ -254,9 +250,8 @@ impl Shell {
                         done(this, false, window, cx);
                     }
                 }
-            });
-        })
-        .detach();
+            },
+        );
     }
 }
 
@@ -267,17 +262,16 @@ mod tests {
     #[test]
     fn delete_messages_say_whether_undo_is_possible() {
         assert_eq!(
-            permanent_delete_message(Some(3), 0),
+            permanent_delete_message(3, 0),
             "Delete undo is disabled. This cannot be undone."
         );
         assert_eq!(
-            permanent_delete_message(Some(500), 500),
+            permanent_delete_message(500, 500),
             "You can undo this until Picto closes. After that the files are removed."
         );
         assert_eq!(
-            permanent_delete_message(Some(1500), 1000),
+            permanent_delete_message(1500, 1000),
             "This exceeds the undo limit of 1,000 media items, including collection members, so it cannot be undone."
         );
-        assert!(permanent_delete_message(None, 500).starts_with("Deleting up to 500 media"));
     }
 }
