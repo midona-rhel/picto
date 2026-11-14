@@ -422,8 +422,11 @@ pub fn backdrop(
 ) -> Stateful<Div> {
     let viewport = window.viewport_size();
     let backdrop = rgba(theme::MODAL_BACKDROP);
+    // A press on it closes the dialog; assistive technology closes it with
+    // the close button or Escape instead.
     let layer = div()
         .id(id)
+        .a11y_presentational()
         .occlude()
         .w(viewport.width)
         .h(viewport.height)

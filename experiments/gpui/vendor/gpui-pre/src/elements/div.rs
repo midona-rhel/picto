@@ -1485,6 +1485,15 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Declare that this element's click is not a control assistive
+    /// technology needs (a dialog's backdrop, a window's drag strip, a
+    /// surface whose click only focuses the field inside it), so it is left
+    /// out of [`crate::Window::a11y_unexposed_clickables`].
+    fn a11y_presentational(mut self) -> Self {
+        self.interactivity().aria.presentational = true;
+        self
+    }
+
     /// Report this element's node as the one standing for `handle`, a focus
     /// handle a descendant without a node of its own tracks: assistive
     /// technology sees this node as focused while `handle` is, and its
@@ -2233,6 +2242,7 @@ pub(crate) struct AriaProperties {
     pub(crate) busy: bool,
     pub(crate) multiselectable: bool,
     pub(crate) live: Option<accesskit::Live>,
+    pub(crate) presentational: bool,
 }
 
 /// The interactivity struct. Powers all of the general-purpose
@@ -2465,7 +2475,10 @@ impl Interactivity {
                     window.a11y.set_focus(node_id);
                 }
             }
-            if self.override_role.is_none() && !self.click_listeners.is_empty() {
+            if self.override_role.is_none()
+                && !self.click_listeners.is_empty()
+                && !self.aria.presentational
+            {
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 let at = self
                     .source_location
