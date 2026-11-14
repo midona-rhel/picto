@@ -724,6 +724,7 @@ impl Render for TagPicker {
                         ],
                         modes.iter().position(|mode| *mode == filter.mode),
                     )
+                    .name(t("Filter matching rule"))
                     .on_select(move |index, _, cx| {
                         let _ = logic.update(cx, |this, cx| this.set_mode(modes[index], cx));
                     }),

@@ -92,7 +92,11 @@ impl Imports {
         } else {
             self.task_view(&task, &this, window, cx)
         };
+        // `role="dialog"` named by the task's title.
         let panel = ui::glass_panel("task-dialog", DIALOG_RADIUS, cx)
+            .role(Role::Dialog)
+            .aria_modal(true)
+            .aria_label(task.heading())
             .w(px(width))
             .overflow_hidden()
             .opacity(eased)
@@ -268,6 +272,8 @@ impl Imports {
         Some(
             div()
                 .id("task-failures-list")
+                .role(Role::List)
+                .aria_label(crate::i18n::t("Files that could not be imported"))
                 .max_h(px(140.))
                 .overflow_y_scroll()
                 .px(px(8.))
@@ -338,82 +344,93 @@ impl Imports {
             .pb(px(16.))
             .child(head);
         if choices.len() > 1 {
-            body = body.child(div().flex().flex_col().gap(px(6.)).mt(px(2.)).children(
-                choices.into_iter().map(|(choice, title, detail)| {
-                    let selected = choice == chosen;
-                    let danger = choice == StopChoice::Remove;
-                    let (border, fill) = match (selected, danger) {
-                        (true, true) => (
-                            rgba(theme::TASK_DANGER_BORDER),
-                            rgba(theme::TASK_DANGER_FILL),
-                        ),
-                        (true, false) => (theme.primary_at(60.), theme.primary_at(10.)),
-                        _ => (theme.border(), theme.surface_hover()),
-                    };
-                    let mark = if danger {
-                        rgb(theme::TASK_DANGER_MARK)
-                    } else {
-                        theme.primary()
-                    };
-                    let hover = theme.surface_active();
-                    div()
-                        .id(match choice {
-                            StopChoice::Keep => "stop-keep",
-                            StopChoice::Remove => "stop-remove",
-                        })
-                        .flex()
-                        .items_start()
-                        .gap(px(10.))
-                        .pt(px(9.))
-                        .pb(px(9.))
-                        .pr(px(10.))
-                        .pl(px(12.))
-                        .rounded(px(theme::RADIUS_LG))
-                        .border_1()
-                        .border_color(border)
-                        .bg(fill)
-                        .cursor_pointer()
-                        .when(!selected, |row| row.hover(move |style| style.bg(hover)))
-                        .on_click(on_click(this, move |imports, cx| {
-                            imports.view.choice = Some(choice);
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .flex_col()
-                                .gap(px(2.))
-                                .min_w_0()
-                                .child(
-                                    div()
-                                        .text_size(px(12.5))
-                                        .line_height(line(12.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .child(title),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.5))
-                                        .line_height(px(11.5 * 1.4))
-                                        .text_color(theme.text_secondary())
-                                        .child(detail),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .self_center()
-                                .size(px(16.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .children(
-                                    selected.then(|| ui::icon("task-choice-check", 14., mark)),
-                                ),
-                        )
-                }),
-            ));
+            body = body.child(
+                div()
+                    .id("stop-choices")
+                    .role(Role::RadioGroup)
+                    .aria_label(crate::i18n::t("When stopping"))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.))
+                    .mt(px(2.))
+                    .children(choices.into_iter().map(|(choice, title, detail)| {
+                        let selected = choice == chosen;
+                        let danger = choice == StopChoice::Remove;
+                        let (border, fill) = match (selected, danger) {
+                            (true, true) => (
+                                rgba(theme::TASK_DANGER_BORDER),
+                                rgba(theme::TASK_DANGER_FILL),
+                            ),
+                            (true, false) => (theme.primary_at(60.), theme.primary_at(10.)),
+                            _ => (theme.border(), theme.surface_hover()),
+                        };
+                        let mark = if danger {
+                            rgb(theme::TASK_DANGER_MARK)
+                        } else {
+                            theme.primary()
+                        };
+                        let hover = theme.surface_active();
+                        div()
+                            .id(match choice {
+                                StopChoice::Keep => "stop-keep",
+                                StopChoice::Remove => "stop-remove",
+                            })
+                            .role(Role::RadioButton)
+                            .aria_label(title.to_owned())
+                            .aria_toggled(ui::a11y::toggled(selected))
+                            .flex()
+                            .items_start()
+                            .gap(px(10.))
+                            .pt(px(9.))
+                            .pb(px(9.))
+                            .pr(px(10.))
+                            .pl(px(12.))
+                            .rounded(px(theme::RADIUS_LG))
+                            .border_1()
+                            .border_color(border)
+                            .bg(fill)
+                            .cursor_pointer()
+                            .when(!selected, |row| row.hover(move |style| style.bg(hover)))
+                            .on_click(on_click(this, move |imports, cx| {
+                                imports.view.choice = Some(choice);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(px(12.5))
+                                            .line_height(line(12.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.5))
+                                            .line_height(px(11.5 * 1.4))
+                                            .text_color(theme.text_secondary())
+                                            .child(detail),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .self_center()
+                                    .size(px(16.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .children(
+                                        selected.then(|| ui::icon("task-choice-check", 14., mark)),
+                                    ),
+                            )
+                    })),
+            );
         } else if let Some((_, _, detail)) = choices.into_iter().next() {
             body = body.child(
                 div()
@@ -477,6 +494,7 @@ impl Imports {
                     let control = match phase {
                         Phase::Importing | Phase::Finding => Some(
                             ui::icon_button(("task-bar-pause", id as u64), "task-player-pause")
+                                .name(crate::i18n::t("Pause"))
                                 .look(IconLook::Task)
                                 .on_click(on_click(&this, move |imports, cx| {
                                     imports.pause(id, cx)
@@ -484,6 +502,7 @@ impl Imports {
                         ),
                         Phase::Paused => Some(
                             ui::icon_button(("task-bar-resume", id as u64), "task-player-play")
+                                .name(crate::i18n::t("Resume"))
                                 .look(IconLook::Task)
                                 .on_click(on_click(&this, move |imports, cx| {
                                     imports.resume(id, cx)
@@ -492,6 +511,8 @@ impl Imports {
                         _ => None,
                     };
                     let panel = ui::glass_panel(("task-bar", id as u64), BAR_RADIUS, cx)
+                        .role(Role::Status)
+                        .aria_live(gpui::accesskit::Live::Polite)
                         .relative()
                         .h(px(40.))
                         // 8px and 6px inside the 1px glass edge.
@@ -509,6 +530,8 @@ impl Imports {
                         .child(
                             div()
                                 .id(("task-bar-title", id as u64))
+                                .role(Role::Button)
+                                .aria_label(task.heading())
                                 .max_w(relative(0.4))
                                 .min_w_0()
                                 .truncate()

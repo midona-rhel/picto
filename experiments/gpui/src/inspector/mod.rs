@@ -604,6 +604,8 @@ impl Inspector {
         ui::tooltip::attach(
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(t(label))
                 .relative()
                 .child(self.place(id))
                 .child(ui::action_row(
@@ -915,6 +917,8 @@ impl Inspector {
             let group = SharedString::from(format!("swatch-{index}"));
             let swatch = div()
                 .id(("palette", index))
+                .role(Role::Button)
+                .aria_label(format!("#{color:06X}"))
                 .group(group.clone())
                 .relative()
                 .size(px(16.))
@@ -1070,6 +1074,17 @@ impl Inspector {
             row = row.child(
                 div()
                     .id(("rating", value))
+                    .role(Role::Button)
+                    .aria_label(if value == current {
+                        t("Clear rating").to_owned()
+                    } else {
+                        crate::tf!(
+                            "Set rating to {value0} star{value1}",
+                            value,
+                            crate::i18n::plural_s(value as i128)
+                        )
+                    })
+                    .aria_toggled(ui::a11y::toggled(value <= current))
                     .w(px(16.))
                     .h(px(20.))
                     .flex()

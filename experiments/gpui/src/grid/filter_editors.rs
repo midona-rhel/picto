@@ -251,25 +251,25 @@ impl Render for DateRangeEditor {
             .gap(px(8.))
             .child(column(
                 t("From"),
-                ui::date_picker::date_picker("date-from", self.first.clone()).on_change(
-                    move |day, _, cx| {
+                ui::date_picker::date_picker("date-from", self.first.clone())
+                    .name(t("From"))
+                    .on_change(move |day, _, cx| {
                         let _ = from.update(cx, |this, cx| {
                             this.first = day;
                             this.commit(cx);
                         });
-                    },
-                ),
+                    }),
             ))
             .child(column(
                 t("To"),
-                ui::date_picker::date_picker("date-to", self.last.clone()).on_change(
-                    move |day, _, cx| {
+                ui::date_picker::date_picker("date-to", self.last.clone())
+                    .name(t("To"))
+                    .on_change(move |day, _, cx| {
                         let _ = to.update(cx, |this, cx| {
                             this.last = day;
                             this.commit(cx);
                         });
-                    },
-                ),
+                    }),
             ))
     }
 }

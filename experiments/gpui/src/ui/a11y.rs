@@ -44,7 +44,10 @@ pub fn heading<E: StatefulInteractiveElement>(
     text: impl Into<SharedString>,
     level: usize,
 ) -> E {
-    element.role(Role::Heading).aria_label(text).aria_level(level)
+    element
+        .role(Role::Heading)
+        .aria_label(text)
+        .aria_level(level)
 }
 
 #[cfg(test)]

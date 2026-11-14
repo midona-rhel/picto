@@ -869,6 +869,7 @@ impl Render for FilterBar {
         let pin = cx.entity().downgrade();
         items = items.child(
             filter_action("filter-add", "filter-plus")
+                .name(t("Add filter"))
                 .tip(ui::tip(t("Add or remove filter fields")))
                 .on_click(move |bounds, _, cx| {
                     let _ = pin.update(cx, |this, cx| this.open_menu(MenuKind::Pin, bounds, cx));
@@ -927,6 +928,7 @@ impl Render for FilterBar {
             )
             .child(
                 filter_action("filter-saved", "filter-floppy")
+                    .name(t("Saved filters"))
                     .tip(ui::tip(t("Save or apply a filter")))
                     .on_click(move |bounds, _, cx| {
                         let _ = saved
@@ -943,6 +945,12 @@ impl Render for FilterBar {
                     },
                 )
                 .active(locked)
+                .name(if locked {
+                    t("Unlock filters")
+                } else {
+                    t("Lock filters")
+                })
+                .pressed(locked)
                 .tip(ui::tip(if locked {
                     t("Keep filters on navigation: on")
                 } else {
@@ -957,6 +965,7 @@ impl Render for FilterBar {
             )
             .child(
                 filter_action("filter-clear-all", "filter-restore")
+                    .name(t("Clear filters"))
                     .disabled(count == 0)
                     .tip(ui::tip(t("Clear all filters")))
                     .on_click(move |_, _, cx| {

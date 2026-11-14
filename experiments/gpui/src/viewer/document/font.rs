@@ -547,7 +547,10 @@ impl Render for FontViewer {
                 div()
                     .id(SharedString::from(format!("paper-{choice:?}")))
                     .role(Role::Button)
-                    .aria_label(crate::tf!("{value0} preview", format!("{choice:?}").to_lowercase()))
+                    .aria_label(crate::tf!(
+                        "{value0} preview",
+                        format!("{choice:?}").to_lowercase()
+                    ))
                     .aria_toggled(crate::ui::a11y::toggled(pressed))
                     .size(px(20.))
                     .rounded(px(theme::RADIUS_SM))

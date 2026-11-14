@@ -33,13 +33,13 @@ pub(super) fn title(theme: theme::Theme, text: &'static str) -> Stateful<Div> {
         3,
     )
     .flex()
-        .items_center()
-        .gap(px(8.))
-        .text(theme::TEXT_MD)
-        .line_height(px(26.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.text())
-        .child(text)
+    .items_center()
+    .gap(px(8.))
+    .text(theme::TEXT_MD)
+    .line_height(px(26.))
+    .font_weight(FontWeight::SEMIBOLD)
+    .text_color(theme.text())
+    .child(text)
 }
 
 /// `.settingLabel`

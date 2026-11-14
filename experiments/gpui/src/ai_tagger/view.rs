@@ -38,8 +38,13 @@ impl AiTagger {
         cx: &App,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        // A button read as its name and badge, pressed while chosen.
         let mut row = div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(format!("{label} {badge}"))
+            .aria_toggled(ui::a11y::toggled(active))
+            .aria_disabled(disabled)
             .w_full()
             .h(px(24.))
             .flex_none()
@@ -241,6 +246,9 @@ impl AiTagger {
         let theme = theme::theme(cx);
         let mut button = div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(t(tip))
+            .aria_disabled(!enabled)
             .size(px(24.))
             .flex()
             .items_center()
@@ -436,6 +444,9 @@ impl AiTagger {
             let id = *id;
             let button = div()
                 .id(("ai-thumbnail", place))
+                .role(Role::Button)
+                .aria_label(crate::tf!("Review item {value0}", place + 1))
+                .aria_selected(active)
                 .size(px(42.))
                 .flex_none()
                 .rounded(px(6.))
@@ -549,8 +560,16 @@ impl AiTagger {
         // ellipsis.
         name = name.child(div().flex_none().child(tag.subtag.clone()));
         let row_tag = tag.clone();
+        // A check box named by the tag and its confidence.
         let mut row = div()
             .id(("ai-tag", index))
+            .role(Role::CheckBox)
+            .aria_label(format!(
+                "{} {}%",
+                tag.key,
+                (tag.confidence * 100.).round() as i64
+            ))
+            .aria_toggled(ui::a11y::toggled(checked))
             .relative()
             .h(px(26.))
             .mx(px(4.))

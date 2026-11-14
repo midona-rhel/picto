@@ -19,7 +19,8 @@ impl Render for TagsToolbar {
         div().w(px(SEARCH_WIDTH)).flex_none().child(
             ui::field("tag-search", &self.search, Look::TitlebarSearch)
                 .icon("library-search", 13., 7., theme.text_tertiary())
-                .clearable(),
+                .clearable()
+                .clear_name(t("Clear tag search")),
         )
     }
 }

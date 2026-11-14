@@ -304,6 +304,7 @@ impl SettingsWindow {
                                         choice("eu", "EU (QWERTZ / AZERTY / Nordic)"),
                                     ],
                                 )
+                                .name(t("Keyboard layout"))
                                 .width(260.)
                                 .on_change(move |value, _, cx| {
                                     model.update(cx, |model, cx| {

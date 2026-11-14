@@ -66,11 +66,17 @@ impl RenderOnce for ActionRow {
             window,
             cx,
         );
-        let row = div()
-            .id(self.id)
-            .role(Role::Button)
-            .aria_label(self.label.clone())
-            .aria_disabled(self.disabled)
+        // A button named by its label; one drawn inside a control that
+        // takes the click itself (with no click of its own) is that
+        // control's look, and the control carries the role.
+        let mut row = div().id(self.id);
+        if self.on_click.is_some() || self.disabled {
+            row = row
+                .role(Role::Button)
+                .aria_label(self.label.clone())
+                .aria_disabled(self.disabled);
+        }
+        let row = row
             .w_full()
             .h(px(self.height))
             .pl(px(16.))

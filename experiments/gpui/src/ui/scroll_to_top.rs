@@ -42,43 +42,43 @@ pub fn scroll_to_top(
                 .aria_label(crate::i18n::t("Return to Top")),
             theme::RADIUS_MD,
         )
-            .backdrop_blur(theme.glass_blur())
-            .drop_shadows(theme.panel_shadow_small())
-            .group("return-to-top")
-            .occlude()
-            .absolute()
-            .right(px(10.))
-            // `translateY(150%)` when hidden.
-            .bottom(px(bottom - SIZE * 1.5 * (1. - shown)))
-            .size(px(SIZE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .border_1()
-            .border_color(theme.glass_border())
-            .bg(theme.glass())
-            .opacity(0.9 * shown)
-            .hover(|style| style.opacity(1.))
-            .child(
-                div()
-                    .absolute()
-                    .top(px(-1.))
-                    .left(px(5.))
-                    .right(px(5.))
-                    .h(px(1.))
-                    .bg(theme.glass_border_top()),
-            )
-            .child(
-                svg()
-                    .path("arrow-up")
-                    .size(px(15.))
-                    .text_color(theme.text())
-                    .opacity(0.5)
-                    .group_hover("return-to-top", |style| style.opacity(1.)),
-            )
-            .on_click(move |_, _, cx| {
-                scroll.set_offset(point(scroll.offset().x, px(0.)));
-                cx.notify(view);
-            }),
+        .backdrop_blur(theme.glass_blur())
+        .drop_shadows(theme.panel_shadow_small())
+        .group("return-to-top")
+        .occlude()
+        .absolute()
+        .right(px(10.))
+        // `translateY(150%)` when hidden.
+        .bottom(px(bottom - SIZE * 1.5 * (1. - shown)))
+        .size(px(SIZE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(theme.glass_border())
+        .bg(theme.glass())
+        .opacity(0.9 * shown)
+        .hover(|style| style.opacity(1.))
+        .child(
+            div()
+                .absolute()
+                .top(px(-1.))
+                .left(px(5.))
+                .right(px(5.))
+                .h(px(1.))
+                .bg(theme.glass_border_top()),
+        )
+        .child(
+            svg()
+                .path("arrow-up")
+                .size(px(15.))
+                .text_color(theme.text())
+                .opacity(0.5)
+                .group_hover("return-to-top", |style| style.opacity(1.)),
+        )
+        .on_click(move |_, _, cx| {
+            scroll.set_offset(point(scroll.offset().x, px(0.)));
+            cx.notify(view);
+        }),
     )
 }

@@ -157,6 +157,7 @@ impl SettingsWindow {
                                     .map(|locale| choice(locale.code(), locale.label()))
                                     .collect(),
                             )
+                            .name(t("Language"))
                             .width(220.)
                             .on_change({
                                 let model = model.clone();
@@ -619,7 +620,9 @@ impl SettingsWindow {
                         .child(row(
                             theme,
                             t("Undo limit (media items)"),
-                            ui::number_input("undo-limit", app.undo_delete_limit, 0, 100_000).on_commit(
+                            ui::number_input("undo-limit", app.undo_delete_limit, 0, 100_000)
+                                .name(t("Undo limit (media items)"))
+                                .on_commit(
                                 number(model, |draft, value: i64| draft.app.undo_delete_limit = value),
                             ),
                         ))
@@ -664,6 +667,7 @@ impl SettingsWindow {
                             theme,
                             t("Posts per run"),
                             ui::number_input("posts-per-run", app.subscription_default_posts_per_run, 1, 10_000)
+                                .name(t("Posts per run"))
                                 .on_commit(number(model, |draft, value: i64| {
                                     draft.app.subscription_default_posts_per_run = value
                                 })),
@@ -686,6 +690,7 @@ impl SettingsWindow {
                             theme,
                             t("Maximum Inbox items"),
                             ui::number_input("inbox-limit", app.subscription_inbox_item_limit, 1, 1_000_000)
+                                .name(t("Maximum Inbox items"))
                                 .on_commit(number(model, |draft, value: i64| {
                                     draft.app.subscription_inbox_item_limit = value
                                 })),

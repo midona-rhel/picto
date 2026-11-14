@@ -7,8 +7,8 @@
 use crate::i18n::t;
 use crate::theme::{self, Text as _};
 use crate::{motion, ui};
-use gpui::prelude::FluentBuilder as _;
 use gpui::accesskit::Live;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::rc::Rc;
 use std::time::Duration;
@@ -376,7 +376,11 @@ impl Render for Host {
             div()
                 .id("notification-region")
                 .role(Role::Group)
-                .aria_live(if urgent { Live::Assertive } else { Live::Polite })
+                .aria_live(if urgent {
+                    Live::Assertive
+                } else {
+                    Live::Polite
+                })
         };
         let Some(notification) = self.displayed.clone() else {
             return region(false).into_any_element();

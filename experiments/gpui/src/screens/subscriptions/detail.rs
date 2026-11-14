@@ -186,18 +186,18 @@ impl SubscriptionsScreen {
                 subscription.name.clone(),
             )
             .max_w_full()
-                .mb(px(8.))
-                .text(theme::TEXT_XL)
-                .line_height(px(24.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .truncate()
-                .text_center()
-                .child(subscription.name.clone())
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    if event.click_count() == 2 {
-                        this.open_rename(id, window, cx);
-                    }
-                })),
+            .mb(px(8.))
+            .text(theme::TEXT_XL)
+            .line_height(px(24.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .truncate()
+            .text_center()
+            .child(subscription.name.clone())
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.click_count() == 2 {
+                    this.open_rename(id, window, cx);
+                }
+            })),
             "subscription-rail-name-tip",
             ui::tip(t("Double-click to rename")),
             24.,
@@ -540,6 +540,7 @@ impl SubscriptionsScreen {
                     1,
                     10_000,
                 )
+                .name(t("Posts per run"))
                 .disabled(format::running(subscription))
                 .on_commit(move |posts, cx| {
                     let _ = posts_view.update(cx, |this, cx| {
@@ -775,6 +776,7 @@ impl SubscriptionsScreen {
                             TABS.iter().map(|tab| ui::segmented::tab(t(tab))).collect(),
                             Some(self.tab),
                         )
+                        .name(t("Subscription details"))
                         .on_select({
                             let view = cx.entity().downgrade();
                             move |tab, _, cx| {
@@ -1090,7 +1092,10 @@ impl SubscriptionsScreen {
             ]));
             let details = query.clone();
             let opened = query.clone();
-            let row_name = format!("{source} {}", query.display_name.as_ref().unwrap_or(&query.text));
+            let row_name = format!(
+                "{source} {}",
+                query.display_name.as_ref().unwrap_or(&query.text)
+            );
             rows.push(
                 self.body_row(("subscription-query", query_id).into(), row, cx)
                     // A row assistive technology presses opens its source's

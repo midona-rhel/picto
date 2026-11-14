@@ -26,7 +26,11 @@ pub struct At<'a> {
 
 impl Tree {
     pub fn new(update: TreeUpdate) -> Self {
-        let root = update.tree.as_ref().map(|tree| tree.root).unwrap_or(NodeId(0));
+        let root = update
+            .tree
+            .as_ref()
+            .map(|tree| tree.root)
+            .unwrap_or(NodeId(0));
         Self {
             nodes: update.nodes.into_iter().collect(),
             root,
@@ -47,10 +51,6 @@ impl Tree {
         self.at(self.focus)
     }
 
-    pub fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
     /// Every node, parents before children, in drawing order.
     pub fn all(&self) -> Vec<At<'_>> {
         let mut out = Vec::new();
@@ -60,7 +60,10 @@ impl Tree {
 
     /// The nodes of `role`.
     pub fn with_role(&self, role: Role) -> Vec<At<'_>> {
-        self.all().into_iter().filter(|node| node.role() == role).collect()
+        self.all()
+            .into_iter()
+            .filter(|node| node.role() == role)
+            .collect()
     }
 
     /// The first node of `role` named `name`, or a failure that shows the tree.
@@ -178,10 +181,6 @@ impl<'a> At<'a> {
 
     pub fn supports(&self, action: Action) -> bool {
         self.node().supports_action(action)
-    }
-
-    pub fn bounds(&self) -> Option<gpui::accesskit::Rect> {
-        self.node().bounds()
     }
 
     fn line(&self) -> String {
@@ -319,7 +318,9 @@ impl Harness {
     /// Elements in the last frame that take a click but have no role.
     pub fn unexposed(&mut self) -> Vec<(String, Bounds<Pixels>)> {
         self.cx
-            .update_window(self.window, |_, window, _| window.a11y_unexposed_clickables())
+            .update_window(self.window, |_, window, _| {
+                window.a11y_unexposed_clickables()
+            })
             .unwrap()
     }
 

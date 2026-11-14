@@ -276,6 +276,7 @@ impl Render for BatchRename {
                 ],
                 Some(usize::from(open.mode == Mode::Replace)),
             )
+            .name(t("Rename mode"))
             .on_select(move |index, _, cx| {
                 let mode = if index == 0 {
                     Mode::Format

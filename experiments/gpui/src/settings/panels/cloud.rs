@@ -102,19 +102,25 @@ impl SettingsWindow {
             .child(row(
                 theme,
                 t("Daily snapshots"),
-                ui::number_input("retention-daily", retention[0], 2, 365).disabled(true),
+                ui::number_input("retention-daily", retention[0], 2, 365)
+                    .name(t("Daily snapshots"))
+                    .disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
                 t("Weekly snapshots"),
-                ui::number_input("retention-weekly", retention[1], 0, 260).disabled(true),
+                ui::number_input("retention-weekly", retention[1], 0, 260)
+                    .name(t("Weekly snapshots"))
+                    .disabled(true),
             ))
             .child(separator(theme))
             .child(row(
                 theme,
                 t("Yearly snapshots"),
-                ui::number_input("retention-yearly", retention[2], 0, 100).disabled(true),
+                ui::number_input("retention-yearly", retention[2], 0, 100)
+                    .name(t("Yearly snapshots"))
+                    .disabled(true),
             ))
             .child(separator(theme))
             .child(row(
@@ -125,7 +131,9 @@ impl SettingsWindow {
                     .items_center()
                     .gap(px(6.))
                     .child(
-                        ui::number_input("retention-deleted", retention[3], 0, 3650).disabled(true),
+                        ui::number_input("retention-deleted", retention[3], 0, 3650)
+                            .name(t("Keep deleted files"))
+                            .disabled(true),
                     )
                     .child(value(theme, t("days"))),
             ))

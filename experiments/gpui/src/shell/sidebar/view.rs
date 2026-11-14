@@ -553,7 +553,8 @@ impl Render for Sidebar {
                                             Look::SidebarFilter,
                                         )
                                         .icon("toolbar-filter", 16., 8., theme.text())
-                                        .clearable(),
+                                        .clearable()
+                                        .clear_name(t("Clear folder filter")),
                                     ),
                             )
                     })),

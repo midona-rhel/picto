@@ -213,7 +213,11 @@ impl TextInput {
     /// The field as assistive technology reads it: its role, name, text,
     /// placeholder and, as a text run inside it, the selection or caret.
     /// Built only while the window builds its tree.
-    fn describe(&self, root: gpui::Stateful<gpui::Div>, window: &Window) -> gpui::Stateful<gpui::Div> {
+    fn describe(
+        &self,
+        root: gpui::Stateful<gpui::Div>,
+        window: &Window,
+    ) -> gpui::Stateful<gpui::Div> {
         if !crate::ui::a11y::active(window) {
             return root;
         }
@@ -556,132 +560,136 @@ impl Render for TextInput {
                 "TextInput"
             })
             .track_focus(&self.focus_handle(cx))
-        .cursor(CursorStyle::IBeam)
-        .on_action(cx.listener(Self::backspace))
-        .on_action(cx.listener(Self::delete))
-        .on_action(cx.listener(Self::left))
-        .on_action(cx.listener(Self::right))
-        .on_action(cx.listener(Self::select_left))
-        .on_action(cx.listener(Self::select_right))
-        .on_action(cx.listener(Self::select_all))
-        .on_action(cx.listener(Self::home))
-        .on_action(cx.listener(Self::end))
-        .on_action(cx.listener(Self::show_character_palette))
-        .on_action(cx.listener(Self::paste))
-        .on_action(cx.listener(Self::cut))
-        .on_action(cx.listener(Self::copy))
-        .on_action(cx.listener(Self::newline))
-        .on_action(cx.listener(Self::up))
-        .on_action(cx.listener(Self::down))
-        .on_action(cx.listener(|this, _: &SelectUp, _, cx| this.vertical(false, true, cx)))
-        .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.vertical(true, true, cx)))
-        .on_action(cx.listener(Self::select_to_start))
-        .on_action(cx.listener(Self::select_to_end))
-        .on_action(cx.listener(|this, _: &WordLeft, _, cx| this.word_left(false, cx)))
-        .on_action(cx.listener(|this, _: &WordRight, _, cx| this.word_right(false, cx)))
-        .on_action(cx.listener(|this, _: &SelectWordLeft, _, cx| this.word_left(true, cx)))
-        .on_action(cx.listener(|this, _: &SelectWordRight, _, cx| this.word_right(true, cx)))
-        .on_action(cx.listener(|this, _: &LineStart, _, cx| this.line_edge(false, false, cx)))
-        .on_action(cx.listener(|this, _: &LineEnd, _, cx| this.line_edge(true, false, cx)))
-        .on_action(cx.listener(|this, _: &SelectLineStart, _, cx| this.line_edge(false, true, cx)))
-        .on_action(cx.listener(|this, _: &SelectLineEnd, _, cx| this.line_edge(true, true, cx)))
-        .on_action(
-            cx.listener(|this, _: &ParagraphStart, _, cx| this.paragraph_edge(false, false, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &ParagraphEnd, _, cx| this.paragraph_edge(true, false, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &SelectParagraphStart, _, cx| {
+            .cursor(CursorStyle::IBeam)
+            .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::show_character_palette))
+            .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(|this, _: &SelectUp, _, cx| this.vertical(false, true, cx)))
+            .on_action(cx.listener(|this, _: &SelectDown, _, cx| this.vertical(true, true, cx)))
+            .on_action(cx.listener(Self::select_to_start))
+            .on_action(cx.listener(Self::select_to_end))
+            .on_action(cx.listener(|this, _: &WordLeft, _, cx| this.word_left(false, cx)))
+            .on_action(cx.listener(|this, _: &WordRight, _, cx| this.word_right(false, cx)))
+            .on_action(cx.listener(|this, _: &SelectWordLeft, _, cx| this.word_left(true, cx)))
+            .on_action(cx.listener(|this, _: &SelectWordRight, _, cx| this.word_right(true, cx)))
+            .on_action(cx.listener(|this, _: &LineStart, _, cx| this.line_edge(false, false, cx)))
+            .on_action(cx.listener(|this, _: &LineEnd, _, cx| this.line_edge(true, false, cx)))
+            .on_action(
+                cx.listener(|this, _: &SelectLineStart, _, cx| this.line_edge(false, true, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SelectLineEnd, _, cx| this.line_edge(true, true, cx)))
+            .on_action(
+                cx.listener(|this, _: &ParagraphStart, _, cx| {
+                    this.paragraph_edge(false, false, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ParagraphEnd, _, cx| this.paragraph_edge(true, false, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SelectParagraphStart, _, cx| {
                 this.paragraph_edge(false, true, cx)
-            }),
-        )
-        .on_action(
-            cx.listener(|this, _: &SelectParagraphEnd, _, cx| this.paragraph_edge(true, true, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &ParagraphBackward, _, cx| this.paragraph_step(false, false, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &ParagraphForward, _, cx| this.paragraph_step(true, false, cx)),
-        )
-        .on_action(cx.listener(|this, _: &SelectParagraphBackward, _, cx| {
-            this.paragraph_step(false, true, cx)
-        }))
-        .on_action(cx.listener(|this, _: &SelectParagraphForward, _, cx| {
-            this.paragraph_step(true, true, cx)
-        }))
-        .on_action(cx.listener(Self::delete_word_backward))
-        .on_action(cx.listener(Self::delete_word_forward))
-        .on_action(cx.listener(Self::delete_to_line_start))
-        .on_action(cx.listener(Self::kill))
-        .on_action(cx.listener(Self::delete_decomposing))
-        .on_action(cx.listener(Self::transpose))
-        .on_action(cx.listener(Self::yank))
-        .on_action(cx.listener(Self::open_line))
-        .on_action(cx.listener(Self::undo))
-        .on_action(cx.listener(Self::redo))
-        .on_key_down(cx.listener(Self::on_key_down))
-        .on_action(cx.listener(|this, _: &Commit, window, cx| {
-            if this.text_area() {
-                this.edit(this.selected_range.clone(), "\n", Some(Typing::Insert), cx);
-                return;
-            }
-            if this.submits {
-                cx.emit(Submitted);
-                return;
-            }
-            this.commit(cx);
-            // An in-place rename ends here rather than waiting for the blur,
-            // which a window that is not active never reports.
-            this.finish_rename(true, cx);
-            window.blur(cx);
-        }))
-        .on_action(cx.listener(|this, _: &Cancel, window, cx| {
-            // A dialog or screen decides what Escape does in its field.
-            if this.submits {
-                cx.propagate();
-                return;
-            }
-            // The sidebar filter empties on Escape and keeps the keyboard,
-            // as the Electron input does.
-            if this.kind == Kind::Sidebar {
-                if !this.content.is_empty() {
-                    this.content = "".into();
-                    this.selected_range = 0..0;
-                    cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &SelectParagraphEnd, _, cx| {
+                this.paragraph_edge(true, true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ParagraphBackward, _, cx| {
+                this.paragraph_step(false, false, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ParagraphForward, _, cx| {
+                    this.paragraph_step(true, false, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &SelectParagraphBackward, _, cx| {
+                this.paragraph_step(false, true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectParagraphForward, _, cx| {
+                this.paragraph_step(true, true, cx)
+            }))
+            .on_action(cx.listener(Self::delete_word_backward))
+            .on_action(cx.listener(Self::delete_word_forward))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::kill))
+            .on_action(cx.listener(Self::delete_decomposing))
+            .on_action(cx.listener(Self::transpose))
+            .on_action(cx.listener(Self::yank))
+            .on_action(cx.listener(Self::open_line))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_key_down(cx.listener(Self::on_key_down))
+            .on_action(cx.listener(|this, _: &Commit, window, cx| {
+                if this.text_area() {
+                    this.edit(this.selected_range.clone(), "\n", Some(Typing::Insert), cx);
+                    return;
                 }
-                return;
-            }
-            this.finish_rename(false, cx);
-            // A stored field goes back to its saved value.
-            this.content = this.original.clone();
-            this.selected_range = 0..0;
-            this.selection_reversed = false;
-            this.history.clear();
-            this.moved();
-            window.blur(cx);
-            cx.notify();
-        }))
-        .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(Self::on_secondary_mouse_down),
-        )
-        .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-        .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-        .map(|root| match &self.face {
-            Some(face) => root
-                .font_family(face.family.clone())
-                .line_height(px(face.line_height))
-                .text_size(px(face.size))
-                .font_weight(face.weight),
-            None => root
-                .font_family(self.kind.font())
-                .line_height(px(self.kind.line_height()))
-                .text_size(px(self.kind.size())),
-        })
-        .child(TextElement { input: cx.entity() })
+                if this.submits {
+                    cx.emit(Submitted);
+                    return;
+                }
+                this.commit(cx);
+                // An in-place rename ends here rather than waiting for the blur,
+                // which a window that is not active never reports.
+                this.finish_rename(true, cx);
+                window.blur(cx);
+            }))
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                // A dialog or screen decides what Escape does in its field.
+                if this.submits {
+                    cx.propagate();
+                    return;
+                }
+                // The sidebar filter empties on Escape and keeps the keyboard,
+                // as the Electron input does.
+                if this.kind == Kind::Sidebar {
+                    if !this.content.is_empty() {
+                        this.content = "".into();
+                        this.selected_range = 0..0;
+                        cx.notify();
+                    }
+                    return;
+                }
+                this.finish_rename(false, cx);
+                // A stored field goes back to its saved value.
+                this.content = this.original.clone();
+                this.selected_range = 0..0;
+                this.selection_reversed = false;
+                this.history.clear();
+                this.moved();
+                window.blur(cx);
+                cx.notify();
+            }))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(Self::on_secondary_mouse_down),
+            )
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .map(|root| match &self.face {
+                Some(face) => root
+                    .font_family(face.family.clone())
+                    .line_height(px(face.line_height))
+                    .text_size(px(face.size))
+                    .font_weight(face.weight),
+                None => root
+                    .font_family(self.kind.font())
+                    .line_height(px(self.kind.line_height()))
+                    .text_size(px(self.kind.size())),
+            })
+            .child(TextElement { input: cx.entity() })
     }
 }
 

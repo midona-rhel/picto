@@ -279,9 +279,15 @@ impl RenderOnce for DatePicker {
                     cx.stop_propagation();
                     turn(cx);
                 });
-            calendar_button(button, named(label), 1., name.to_owned(), window, cx, move |_, cx| {
-                pressed(cx)
-            })
+            calendar_button(
+                button,
+                named(label),
+                1.,
+                name.to_owned(),
+                window,
+                cx,
+                move |_, cx| pressed(cx),
+            )
         };
         let header = div()
             .flex()

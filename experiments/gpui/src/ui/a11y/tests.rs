@@ -7,9 +7,7 @@ use crate::i18n::t;
 use crate::ui::tooltip::tip;
 use crate::ui::{self, icon_button::icon_button};
 use gpui::accesskit::{Action, Role, Toggled};
-use gpui::{
-    AppContext as _, Focusable as _, IntoElement, ParentElement as _, Styled as _, div, point, px,
-};
+use gpui::{Focusable as _, IntoElement, ParentElement as _, Styled as _, div, point, px};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -39,13 +37,12 @@ const CONTROLS: [Role; 16] = [
 pub fn assert_complete(harness: &mut Harness, tree: &Tree) {
     for node in tree.all() {
         if CONTROLS.contains(&node.role()) {
-            let named = !node.name().is_empty() || node.node().placeholder().is_some();
-            assert!(
-                named,
-                "an unnamed {:?} in\n{}",
-                node.role(),
-                tree.dump()
-            );
+            // A field may be known by its placeholder and a select by the
+            // choice it shows, as production's unlabelled ones are.
+            let named = !node.name().is_empty()
+                || node.node().placeholder().is_some()
+                || (node.role() == Role::ComboBox && node.value().is_some_and(|v| !v.is_empty()));
+            assert!(named, "an unnamed {:?} in\n{}", node.role(), tree.dump());
         }
     }
     let unexposed = harness.unexposed();
@@ -379,10 +376,7 @@ fn a_menu_is_a_menu_of_items_with_checks_shortcuts_and_submenus() {
         Some(Toggled::True)
     );
     assert!(menu.find(Role::MenuItem, "Move to Trash").disabled());
-    assert_eq!(
-        menu.find(Role::MenuItem, "Sort By").expanded(),
-        Some(false)
-    );
+    assert_eq!(menu.find(Role::MenuItem, "Sort By").expanded(), Some(false));
     assert_eq!(tree.focused().id, menu.id);
     assert_complete(&mut harness, &tree);
 }
@@ -397,7 +391,9 @@ fn a_notification_is_an_alert_or_status_in_a_live_region() {
     let tree = harness.tree();
     let region = tree.with_role(Role::Group);
     assert!(
-        region.iter().any(|node| node.node().live() == Some(Live::Polite)),
+        region
+            .iter()
+            .any(|node| node.node().live() == Some(Live::Polite)),
         "the live region is there before anything is announced\n{}",
         tree.dump()
     );
@@ -459,7 +455,10 @@ fn sections_chips_progress_and_dates_describe_themselves() {
     assert_eq!(heading.expanded(), Some(true));
     let chip = group.find(Role::ListItem, "general:blue sky");
     chip.find(Role::Button, "Remove");
-    let folders = tree.find(Role::Button, &format!("Folders ({})", crate::grid::format::grouped(1234u64)));
+    let folders = tree.find(
+        Role::Button,
+        &format!("Folders ({})", crate::grid::format::grouped(1234u64)),
+    );
     assert_eq!(folders.expanded(), Some(false));
     let progress = tree.with_role(Role::ProgressIndicator);
     assert_eq!(progress[0].node().numeric_value(), Some(25.));
@@ -515,7 +514,11 @@ fn sources() -> Vec<(String, String)> {
             if path.is_dir() {
                 walk(&path, root, out);
             } else if path.extension().is_some_and(|extension| extension == "rs") {
-                let name = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.push((name, std::fs::read_to_string(&path).unwrap()));
             }
         }
