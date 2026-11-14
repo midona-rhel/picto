@@ -634,9 +634,11 @@ impl RenderOnce for IconButton {
             } else {
                 button.on_click(move |event, window, cx| handler(event, window, cx))
             };
-            button = focus.attach(button, super::focus::Kind::Button, move |event, window, cx| {
-                pressed(event, window, cx)
-            });
+            button = focus.attach(
+                button,
+                super::focus::Kind::Button,
+                move |event, window, cx| pressed(event, window, cx),
+            );
         } else {
             button = focus.attach(button, super::focus::Kind::Button, |_, _, _| {});
         }

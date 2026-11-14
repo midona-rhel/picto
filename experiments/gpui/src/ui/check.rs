@@ -184,17 +184,22 @@ impl RenderOnce for Check {
                 0.,
             )
         });
-        let indicator = div().relative().flex_none().mr(px(6.)).children(ring).child(
-            check_box(
-                if self.checked {
-                    Mark::Selected
-                } else {
-                    Mark::Empty
-                },
-                Size::Regular,
-            )
-            .round(self.radio),
-        );
+        let indicator = div()
+            .relative()
+            .flex_none()
+            .mr(px(6.))
+            .children(ring)
+            .child(
+                check_box(
+                    if self.checked {
+                        Mark::Selected
+                    } else {
+                        Mark::Empty
+                    },
+                    Size::Regular,
+                )
+                .round(self.radio),
+            );
         let mut row = div()
             .id(self.id)
             .relative()

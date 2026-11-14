@@ -265,9 +265,10 @@ impl Control {
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 let before = window.focused(cx).map(|focus| focus.downgrade());
-                keyboard(cx)
-                    .pressed
-                    .insert(window.window_handle().window_id(), (pressed.downgrade(), before));
+                keyboard(cx).pressed.insert(
+                    window.window_handle().window_id(),
+                    (pressed.downgrade(), before),
+                );
             });
         element = element.child(div().absolute().size_0().track_focus(&handle));
         if shown {
@@ -514,7 +515,9 @@ pub mod names {
     }
 
     pub fn name_text(handle: &FocusHandle, name: impl Into<SharedString>, cx: &mut App) {
-        cx.default_global::<Names>().0.insert(key(handle), name.into());
+        cx.default_global::<Names>()
+            .0
+            .insert(key(handle), name.into());
     }
 
     /// The control with the keyboard, and whether it shows its ring.

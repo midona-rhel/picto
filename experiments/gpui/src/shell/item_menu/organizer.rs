@@ -269,7 +269,22 @@ impl Render for Organizer {
                     ),
             );
             for group in self.groups.clone() {
-                choices = choices.child(self.choice(&group, cx));
+                let choice = self.choice(&group, cx);
+                let id = group.collection_id;
+                // The radios are one stop, at the chosen one, as a browser
+                // makes a radio group.
+                choices = if self.winner == Some(id) {
+                    choices.child(ui::focus::stop(
+                        ("group-choice", id.0 as u64),
+                        choice,
+                        cx.listener(move |this, _, _, cx| {
+                            this.winner = Some(id);
+                            cx.notify();
+                        }),
+                    ))
+                } else {
+                    choices.child(choice)
+                };
             }
             body = body.child(choices);
         } else {

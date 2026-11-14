@@ -493,7 +493,13 @@ impl LibraryPopover {
             }));
         // `.item` is a `<button>`: Enter and Space choose it.
         let press = cx.listener(move |this, _, window, cx| this.pick(current, window, cx));
-        ui::focus::button(row, &ElementId::from(("known-library", index)), window, cx, press)
+        ui::focus::button(
+            row,
+            &ElementId::from(("known-library", index)),
+            window,
+            cx,
+            press,
+        )
     }
 
     /// The actions at the foot (`.functionItem`).

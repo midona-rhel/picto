@@ -129,6 +129,24 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
 
 ## Implemented
 
+- Keyboard focus (`ui/focus.rs`, one implementation for every shared
+  control): buttons, icon buttons, check boxes, switches, segments, selects,
+  sliders, number steppers, date pickers, colour and theme swatches, chip
+  remove buttons, read-only dialog fields and text fields are tab stops.
+  In a dialog, a popover and the Settings window Tab and Shift-Tab go round
+  their own stops in production's DOM order and wrap, scrolling the stop
+  into view; the dialog gives the keyboard back when it closes. A stop
+  shows production's `:focus-visible` ring (`.btn`: 2px primary-60, 1px
+  out; check boxes, date picker, condition buttons, settings search
+  results, cover candidates, steppers each their own; none where production
+  draws none) only when Tab put it there. Enter and Space press a button,
+  Space ticks a check box, a select takes `CmSelect`'s keys (Space, Enter,
+  Up, Down, Home, End, Escape, Tab closes it), a slider an `<input
+  type="range">`'s. A click leaves the keyboard where it was (so the
+  window's shortcuts keep working) but the next Tab starts from the control
+  clicked. The off-screen tool's `focused` line prints the stop with the
+  keyboard.
+
 - Backdrop blur behind the glass surfaces (`ui::GlassPanel`): what the window
   drew behind a panel shows through its fill blurred, at production's
   `backdrop-filter` for that surface (`--glass-blur` for panels, menus,
@@ -554,7 +572,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   writes them to the selection through the inspector's edit path, Cancel,
   Escape, the close button and the backdrop forget them. The arrows, Enter
   and Tab work in the tag dialog's search as in production; in the folder
-  dialog Enter applies. As in production the checks start from the item the
+  dialog Enter applies and Tab goes on to Cancel, as the browser takes it. As in production the checks start from the item the
   inspector shows or last showed, whatever is selected; Folders' Apply
   clears the selection. Recent tags and folders are kept across launches
   (see "What is kept across launches").
@@ -1162,6 +1180,15 @@ element (`shell/rails.rs`).
 
 ## Not yet equivalent to Picto
 
+- Keyboard focus departs from production on purpose where production is
+  broken: production's window-wide shortcut handler swallows Tab on every
+  control that is not a text field (and toggles both panels, behind an open
+  dialog too), and sends Enter, Space and the arrows to the grid or viewer
+  behind a dialog; nothing traps focus in a dialog. Here Tab cycles inside
+  the dialog and the keys act on the focused control. A radio group is one
+  stop but its arrows do not move the choice; a select has no typeahead.
+  Outside dialogs, Settings and popovers, Tab still toggles the panels.
+
 - Text fields: a line that starts with right-to-left text is laid out
   right to left (production keeps the field left to right) and its
   selection is not drawn; there is no spell-check underline; Home and End
@@ -1170,8 +1197,6 @@ element (`shell/rails.rs`).
   menu's Ungroup row ("Ungroup Collections..."); production looks the count
   up. Open With Other lists the applications on macOS only; Windows'
   chooser row has a `TODO`, and Linux offers none, as production.
-- Tab in the Folders dialog leaves the keyboard in the search field;
-  production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
   action no repeat flag (the off-screen test sends no key releases, so it
@@ -1192,8 +1217,7 @@ element (`shell/rails.rs`).
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
   not its rounded corners.
-- The Add Tags and Folders dialogs: Tab in the folder dialog's search does
-  not move the keyboard to the next control as the browser does, the fold
+- The Add Tags and Folders dialogs: the fold
   chevron turns at once rather than over 120 ms, row highlights do not fade
   over 60 ms, and a folder's own glyph is drawn as the plain folder (`TODO`).
 - The pickers: with
@@ -1214,8 +1238,7 @@ element (`shell/rails.rs`).
   downloaded, and only the storage they take is read (`ai.status`). An audio
   tile's tint is the dark theme's in every theme, and the native
   transparency themes (vibrancy, Liquid Glass, Mica, Acrylic) fall back to
-  Dark. Selects open by pointer only (no arrow keys or
-  typeahead), there is no keyboard focus ring or tab order, the section
+  Dark. Selects have no typeahead, the section
   headings' letter spacing is not drawn, the window can still be zoomed and
   made full screen, and a binding field cannot capture keys the app binds
   (⌘Q, ⌘,). An undo in the main window that reverts a settings write does not

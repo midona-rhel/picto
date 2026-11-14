@@ -1,6 +1,6 @@
+use super::focus::{self, SliderKey, slider_key};
 use crate::theme;
 use gpui::prelude::FluentBuilder as _;
-use super::focus::{self, SliderKey, slider_key};
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 

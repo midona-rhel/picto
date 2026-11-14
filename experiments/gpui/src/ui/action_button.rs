@@ -263,9 +263,11 @@ impl RenderOnce for ActionButton {
         // `.btn:focus-visible`; the Settings buttons draw no ring.
         let focus = super::focus::control(&self.id, window, cx);
         if !self.look.settings() {
-            button = button.children(
-                focus.ring(super::focus::Ring::button(&theme), theme::RADIUS_MD, 1.),
-            );
+            button = button.children(focus.ring(
+                super::focus::Ring::button(&theme),
+                theme::RADIUS_MD,
+                1.,
+            ));
         }
         let duration = motion::BUTTON_HOVER;
         let on_hover = self.on_hover;
@@ -285,9 +287,11 @@ impl RenderOnce for ActionButton {
             let handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> = Rc::from(handler);
             let pressed = handler.clone();
             button = button.on_click(move |event, window, cx| handler(event, window, cx));
-            button = focus.attach(button, super::focus::Kind::Button, move |event, window, cx| {
-                pressed(event, window, cx)
-            });
+            button = focus.attach(
+                button,
+                super::focus::Kind::Button,
+                move |event, window, cx| pressed(event, window, cx),
+            );
         } else {
             button = focus.attach(button, super::focus::Kind::Button, |_, _, _| {});
         }
