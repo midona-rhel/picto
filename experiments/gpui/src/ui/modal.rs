@@ -142,81 +142,6 @@ pub struct Modal {
     flush: bool,
 }
 
-/// A dialog's help text (`.pickerHint`, `.inlineLabel`, `.settingHint`):
-/// small secondary text. Each place adds its own spacing.
-pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {
-    div()
-        .text(theme::TEXT_SM)
-        .text_color(theme.text_secondary())
-        .child(text.into())
-}
-
-/// `.fieldLabel`: 13px on 20px, the primary text colour, regular weight.
-pub fn form_label(theme: &theme::Theme, text: impl Into<SharedString>) -> Div {
-    div()
-        .text(theme::TEXT_MD)
-        .line_height(px(theme::LINE_HEIGHT_MD))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(theme.text())
-        .child(text.into())
-}
-
-/// `.field`: a label over its control, 6px apart.
-pub fn form_field(
-    theme: &theme::Theme,
-    text: impl Into<SharedString>,
-    control: impl IntoElement,
-) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(form_label(theme, text))
-        .child(control)
-}
-
-/// `.fieldRow` and `.row`: controls in a row, 8px apart.
-pub fn form_row() -> Div {
-    div().flex().items_center().gap(px(8.))
-}
-
-/// `.stack`: a column 16px apart.
-pub fn form_stack() -> Div {
-    div().flex().flex_col().gap(px(16.))
-}
-
-/// `.error`: an edit or search that failed, as a dialog or screen shows it
-/// above its content. Each place adds its own margins.
-pub fn error_banner(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
-    div()
-        .px(px(12.))
-        .py(px(9.))
-        .rounded(px(theme::RADIUS_SM))
-        .border_1()
-        .border_color(theme.negative_at(35.))
-        .bg(theme.negative_at(8.))
-        .text_color(rgb(theme::ERROR_TEXT))
-        .text(theme::TEXT_SM)
-        .child(message.into())
-}
-
-/// `.warningBox`: a note in a dialog that something about its subject needs
-/// attention, on a faint warning tint.
-pub fn warning_box(theme: theme::Theme, message: impl Into<SharedString>) -> Div {
-    let warning = rgb(theme::WARNING);
-    div()
-        .px(px(12.))
-        .py(px(10.))
-        .rounded(px(theme::RADIUS_MD))
-        .border_1()
-        .border_color(theme::blend(theme.border_secondary(), warning, 0.45))
-        .bg(theme::blend(theme.control_surface(), warning, 0.09))
-        .text_color(theme.text())
-        .text(theme::TEXT_SM)
-        .line_height(px(18.))
-        .child(message.into())
-}
-
 /// A dialog titled `title`. Draw it from the view that owns it; it covers
 /// the whole window whatever that view's bounds.
 pub fn modal(
@@ -281,16 +206,6 @@ impl Modal {
     }
 }
 
-/// `WindowCloseButton`, which closes the dialog.
-fn close_button(on_close: Option<Handler>) -> super::icon_button::IconButton {
-    let button = super::icon_button("modal-close", "window-close")
-        .look(super::icon_button::Look::WindowClose);
-    match on_close {
-        Some(handler) => button.on_click(move |_, window, cx| handler(window, cx)),
-        None => button,
-    }
-}
-
 impl RenderOnce for Modal {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         // A dialog that has faded out draws nothing, so that it cannot take
@@ -303,8 +218,7 @@ impl RenderOnce for Modal {
             window.request_animation_frame();
         }
         let shown = self.presence.panel();
-        let viewport = window.viewport_size();
-        let max_height = f32::from(viewport.height) * self.size.max_height();
+        let max_height = f32::from(window.viewport_size().height) * self.size.max_height();
         let has_footer = !self.footer.is_empty();
         let padding = if self.flush { 0. } else { BODY_PADDING };
         let body_height = max_height - 2. * BORDER - HEADER - if has_footer { FOOTER } else { 0. };
@@ -383,7 +297,15 @@ impl RenderOnce for Modal {
                             .text_color(theme.text())
                             .child(self.title),
                     )
-                    .child(close_button(self.on_close.clone()))
+                    .child({
+                        // `WindowCloseButton`, which closes the dialog.
+                        let close = self.on_close.clone();
+                        super::window_chrome::close_button("modal-close", move |_, window, cx| {
+                            if let Some(close) = &close {
+                                close(window, cx);
+                            }
+                        })
+                    })
                     // `box-shadow: 0 -1px 0 var(--color-border-secondary) inset`
                     .child(
                         div()
@@ -461,43 +383,62 @@ impl RenderOnce for Modal {
                 .child(content.relative().max_h(px(max_height - 2. * BORDER))),
         };
 
-        let backdrop = rgba(theme::MODAL_BACKDROP);
-        let mut layer = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id),
-                "backdrop".into(),
-            ))
-            .occlude()
-            .w(viewport.width)
-            .h(viewport.height)
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(Rgba {
-                a: backdrop.a * self.presence.backdrop(),
-                ..backdrop
-            })
-            .key_context("Modal")
-            // Nothing beneath the dialog scrolls while it is up.
-            .on_scroll(|_, _, cx| cx.stop_propagation());
-        // The dialog keeps Tab and Shift-Tab among its own controls.
-        if let Some(focus) = &self.focus {
-            layer = super::focus::scope(layer.track_focus(focus), focus);
-        }
+        let mut layer = backdrop(
+            ElementId::NamedChild(std::sync::Arc::new(self.id), "backdrop".into()),
+            self.presence.backdrop(),
+            self.focus.as_ref(),
+            window,
+        );
         if let Some(handler) = self.on_close.filter(|_| !self.presence.closing()) {
             let escape = handler.clone();
             layer = layer
                 .on_action(move |_: &Close, window, cx| escape(window, cx))
                 .on_click(move |_, window, cx| handler(window, cx));
         }
-        deferred(
-            anchored()
-                .position(point(px(0.), px(0.)))
-                .child(layer.child(panel)),
-        )
-        .with_priority(self.priority)
-        .into_any_element()
+        over_window(layer.child(panel), self.priority).into_any_element()
     }
+}
+
+/// `.backdrop`: the dimmed layer over the whole window that a dialog's
+/// panel sits centred on, at `strength` (0 to 1) of
+/// `--modal-backdrop`. It takes every press and scroll beneath it and
+/// holds the dialog's keys (`Modal`: Escape is [`Close`]); with `focus` it
+/// holds the keyboard while no field in the dialog has it and keeps Tab
+/// and Shift-Tab among the dialog's controls. The dialog adds what Escape
+/// and a click on it do.
+pub fn backdrop(
+    id: impl Into<ElementId>,
+    strength: f32,
+    focus: Option<&FocusHandle>,
+    window: &Window,
+) -> Stateful<Div> {
+    let viewport = window.viewport_size();
+    let backdrop = rgba(theme::MODAL_BACKDROP);
+    let layer = div()
+        .id(id)
+        .occlude()
+        .w(viewport.width)
+        .h(viewport.height)
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(Rgba {
+            a: backdrop.a * strength,
+            ..backdrop
+        })
+        .key_context("Modal")
+        // Nothing beneath the dialog scrolls while it is up.
+        .on_scroll(|_, _, cx| cx.stop_propagation());
+    match focus {
+        Some(focus) => super::focus::scope(layer.track_focus(focus), focus),
+        None => layer,
+    }
+}
+
+/// A dialog's [`backdrop`], with its panel, over the whole window on
+/// `priority` (`ui::layer::DIALOG`, more for one opened over another).
+pub fn over_window(layer: Stateful<Div>, priority: usize) -> impl IntoElement {
+    deferred(anchored().position(point(px(0.), px(0.))).child(layer)).with_priority(priority)
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ pub(super) fn separator(theme: theme::Theme) -> Div {
 
 /// `.settingHint`
 pub(super) fn hint(theme: theme::Theme, text: &'static str) -> Div {
-    ui::modal::help_text(theme, text)
+    ui::form::help_text(theme, text)
         .mt(px(8.))
         .line_height(px(20.))
 }

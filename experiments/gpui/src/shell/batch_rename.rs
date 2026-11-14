@@ -6,7 +6,7 @@ use crate::session::{Report, Reread, Session};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
-use crate::ui::modal::{form_field, form_row, form_stack, help_text};
+use crate::ui::form::{self, help_text};
 use crate::ui::text_input::{Submitted, TextInput};
 use crate::{theme, ui};
 use gpui::*;
@@ -276,10 +276,10 @@ impl Render for BatchRename {
                 let _ = this.update(cx, |this, cx| this.set_mode(mode, cx));
             })
         };
-        let mut body = form_stack().child(tabs);
+        let mut body = form::stack().child(tabs);
         body = match open.mode {
             Mode::Format => body
-                .child(form_field(
+                .child(form::field(
                     &theme,
                     "Name format",
                     div()
@@ -299,7 +299,7 @@ impl Render for BatchRename {
                             .line_height(px(18.)),
                         ),
                 ))
-                .child(form_field(
+                .child(form::field(
                     &theme,
                     "Start at",
                     div().w(px(96.)).child(ui::field(
@@ -309,7 +309,7 @@ impl Render for BatchRename {
                     )),
                 )),
             Mode::Replace => body.child(
-                form_row()
+                form::row()
                     .child(div().flex_1().min_w_0().child(ui::field(
                         "batch-rename-find",
                         &self.pattern,

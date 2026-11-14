@@ -106,37 +106,18 @@ impl Imports {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(body)
             .child(foot);
-        let backdrop = rgba(theme::TASK_BACKDROP);
         let open = task.open();
         let id = task.task_id;
         let escape = this.clone();
-        let layer = div()
-            .id("task-backdrop")
-            .occlude()
-            .w(viewport.width)
-            .h(viewport.height)
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(Rgba {
-                a: backdrop.a * eased,
-                ..backdrop
-            })
-            .key_context("Modal")
-            .track_focus(&self.focus)
+        let layer = ui::modal::backdrop("task-backdrop", eased, Some(&self.focus), window)
             // Escape sends a working import to the task bar.
             .on_action(move |_: &ui::modal::Close, _, cx| {
                 if open {
                     let _ = escape.update(cx, |imports, cx| imports.minimize(id, cx));
                 }
             })
-            .on_scroll(|_, _, cx| cx.stop_propagation())
             .child(panel);
-        Some(
-            deferred(anchored().position(point(px(0.), px(0.))).child(layer))
-                .with_priority(crate::ui::layer::DIALOG)
-                .into_any_element(),
-        )
+        Some(ui::modal::over_window(layer, crate::ui::layer::DIALOG).into_any_element())
     }
 
     /// `TaskView`: the progress, the counts and the controls.
@@ -641,9 +622,9 @@ impl Imports {
                                     )])),
                             )
                             .children(analyzing.then(|| help("Checking the folder structure...")))
-                            .children(message.map(|message| ui::modal::warning_box(theme, message)))
+                            .children(message.map(|message| ui::form::warning_box(theme, message)))
                             .children(failed.then(|| {
-                                ui::modal::warning_box(
+                                ui::form::warning_box(
                                     theme,
                                     "Picto could not inspect this folder. Choose it again or check that it is still available.",
                                 )

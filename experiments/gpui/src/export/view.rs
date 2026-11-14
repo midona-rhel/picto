@@ -5,9 +5,7 @@ use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource, format
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
-use crate::ui::modal::{
-    form_field as field, form_label as label, form_row as row, form_stack as stack,
-};
+use crate::ui::form::{field, label, row, stack};
 use crate::{theme, ui};
 use gpui::*;
 

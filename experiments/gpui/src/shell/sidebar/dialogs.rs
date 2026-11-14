@@ -672,10 +672,10 @@ impl Sidebar {
                                 stack.child(help("Checking the folder structure...".into()))
                             })
                             .when_some(consolidation, |stack, message| {
-                                stack.child(ui::modal::warning_box(theme, message))
+                                stack.child(ui::form::warning_box(theme, message))
                             })
                             .when(failed, |stack| {
-                                stack.child(ui::modal::warning_box(
+                                stack.child(ui::form::warning_box(
                                     theme,
                                     "Picto could not inspect this folder. Choose it again or check that it is still available.",
                                 ))

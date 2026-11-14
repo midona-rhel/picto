@@ -729,7 +729,7 @@ fn choices(options: &'static [(&'static str, &'static str)]) -> Vec<ui::select::
 
 /// `modalStyles.inlineLabel`.
 fn inline_label(text: &'static str, cx: &App) -> Div {
-    ui::modal::help_text(theme::theme(cx), text).flex_none()
+    ui::form::help_text(theme::theme(cx), text).flex_none()
 }
 
 /// `.label`.

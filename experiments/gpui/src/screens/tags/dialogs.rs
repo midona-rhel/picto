@@ -178,7 +178,7 @@ fn prefix(namespace: &str, cx: &App) -> Option<SharedString> {
 
 /// `.pickerHint` and the dialogs' help text.
 fn hint(text: impl Into<SharedString>, cx: &App) -> Div {
-    ui::modal::help_text(theme::theme(cx), text)
+    ui::form::help_text(theme::theme(cx), text)
 }
 
 impl TagsScreen {
@@ -660,7 +660,7 @@ impl TagsScreen {
 
 /// `.error`: an edit or search that failed, inset from the screen's edges.
 pub fn error_banner(message: String, cx: &App) -> Div {
-    ui::modal::error_banner(theme::theme(cx), message)
+    ui::form::error_banner(theme::theme(cx), message)
         .mt(px(12.))
         .mx(px(24.))
         .flex_none()

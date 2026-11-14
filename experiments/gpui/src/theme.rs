@@ -490,8 +490,6 @@ pub const TASK_DANGER_BORDER: u32 = 0xff475780;
 pub const TASK_DANGER_FILL: u32 = 0xff475714;
 /// `.choice[data-danger] .choiceMark`
 pub const TASK_DANGER_MARK: u32 = 0xff8a95;
-/// `.backdrop`: `rgba(0, 0, 0, 0.55)`.
-pub const TASK_BACKDROP: u32 = 0x0000008c;
 
 /// `GRID_SELECTION_COLOR`: the grid's selection stroke and name pill, the
 /// same in every theme.

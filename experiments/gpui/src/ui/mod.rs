@@ -13,6 +13,7 @@ mod empty_state;
 pub mod field;
 pub mod filter_control;
 pub mod focus;
+pub mod form;
 mod glass;
 pub mod icon_button;
 pub mod icon_picker;
