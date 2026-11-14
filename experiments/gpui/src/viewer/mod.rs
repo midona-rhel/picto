@@ -869,14 +869,6 @@ fn shown_collection(session: &Session) -> Option<&picto_library::RootDetails> {
         .filter(|details| details.root.kind == picto_library::RootKind::Collection)
 }
 
-/// Takes a picture nothing draws any more out of the sprite atlas of every
-/// window, where GPUI keeps it until told. Done once no window is being
-/// updated: the window that is drawing or handling input is out of the
-/// app's list meanwhile, and would keep the picture.
-pub fn release_image(image: std::sync::Arc<RenderImage>, cx: &mut App) {
-    cx.defer(move |cx| cx.drop_image(image, None));
-}
-
 /// An item's size in image pixels, when the library knows it.
 fn size_of(width: Option<u32>, height: Option<u32>) -> Option<camera::Size> {
     Some((width? as f32, height? as f32)).filter(|size| size.0 > 0. && size.1 > 0.)

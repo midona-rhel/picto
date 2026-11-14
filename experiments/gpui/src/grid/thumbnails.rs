@@ -242,7 +242,7 @@ impl Thumbnails {
         cx.on_release(|cache, cx| {
             for (_, entry) in std::mem::take(&mut cache.entries) {
                 if let Some(Ok(image)) = entry.item.get() {
-                    cx.drop_image(image, None);
+                    crate::atlas::release(image, cx);
                 }
             }
         })
@@ -326,7 +326,7 @@ impl Thumbnails {
             if let Some(entry) = self.entries.remove(&resource)
                 && let Some(Ok(image)) = entry.item.get()
             {
-                cx.drop_image(image, None);
+                crate::atlas::release(image, cx);
             }
         }
     }
@@ -407,7 +407,7 @@ impl Thumbnails {
             if let Some(entry) = self.entries.remove(&resource)
                 && let Some(Ok(image)) = entry.item.get()
             {
-                cx.drop_image(image, Some(window));
+                crate::atlas::release(image, cx);
                 crate::stats::thumbnail_evicted(entry.drawn);
             }
         }
@@ -445,9 +445,109 @@ impl ImageCache for Thumbnails {
 
 #[cfg(test)]
 mod tests {
-    use super::{fallback, load_order, primary};
-    use gpui::Resource;
-    use std::path::Path;
+    use super::{CAPACITY, Thumbnails, fallback, load_order, primary};
+    use gpui::{
+        AnyWindowHandle, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+        RenderImage, Resource, Styled as _, TestAppContext, Window, div, img, px,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    /// A band of the grid: its thumbnails, planned and drawn as the grid
+    /// does.
+    struct Band {
+        thumbnails: Entity<Thumbnails>,
+        shown: Vec<PathBuf>,
+    }
+
+    impl Render for Band {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let wanted = self
+                .shown
+                .iter()
+                .map(|path| Resource::Path(path.clone().into()))
+                .collect();
+            self.thumbnails
+                .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
+            div().size_full().children(self.shown.iter().map(|path| {
+                img(path.clone())
+                    .image_cache(&self.thumbnails)
+                    .w(px(20.))
+                    .h(px(15.))
+            }))
+        }
+    }
+
+    /// Scrolling through several thousand tiles, a band at a time: every
+    /// thumbnail is decoded and drawn, and the sprite atlas ends holding no
+    /// more than the cache keeps, not every thumbnail ever shown.
+    #[test]
+    fn scrolling_through_thousands_of_tiles_keeps_the_atlas_bounded() {
+        const TILES: usize = 3000;
+        const BAND: usize = 40;
+        let folder = tempfile::tempdir().unwrap();
+        let first = folder.path().join("0.jpg");
+        image::RgbImage::from_pixel(8, 6, image::Rgb([200, 90, 20]))
+            .save(&first)
+            .unwrap();
+        let paths = (0..TILES)
+            .map(|index| {
+                let path = folder.path().join(format!("{index}.jpg"));
+                if index > 0 {
+                    std::fs::copy(&first, &path).unwrap();
+                }
+                path
+            })
+            .collect::<Vec<_>>();
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, cx| Band {
+            thumbnails: cx.new(Thumbnails::new),
+            shown: Vec::new(),
+        });
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            for _ in 0..2 {
+                cx.update_window(handle, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+                cx.run_until_parked();
+            }
+        };
+        let mut decoded: Vec<Arc<RenderImage>> = Vec::new();
+        for band in paths.chunks(BAND) {
+            window
+                .update(&mut cx, |view, _, _| view.shown = band.to_vec())
+                .unwrap();
+            // Six load at a time: the band is drawn until all have come.
+            for _ in 0..BAND {
+                draw(&mut cx);
+                let loaded = window
+                    .read_with(&cx, |view, cx| {
+                        let thumbnails = view.thumbnails.read(cx);
+                        band.iter()
+                            .map(|path| thumbnails.image(&Resource::Path(path.clone().into())))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .unwrap();
+                if let Some(images) = loaded {
+                    decoded.extend(images);
+                    break;
+                }
+            }
+        }
+        assert_eq!(decoded.len(), TILES);
+        let held = cx
+            .update_window(handle, |_, window, _| {
+                decoded
+                    .iter()
+                    .filter(|image| window.has_image_atlas_entry(image))
+                    .count()
+            })
+            .unwrap();
+        assert!(held > 0 && held <= CAPACITY + BAND, "{held} in the atlas");
+    }
 
     #[test]
     fn a_thumbnail_is_kept_aside_beside_itself() {

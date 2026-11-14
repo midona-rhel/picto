@@ -474,7 +474,7 @@ impl GroupEditor {
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         let open = self.preview.shown.is_some();
         if let Some(image) = self.preview.clear() {
-            super::release_image(image, cx);
+            crate::atlas::release(image, cx);
         }
         if open {
             cx.notify();
@@ -498,7 +498,7 @@ impl GroupEditor {
             .take()
             .and_then(|mut shown| shown.take_image())
         {
-            super::release_image(image, cx);
+            crate::atlas::release(image, cx);
         }
         let expected = hash.clone();
         let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
@@ -512,7 +512,7 @@ impl GroupEditor {
                     shown.decoded(image);
                     cx.notify();
                 }
-                _ => super::release_image(image, cx),
+                _ => crate::atlas::release(image, cx),
             });
         });
         self.preview.shown = Some(preview::Shown::new(hash, task));
@@ -712,7 +712,7 @@ impl Render for GroupEditor {
             self.last_top = top;
             self.hovered = None;
             if let Some(image) = self.preview.clear() {
-                cx.drop_image(image, Some(window));
+                crate::atlas::release(image, cx);
             }
             self.scrolled = Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {

@@ -111,7 +111,7 @@ impl Originals {
         cx.on_release(|originals, cx| {
             for (_, entry) in std::mem::take(&mut originals.entries) {
                 if let Some(image) = entry.image() {
-                    cx.drop_image(image, None);
+                    crate::atlas::release(image, cx);
                 }
             }
         })
@@ -135,7 +135,7 @@ impl Originals {
     /// The tiles in the viewport that should show their original. One that
     /// has left is let go and its dwell starts over when it returns; one
     /// that has stayed long enough is decoded, a couple at a time.
-    pub fn plan(&mut self, wants: Vec<Want>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn plan(&mut self, wants: Vec<Want>, cx: &mut Context<Self>) {
         let now = Instant::now();
         self.seen
             .retain(|hash, _| wants.iter().any(|want| want.hash == *hash));
@@ -147,7 +147,7 @@ impl Originals {
             .collect::<Vec<_>>();
         for hash in gone {
             if let Some(image) = self.entries.remove(&hash).and_then(Entry::image) {
-                cx.drop_image(image, Some(window));
+                crate::atlas::release(image, cx);
             }
         }
         let mut loading = self
@@ -214,7 +214,7 @@ impl Originals {
                     if let (Entry::Ready(_, image), Some(previous)) = (&entry, previous)
                         && !Arc::ptr_eq(image, &previous)
                     {
-                        cx.drop_image(previous, None);
+                        crate::atlas::release(previous, cx);
                     }
                     this.entries.insert(key, entry);
                     cx.notify();

@@ -177,7 +177,7 @@ impl ReaderViewer {
             .iter()
             .flat_map(|blocks| rich::pictures(blocks))
         {
-            crate::viewer::release_image(picture, cx);
+            crate::atlas::release(picture, cx);
         }
     }
 

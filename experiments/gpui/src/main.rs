@@ -1,6 +1,7 @@
 mod app_menu;
 mod application;
 mod assets;
+mod atlas;
 mod backend;
 mod cover;
 mod covered;

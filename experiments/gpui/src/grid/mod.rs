@@ -866,7 +866,7 @@ impl GridView {
     fn close_preview(&mut self, cx: &mut Context<Self>) {
         let open = self.preview.shown.is_some();
         if let Some(image) = self.preview.clear() {
-            cx.drop_image(image, None);
+            crate::atlas::release(image, cx);
         }
         if open {
             cx.notify();
@@ -890,7 +890,7 @@ impl GridView {
             .take()
             .and_then(|mut shown| shown.take_image())
         {
-            cx.drop_image(image, None);
+            crate::atlas::release(image, cx);
         }
         let wanted = hash.clone();
         let path = self.session.read(cx).run(move |library| {
@@ -920,7 +920,7 @@ impl GridView {
                     shown.decoded(image);
                     cx.notify();
                 }
-                _ => cx.drop_image(image, None),
+                _ => crate::atlas::release(image, cx),
             });
         });
         self.preview.shown = Some(preview::Shown::new(hash, load));
@@ -1560,7 +1560,7 @@ impl Render for GridView {
             // The anchor was for where the scroll was when it asked.
             self.window_anchor = None;
             if let Some(image) = self.preview.clear() {
-                cx.drop_image(image, Some(window));
+                crate::atlas::release(image, cx);
             }
             self.scrolled = std::time::Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {
@@ -1909,7 +1909,7 @@ impl Render for GridView {
                 .collect::<Vec<_>>()
         };
         self.originals
-            .update(cx, |originals, cx| originals.plan(wants, window, cx));
+            .update(cx, |originals, cx| originals.plan(wants, cx));
         {
             let originals = self.originals.read(cx);
             for data in &mut tiles {

@@ -49,6 +49,10 @@ static THUMBNAIL_EVICTIONS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_UNSEEN: AtomicU64 = AtomicU64::new(0);
 /// Thumbnail loads dropped before they finished, the tile scrolled away.
 static THUMBNAIL_ABANDONED: AtomicU64 = AtomicU64::new(0);
+/// Pictures let go of through `atlas::release`, and of those, the ones a
+/// window's atlas still held afterwards (checked in test builds only).
+static IMAGES_RELEASED: AtomicU64 = AtomicU64::new(0);
+static IMAGES_KEPT: AtomicU64 = AtomicU64::new(0);
 
 pub fn rendered(view: View) {
     RENDERS[view as usize].fetch_add(1, Relaxed);
@@ -252,6 +256,14 @@ pub fn thumbnail_abandoned() {
     THUMBNAIL_ABANDONED.fetch_add(1, Relaxed);
 }
 
+/// A picture was let go of; `kept` says a window's atlas still held it.
+pub fn image_released(kept: bool) {
+    IMAGES_RELEASED.fetch_add(1, Relaxed);
+    if kept {
+        IMAGES_KEPT.fetch_add(1, Relaxed);
+    }
+}
+
 pub fn start_reporting(cx: &mut App) {
     since_launch();
     if std::env::var_os("PICTO_GPUI_STATS").is_none() {
@@ -282,6 +294,8 @@ pub fn start_reporting(cx: &mut App) {
             let evictions = THUMBNAIL_EVICTIONS.swap(0, Relaxed);
             let unseen = THUMBNAIL_UNSEEN.swap(0, Relaxed);
             let abandoned = THUMBNAIL_ABANDONED.swap(0, Relaxed);
+            let released = IMAGES_RELEASED.swap(0, Relaxed);
+            let kept = IMAGES_KEPT.swap(0, Relaxed);
             let gaps = GRID_GAPS.swap(0, Relaxed);
             let gap = GRID_GAP_MICROS.swap(0, Relaxed);
             let widest = GRID_GAP_MAX_MICROS.swap(0, Relaxed);
@@ -304,7 +318,8 @@ pub fn start_reporting(cx: &mut App) {
                  (own time: max={:.2}ms layout max={:.2}ms tiles max={:.2}ms) tiles/frame={} \
                  frame-gap avg={:.1}ms max={:.1}ms late={late}/{gaps} \
                  main-thread stall max={:.1}ms thumbnail-reads={reads} evictions={evictions} \
-                 (never painted={unseen}) abandoned={abandoned}",
+                 (never painted={unseen}) abandoned={abandoned} \
+                 images-released={released} (still in an atlas={kept})",
                 build as f64 / grid.max(1) as f64 / 1000.,
                 longest as f64 / 1000.,
                 longest_cpu as f64 / 1000.,
