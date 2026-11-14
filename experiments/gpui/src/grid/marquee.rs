@@ -45,7 +45,8 @@ pub struct Marquee {
     pub start: (f32, f32),
     /// The pointer relative to the grid's top-left corner, not scrolled.
     pub pointer: (f32, f32),
-    /// The selection kept from before the press (Shift or Cmd held).
+    /// The selection kept from before the press (Shift or the selection key
+    /// held).
     pub base: BTreeSet<usize>,
     /// The images under the rectangle.
     pub hits: BTreeSet<usize>,

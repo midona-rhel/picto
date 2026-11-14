@@ -91,7 +91,8 @@ pub struct GridView {
     /// A press on a tile that becomes a drag after 5px: the item's ordinal,
     /// and where.
     press: Option<(usize, Point<Pixels>)>,
-    /// The rubber band adds to the selection (Shift or Cmd held).
+    /// The rubber band adds to the selection (Shift or the selection key,
+    /// Command on macOS and Control elsewhere, held).
     marquee_keep: bool,
     /// The tile's selected items are being dragged.
     dragging: bool,
@@ -927,13 +928,19 @@ impl GridView {
         cx.notify();
     }
 
-    /// A left press on empty space starts a rubber band. Shift or Cmd held
-    /// keeps what is selected.
-    fn pressed(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+    /// A left press on empty space starts a rubber band. Shift, or the
+    /// platform's selection key, held keeps what is selected; a secondary
+    /// click (Control on macOS) is a right-click.
+    fn pressed(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.swallow_click = false;
         self.swallow_tile_click = false;
         let (x, y) = self.local(event.position);
         if x < 0. || x >= self.grid_width() {
+            return;
+        }
+        let press = selection::Press::here(event.modifiers);
+        if press == selection::Press::Menu {
+            self.empty_menu(event.position, window, cx);
             return;
         }
         // A press on an image may become a drag of the items.
@@ -942,8 +949,7 @@ impl GridView {
             cx.notify();
             return;
         }
-        let modifiers = event.modifiers;
-        let keep = modifiers.shift || modifiers.platform || modifiers.control;
+        let keep = press.keeps();
         // The band works in the window's own layout.
         let base = if keep {
             let session = self.session.read(cx);
@@ -1314,8 +1320,8 @@ impl GridView {
             return;
         };
         // A band over subfolder tiles selects those folders, not items
-        // (`collectHeaderMarqueeHits`); with Shift or Cmd it adds them to
-        // folders already selected.
+        // (`collectHeaderMarqueeHits`); a band that keeps the selection adds
+        // them to folders already selected.
         let folders = marquee
             .rect
             .map(|rect| self.subfolders_in(rect))
@@ -1439,25 +1445,35 @@ impl GridView {
                     if std::mem::take(&mut this.swallow_tile_click) {
                         return;
                     }
-                    let modifiers = event.modifiers();
-                    let open = event.click_count() == 2;
-                    this.session.update(cx, |session, cx| {
-                        if modifiers.shift {
-                            session.select_to(ordinal, modifiers.platform, cx);
-                        } else if modifiers.platform {
-                            session.toggle(ordinal, cx);
-                        } else {
-                            session.select(ordinal, cx);
-                        }
+                    let press = selection::Press::here(event.modifiers());
+                    this.session.update(cx, |session, cx| match press {
+                        selection::Press::Range { keep } => session.select_to(ordinal, keep, cx),
+                        selection::Press::Toggle => session.toggle(ordinal, cx),
+                        selection::Press::Plain => session.select(ordinal, cx),
+                        // Opened its menu as it went down.
+                        selection::Press::Menu => {}
                     });
+                    if press == selection::Press::Menu {
+                        return;
+                    }
                     window.focus(&this.focus, cx);
-                    if open && !modifiers.shift && !modifiers.platform {
+                    if event.click_count() == 2 && press == selection::Press::Plain {
                         cx.emit(Activated {
                             ordinal,
                             middle: false,
                         });
                     }
                 }))
+                // A secondary click (Control on macOS) is a right-click.
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        if selection::Press::here(event.modifiers) == selection::Press::Menu {
+                            cx.stop_propagation();
+                            this.tile_menu(ordinal, in_selection, event.position, window, cx);
+                        }
+                    }),
+                )
                 .on_mouse_down(
                     MouseButton::Middle,
                     cx.listener(move |_, _: &MouseDownEvent, _, cx| {
@@ -1473,16 +1489,34 @@ impl GridView {
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                         // The grid's own right-click is for empty space.
                         cx.stop_propagation();
-                        // A right-click inside the selection keeps it.
-                        if !in_selection {
-                            this.session
-                                .update(cx, |session, cx| session.select(ordinal, cx));
-                        }
-                        cx.emit(MenuRequested(event.position));
-                        window.focus(&this.focus, cx);
+                        this.tile_menu(ordinal, in_selection, event.position, window, cx);
                     }),
                 ),
         )
+    }
+
+    /// A tile's menu, at a window position. A right-click inside the
+    /// selection keeps it; elsewhere it selects the tile first.
+    fn tile_menu(
+        &mut self,
+        ordinal: usize,
+        in_selection: bool,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !in_selection {
+            self.session
+                .update(cx, |session, cx| session.select(ordinal, cx));
+        }
+        cx.emit(MenuRequested(position));
+        window.focus(&self.focus, cx);
+    }
+
+    /// The menu of the grid's empty space, at a window position.
+    fn empty_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(EmptyMenuRequested(position));
+        window.focus(&self.focus, cx);
     }
 }
 
@@ -2089,20 +2123,23 @@ impl Render for GridView {
                     }))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| this.pressed(event, cx)),
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.pressed(event, window, cx)
+                        }),
                     )
                     // A right-click no image took is on empty space.
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            cx.emit(EmptyMenuRequested(event.position));
-                            window.focus(&this.focus, cx);
+                            this.empty_menu(event.position, window, cx)
                         }),
                     )
                     // A click that no image took is a click on empty space,
-                    // unless it ends a rubber band.
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if std::mem::take(&mut this.swallow_click) {
+                    // unless it ends a rubber band or was a secondary click.
+                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                        if std::mem::take(&mut this.swallow_click)
+                            || selection::Press::here(event.modifiers()) == selection::Press::Menu
+                        {
                             return;
                         }
                         this.session

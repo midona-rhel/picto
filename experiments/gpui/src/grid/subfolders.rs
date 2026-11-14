@@ -5,6 +5,7 @@
 //! folder's menu on a right-click, is renamed in place, and takes items
 //! dragged onto it.
 use super::GridView;
+use super::selection::Press;
 use crate::backend::Navigation;
 use crate::theme::{self, Text as _};
 use crate::ui::{self, text_input::Renamed, text_input::TextInput};
@@ -883,17 +884,30 @@ impl GridView {
                 .truncate()
                 .child(metas),
         )
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Left, {
+            let menu_node = menu_node.clone();
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                // A secondary click (Control on macOS) is a right-click.
+                if Press::here(event.modifiers) == Press::Menu {
+                    this.folder_menu(&menu_node, event.position, window, cx);
+                }
+            })
+        })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            let modifiers = event.modifiers();
+            let press = Press::here(event.modifiers());
+            if press == Press::Menu {
+                return;
+            }
             if event.click_count() == 2 {
                 // `onOpenFolder`: the folder's own grid.
                 this.session
                     .update(cx, |session, cx| session.navigate(open_index, cx));
                 return;
             }
-            let toggle = modifiers.platform || modifiers.control;
+            // `onSelectFolder`: the platform's selection key toggles.
+            let toggle = matches!(press, Press::Toggle | Press::Range { keep: true });
             this.session.update(cx, |session, cx| {
                 session.select_folders(vec![node.clone()], toggle, cx)
             });
@@ -903,26 +917,39 @@ impl GridView {
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                // The tile joins the selection first unless it is in it.
-                let selected = {
-                    let session = this.session.read(cx);
-                    session.folder_selection.contains(&menu_node)
-                };
-                if !selected {
-                    this.session.update(cx, |session, cx| {
-                        session.select_folders(vec![menu_node.clone()], false, cx)
-                    });
-                }
-                let selected = this.session.read(cx).folder_selection.clone();
-                cx.emit(FolderMenuRequested {
-                    node: menu_node.clone(),
-                    selected,
-                    position: event.position,
-                });
-                window.focus(&this.focus, cx);
+                this.folder_menu(&menu_node, event.position, window, cx);
             }),
         )
         .into_any_element()
+    }
+
+    /// A subfolder tile's menu, at a window position. The tile joins the
+    /// selection first unless it is in it.
+    fn folder_menu(
+        &mut self,
+        node: &str,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .session
+            .read(cx)
+            .folder_selection
+            .iter()
+            .any(|chosen| chosen == node);
+        if !selected {
+            self.session.update(cx, |session, cx| {
+                session.select_folders(vec![node.to_owned()], false, cx)
+            });
+        }
+        let selected = self.session.read(cx).folder_selection.clone();
+        cx.emit(FolderMenuRequested {
+            node: node.to_owned(),
+            selected,
+            position,
+        });
+        window.focus(&self.focus, cx);
     }
 }
 
