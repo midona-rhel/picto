@@ -17,7 +17,11 @@
 //!     dragfiles 600 400 /path/one.png /path/two
 //!     drop 600 400 /path/one.png /path/two
 //!     dragexit
+//!     window 1
 //!
+//! `window <n>` sends the lines after it to the app's nth window (0 is the
+//! main one, the others in the order they opened, as the off-screen tool
+//! counts them); when that window closes they go to the main one again.
 //! Coordinates are window points (the system's, which a zoomed window
 //! divides by its interface zoom). A fourth number is the click count for
 //! `down` and `up`, and the distance in points for `scroll`. `key` takes a
@@ -41,6 +45,8 @@ pub enum Line {
     Inputs(Vec<PlatformInput>),
     /// Pressed as though typed: bindings first, then the focused text field.
     Keys(Vec<Keystroke>),
+    /// The lines after it go to this window (`window <n>`).
+    Window(usize),
 }
 
 impl Line {
@@ -57,6 +63,7 @@ impl Line {
                     window.dispatch_platform_input(event, cx);
                 }
             }
+            Line::Window(_) => {}
             Line::Keys(keys) => {
                 for key in keys {
                     // The system reports held modifiers before the key and
@@ -107,6 +114,7 @@ pub fn parse(line: &str) -> Option<Line> {
                 .collect();
             return Some(Line::Keys(keys));
         }
+        "window" => return rest.trim().parse().ok().map(Line::Window),
         "dragexit" => return Some(Line::Input(PlatformInput::FileDrop(FileDropEvent::Exited))),
         "dragfiles" | "drop" => return file_drop(kind == "drop", rest).map(Line::Inputs),
         _ => {}
@@ -233,12 +241,26 @@ pub fn start(window: AnyWindowHandle, cx: &mut App) {
         }
     });
     cx.spawn(async move |cx| {
+        let main = window;
+        let mut target = main;
         loop {
             cx.background_executor()
                 .timer(Duration::from_millis(8))
                 .await;
             while let Ok(event) = receiver.try_recv() {
-                let delivered = window.update(cx, |_, window, cx| event.deliver(window, cx));
+                if let Line::Window(index) = event {
+                    // The main window first, the others in the order they
+                    // opened.
+                    let mut windows = cx.update(|cx| cx.windows());
+                    windows.sort_by_key(|handle| (*handle != main, handle.window_id().as_u64()));
+                    target = windows.get(index).copied().unwrap_or(main);
+                    continue;
+                }
+                let mut delivered = target.update(cx, |_, window, cx| event.deliver(window, cx));
+                if delivered.is_err() && target != main {
+                    target = main;
+                    delivered = Ok(());
+                }
                 if delivered.is_err() {
                     return;
                 }

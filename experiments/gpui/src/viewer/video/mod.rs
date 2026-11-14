@@ -924,9 +924,14 @@ impl VideoPlayer {
             );
         if self.rate_open {
             let entity = cx.entity().downgrade();
+            // The list stands above the controls, outside their box: the
+            // pointer moving over it is activity too (in production the
+            // event bubbles up to the player), so the controls, and the
+            // list with them, do not hide while a rate is being chosen.
             let mut menu = div()
                 .id("media-rate-menu")
                 .occlude()
+                .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
                 .relative()
                 .child(
                     canvas(
