@@ -82,7 +82,7 @@ enum Rate {
 }
 
 /// A folder chip without a colour of its own.
-pub const FOLDER_COLOR: u32 = 0x868e96;
+pub const FOLDER_COLOR: u32 = theme::FOLDER_DEFAULT;
 /// The preview fits this square.
 const PREVIEW: f32 = 200.;
 

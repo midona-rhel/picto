@@ -1,3 +1,4 @@
+use super::menu::SHADOW_ROOM;
 use super::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::theme;
 use crate::theme::Text as _;
@@ -115,8 +116,6 @@ fn placement(choices: usize) -> Placement {
         })
         .unclamped()
 }
-/// Room around a pop-up list for its drawn shadow (`--shadow-panel`).
-const SHADOW_ROOM: f32 = 40.;
 
 /// The choices the menu shows before it scrolls.
 const VISIBLE: usize = 7;

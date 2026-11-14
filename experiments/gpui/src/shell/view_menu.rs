@@ -226,20 +226,7 @@ pub fn build(
 
 /// A toggle label's width in the menu's text.
 fn label_width(label: &'static str, window: &Window) -> f32 {
-    let run = TextRun {
-        len: label.len(),
-        font: font(theme::FONT_UI),
-        color: black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    f32::from(
-        window
-            .text_system()
-            .shape_line(label.into(), px(theme::TEXT_MD), &[run], None)
-            .width,
-    )
+    crate::ui::text_width(label, font(theme::FONT_UI), theme::TEXT_MD, window)
 }
 
 impl ViewOptions {

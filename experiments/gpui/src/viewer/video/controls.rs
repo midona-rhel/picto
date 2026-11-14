@@ -6,6 +6,7 @@ use super::model;
 use crate::theme::Text as _;
 use crate::{motion, theme, ui};
 use gpui::*;
+use std::cell::Cell;
 use std::rc::Rc;
 
 /// `.controls`: the bar along the bottom, shaded from black at 60% below to
@@ -54,7 +55,7 @@ type MuteHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(Default)]
 struct VolumeState {
     shown: bool,
-    dragging: bool,
+    dragging: Rc<Cell<bool>>,
     /// Counts the pointer's visits, so only the latest leave's timer hides
     /// the slider.
     visit: u64,
@@ -71,7 +72,7 @@ fn hover(state: &Entity<VolumeState>, inside: bool, window: &mut Window, cx: &mu
             cx.notify();
             None
         } else {
-            (!state.dragging).then_some(state.visit)
+            (!state.dragging.get()).then_some(state.visit)
         }
     });
     if let Some(visit) = leave {
@@ -82,7 +83,7 @@ fn hover(state: &Entity<VolumeState>, inside: bool, window: &mut Window, cx: &mu
                     .timer(motion::MEDIA_VOLUME_PANEL_GRACE)
                     .await;
                 let _ = state.update(cx, |state, cx| {
-                    if state.visit == visit && !state.dragging {
+                    if state.visit == visit && !state.dragging.get() {
                         state.shown = false;
                         cx.notify();
                     }
@@ -181,7 +182,7 @@ impl RenderOnce for VolumePanel {
             .child(
                 canvas(
                     |_, _, _| {},
-                    move |bounds, _, window, _| {
+                    move |bounds, _, window, cx| {
                         let report = move |y: Pixels, window: &mut Window, cx: &mut App| {
                             if let Some(change) = &change {
                                 let volume = model::volume_at(
@@ -192,33 +193,14 @@ impl RenderOnce for VolumePanel {
                                 change(volume, window, cx);
                             }
                         };
-                        let report = Rc::new(report);
-                        let (down, report_down) = (drag.clone(), report.clone());
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-                            if phase == DispatchPhase::Bubble
-                                && event.button == MouseButton::Left
-                                && bounds.contains(&event.position)
-                            {
-                                down.update(cx, |state, _| state.dragging = true);
-                                report_down(event.position.y, window, cx);
-                                cx.stop_propagation();
-                            }
-                        });
-                        let moved = drag.clone();
-                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                            if phase == DispatchPhase::Capture && moved.read(cx).dragging {
-                                report(event.position.y, window, cx);
-                            }
-                        });
-                        let up = drag.clone();
-                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture && up.read(cx).dragging {
-                                up.update(cx, |state, cx| {
-                                    state.dragging = false;
-                                    cx.notify();
-                                });
-                            }
-                        });
+                        let state = drag.clone();
+                        crate::ui::track_drag(
+                            bounds,
+                            drag.read(cx).dragging.clone(),
+                            move |at, window, cx| report(at.y, window, cx),
+                            move |cx| state.update(cx, |_, cx| cx.notify()),
+                            window,
+                        );
                     },
                 )
                 .absolute()

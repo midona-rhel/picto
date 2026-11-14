@@ -17,7 +17,7 @@ impl Render for TagsToolbar {
         let theme = theme::theme(cx);
         div().w(px(SEARCH_WIDTH)).flex_none().child(
             ui::field("tag-search", &self.search, Look::TitlebarSearch)
-                .icon("tags-search", 13., 7., theme.text_tertiary())
+                .icon("library-search", 13., 7., theme.text_tertiary())
                 .clearable(),
         )
     }
@@ -109,7 +109,7 @@ impl TagsScreen {
             .child(
                 self.rail_item(
                     "tags-general",
-                    "tags-bookmark",
+                    "pin-bookmark",
                     theme.text(),
                     "General".into(),
                     general,
@@ -123,7 +123,7 @@ impl TagsScreen {
             .child(
                 self.rail_item(
                     "tags-starred",
-                    "tags-star",
+                    "star",
                     theme.text(),
                     "Starred".into(),
                     self.preferences.starred.len() as u64,
@@ -206,7 +206,7 @@ impl TagsScreen {
             .line_height(px(theme::CONTROL_SM))
             .group("cleanup")
             .child(
-                ui::icon("tags-trash", 14., theme.text_secondary())
+                ui::icon("trash-2", 14., theme.text_secondary())
                     .flex_none()
                     .group_hover("cleanup", move |style| {
                         if enabled {
@@ -268,16 +268,12 @@ impl TagsScreen {
         let count = format!("({})", tag.assignment_count);
         // The name keeps its own width beside the count unless it is too
         // long, when it takes what is left and ends in an ellipsis.
-        let measure = |text: SharedString, font: &'static str, size: f32, window: &mut Window| {
-            let mut style = window.text_style();
-            style.font_family = font.into();
-            let run = style.to_run(text.len());
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text, px(size), &[run], None)
-                    .width,
-            )
+        let measure = |text: SharedString, family: &'static str, size: f32, window: &mut Window| {
+            let face = Font {
+                family: family.into(),
+                ..window.text_style().font()
+            };
+            ui::text_width(&text, face, size, window)
         };
         let label: SharedString = tag.subname.clone().into();
         let room = width

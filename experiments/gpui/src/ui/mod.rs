@@ -1,8 +1,9 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
-//! Electron frontend. Views compose these; a few still draw a button or a
-//! row of their own that belongs here. Everything that floats over the
-//! window takes its drawing order from [`layer`] and, when it opens beside
-//! a control, its place and its layer element from [`popover`].
+//! Electron frontend. Views compose these; a control that only one view has
+//! in production (its own CSS class) is drawn by that view. Everything that
+//! floats over the window takes its drawing order from [`layer`] and, when
+//! it opens beside a control, its place and its layer element from
+//! [`popover`].
 pub mod action_button;
 mod action_row;
 mod avatar;
@@ -41,7 +42,6 @@ pub mod sidebar_row;
 pub mod slider;
 mod small_button;
 pub mod status_badge;
-mod tabs;
 pub mod tag_token_input;
 pub mod text_input;
 mod toggle;
@@ -72,7 +72,6 @@ pub use sidebar_row::sidebar_row;
 pub use slider::slider;
 pub use small_button::small_button;
 pub use status_badge::status_badge;
-pub use tabs::tabs;
 pub use toggle::toggle;
 pub use tooltip::tip;
 pub use tracked::tracked;
@@ -84,6 +83,93 @@ use gpui::*;
 /// A monochrome glyph from the embedded icon set.
 pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) -> Svg {
     svg().path(name).size(px(size)).text_color(color.into())
+}
+
+/// One line of `text` shaped in `font` at `size`, to measure or paint.
+pub fn shape_line(
+    text: impl Into<SharedString>,
+    font: Font,
+    size: f32,
+    color: impl Into<Hsla>,
+    window: &Window,
+) -> ShapedLine {
+    let text = text.into();
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color: color.into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(text, px(size), &[run], None)
+}
+
+/// How wide one line of `text` is in `font` at `size`.
+pub fn text_width(text: &str, font: Font, size: f32, window: &Window) -> f32 {
+    f32::from(shape_line(text.to_owned(), font, size, black(), window).width)
+}
+
+/// A breadcrumb that goes somewhere (the toolbar's path, the viewer's
+/// `.viewerBreadcrumb` parent): the secondary text colour, turning to the
+/// primary under the pointer, and underlined there when `underline`. It
+/// occludes the titlebar's drag region behind it.
+pub fn crumb(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    underline: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = theme::theme(cx);
+    div()
+        .id(id)
+        .occlude()
+        .cursor_pointer()
+        .text_color(theme.text_secondary())
+        .hover(move |style| {
+            let style = style.text_color(theme.text());
+            if underline { style.underline() } else { style }
+        })
+        .child(label.into())
+}
+
+/// The press-then-drag gesture along a track at `bounds`, set up from a
+/// `canvas`'s paint: a left press on the track holds it, reports the point
+/// and goes no further; while held, every move anywhere in the window
+/// reports its point; the release lets go and, if it was held, calls
+/// `released`.
+pub fn track_drag(
+    bounds: Bounds<Pixels>,
+    held: std::rc::Rc<std::cell::Cell<bool>>,
+    on_point: impl Fn(Point<Pixels>, &mut Window, &mut App) + 'static,
+    released: impl Fn(&mut App) + 'static,
+    window: &mut Window,
+) {
+    let on_point = std::rc::Rc::new(on_point);
+    let (down, pressed) = (held.clone(), on_point.clone());
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && bounds.contains(&event.position)
+        {
+            down.set(true);
+            pressed(event.position, window, cx);
+            cx.stop_propagation();
+        }
+    });
+    let moving = held.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Capture && moving.get() {
+            on_point(event.position, window, cx);
+        }
+    });
+    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Capture && held.replace(false) {
+            released(cx);
+        }
+    });
 }
 
 /// A titlebar strip that moves the window, as `data-window-drag-region` does

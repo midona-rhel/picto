@@ -350,7 +350,7 @@ pub fn cover_layer<V: CoverHost>(
                             f64::from(ZOOM_MAX),
                             f64::from(ZOOM_STEP),
                         )
-                        .dialog()
+                        .look(ui::slider::Look::Dialog)
                         .on_change(move |zoom, cx| {
                             let _ = zoom_view.update(cx, |this, cx| {
                                 this.set_crop(|crop| crop.zoom = stepped_zoom(zoom as f32), cx)

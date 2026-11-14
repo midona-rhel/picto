@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 /// `CURATED_ICONS` in `iconRegistry.ts`: the name stored on a folder, which
 /// is also the glyph's file in `assets/`, and its label.
-pub const CURATED_ICONS: [(&str, &str); 115] = [
+const CURATED_ICONS: [(&str, &str); 115] = [
     ("IconPhoto", "Photo"),
     ("IconVideo", "Video"),
     ("IconMusic", "Music"),
@@ -222,7 +222,7 @@ impl Render for IconPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut grid = div().flex().flex_wrap().w(px(TILE * COLUMNS as f32));
         let label = self.default_label.clone();
-        grid = grid.child(self.tile(0, "folder", label, None, window, cx));
+        grid = grid.child(self.tile(0, "IconFolder", label, None, window, cx));
         for (index, (name, label)) in CURATED_ICONS.iter().enumerate() {
             grid = grid.child(self.tile(index + 1, name, (*label).into(), Some(name), window, cx));
         }

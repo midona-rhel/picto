@@ -361,11 +361,8 @@ impl Opening {
     /// Gives the keyboard back to where it was, unless something outside
     /// the panel has taken it since.
     pub fn finish(self, focus: &FocusHandle, window: &mut Window, cx: &mut App) {
-        if let Some(restore) = self.restore
-            && (focus.contains_focused(window, cx) || window.focused(cx).is_none())
-        {
-            window.focus(&restore, cx);
-        }
+        let still_there = focus.contains_focused(window, cx);
+        super::menu::host::give_back(self.restore, still_there, window, cx);
     }
 }
 

@@ -42,17 +42,13 @@ fn shift(index: usize, spacing: f32) -> f32 {
 
 impl RenderOnce for Tracked {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let run = TextRun {
-            len: self.text.len(),
-            font: self.font.clone(),
-            color: self.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let line = window
-            .text_system()
-            .shape_line(self.text.clone(), px(self.size), &[run], None);
+        let line = super::shape_line(
+            self.text.clone(),
+            self.font.clone(),
+            self.size,
+            self.color,
+            window,
+        );
         let characters = self.text.chars().count();
         let width = f32::from(line.width) + shift(characters, self.spacing);
         // Byte offsets of the characters, to find each glyph's character.

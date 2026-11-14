@@ -17,6 +17,7 @@ mod motion;
 // Pictures of the app drawn off-screen, for checks without a screen.
 #[cfg(test)]
 mod offscreen;
+mod platform;
 // Input playback, a test seam a release build does not hold (`seams.rs`).
 #[cfg(any(test, debug_assertions))]
 mod pointer;

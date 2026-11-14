@@ -66,7 +66,7 @@ impl RenderOnce for CheckBox {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (side, ring, tick, tick_size) = match self.size {
-            Size::Compact => (14., theme.pressed_overlay(), "picker-check", 10.),
+            Size::Compact => (14., theme.pressed_overlay(), "check", 10.),
             Size::Regular => (16., theme.contrast(30.), "settings-check", 11.),
         };
         let base = div()
@@ -162,11 +162,8 @@ impl Check {
 impl RenderOnce for Check {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let hover = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::default());
-        let strength = hover.read(cx).value_with(motion::EASE);
-        if hover.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (strength, set_hover) =
+            motion::hover_fade(self.id.clone(), motion::ROW_HOVER, motion::EASE, window, cx);
         // A radio group is one stop, at its chosen button, as the browser
         // makes it; a disabled row is none.
         let focus = (!self.disabled && (!self.radio || self.checked))
@@ -228,12 +225,7 @@ impl RenderOnce for Check {
         if self.disabled {
             return row.opacity(0.5);
         }
-        row = row.cursor_pointer().on_hover(move |hovered, _, cx| {
-            hover.update(cx, |hover, cx| {
-                hover.set(*hovered, motion::ROW_HOVER);
-                cx.notify();
-            })
-        });
+        row = row.cursor_pointer().on_hover(set_hover);
         let handler: Option<Rc<dyn Fn(&mut Window, &mut App)>> = self.on_toggle.map(Rc::from);
         if let Some(handler) = handler.clone() {
             row = row.on_click(move |_, window, cx| handler(window, cx));

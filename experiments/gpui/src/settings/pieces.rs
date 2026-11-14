@@ -168,17 +168,16 @@ pub(super) fn swatch(
 ) -> impl IntoElement {
     let theme = theme::theme(cx);
     let id = ElementId::Name(format!("theme-swatch-{index}").into());
-    let hover = window.use_keyed_state(id.clone(), cx, |_, _| motion::Fade::default());
+    let (lit, set_hover) =
+        motion::hover_fade(id.clone(), motion::ROW_HOVER, motion::EASE, window, cx);
     let tip = window.use_keyed_state(
         ElementId::Name(format!("theme-swatch-tip-{index}").into()),
         cx,
-        |_, _| motion::Fade::default(),
+        |_, _| ui::tooltip::Hover::default(),
     );
-    if hover.read(cx).animating() || tip.read(cx).animating() {
+    if tip.read(cx).animating() {
         window.request_animation_frame();
     }
-    let lit = hover.read(cx).value_with(motion::EASE);
-    let shown = tip.read(cx).value_with(motion::EASE);
     let outline = if active {
         theme.text()
     } else {
@@ -216,6 +215,7 @@ pub(super) fn swatch(
     let focus = ui::focus::control(&id, window, cx);
     let on_click = std::rc::Rc::new(on_click);
     let pressed = on_click.clone();
+    let bubble = tip.read(cx).layer(&ui::tip(name).plain(), 20., cx);
     let mut cell = div()
         .id(id)
         .relative()
@@ -230,61 +230,14 @@ pub(super) fn swatch(
                 .border_color(theme.border_secondary()),
         )
         .child(ring)
-        .on_hover(move |hovered, _, cx| {
-            hover.update(cx, |hover, cx| {
-                hover.set(*hovered, motion::ROW_HOVER);
-                cx.notify();
-            });
-            tip.update(cx, |tip, cx| {
-                tip.set(*hovered, motion::TOOLTIP_FADE);
-                cx.notify();
-            });
+        .on_hover(move |hovered, window, cx| {
+            set_hover(hovered, window, cx);
+            tip.update(cx, |tip, cx| tip.set_now(*hovered, cx));
         })
-        .on_click(move |_, window, cx| on_click(window, cx));
+        .on_click(move |_, window, cx| on_click(window, cx))
+        .children(bubble);
     cell = focus.attach(cell, ui::focus::Kind::Button, move |_, window, cx| {
         pressed(window, cx)
     });
-    if shown > 0. {
-        // Centred 6px above the swatch, growing from 95% as it fades in.
-        let bubble = ui::GlassPanel::new(
-            div()
-                .id("swatch-tip")
-                .relative()
-                .h(px(24.))
-                .px(px(6.))
-                .flex()
-                .items_center()
-                .bg(theme.glass())
-                .border_1()
-                .border_color(theme.border_secondary()),
-            theme::RADIUS_SM,
-        )
-        .backdrop_blur(theme::tooltip_blur())
-        .drop_shadows(vec![
-            BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
-        ])
-        .text(theme::TEXT_SM)
-        .line_height(px(24.))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(theme.text())
-        .whitespace_nowrap()
-        .opacity(shown)
-        .child(
-            div()
-                .absolute()
-                .top(px(-1.))
-                .left_0()
-                .right_0()
-                .h(px(1.))
-                .bg(theme.contrast(15.)),
-        )
-        .child(name);
-        cell = cell.child(
-            div().absolute().top(px(-6.)).left(relative(0.5)).child(
-                deferred(anchored().anchor(Anchor::BottomCenter).child(bubble))
-                    .with_priority(ui::layer::TOOLTIP),
-            ),
-        );
-    }
     cell
 }

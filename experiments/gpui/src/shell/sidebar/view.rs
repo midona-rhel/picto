@@ -31,8 +31,8 @@ impl Sidebar {
             ui::tooltip::Hover::default()
         });
         state.update(cx, |state, _| {
-            state.lit.set(state.hovered || open, motion::SIDEBAR_HOVER);
-            state.open.set(open, motion::SIDEBAR_HOVER);
+            state.lit.set(state.hovered || open, motion::FAST);
+            state.open.set(open, motion::FAST);
         });
         let (lit, active) = {
             let state = state.read(cx);
@@ -571,7 +571,7 @@ impl Sidebar {
         let icon = match &entry.icon {
             Some(name) if crate::assets::has_icon(name) => name.clone(),
             None if entry.group => "layout-grid".into(),
-            _ => "folder".into(),
+            _ => "IconFolder".into(),
         };
         let node = id.clone();
         ui::sidebar_row(
@@ -617,10 +617,10 @@ impl Sidebar {
         // longer has falls back to the folder.
         let icon = match &entry.icon {
             Some(name) if !in_section || crate::assets::has_icon(name) => name.as_str(),
-            Some(_) => "folder",
+            Some(_) => "IconFolder",
             None if group => "layout-grid",
-            None if has_children && expanded => "folder-open",
-            None => "folder",
+            None if has_children && expanded => "IconFolderOpen",
+            None => "IconFolder",
         }
         .to_owned();
         let node = id.to_owned();

@@ -473,11 +473,8 @@ impl Shell {
         }
         if sidebar {
             self.sidebar_collapsed = !self.sidebar_collapsed;
-            self.rails.set(
-                ("sidebar", 0),
-                self.sidebar_collapsed,
-                motion::SIDEBAR_SLIDE,
-            );
+            self.rails
+                .set(("sidebar", 0), self.sidebar_collapsed, motion::FAST);
         }
         if inspector {
             self.inspector_collapsed = !self.inspector_collapsed;

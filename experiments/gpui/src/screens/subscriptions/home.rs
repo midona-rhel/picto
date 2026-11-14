@@ -448,13 +448,13 @@ impl SubscriptionsScreen {
         let theme = theme::theme(cx);
         let id = card.id;
         let selected = self.selected.contains(&id);
-        let fade = window.use_keyed_state(("subscription-card-hover", id as usize), cx, |_, _| {
-            motion::Fade::default()
-        });
-        let hover = fade.read(cx).value_with(motion::EASE);
-        if fade.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (hover, set_hover) = motion::hover_fade(
+            ("subscription-card-hover", id as usize),
+            motion::CARD_HOVER,
+            motion::EASE,
+            window,
+            cx,
+        );
         let (tone, label) = format::card_status(card);
         let accent = rgb(theme::ACCENT);
         let border = if selected {
@@ -498,12 +498,7 @@ impl SubscriptionsScreen {
             .flex_col()
             .gap(px(4.))
             .cursor_pointer()
-            .on_hover(move |hovered, _, cx| {
-                fade.update(cx, |fade, cx| {
-                    fade.set(*hovered, motion::CARD_HOVER);
-                    cx.notify();
-                })
-            })
+            .on_hover(set_hover)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 if event.click_count() >= 2 {

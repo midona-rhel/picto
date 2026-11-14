@@ -82,7 +82,7 @@ fn gallery_placeholder(service: &str) -> &'static str {
 }
 
 /// `.row`: an 84px label on the right of its column, then the control.
-fn form_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
+fn label_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
         .min_w_0()
@@ -110,24 +110,6 @@ fn form_row(label: &'static str, control: impl IntoElement, cx: &App) -> Div {
                 .gap(px(8.))
                 .child(control),
         )
-}
-
-/// `.formField`: a label over its control, 14px above the next.
-fn form_field(label: impl Into<SharedString>, control: impl IntoElement, cx: &App) -> Div {
-    div()
-        .min_w_0()
-        .mb(px(14.))
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(
-            div()
-                .text(theme::TEXT_MD)
-                .line_height(px(theme::LINE_HEIGHT_MD))
-                .text_color(theme::theme(cx).text())
-                .child(label.into()),
-        )
-        .child(control)
 }
 
 impl SubscriptionsScreen {
@@ -540,7 +522,7 @@ impl SubscriptionsScreen {
                     .size(Size::Small)
                     .focus(&focus)
                     .on_close(dismiss)
-                    .child(div().flex().flex_col().gap(px(12.)).child(form_row(
+                    .child(div().flex().flex_col().gap(px(12.)).child(label_row(
                         "Name",
                         ui::field("subscription-create-name", name, Look::FormRow),
                         cx,
@@ -570,7 +552,7 @@ impl SubscriptionsScreen {
                             .flex()
                             .flex_col()
                             .gap(px(12.))
-                            .child(form_row(
+                            .child(label_row(
                                 "Service",
                                 ui::select(
                                     "subscription-gallery-service",
@@ -590,7 +572,7 @@ impl SubscriptionsScreen {
                                 ),
                                 cx,
                             ))
-                            .child(form_row(
+                            .child(label_row(
                                 "Gallery URL",
                                 ui::field("subscription-gallery-url", url, Look::FormRow),
                                 cx,
@@ -631,6 +613,7 @@ impl SubscriptionsScreen {
                     .into_any_element()
             }
             Dialog::EditQuery(edit) => {
+                let theme = theme::theme(cx);
                 let site = format::site(edit.site);
                 let can_save =
                     !edit.site.is_empty() && !edit.text.read(cx).value().trim().is_empty();
@@ -639,43 +622,59 @@ impl SubscriptionsScreen {
                     .size(Size::Medium)
                     .focus(&focus)
                     .on_close(dismiss)
-                    .child(form_field(
-                        "Site",
-                        div().flex().child(
-                            ui::select(
-                                "subscription-edit-site",
-                                edit.site,
-                                format::sites_by_name()
-                                    .into_iter()
-                                    .map(|site| ui::choice(site.id, site.name))
-                                    .collect(),
-                            )
-                            .on_change(move |site, _, cx| {
-                                let _ =
-                                    choose.update(cx, |this, cx| this.choose_query_site(site, cx));
-                            }),
-                        ),
-                        cx,
-                    ))
-                    .child(form_field(
-                        if site.is_some_and(|site| site.supports_query) {
-                            "Search"
-                        } else {
-                            "Account"
-                        },
-                        ui::field("subscription-edit-text", &edit.text, Look::Modal),
-                        cx,
-                    ))
-                    .child(form_field(
-                        "Display name (optional)",
-                        ui::field("subscription-edit-name", &edit.display_name, Look::Modal),
-                        cx,
-                    ))
-                    .child(form_field(
-                        "Notes (optional)",
-                        ui::field("subscription-edit-notes", &edit.notes, Look::Modal),
-                        cx,
-                    ))
+                    .child(
+                        ui::form::field(
+                            &theme,
+                            "Site",
+                            div().flex().child(
+                                ui::select(
+                                    "subscription-edit-site",
+                                    edit.site,
+                                    format::sites_by_name()
+                                        .into_iter()
+                                        .map(|site| ui::choice(site.id, site.name))
+                                        .collect(),
+                                )
+                                .on_change(move |site, _, cx| {
+                                    let _ = choose
+                                        .update(cx, |this, cx| this.choose_query_site(site, cx));
+                                }),
+                            ),
+                        )
+                        .min_w_0()
+                        .mb(px(14.)),
+                    )
+                    .child(
+                        ui::form::field(
+                            &theme,
+                            if site.is_some_and(|site| site.supports_query) {
+                                "Search"
+                            } else {
+                                "Account"
+                            },
+                            ui::field("subscription-edit-text", &edit.text, Look::Modal),
+                        )
+                        .min_w_0()
+                        .mb(px(14.)),
+                    )
+                    .child(
+                        ui::form::field(
+                            &theme,
+                            "Display name (optional)",
+                            ui::field("subscription-edit-name", &edit.display_name, Look::Modal),
+                        )
+                        .min_w_0()
+                        .mb(px(14.)),
+                    )
+                    .child(
+                        ui::form::field(
+                            &theme,
+                            "Notes (optional)",
+                            ui::field("subscription-edit-notes", &edit.notes, Look::Modal),
+                        )
+                        .min_w_0()
+                        .mb(px(14.)),
+                    )
                     .footer(
                         ui::action_button("subscription-edit-cancel", ButtonLook::Standard)
                             .label("Cancel")

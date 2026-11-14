@@ -47,36 +47,6 @@ fn text_color(color: u32, theme: theme::Theme) -> Rgba {
 /// `.subtag { max-width: 120px }`
 const LABEL_LIMIT: f32 = 120.;
 
-/// `text-overflow: ellipsis` as Chromium draws it: a label wider than
-/// `limit` keeps the most characters that fit with "…" after them, without
-/// dropping trailing punctuation as GPUI's own truncation does.
-fn ellipsized(label: &str, limit: f32, measure: impl Fn(&str) -> f32) -> SharedString {
-    if measure(label) <= limit {
-        return SharedString::from(label.to_owned());
-    }
-    let ends = label
-        .char_indices()
-        .map(|(index, _)| index)
-        .skip(1)
-        .collect::<Vec<_>>();
-    // The longest prefix that fits with the ellipsis, found by halving.
-    let (mut low, mut high) = (0, ends.len());
-    while low < high {
-        let middle = (low + high).div_ceil(2);
-        if measure(&format!("{}…", &label[..ends[middle - 1]])) <= limit {
-            low = middle;
-        } else {
-            high = middle - 1;
-        }
-    }
-    let prefix = if low == 0 {
-        ""
-    } else {
-        &label[..ends[low - 1]]
-    };
-    SharedString::from(format!("{prefix}…"))
-}
-
 /// The inspector's label chip (`TagChip.tsx`), for tags and folders: a tint
 /// of its colour that deepens under the pointer over 200 ms, with an optional
 /// namespace prefix and remove button.
@@ -127,27 +97,19 @@ impl Chip {
 impl RenderOnce for Chip {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let fade = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::default());
-        let hover = fade.read(cx).value();
-        if fade.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (hover, set_hover) = motion::hover_fade(
+            self.id.clone(),
+            motion::NORMAL,
+            motion::EASE_DEFAULT,
+            window,
+            cx,
+        );
         // The label is cut at 120px with an ellipsis. It is cut here rather
         // than by a truncating element, which would be measured at the full
         // row width and put every chip on a line of its own.
-        let mut style = window.text_style();
-        style.color = theme.text().into();
-        let measure = |text: &str| {
-            let text = SharedString::from(text.to_owned());
-            let run = style.to_run(text.len());
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text, px(theme::TEXT_SM), &[run], None)
-                    .width,
-            )
-        };
-        let shown = ellipsized(&self.label, LABEL_LIMIT, measure);
+        let face = window.text_style().font();
+        let measure = |text: &str| super::text_width(text, face.clone(), theme::TEXT_SM, window);
+        let shown = crate::text::truncate_to(&self.label, LABEL_LIMIT, measure, || 0);
         let label = div().h(px(16.)).line_height(px(16.)).child(shown);
         let tint = |percent: f32| rgba(self.color << 8 | (percent / 100. * 255.).round() as u32);
         let removable = self.on_remove.is_some();
@@ -167,12 +129,7 @@ impl RenderOnce for Chip {
             .text(theme::TEXT_SM)
             .whitespace_nowrap()
             .cursor_pointer()
-            .on_hover(move |hovered, _, cx| {
-                fade.update(cx, |fade, cx| {
-                    fade.set(*hovered, motion::NORMAL);
-                    cx.notify();
-                })
-            })
+            .on_hover(set_hover)
             .children(
                 self.namespace
                     .map(|namespace| div().child(format!("{namespace}:"))),
@@ -227,7 +184,7 @@ impl RenderOnce for Chip {
 
 #[cfg(test)]
 mod tests {
-    use super::{ellipsized, text_color};
+    use super::text_color;
     use crate::theme::{DARK, LIGHT};
     use gpui::rgb;
 
@@ -247,18 +204,5 @@ mod tests {
         assert_eq!(text_color(0xff6667, LIGHT), rgb(0x513636));
         assert_eq!(text_color(0x00aaff, LIGHT), rgb(0x3c4e5a));
         assert_eq!(text_color(0x868e96, LIGHT), LIGHT.text());
-    }
-
-    #[test]
-    fn a_long_label_keeps_what_fits_with_the_ellipsis_and_its_punctuation() {
-        // Every character 10px wide.
-        let measure = |text: &str| text.chars().count() as f32 * 10.;
-        assert_eq!(ellipsized("short", 120., measure), "short");
-        assert_eq!(
-            ellipsized("adobe_photoshop_(artwork)", 120., measure),
-            "adobe_photo…"
-        );
-        assert_eq!(ellipsized("abcdefghijk_(x)", 120., measure), "abcdefghijk…");
-        assert_eq!(ellipsized("abcdefghij_(x)", 120., measure), "abcdefghij_…");
     }
 }

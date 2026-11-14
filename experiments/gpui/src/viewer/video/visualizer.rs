@@ -164,9 +164,7 @@ fn along(stops: &[(f32, Rgba)], t: f32) -> Rgba {
     stops.last().map_or(color(0), |stop| stop.1)
 }
 
-const CYAN: u32 = 0x31d7ff;
-const VIOLET: u32 = 0x735cff;
-const PINK: u32 = 0xff4fa3;
+use crate::theme::{VISUALIZER_CYAN as CYAN, VISUALIZER_PINK as PINK, VISUALIZER_VIOLET as VIOLET};
 
 /// The scene, in device pixels, mapped to window points when painted.
 struct Canvas<'a> {

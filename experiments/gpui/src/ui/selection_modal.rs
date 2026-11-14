@@ -99,7 +99,7 @@ pub fn search_bar(
         // `.searchIcon`: the tertiary colour at 60%.
         .child(
             super::icon(
-                "selection-search",
+                "library-search",
                 14.,
                 Rgba {
                     a: theme.text_tertiary().a * 0.6,

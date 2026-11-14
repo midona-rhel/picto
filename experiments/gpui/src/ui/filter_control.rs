@@ -187,7 +187,7 @@ impl RenderOnce for FilterControl {
                     .bg(theme.text())
                     .opacity(if clear_hovered { 1. } else { 0.9 })
                     .cursor_pointer()
-                    .child(super::icon("filter-x", 12., theme.background()))
+                    .child(super::icon("x", 12., theme.background()))
                     .on_hover(move |hovered, _, cx| {
                         clear_state.update(cx, |state, cx| {
                             state.clear_hovered = *hovered;

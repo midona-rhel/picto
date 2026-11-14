@@ -277,7 +277,7 @@ impl FolderDialog {
                 .flex_none()
                 .opacity(0.6)
                 .group_hover(group.clone(), |style| style.opacity(1.))
-                .child(ui::icon("selection-folder", 14., tint)),
+                .child(ui::icon("pin-folder", 14., tint)),
         )
         .child(
             div()

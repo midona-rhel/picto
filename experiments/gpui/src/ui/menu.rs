@@ -98,9 +98,9 @@ const ROW_PADDING: f32 = 6.;
 const ICON_SLOT: f32 = 22.;
 const CHECK_SLOT: f32 = 16.;
 const SHORTCUT_GAP: f32 = 28.;
-/// Room around a pop-up panel for its drawn shadow (`--shadow-panel`
-/// reaches 24px out and 36px down).
-const SHADOW_ROOM: f32 = 40.;
+/// Room around a pop-up panel (a menu's, a select's list) for its drawn
+/// shadow (`--shadow-panel` reaches 24px out and 36px down).
+pub(crate) const SHADOW_ROOM: f32 = 40.;
 /// After a window of the menu loses the keyboard, how long to wait for
 /// another of its windows to report that it took it.
 const ACTIVATION_SETTLE: Duration = Duration::from_millis(50);
@@ -706,20 +706,7 @@ impl Menu {
         let rows = self.submenu_rows(top);
         let has_icons = self.has_icons(&rows);
         let measure = |text: &SharedString, size: f32| {
-            let run = TextRun {
-                len: text.len(),
-                font: font(theme::FONT_UI),
-                color: black(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text.clone(), px(size), &[run], None)
-                    .width,
-            )
+            super::text_width(text, font(theme::FONT_UI), size, window)
         };
         let widest = rows
             .iter()

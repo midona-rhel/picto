@@ -384,20 +384,7 @@ impl LibraryPopover {
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let measure = |text: &str, size: f32, window: &mut Window| {
-            let run = TextRun {
-                len: text.len(),
-                font: font(theme::FONT_UI),
-                color: theme.text().into(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text.to_owned().into(), px(size), &[run], None)
-                    .width,
-            )
+            ui::text_width(text, font(theme::FONT_UI), size, window)
         };
         // The name and folder share what the avatar and check leave.
         let available = width

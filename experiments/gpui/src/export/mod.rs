@@ -188,25 +188,6 @@ pub fn safe_pack_name(value: &str) -> String {
     }
 }
 
-/// `formatBytes`: "512 B", "1.50 KB", "12.3 MB".
-pub fn format_bytes(value: u64) -> String {
-    if value < 1024 {
-        return format!("{value} B");
-    }
-    let units = ["KB", "MB", "GB", "TB"];
-    let mut size = value as f64 / 1024.;
-    let mut unit = 0;
-    while size >= 1024. && unit + 1 < units.len() {
-        size /= 1024.;
-        unit += 1;
-    }
-    if size >= 10. {
-        format!("{size:.1} {}", units[unit])
-    } else {
-        format!("{size:.2} {}", units[unit])
-    }
-}
-
 /// What a Picto Pack holds (`PictoPackSummary`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Summary {
@@ -676,9 +657,7 @@ impl Exports {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Format, PackSource, Request, digits, export_outcome, format_bytes, safe_pack_name,
-    };
+    use super::{Format, PackSource, Request, digits, export_outcome, safe_pack_name};
     use picto_library::selection::SelectionTarget;
     use picto_library::{FolderId, RootId, SmartFolderId};
     use serde_json::json;
@@ -691,14 +670,6 @@ mod tests {
         assert_eq!(safe_pack_name("Notes..."), "Notes");
         assert_eq!(safe_pack_name("..."), "Picto Pack");
         assert_eq!(safe_pack_name(""), "Picto Pack");
-    }
-
-    #[test]
-    fn sizes_read_as_format_bytes_writes_them() {
-        assert_eq!(format_bytes(512), "512 B");
-        assert_eq!(format_bytes(1536), "1.50 KB");
-        assert_eq!(format_bytes(12 * 1024 * 1024 + 300 * 1024), "12.3 MB");
-        assert_eq!(format_bytes(3 * 1024u64.pow(4) * 2048), "6144.0 TB");
     }
 
     #[test]

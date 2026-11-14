@@ -35,7 +35,7 @@ pub fn step_tile(size: f32, larger: bool) -> f32 {
 /// Where a zoom percentage sits on the viewer's 0–100 track: 5% at the left
 /// end, 100% in the middle, 800% at the right end, logarithmic on each side
 /// (`zoomToSlider` in `GridToolbar.tsx`).
-pub fn percent_to_position(percent: f32) -> f32 {
+fn percent_to_position(percent: f32) -> f32 {
     if percent <= 100. {
         50. * (percent / PERCENT_MINIMUM).ln() / (100. / PERCENT_MINIMUM).ln()
     } else {
@@ -44,7 +44,7 @@ pub fn percent_to_position(percent: f32) -> f32 {
 }
 
 /// The inverse of [`percent_to_position`] (`sliderToZoom`).
-pub fn position_to_percent(position: f32) -> f32 {
+fn position_to_percent(position: f32) -> f32 {
     if position <= 50. {
         PERCENT_MINIMUM * (100. / PERCENT_MINIMUM).powf(position / 50.)
     } else {
@@ -192,29 +192,16 @@ impl Render for Zoom {
         let pointer = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let (zoom, held) = (entity.clone(), dragging.clone());
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble
-                        && event.button == MouseButton::Left
-                        && bounds.contains(&event.position)
-                    {
-                        held.set(true);
-                        let _ = zoom.update(cx, |zoom, cx| zoom.at(event.position.x, bounds, cx));
-                        cx.stop_propagation();
-                    }
-                });
-                let (zoom, held) = (entity.clone(), dragging.clone());
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture && held.get() {
-                        let _ = zoom.update(cx, |zoom, cx| zoom.at(event.position.x, bounds, cx));
-                    }
-                });
-                let held = dragging.clone();
-                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
-                    if phase == DispatchPhase::Capture {
-                        held.set(false);
-                    }
-                });
+                let zoom = entity.clone();
+                super::track_drag(
+                    bounds,
+                    dragging.clone(),
+                    move |at, _, cx| {
+                        let _ = zoom.update(cx, |zoom, cx| zoom.at(at.x, bounds, cx));
+                    },
+                    |_| {},
+                    window,
+                );
             },
         )
         .size_full();

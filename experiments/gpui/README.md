@@ -243,8 +243,11 @@ view owns another's state.
 **Shared UI layer** (`src/ui/`). One implementation of each control, as
 `src/shared/ui` is for production: buttons, icon buttons, check boxes and
 radios, switches, selects, sliders, number fields, date and colour pickers,
-chips, rows, the scrollbar, tooltips, empty states, window chrome. The
-pieces every view relies on:
+chips, rows, the scrollbar, tooltips, empty states, segmented controls and
+tab strips, breadcrumbs, window chrome, and the track-drag gesture and hover
+fade they share. A control that only one view has in production (its own CSS
+class, such as the grid's Retry button) is drawn by that view. The pieces
+every view relies on:
 
 - *Layers* (`ui/layer.rs`): the one drawing order for everything that floats,
   production's `--layer-*` scale by name (`OVERLAY`, `PANEL`, `DIALOG`,
@@ -288,8 +291,11 @@ with the keyboard preset and the user's overrides, into bindings in the key
 context of production's scope (`Anywhere`, `App`, `Grid`, `Viewer`,
 `GroupEditor`, `Duplicates`, `Subscriptions`, `DetailWindow`, `Media`,
 `TextField`), rebuilt when Settings applies a change. Nothing fires while a
-text field, menu, popover or dialog has the keyboard. Rule: views take
-colours, sizes and timings from these files and write none of their own.
+text field, menu, popover or dialog has the keyboard. Rule: views take their
+colours and timings from these files; only colour tables that are data (the
+theme swatches, the colour editor's presets, a chip's label shades) sit with
+the code that lists them, and a size that belongs to one component stays with
+it, beside the CSS rule it ports.
 
 **Grid** (`src/grid/`). `layout.rs` ports `layoutMath.ts` (waterfall, grid,
 justified) in double precision. `window.rs` is the windowed model of
@@ -419,9 +425,11 @@ version are kept. The app starts on All each launch, as production does.
   `keymap::bind_written`. Every registry id is either bound or listed with
   its reason in `keymap::NOT_YET`, and a test keeps it so.
 - **Platform code** lives only in the platform leaves: `src/desktop/macos.rs`,
-  `windows.rs` and `linux.rs` for the desktop hand-offs, and the shared UI
-  layer's platform module for window-level calls (AppKit for the pop-up
-  menus, the rim, the aspect lock). All three platforms are required: a feature that
+  `windows.rs` and `linux.rs` for the desktop hand-offs, and
+  `src/platform/macos.rs` and `windows.rs` for window-level calls (AppKit and
+  Core Animation for the pop-up menus, the traffic lights, the aspect lock,
+  the window level; `SetWindowPos` on Windows), each reached through one
+  shared function in `ui/window_chrome.rs`. All three platforms are required: a feature that
   works on one and not the others is listed in section 8 with what is
   missing.
 - **Test seams are debug-build only.** Environment variables that drive or

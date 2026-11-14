@@ -265,12 +265,12 @@ impl Render for BatchRename {
         };
         let tabs = {
             let this = this.clone();
-            ui::tabs(
+            ui::segmented::segmented(
                 "batch-rename-mode",
-                vec!["Format".into(), "Replace".into()],
-                usize::from(open.mode == Mode::Replace),
+                ui::segmented::Look::FilledTabs,
+                vec![ui::segmented::tab("Format"), ui::segmented::tab("Replace")],
+                Some(usize::from(open.mode == Mode::Replace)),
             )
-            .filled()
             .on_select(move |index, _, cx| {
                 let mode = if index == 0 {
                     Mode::Format

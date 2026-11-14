@@ -56,7 +56,7 @@ pub struct Hsv {
 }
 
 /// `hexToHsv`; anything that is not `#rrggbb` is mid grey.
-pub fn hex_to_hsv(hex: &str) -> Hsv {
+fn hex_to_hsv(hex: &str) -> Hsv {
     let rgb = theme::parse_hex_code(hex).unwrap_or(0x808080);
     let channel = |shift: u32| ((rgb >> shift) & 0xff) as f32 / 255.;
     let (red, green, blue) = (channel(16), channel(8), channel(0));
@@ -80,7 +80,7 @@ pub fn hex_to_hsv(hex: &str) -> Hsv {
 }
 
 /// `hsvToHex`, in capitals.
-pub fn hsv_to_hex(hsv: Hsv) -> String {
+fn hsv_to_hex(hsv: Hsv) -> String {
     let chroma = hsv.value * hsv.saturation;
     let segment = hsv.hue / 60.;
     let secondary = chroma * (1. - ((segment % 2.) - 1.).abs());
@@ -125,7 +125,8 @@ pub struct ColorEditor {
     /// The "no colour" swatch (`allowClear`).
     clear: bool,
     settle: Option<Task<()>>,
-    drag: Rc<Cell<Option<Drag>>>,
+    /// Whether the square and the hue strip are held.
+    drag: (Rc<Cell<bool>>, Rc<Cell<bool>>),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -170,7 +171,7 @@ impl ColorEditor {
             sensitivity,
             clear: true,
             settle: None,
-            drag: Rc::new(Cell::new(None)),
+            drag: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -277,36 +278,24 @@ impl ColorEditor {
     /// A drag surface: a press starts the drag there, and moves anywhere
     /// in the window follow it until the button is released.
     fn drag_surface(&self, drag: Drag, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let state = self.drag.clone();
+        let held = match drag {
+            Drag::Square => self.drag.0.clone(),
+            Drag::Hue => self.drag.1.clone(),
+        };
         let editor = cx.entity().downgrade();
         canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let (down, pressed) = (state.clone(), editor.clone());
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble
-                        && event.button == MouseButton::Left
-                        && bounds.contains(&event.position)
-                    {
-                        down.set(Some(drag));
-                        let _ = pressed
-                            .update(cx, |this, cx| this.point(drag, event.position, bounds, cx));
-                        cx.stop_propagation();
-                    }
-                });
-                let (moving, moved) = (state.clone(), editor.clone());
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture && moving.get() == Some(drag) {
-                        let _ = moved
-                            .update(cx, |this, cx| this.point(drag, event.position, bounds, cx));
-                    }
-                });
-                let up = state.clone();
-                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
-                    if phase == DispatchPhase::Capture {
-                        up.set(None);
-                    }
-                });
+                let editor = editor.clone();
+                super::track_drag(
+                    bounds,
+                    held.clone(),
+                    move |at, _, cx| {
+                        let _ = editor.update(cx, |this, cx| this.point(drag, at, bounds, cx));
+                    },
+                    |_| {},
+                    window,
+                );
             },
         )
         .absolute()
@@ -441,7 +430,7 @@ impl Render for ColorEditor {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_INHERITED))
+                            .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_BODY))
                             .child("Tolerance")
                             .child(
                                 div()
@@ -458,7 +447,7 @@ impl Render for ColorEditor {
                             filters::MAXIMUM_DELTA_E as f64,
                             1.,
                         )
-                        .filled()
+                        .look(super::slider::Look::Filled)
                         .on_change(move |value, cx| {
                             let _ = editor_handle.update(cx, |this, cx| {
                                 this.delta_e = value as f32;

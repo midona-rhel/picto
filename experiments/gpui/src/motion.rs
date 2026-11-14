@@ -17,7 +17,7 @@ pub const MENU_IN: Duration = Duration::from_millis(70);
 /// `menuIn` and `librarySwitcherIn`: the scale a menu or popover grows from.
 pub const MENU_IN_SCALE: f32 = 0.96;
 /// `menuOut`: the scale a dismissed context menu shrinks to as it fades.
-pub const MENU_OUT_SCALE: f32 = 0.95;
+const MENU_OUT_SCALE: f32 = 0.95;
 /// CSS `ease`.
 pub const EASE: CubicBezier = CubicBezier::new(0.25, 0.1, 0.25, 1.);
 /// The viewer's "First item" / "Last item" notice: its fade (`200ms ease`)
@@ -102,12 +102,12 @@ impl CubicBezier {
     }
 }
 
-/// `--sidebar-list-highlight-transition`: a sidebar row's highlight fade.
-pub const SIDEBAR_HOVER: Duration = Duration::from_millis(50);
+/// `--duration-fast`: a sidebar row's highlight
+/// (`--sidebar-list-highlight-transition`), the library avatar's ring, the
+/// sidebar sliding in and out, and a form field's border on focus.
+pub const FAST: Duration = Duration::from_millis(50);
 /// `iconButton.module.css`: an icon button's hover fade.
 pub const BUTTON_HOVER: Duration = Duration::from_millis(150);
-/// `.sidebar { transition: transform var(--duration-fast) }`.
-pub const SIDEBAR_SLIDE: Duration = Duration::from_millis(50);
 /// `inspectorRailIn` / `inspectorRailOut`.
 pub const INSPECTOR_SLIDE: Duration = Duration::from_millis(100);
 
@@ -124,7 +124,7 @@ pub const CARD_HOVER: Duration = Duration::from_millis(120);
 /// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
 pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
-pub const STATUS_PULSE: Duration = Duration::from_millis(2400);
+const STATUS_PULSE: Duration = Duration::from_millis(2400);
 
 /// Duplicate review: an original fades in over its thumbnail (`.fullImage`).
 pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
@@ -142,8 +142,7 @@ pub const NORMAL: Duration = Duration::from_millis(200);
 /// A settings row's or check row's highlight (`background 100ms ease`), and
 /// a theme swatch's outline.
 pub const ROW_HOVER: Duration = Duration::from_millis(100);
-/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`), and
-/// `GlassInput`'s border on focus.
+/// `CompactNumberInput`'s stepper arrows brightening (`opacity 120ms`).
 pub const STEPPER: Duration = Duration::from_millis(120);
 /// The search field's border and background on focus.
 pub const FIELD_FOCUS: Duration = Duration::from_millis(160);
@@ -163,8 +162,8 @@ pub const TOOLTIP_FADE: Duration = Duration::from_millis(150);
 pub const TOOLTIP_OFFSET: f32 = 6.;
 /// Mantine's `pop` transition, which `KbdTooltip` uses: hidden, the tooltip
 /// is at `scale(.9) translateY(10px)` about its centre.
-pub const TOOLTIP_POP_SCALE: f32 = 0.9;
-pub const TOOLTIP_POP_RISE: f32 = 10.;
+const TOOLTIP_POP_SCALE: f32 = 0.9;
+const TOOLTIP_POP_RISE: f32 = 10.;
 
 /// `inspectorFadeIn` / `inspectorFadeOut`: the inspector rail fades rather
 /// than slides when it becomes available or unavailable (a screen opened
@@ -172,8 +171,23 @@ pub const TOOLTIP_POP_RISE: f32 = 10.;
 pub const INSPECTOR_FADE: Duration = Duration::from_millis(170);
 
 /// `modalIn` / `modalOut`: the panel's scale and drop when hidden.
-pub const MODAL_SCALE: f32 = 0.97;
-pub const MODAL_DROP: f32 = 4.;
+const MODAL_SCALE: f32 = 0.97;
+const MODAL_DROP: f32 = 4.;
+
+/// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
+/// before going back once the pointer leaves it.
+pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
+
+/// `notifications.ts`: a notification stays this long unless it says
+/// otherwise.
+pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
+/// `NotificationHost.module.css` `.notification`'s `transition` and
+/// `EXIT_DURATION_MS`: it rises and fades out over 400 ms, on
+/// `cubic-bezier(0, 1.1, 0.79, 1.03)`, which overshoots a little.
+pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
+pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
+/// `.hidden`: how far above its place a leaving notification ends.
+pub const NOTIFICATION_RISE: f32 = 48.;
 
 /// `ScrollToTopButton`: its rise and fade wait this long before starting.
 pub const RETURN_TO_TOP_DELAY: Duration = Duration::from_millis(30);
@@ -252,19 +266,6 @@ pub const REVIEW_GLOW: Duration = Duration::from_millis(160);
 /// `.action`'s `color`: 140 ms (`ease`).
 pub const REVIEW_TINT: Duration = Duration::from_millis(140);
 
-/// Where a fade that set off from `from` toward 0 or 1 has got to.
-fn fade_value(from: f32, hovered: bool, elapsed: Duration, duration: Duration) -> f32 {
-    let target = if hovered { 1. } else { 0. };
-    from + (target - from) * EASE_DEFAULT.ease(progress(elapsed, duration))
-}
-
-struct HoverFade {
-    hovered: bool,
-    since: std::time::Instant,
-    from: f32,
-    duration: Duration,
-}
-
 /// One two-state value that moves as a CSS transition does. Components keep
 /// one per element for their hover highlight.
 pub struct Fade {
@@ -342,41 +343,58 @@ impl Fade {
     }
 }
 
-/// Two-state values that move as CSS transitions do: toward the new state on
-/// the default curve, starting from wherever the previous move had reached.
-/// Used for hover highlights and for sliding the rails in and out.
+/// A hover highlight kept between frames under `id`, moving over
+/// `duration` on `curve`: its strength now (0 at rest, 1 hovered), and the
+/// handler to give the element's `on_hover`. While it moves it asks for the
+/// next frame, so no caller can forget to.
+pub fn hover_fade(
+    id: impl Into<gpui::ElementId>,
+    duration: Duration,
+    curve: CubicBezier,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> (
+    f32,
+    impl Fn(&bool, &mut gpui::Window, &mut gpui::App) + 'static,
+) {
+    let fade = window.use_keyed_state(id, cx, |_, _| Fade::default());
+    let (value, animating) = {
+        let fade = fade.read(cx);
+        (fade.value_with(curve), fade.animating())
+    };
+    if animating {
+        window.request_animation_frame();
+    }
+    let set = move |hovered: &bool, _: &mut gpui::Window, cx: &mut gpui::App| {
+        fade.update(cx, |fade, cx| {
+            fade.set(*hovered, duration);
+            cx.notify();
+        })
+    };
+    (value, set)
+}
+
+/// Two-state values that move as CSS transitions do, one [`Fade`] per key:
+/// for hover highlights and for sliding the rails in and out.
 #[derive(Default)]
 pub struct Fades {
-    fades: std::collections::HashMap<(&'static str, usize), HoverFade>,
+    fades: std::collections::HashMap<(&'static str, usize), Fade>,
 }
 
 impl Fades {
     pub fn set(&mut self, key: (&'static str, usize), hovered: bool, duration: Duration) {
-        let from = self.value(key);
-        self.fades
-            .retain(|_, fade| fade.hovered || fade.since.elapsed() < fade.duration);
-        self.fades.insert(
-            key,
-            HoverFade {
-                hovered,
-                since: std::time::Instant::now(),
-                from,
-                duration,
-            },
-        );
+        // Fades back at rest are forgotten; one that is unknown is at 0.
+        self.fades.retain(|_, fade| fade.on() || fade.animating());
+        self.fades.entry(key).or_default().set(hovered, duration);
     }
 
     /// The highlight's strength, 0 at rest and 1 fully hovered.
     pub fn value(&self, key: (&'static str, usize)) -> f32 {
-        self.fades.get(&key).map_or(0., |fade| {
-            fade_value(fade.from, fade.hovered, fade.since.elapsed(), fade.duration)
-        })
+        self.fades.get(&key).map_or(0., Fade::value)
     }
 
     pub fn animating(&self) -> bool {
-        self.fades
-            .values()
-            .any(|fade| fade.since.elapsed() < fade.duration)
+        self.fades.values().any(Fade::animating)
     }
 }
 
@@ -483,18 +501,16 @@ mod tests {
     }
 
     #[test]
-    fn a_reversed_hover_fade_continues_from_where_it_was() {
-        let duration = Duration::from_millis(150);
-        assert_eq!(fade_value(0., true, Duration::ZERO, duration), 0.);
-        assert_eq!(fade_value(0., true, duration, duration), 1.);
-        let halfway = fade_value(0., true, Duration::from_millis(75), duration);
-        assert!(halfway > 0. && halfway < 1.);
-        // The pointer leaves mid-fade: the fade-out starts at that strength.
-        assert_eq!(
-            fade_value(halfway, false, Duration::ZERO, duration),
-            halfway
-        );
-        assert_eq!(fade_value(halfway, false, duration, duration), 0.);
+    fn keyed_fades_start_at_rest_and_forget_what_has_settled() {
+        let mut fades = Fades::default();
+        assert_eq!(fades.value(("row", 1)), 0.);
+        fades.set(("row", 1), true, Duration::ZERO);
+        assert_eq!(fades.value(("row", 1)), 1.);
+        fades.set(("row", 1), false, Duration::ZERO);
+        // Settled at rest: the next change forgets it.
+        fades.set(("row", 2), true, Duration::from_secs(10));
+        assert!(!fades.fades.contains_key(&("row", 1)));
+        assert!(fades.animating());
     }
 
     #[test]
@@ -574,18 +590,3 @@ mod tests {
         assert_eq!(progress(Duration::from_secs(1), duration), 1.);
     }
 }
-
-/// `.inspectorResizeHandle`'s `transition-delay`: the edge waits this long
-/// before going back once the pointer leaves it.
-pub const RESIZE_EDGE_DELAY: Duration = Duration::from_millis(100);
-
-/// `notifications.ts`: a notification stays this long unless it says
-/// otherwise.
-pub const NOTIFICATION_DURATION: Duration = Duration::from_millis(4000);
-/// `NotificationHost.module.css` `.notification`'s `transition` and
-/// `EXIT_DURATION_MS`: it rises and fades out over 400 ms, on
-/// `cubic-bezier(0, 1.1, 0.79, 1.03)`, which overshoots a little.
-pub const NOTIFICATION_EXIT: Duration = Duration::from_millis(400);
-pub const NOTIFICATION_EASE: CubicBezier = CubicBezier::new(0., 1.1, 0.79, 1.03);
-/// `.hidden`: how far above its place a leaving notification ends.
-pub const NOTIFICATION_RISE: f32 = 48.;

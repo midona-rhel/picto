@@ -11,6 +11,9 @@ pub struct Tip {
     /// Opens above the control, where Mantine flips a tooltip that would
     /// leave the window below it.
     above: bool,
+    /// The plain CSS bubble Settings draws where it has no Mantine tooltip
+    /// (`.themeSwatch[data-tooltip]::after`).
+    plain: bool,
 }
 
 pub fn tip(label: impl Into<SharedString>) -> Tip {
@@ -44,7 +47,18 @@ impl Tip {
             label: label.into(),
             keys: Vec::new(),
             above: false,
+            plain: false,
         }
+    }
+
+    /// `.themeSwatch[data-tooltip]::after`, Settings' own bubble: shown at
+    /// once (give its [`Hover`] [`Hover::set_now`]), above the control, in
+    /// the small text, with a `--color-contrast-15` top edge, growing from
+    /// 95% without rising.
+    pub fn plain(mut self) -> Self {
+        self.plain = true;
+        self.above = true;
+        self
     }
 
     /// Opens above the control: for controls along the window's bottom edge.
@@ -73,16 +87,30 @@ pub struct Hover {
 }
 
 impl Hover {
+    /// The pointer came onto the control or left it: the tooltip opens
+    /// after it has rested there.
     pub fn set(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.set_after(hovered, motion::TOOLTIP_DELAY, cx);
+    }
+
+    /// As [`Hover::set`], opening as the pointer arrives.
+    pub fn set_now(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.set_after(hovered, std::time::Duration::ZERO, cx);
+    }
+
+    fn set_after(&mut self, hovered: bool, delay: std::time::Duration, cx: &mut Context<Self>) {
         if self.hovered == hovered {
             return;
         }
         self.hovered = hovered;
         self.visit += 1;
-        if hovered {
+        if hovered && delay.is_zero() {
+            self.shown.set(true, motion::TOOLTIP_FADE);
+            cx.notify();
+        } else if hovered {
             let visit = self.visit;
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(motion::TOOLTIP_DELAY).await;
+                cx.background_executor().timer(delay).await;
                 let _ = this.update(cx, |this: &mut Self, cx| {
                     if this.hovered && this.visit == visit {
                         this.shown.set(true, motion::TOOLTIP_FADE);
@@ -111,7 +139,12 @@ impl Hover {
         if shown <= 0. {
             return None;
         }
-        let (scale, below) = motion::tooltip_pop(shown);
+        let (scale, below) = if tip.plain {
+            // `transform: scale(0.95)` to `scale(1)` on the same `ease`.
+            (0.95 + 0.05 * shown, 0.)
+        } else {
+            motion::tooltip_pop(shown)
+        };
         let theme = theme::theme(cx);
         // GPUI cannot scale the label, so only the bubble's surface, border
         // and shadow are drawn at the scale, about the bubble's centre; the
@@ -134,16 +167,25 @@ impl Hover {
         .drop_shadows(vec![
             BoxShadow::new(px(0.), px(2.), rgba(theme::BLACK_30).into()).blur_radius(px(8.)),
         ])
-        // `--glass-border-top`: the top edge is brighter than the sides.
-        .child(
+        // `--glass-border-top`: the top edge is brighter than the sides
+        // (the plain bubble's whole top border is `--color-contrast-15`).
+        .child(if tip.plain {
+            div()
+                .absolute()
+                .top(px(-1.))
+                .left_0()
+                .right_0()
+                .h(px(1.))
+                .bg(theme.contrast(15.))
+        } else {
             div()
                 .absolute()
                 .top(px(-1.))
                 .left(px(3.))
                 .right(px(3.))
                 .h(px(1.))
-                .bg(theme.glass_border_top()),
-        );
+                .bg(theme.glass_border_top())
+        });
         // `padding: 0 6px` inside the 1px border, which the surface draws.
         let mut bubble = div()
             .relative()
@@ -153,7 +195,11 @@ impl Hover {
             .items_center()
             .gap(px(4.))
             .font_family(theme::FONT_UI)
-            .text(theme::TEXT_MD)
+            .text(if tip.plain {
+                theme::TEXT_SM
+            } else {
+                theme::TEXT_MD
+            })
             .font_weight(FontWeight::NORMAL)
             .text_color(theme.text())
             .whitespace_nowrap()

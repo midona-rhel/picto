@@ -1088,7 +1088,7 @@ impl SmartFolderEditor {
             .icon
             .clone()
             .filter(|icon| crate::assets::has_icon(icon))
-            .unwrap_or("folder".into());
+            .unwrap_or("IconFolder".into());
         let trigger = div()
             .id("icon-trigger")
             .relative()
@@ -1189,7 +1189,8 @@ impl SmartFolderEditor {
                     .border_color(rgba(theme::COLOR_SWATCH_RING))
                     .bg(swatch)
                     .shadow(vec![
-                        BoxShadow::new(px(0.), px(1.), rgba(0xffffff2e).into()).inset(),
+                        BoxShadow::new(px(0.), px(1.), rgba(theme::COLOR_SWATCH_HIGHLIGHT).into())
+                            .inset(),
                     ]),
             )
             .child(

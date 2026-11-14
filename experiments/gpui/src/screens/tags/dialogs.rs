@@ -403,7 +403,7 @@ impl TagsScreen {
                                         .rounded(px(9.))
                                         .bg(theme.surface_2())
                                         .child(ui::icon(
-                                            "tags-bookmark",
+                                            "pin-bookmark",
                                             18.,
                                             theme.text_secondary(),
                                         )),
@@ -496,7 +496,7 @@ impl TagsScreen {
                                 .child(
                                     ui::action_button("editor-delete", ButtonLook::Danger)
                                         .label("Delete")
-                                        .icon("tags-trash", 14.)
+                                        .icon("trash-2", 14.)
                                         .disabled(busy)
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             let tag = delete_tag.clone();
@@ -565,7 +565,7 @@ impl TagsScreen {
                         .flex_col()
                         .gap(px(10.))
                         .child(ui::field("merge-search", search, Look::ModalSearch).icon(
-                            "tags-search",
+                            "library-search",
                             14.,
                             10.,
                             theme::blend(

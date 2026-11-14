@@ -43,7 +43,7 @@ impl Tone {
             Tone::Error => "notify-error",
             Tone::Warning => "notify-warning",
             Tone::Info => "notify-info",
-            Tone::Success => "notify-success",
+            Tone::Success => "circle-check-filled",
         }
     }
 
@@ -254,9 +254,7 @@ pub fn info(title: impl Into<SharedString>, message: impl Into<SharedString>, cx
     show(Tone::Info, Options::new(title, message), cx);
 }
 
-/// `showSuccessNotification`. No call site yet: production's plain
-/// successes come from Picto Pack, export and cloud work not built here.
-#[allow(dead_code)]
+/// `showSuccessNotification`.
 pub fn success(title: impl Into<SharedString>, message: impl Into<SharedString>, cx: &mut App) {
     show(Tone::Success, Options::new(title, message), cx);
 }

@@ -167,28 +167,21 @@ impl Toolbar {
                 continue;
             }
             let clears = position == last;
-            path = path.child(
-                div()
-                    .id(("scope-crumb", index))
-                    .occlude()
-                    .cursor_pointer()
-                    .text_color(theme.text_secondary())
-                    .hover(move |style| style.text_color(theme.text()).underline())
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if clears {
-                            // `clearSearchResults`: no search, no filters.
-                            this.search.update(cx, |search, cx| search.clear(cx));
-                            this.session.update(cx, |session, cx| {
-                                session.set_search(String::new(), cx);
-                                session.navigate_with_filters(index, Default::default(), cx);
-                            });
-                        } else {
-                            this.session
-                                .update(cx, |session, cx| session.navigate(index, cx));
-                        }
-                    })),
-            );
+            path = path.child(ui::crumb(("scope-crumb", index), label, true, cx).on_click(
+                cx.listener(move |this, _, _, cx| {
+                    if clears {
+                        // `clearSearchResults`: no search, no filters.
+                        this.search.update(cx, |search, cx| search.clear(cx));
+                        this.session.update(cx, |session, cx| {
+                            session.set_search(String::new(), cx);
+                            session.navigate_with_filters(index, Default::default(), cx);
+                        });
+                    } else {
+                        this.session
+                            .update(cx, |session, cx| session.navigate(index, cx));
+                    }
+                }),
+            ));
             if !clears {
                 path = path.child(separator());
             }

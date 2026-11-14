@@ -97,7 +97,7 @@ impl Look {
 
     /// The colours, sizes and strengths the look draws with.
     fn paint(self, theme: &theme::Theme, toggled: bool) -> Paint {
-        let clear = |color: Rgba| Rgba { a: 0., ..color };
+        let clear = theme::clear;
         let base = Paint {
             width: theme::ICON_BUTTON,
             height: theme::ICON_BUTTON,

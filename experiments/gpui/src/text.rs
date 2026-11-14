@@ -156,9 +156,9 @@ pub fn size_to_megabytes(bytes: i64) -> String {
     }
 }
 
-/// `formatBytes` in Settings: bytes, then the largest binary unit up to TB,
+/// `formatBytes` in Settings and the Picto Pack dialog: bytes, then the largest binary unit up to TB,
 /// with two decimals under ten and one above.
-pub fn size_to_terabytes(value: i64) -> String {
+pub fn size_to_terabytes(value: u64) -> String {
     if value < 1024 {
         return format!("{value} B");
     }
@@ -171,6 +171,58 @@ pub fn size_to_terabytes(value: i64) -> String {
     }
     let digits = if amount >= 10. { 1 } else { 2 };
     format!("{amount:.digits$} {}", units[unit])
+}
+
+/// `truncateText`, and `text-overflow: ellipsis` as Chromium draws it: the
+/// text whole when it fits in `max`, else as many of its characters as fit
+/// with "…" after them (trailing punctuation kept, unlike GPUI's own
+/// truncation), measured by `measure`.
+///
+/// Each measurement is a text shaping, and a window of new tiles (a jump, a
+/// fast scroll) shapes every name it shows, so they are few: `guess` says
+/// how many characters probably fit (from the whole text's own shaping),
+/// the cuts on either side of it are measured, and only when the guess was
+/// off is the rest found by halving. A longer cut is never narrower.
+pub fn truncate_to(
+    text: &str,
+    max: f32,
+    measure: impl Fn(&str) -> f32,
+    guess: impl FnOnce() -> usize,
+) -> String {
+    if measure(text) <= max {
+        return text.to_owned();
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    let cut = |end: usize| chars[..end].iter().collect::<String>() + "…";
+    let fit = |end: usize| measure(&cut(end)) <= max;
+    // The longest cut that fits lies in `fits..=last`; nothing at all ("…"
+    // alone) is the answer when none does.
+    let (mut fits, mut last) = (0, chars.len().saturating_sub(1));
+    let guess = guess().min(last);
+    if guess > 0 && !fit(guess) {
+        last = guess - 1;
+        if last > 0 && fit(last) {
+            fits = last;
+        }
+    } else {
+        fits = guess;
+        if guess < last {
+            if fit(guess + 1) {
+                fits = guess + 1;
+            } else {
+                last = guess;
+            }
+        }
+    }
+    while fits < last {
+        let middle = (fits + last).div_ceil(2);
+        if fit(middle) {
+            fits = middle;
+        } else {
+            last = middle - 1;
+        }
+    }
+    cut(fits)
 }
 
 // ── Dates ───────────────────────────────────────────────────────
@@ -249,6 +301,38 @@ pub fn filter_type(mime: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_truncate_with_an_ellipsis_to_what_fits() {
+        // Ten units a character.
+        let measure = |text: &str| text.chars().count() as f32 * 10.;
+        let none = || 0;
+        assert_eq!(truncate_to("Tribal", 60., measure, none), "Tribal");
+        assert_eq!(
+            truncate_to("Main Four - Communal", 100., measure, none),
+            "Main Four…"
+        );
+        // A space before the cut stays, as `slice` keeps it.
+        assert_eq!(truncate_to("Main Four - C", 60., measure, none), "Main …");
+        assert_eq!(truncate_to("ab", 5., measure, none), "…");
+        // A chip label's punctuation before the cut stays too.
+        assert_eq!(
+            truncate_to("adobe_photoshop_(artwork)", 120., measure, none),
+            "adobe_photo…"
+        );
+        assert_eq!(
+            truncate_to("abcdefghij_(x)", 120., measure, none),
+            "abcdefghij_…"
+        );
+    }
+
+    #[test]
+    fn sizes_read_as_format_bytes_writes_them() {
+        assert_eq!(size_to_terabytes(512), "512 B");
+        assert_eq!(size_to_terabytes(1536), "1.50 KB");
+        assert_eq!(size_to_terabytes(12 * 1024 * 1024 + 300 * 1024), "12.3 MB");
+        assert_eq!(size_to_terabytes(3 * 1024u64.pow(4) * 2048), "6144.0 TB");
+    }
 
     #[test]
     fn names_sort_without_case_and_with_numbers_by_value() {

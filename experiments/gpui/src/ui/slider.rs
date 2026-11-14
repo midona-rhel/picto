@@ -6,9 +6,24 @@ use std::{cell::Cell, rc::Rc};
 
 type ChangeHandler = Rc<dyn Fn(f64, &mut App) + 'static>;
 
-/// `.rangeInput` in `Settings.module.css`: a 200px, 3px track at the
-/// primary border colour with a 12px round thumb in the text colour. A press
-/// on the track moves the thumb there, and dragging moves it in steps.
+/// Which slider to draw.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Look {
+    /// `.rangeInput` in `Settings.module.css`: a 200px, 3px track at the
+    /// primary border colour with a 12px round thumb in the text colour.
+    Settings,
+    /// `.toleranceSlider`: the Settings track in the primary colour up to
+    /// the thumb, and a thumb with a border and a small shadow.
+    Filled,
+    /// `.rangeInput` in a dialog (`GlassModal.module.css`): as wide as its
+    /// container, a 4px track at the primary border colour, and a 14px
+    /// thumb in the primary colour that overhangs the track's 4px of
+    /// layout.
+    Dialog,
+}
+
+/// A range input: a press on the track moves the thumb there, and dragging
+/// moves it in steps.
 #[derive(IntoElement)]
 pub struct Slider {
     id: ElementId,
@@ -17,9 +32,7 @@ pub struct Slider {
     max: f64,
     step: f64,
     width: f32,
-    filled: bool,
-    /// `GlassModal.module.css` `.rangeInput`, as wide as its container.
-    dialog: bool,
+    look: Look,
     on_change: Option<ChangeHandler>,
 }
 
@@ -31,8 +44,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         max,
         step,
         width: WIDTH,
-        filled: false,
-        dialog: false,
+        look: Look::Settings,
         on_change: None,
     }
 }
@@ -44,19 +56,8 @@ impl Slider {
         self
     }
 
-    /// `.toleranceSlider`: the track in the primary colour up to the thumb,
-    /// and a thumb with a border and a small shadow.
-    pub fn filled(mut self) -> Self {
-        self.filled = true;
-        self
-    }
-
-    /// `.rangeInput` in a dialog (`GlassModal.module.css`): as wide as its
-    /// container, a 4px track at the primary border colour, and a 14px
-    /// thumb in the primary colour that overhangs the track's 4px of
-    /// layout.
-    pub fn dialog(mut self) -> Self {
-        self.dialog = true;
+    pub fn look(mut self, look: Look) -> Self {
+        self.look = look;
         self
     }
 
@@ -97,7 +98,8 @@ impl RenderOnce for Slider {
         let (min, max, step, value) = (self.min, self.max, self.step, self.value);
         let handler = self.on_change;
         let width = self.width;
-        let dialog = self.dialog;
+        let dialog = self.look == Look::Dialog;
+        let filled = self.look == Look::Filled;
         let focus = super::focus::control(&self.id, window, cx);
         let keyed = handler.clone();
         let root = div().id(self.id).occlude().relative().cursor_pointer();
@@ -140,7 +142,7 @@ impl RenderOnce for Slider {
                         .bg(theme.border())
                         // The filled part runs to the thumb's place along the
                         // whole track, as `--tolerance-progress` does.
-                        .when(self.filled, |track| {
+                        .when(filled, |track| {
                             track.child(
                                 div()
                                     .absolute()
@@ -161,7 +163,7 @@ impl RenderOnce for Slider {
                         .size(px(THUMB))
                         .rounded_full()
                         .bg(theme.text())
-                        .when(self.filled, |thumb| {
+                        .when(filled, |thumb| {
                             thumb.border_1().border_color(theme.border()).shadow(vec![
                                 BoxShadow::new(px(0.), px(1.), rgba(theme::BLACK_25).into())
                                     .blur_radius(px(2.)),
@@ -176,7 +178,8 @@ impl RenderOnce for Slider {
                 move |bounds, _, window, _| {
                     let report = {
                         let handler = handler.clone();
-                        move |x: Pixels, cx: &mut App| {
+                        move |at: Point<Pixels>, _: &mut Window, cx: &mut App| {
+                            let x = at.x;
                             let next = value_along(
                                 f32::from(x - bounds.left()),
                                 f32::from(bounds.size.width),
@@ -192,29 +195,7 @@ impl RenderOnce for Slider {
                             }
                         }
                     };
-                    let (down, report_down) = (dragging.clone(), report.clone());
-                    window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Bubble
-                            && event.button == MouseButton::Left
-                            && bounds.contains(&event.position)
-                        {
-                            down.set(true);
-                            report_down(event.position.x, cx);
-                            cx.stop_propagation();
-                        }
-                    });
-                    let moved = dragging.clone();
-                    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                        if phase == DispatchPhase::Capture && moved.get() {
-                            report(event.position.x, cx);
-                        }
-                    });
-                    let up = dragging.clone();
-                    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
-                        if phase == DispatchPhase::Capture {
-                            up.set(false);
-                        }
-                    });
+                    super::track_drag(bounds, dragging.clone(), report, |_| {}, window);
                 },
             )
             .absolute()
