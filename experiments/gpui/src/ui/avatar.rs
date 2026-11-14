@@ -13,6 +13,8 @@ pub struct LibraryAvatar {
     cache: Option<Entity<Thumbnails>>,
     highlighted: bool,
     hovered: bool,
+    icon: Option<SharedString>,
+    color: Option<Rgba>,
 }
 
 /// The avatar of a library whose cropped cover, if it has one, is at
@@ -29,6 +31,8 @@ pub fn library_avatar(
         cache: None,
         highlighted: false,
         hovered: false,
+        icon: None,
+        color: None,
     }
 }
 
@@ -43,6 +47,15 @@ impl LibraryAvatar {
     /// `.highlighted`: the open library, ringed in the primary colour.
     pub fn highlighted(mut self, highlighted: bool) -> Self {
         self.highlighted = highlighted;
+        self
+    }
+
+    /// The library's icon (an icon picker name) and colour, shown when it
+    /// has no cover (`appearance.icon`, `appearance.color`): the icon in
+    /// the colour, or the books glyph in it.
+    pub fn appearance(mut self, icon: Option<String>, color: Option<Rgba>) -> Self {
+        self.icon = icon.map(Into::into);
+        self.color = color;
         self
     }
 
@@ -120,9 +133,17 @@ impl RenderOnce for LibraryAvatar {
                 .object_fit(ObjectFit::Cover)
                 .into_any_element()
             }
-            // `IconBooks` at 72% of the disc, stroke 0.9.
-            None => super::icon("books", (size * 0.72).round(), theme.text_secondary())
-                .into_any_element(),
+            None => {
+                let color = self.color.unwrap_or(theme.text_secondary());
+                match self.icon {
+                    // `DynamicIcon` at 72% of the disc.
+                    Some(icon) => {
+                        super::icon(icon, (size * 0.72).round(), color).into_any_element()
+                    }
+                    // `IconBooks` at 72% of the disc, stroke 0.9.
+                    None => super::icon("books", (size * 0.72).round(), color).into_any_element(),
+                }
+            }
         };
         div()
             .relative()

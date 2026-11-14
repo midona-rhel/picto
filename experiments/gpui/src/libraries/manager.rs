@@ -11,7 +11,7 @@
 //! listed library's folder and cover and nothing else; statistics are read
 //! for the open library only, through its application, as production reads
 //! them.
-use super::admission::Origin;
+use super::admission::{Decision, Origin};
 use super::{Kind, history, host};
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -42,6 +42,8 @@ pub struct Row {
     pub missing: bool,
     pub kind: Kind,
     pub cover: Option<PathBuf>,
+    /// Its colour and icon (`libraryMeta`).
+    pub look: crate::state::LibraryLook,
 }
 
 /// The rows in production's order (`orderedLibraryPaths`): pinned first,
@@ -75,6 +77,7 @@ pub fn rows(
                 name,
                 dir,
                 cover: None,
+                look: Default::default(),
                 path,
             }
         })
@@ -94,10 +97,24 @@ pub fn rows(
                 missing: false,
                 kind,
                 cover: None,
+                look: Default::default(),
             },
         );
     }
     rows
+}
+
+/// What the actions menu does to a library that is not open, each only
+/// once `host::check` lets it (asking the user's consent first, as opening
+/// does, for a library not yet agreed to): rename and Show in File Manager
+/// act on a library the user has not opened here, so they are asked about
+/// as opening is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Act {
+    Rename,
+    Reveal,
+    Move,
+    Delete,
 }
 
 /// What the right side shows.
@@ -169,6 +186,12 @@ pub struct Manager {
     message: Option<String>,
     error: Option<String>,
     removing: Option<(String, ui::modal::Presence)>,
+    /// A library about to be deleted, once the user confirms (`deleteLibrary`).
+    deleting: Option<(String, ui::modal::Presence)>,
+    /// A library the user is asked about before `Act` (its consent).
+    asking: Option<(super::Identity, PathBuf, Act, ui::modal::Presence)>,
+    /// The icon picker, while Change… has it open.
+    icons: Option<Entity<ui::icon_picker::IconPicker>>,
     menu: menu::Host,
     busy: bool,
     /// The open library when the list was last read.
@@ -209,6 +232,9 @@ impl Manager {
             message: None,
             error: host.read(cx).failure.clone().map(|(_, message)| message),
             removing: None,
+            deleting: None,
+            asking: None,
+            icons: None,
             menu: menu::Host::deferred(ui::layer::MENU, menu::Return::Opener),
             busy: false,
             shown_current: None,
@@ -255,6 +281,11 @@ impl Manager {
             .as_ref()
             .map(|scratch| scratch.path().to_path_buf());
         for row in &mut rows {
+            row.look = state
+                .library_meta
+                .get(&row.path)
+                .cloned()
+                .unwrap_or_default();
             if row.missing {
                 continue;
             }
@@ -312,6 +343,156 @@ impl Manager {
         self.selected = Some(path);
         self.pane = Pane::Library;
         self.renaming = None;
+        self.icons = None;
+        cx.notify();
+    }
+
+    /// Runs `act` on the library at `path` if `host::check` lets it now,
+    /// asking the user's consent first where opening would; the open
+    /// library was let through when it opened.
+    fn guarded(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
+        self.error = None;
+        self.message = None;
+        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
+        if open {
+            return self.perform(path, act, window, cx);
+        }
+        match host::check(Path::new(&path), cx) {
+            Decision::Real { .. } => self.perform(path, act, window, cx),
+            Decision::Ask { root, identity } => {
+                self.asking = Some((identity, root, act, ui::modal::Presence::new()));
+                cx.notify();
+            }
+            // Never a copy that is not open: only the open one is listed.
+            Decision::Copy(_) => {}
+            Decision::Refused(refusal) => {
+                self.error = Some(refusal.words().1);
+                cx.notify();
+            }
+        }
+    }
+
+    fn perform(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
+        match act {
+            Act::Rename => self.start_rename(window, cx),
+            Act::Reveal => crate::desktop::reveal_library(Path::new(&path), cx),
+            Act::Move => self.move_library(path, cx),
+            Act::Delete => {
+                self.deleting = Some((path, ui::modal::Presence::new()));
+                cx.notify();
+            }
+        }
+    }
+
+    /// Move… (`relocateLibrary` for a library on disk): the folder it goes
+    /// into, chosen in the system's dialog, then moved there.
+    fn move_library(&mut self, path: String, cx: &mut Context<Self>) {
+        let from = PathBuf::from(&path);
+        let basename = from
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        // Production's dialog says this as its message.
+        let chosen = crate::prompt::folder(
+            &format!("{basename} will be placed in the selected folder"),
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            let Ok(Some(folder)) = chosen.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                match super::files::destination(&from, &folder) {
+                    Ok(super::files::Moved::To(target)) => {
+                        this.selected = Some(target.to_string_lossy().into_owned());
+                        cx.defer(move |cx| host::move_library(from, target, cx));
+                    }
+                    Ok(super::files::Moved::Unchanged) => {}
+                    Err(error) => {
+                        this.error = Some(error);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The user confirmed Delete…: checked again, as the moment may have
+    /// changed (the Electron app started, the library was opened), then
+    /// removed.
+    fn delete(&mut self, path: String, cx: &mut Context<Self>) {
+        self.deleting = None;
+        cx.notify();
+        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
+        if open {
+            self.error = Some(
+                "Cannot delete the currently open library. Switch to a different library first."
+                    .to_owned(),
+            );
+            return;
+        }
+        match host::check(Path::new(&path), cx) {
+            Decision::Real { .. } => {}
+            Decision::Refused(refusal) => {
+                self.error = Some(refusal.words().1);
+                return;
+            }
+            // The consent was withdrawn meanwhile, or this is a copy.
+            Decision::Ask { .. } | Decision::Copy(_) => return,
+        }
+        let manager = cx.entity().downgrade();
+        host::delete(PathBuf::from(&path), cx, move |result, cx| {
+            let _ = manager.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => {
+                        this.selected = None;
+                        this.message = Some(t("Library deleted.").to_owned());
+                    }
+                    Err(error) => this.error = Some(error),
+                }
+                this.read(cx);
+            });
+        });
+    }
+
+    /// The library's colour or icon (`setLibraryMeta`), kept in this app's
+    /// state.
+    fn set_look(
+        &mut self,
+        path: String,
+        change: impl FnOnce(&mut crate::state::LibraryLook),
+        cx: &mut Context<Self>,
+    ) {
+        crate::state::update(cx, |state| {
+            let mut look = state.library_meta.get(&path).cloned().unwrap_or_default();
+            change(&mut look);
+            if look.is_default() {
+                state.library_meta.remove(&path);
+            } else {
+                state.library_meta.insert(path, look);
+            }
+        });
+        self.read(cx);
+    }
+
+    /// Change… / Done: the icon picker under the appearance card.
+    fn toggle_icons(&mut self, path: String, current: Option<String>, cx: &mut Context<Self>) {
+        if self.icons.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let manager = cx.entity().downgrade();
+        self.icons = Some(cx.new(|_| {
+            ui::icon_picker::IconPicker::new(current, move |icon, _, cx| {
+                let path = path.clone();
+                let _ = manager.update(cx, |this, cx| {
+                    this.set_look(path, |look| look.icon = icon, cx)
+                });
+            })
+            .default_label(en("Use default library icon"))
+        }));
         cx.notify();
     }
 
@@ -419,8 +600,7 @@ impl Manager {
             menu::item("reveal", t("Show in File Manager"))
                 .disabled(row.missing)
                 .into(),
-            // TODO: move a library to another folder, and locate a missing
-            // one (`relocateLibrary`).
+            // A missing library is located instead of moved.
             menu::item(
                 "move",
                 if row.missing {
@@ -429,22 +609,25 @@ impl Manager {
                     t("Move…")
                 },
             )
-            .disabled(true)
+            .disabled(self.busy || !real)
             .into(),
+            // TODO: Sync Now, Pause Sync, Create Recovery Snapshot, Show
+            // Cloud Folder, Stop Syncing and Enable Cloud Sync for the open
+            // library; cloud sync is not built.
             menu::Entry::Separator,
             menu::item("remove", t("Remove from List"))
                 .danger(true)
                 .disabled(row.current || !real)
                 .into(),
-            // TODO: delete a library and its files (`deleteLibrary`); not
-            // built, as it removes a library the user keeps for good.
+            // Production asks for confirmation and refuses the open library.
             menu::item("delete", t("Delete…"))
                 .danger(true)
-                .disabled(true)
+                .disabled(row.current || row.missing || self.busy || !real)
                 .into(),
         ];
         let menu = cx.new(|cx| Menu::new(entries, position, cx).width(236.).in_window());
         let path = row.path.clone();
+        let missing = row.missing;
         self.menu.open(
             menu,
             window,
@@ -458,8 +641,14 @@ impl Manager {
                     crate::set_app_menus(cx);
                     this.read(cx);
                 }
-                "rename" => this.start_rename(window, cx),
-                "reveal" => crate::desktop::reveal_library(Path::new(&path), cx),
+                "rename" => this.guarded(path.clone(), Act::Rename, window, cx),
+                "reveal" => this.guarded(path.clone(), Act::Reveal, window, cx),
+                "move" if missing => {
+                    let path = PathBuf::from(&path);
+                    cx.defer(move |cx| host::locate(path, false, cx));
+                }
+                "move" => this.guarded(path.clone(), Act::Move, window, cx),
+                "delete" => this.guarded(path.clone(), Act::Delete, window, cx),
                 "remove" => {
                     this.removing = Some((path.clone(), ui::modal::Presence::new()));
                     cx.notify();
@@ -563,6 +752,7 @@ impl Manager {
                     }))
                     .child(
                         ui::library_avatar(("library-row-avatar", index), row.cover.clone(), 42.)
+                            .appearance(row.look.icon.clone(), look_color(&row.look))
                             .highlighted(selected),
                     )
                     .child(
@@ -718,11 +908,11 @@ impl Manager {
             .flex()
             .items_center()
             .gap(px(12.))
-            .child(ui::library_avatar(
-                "library-hero-avatar",
-                row.cover.clone(),
-                56.,
-            ))
+            .child(
+                ui::library_avatar("library-hero-avatar", row.cover.clone(), 84.)
+                    .appearance(row.look.icon.clone(), look_color(&row.look))
+                    .highlighted(true),
+            )
             .child(
                 div()
                     .flex_1()
@@ -763,42 +953,106 @@ impl Manager {
                     .child(t("Missing on disk")),
             );
         }
-        // `Appearance`: the cover, chosen in the main window's cover dialog
-        // for the open library.
-        // TODO: a library's colour and icon (`libraryMeta.color`, `.icon`).
+        // `Appearance`: the colour and icon (kept in this app's state, as
+        // production keeps them in its `config.json`), and the cover,
+        // chosen in the main window's cover dialog for the open library.
         let current = row.current;
-        // i18n: translated where drawn
-        let appearance = Self::card("Appearance", cx).child(
+        let label = |text: &'static str| {
             div()
-                .flex()
-                .items_center()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .w(px(64.))
-                        .text(theme::TEXT_SM)
-                        .text_color(theme.text_secondary())
-                        .child(t("Cover")),
-                )
-                .child(
-                    ui::action_button::action_button(
-                        "library-cover",
-                        ui::action_button::Look::Standard,
-                    )
-                    .label(t("Choose…"))
-                    .disabled(!current)
-                    .tip(ui::tip(if current {
-                        t("Choose a media item and crop the library cover")
-                    } else {
-                        t("Open this library before choosing its media")
-                    }))
-                    .on_click(|_, _, cx| cx.defer(choose_cover)),
-                ),
-        );
+                .w(px(64.))
+                .flex_none()
+                .text(theme::TEXT_SM)
+                .text_color(theme.text_secondary())
+                .child(t(text))
+        };
+        let colored = row.path.clone();
+        let colors = ui::color_picker::color_picker("library-color", row.look.color.clone())
+            .on_pick({
+                let manager = cx.entity().downgrade();
+                move |color, _, cx| {
+                    let path = colored.clone();
+                    let _ = manager.update(cx, |this, cx| {
+                        this.set_look(path, |look| look.color = color.map(str::to_owned), cx)
+                    });
+                }
+            });
+        let (iconed, icon) = (row.path.clone(), row.look.icon.clone());
+        // i18n: translated where drawn
+        let appearance = Self::card("Appearance", cx)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(label("Color"))
+                    .child(div().w(px(260.)).child(colors)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(label("Icon"))
+                    .child(
+                        ui::action_button::action_button(
+                            "library-icon",
+                            ui::action_button::Look::Standard,
+                        )
+                        .label(if self.icons.is_some() {
+                            t("Done")
+                        } else {
+                            t("Change…")
+                        })
+                        .disabled(self.busy)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_icons(iconed.clone(), icon.clone(), cx)
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(label("Cover"))
+                    .child(
+                        ui::action_button::action_button(
+                            "library-cover",
+                            ui::action_button::Look::Standard,
+                        )
+                        .label(t("Choose…"))
+                        .disabled(self.busy || !current)
+                        .tip(ui::tip(if current {
+                            t("Choose a media item and crop the library cover")
+                        } else {
+                            t("Open this library before choosing its media")
+                        }))
+                        .on_click(|_, _, cx| cx.defer(choose_cover)),
+                    ),
+            )
+            .children(self.icons.clone().map(|icons| {
+                div()
+                    .mt(px(2.))
+                    .rounded(px(theme::RADIUS_MD))
+                    .border_1()
+                    .border_color(theme.border_secondary())
+                    .w(px(ui::icon_picker::WIDTH))
+                    .child(icons)
+            }));
         // i18n: translated where drawn
         let statistics = Self::card("Library", cx)
             .mt(px(12.))
             .child(self.statistics(row, cx));
+        // i18n: translated where drawn
+        let cloud = Self::card("Cloud Sync", cx).mt(px(12.)).child(if current {
+            cloud_providers("library-cloud", cx).into_any_element()
+        } else {
+            div()
+                .text(theme::TEXT_SM)
+                .text_color(theme.text_tertiary())
+                .child(t("Open this library to configure its cloud location."))
+                .into_any_element()
+        });
         let _ = window;
         div()
             .flex()
@@ -807,6 +1061,7 @@ impl Manager {
             .child(status)
             .child(appearance)
             .child(statistics)
+            .child(cloud)
             .into_any_element()
     }
 
@@ -1021,8 +1276,87 @@ impl Manager {
                 .label(t("Open Existing…"))
                 .on_click(|_, _, cx| cx.defer(host::open_dialog)),
             )
-        // TODO: Open from Cloud… (`joinCloudLibrary`); cloud sync is not
-        // built.
+            // TODO: Open from Cloud… (`joinCloudLibrary`); cloud sync is not
+            // built, so it is shown and does nothing.
+            .child(
+                ui::action_button::action_button(
+                    "library-open-cloud",
+                    ui::action_button::Look::Standard,
+                )
+                .label(t("Open from Cloud…"))
+                .disabled(true),
+            )
+    }
+
+    /// `deleteLibrary`'s question, as production's message box words it,
+    /// naming the full path.
+    fn deletion(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (path, presence) = self.deleting.as_ref()?;
+        let name = super::name(path);
+        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.deleting = None;
+            cx.notify();
+        });
+        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.deleting = None;
+            cx.notify();
+        });
+        let deleted = path.clone();
+        let accept =
+            cx.listener(move |this: &mut Self, _: &(), _, cx| this.delete(deleted.clone(), cx));
+        // Production's main process writes these in English, without keys.
+        let message = format!(
+            "Delete library \"{name}\"?\n\nThis will permanently delete all files in:\n{path}\n\nThis cannot be undone."
+        );
+        Some(
+            ui::confirm::confirm(
+                "library-delete",
+                en("Delete Library"),
+                message,
+                t("Delete"),
+                *presence,
+            )
+            .danger(true)
+            .busy(self.busy)
+            .on_close(move |window, cx| cancel(&(), window, cx))
+            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
+            .on_confirm(move |window, cx| accept(&(), window, cx))
+            .into_any_element(),
+        )
+    }
+
+    /// The consent question, asked here before Rename, Show in File
+    /// Manager, Move… or Delete… on a library the user has not agreed to.
+    fn consent(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, root, _, presence) = self.asking.as_ref()?;
+        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.asking = None;
+            cx.notify();
+        });
+        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.asking = None;
+            cx.notify();
+        });
+        let accept = cx.listener(|this: &mut Self, _: &(), window, cx| {
+            if let Some((identity, root, act, _)) = this.asking.take() {
+                host::agree(&identity, cx);
+                this.perform(root.to_string_lossy().into_owned(), act, window, cx);
+                cx.notify();
+            }
+        });
+        Some(
+            ui::confirm::confirm(
+                "library-manager-consent",
+                en("Open this library directly?"),
+                host::consent_message(root),
+                en("Continue"),
+                *presence,
+            )
+            .on_close(move |window, cx| cancel(&(), window, cx))
+            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
+            .on_confirm(move |window, cx| accept(&(), window, cx))
+            .into_any_element(),
+        )
     }
 
     fn removal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1059,6 +1393,34 @@ impl Manager {
     }
 }
 
+/// A library's colour (`#RRGGBB`), to draw.
+fn look_color(look: &crate::state::LibraryLook) -> Option<Rgba> {
+    look.color.as_deref().and_then(theme::parse_hex).map(rgb)
+}
+
+/// The cloud card's providers as production shows them when the library
+/// has no cloud location yet (`cloudProviderButton`s).
+// TODO: connect Google Drive and Dropbox (`chooseCloudRoot`); cloud sync
+// is not built, so they are shown and do nothing.
+fn cloud_providers(id: &'static str, cx: &App) -> Div {
+    let _ = cx;
+    let button = |suffix: &'static str, label: &'static str| {
+        ui::action_button::action_button(
+            ElementId::NamedChild(std::sync::Arc::new(id.into()), suffix.into()),
+            ui::action_button::Look::Standard,
+        )
+        .icon("IconCloud", 14.)
+        .label(t(label))
+        .disabled(true)
+    };
+    // i18n: translated where drawn
+    div()
+        .flex()
+        .gap(px(8.))
+        .child(button("drive", "Connect Google Drive…"))
+        .child(button("dropbox", "Connect Dropbox…"))
+}
+
 /// Cover › Choose… for the open library: the main window's cover dialog.
 fn choose_cover(cx: &mut App) {
     if let Some(shell) = host::shell(cx) {
@@ -1091,6 +1453,11 @@ impl Render for Manager {
                         .child(t(
                             "Create a library on this device or connect an existing cloud folder.",
                         )),
+                )
+                .child(
+                    div()
+                        .mt(px(8.))
+                        .child(cloud_providers("library-start-cloud", cx)),
                 )
                 .into_any_element(),
         };
@@ -1126,6 +1493,8 @@ impl Render for Manager {
             .child(self.footer(cx))
             .children(self.menu.layer(window, cx))
             .children(self.removal(cx))
+            .children(self.deletion(cx))
+            .children(self.consent(cx))
             .children(ui::window_chrome::rim(cx))
     }
 }

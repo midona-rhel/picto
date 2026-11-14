@@ -161,6 +161,39 @@ pub struct State {
     /// Whether the list of libraries was once seeded from the Electron
     /// app's `config.json` (`libraries::seed`), so it never is again.
     pub libraries_seeded: bool,
+    /// `config.json` `libraryMeta`: each library's colour and icon, by
+    /// path, as the Library Manager sets them. (The cover is kept in the
+    /// library's own folder.)
+    pub library_meta: BTreeMap<String, LibraryLook>,
+}
+
+/// A library's colour (`#RRGGBB`) and icon (an icon picker name), each
+/// unset for the default.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryLook {
+    pub color: Option<String>,
+    pub icon: Option<String>,
+}
+
+impl LibraryLook {
+    /// From production's `libraryMeta` entry; other fields are left out.
+    pub fn from_value(value: &Value) -> Self {
+        let text = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        Self {
+            color: text("color"),
+            icon: text("icon"),
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.color.is_none() && self.icon.is_none()
+    }
 }
 
 impl Default for State {
@@ -190,6 +223,7 @@ impl Default for State {
             last_library: None,
             library_consents: Vec::new(),
             libraries_seeded: false,
+            library_meta: BTreeMap::new(),
         }
     }
 }
@@ -350,6 +384,13 @@ impl State {
                 })
                 .collect();
         }
+        if let Some(meta) = get("libraryMeta").and_then(Value::as_object) {
+            state.library_meta = meta
+                .iter()
+                .map(|(path, look)| (path.clone(), LibraryLook::from_value(look)))
+                .filter(|(_, look)| !look.is_default())
+                .collect();
+        }
         if let Some(seeded) = get("librariesSeeded").and_then(Value::as_bool) {
             state.libraries_seeded = seeded;
         }
@@ -439,6 +480,20 @@ impl State {
             ),
         );
         put("librariesSeeded", json!(self.libraries_seeded));
+        put(
+            "libraryMeta",
+            Value::Object(
+                self.library_meta
+                    .iter()
+                    .map(|(path, look)| {
+                        (
+                            path.clone(),
+                            json!({ "color": look.color, "icon": look.icon }),
+                        )
+                    })
+                    .collect(),
+            ),
+        );
         Value::Object(object)
     }
 
@@ -450,7 +505,7 @@ impl State {
 }
 
 /// The fields this version reads and writes.
-const KNOWN: [&str; 23] = [
+const KNOWN: [&str; 24] = [
     "version",
     "window",
     "sidebarWidth",
@@ -474,6 +529,7 @@ const KNOWN: [&str; 23] = [
     "lastLibrary",
     "libraryConsents",
     "librariesSeeded",
+    "libraryMeta",
 ];
 
 /// Brings a file written by an earlier version to this version's layout,
@@ -702,6 +758,13 @@ mod tests {
             last_library: Some("/b/Two.library".into()),
             library_consents: vec![("/b/Two.library".into(), "16777234:991".into())],
             libraries_seeded: true,
+            library_meta: std::collections::BTreeMap::from([(
+                "/a/One.library".into(),
+                super::LibraryLook {
+                    color: Some("#FA5252".into()),
+                    icon: Some("IconStar".into()),
+                },
+            )]),
             ..State::default()
         };
         state

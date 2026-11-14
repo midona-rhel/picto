@@ -11,9 +11,11 @@
 //!   opening, switching and closing, the consent dialog, and the notice
 //!   that blocks the window while the Electron app runs.
 //! - [`manager`]: the Library Manager window.
+//! - [`files`]: Delete… and Move… on disk, as production's main process.
 //! - [`seed`]: the first run's list, read once from the Electron app's
 //!   `config.json`.
 pub mod admission;
+pub mod files;
 pub mod host;
 pub mod manager;
 pub(crate) mod platform;
@@ -302,6 +304,18 @@ pub mod history {
         }
         if last.as_deref() == Some(from) {
             *last = Some(to.to_owned());
+        }
+    }
+
+    /// `updateLibraryPath`'s `libraryMeta`: the colour and icon follow a
+    /// renamed, moved or located library.
+    pub fn rename_look(
+        looks: &mut std::collections::BTreeMap<String, crate::state::LibraryLook>,
+        from: &str,
+        to: &str,
+    ) {
+        if let Some(look) = looks.remove(from) {
+            looks.insert(to.to_owned(), look);
         }
     }
 

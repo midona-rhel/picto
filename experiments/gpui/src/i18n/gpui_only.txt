@@ -118,3 +118,6 @@ Library copy
 Library name cannot contain slashes
 A library cannot be created inside another Picto library
 A library with that name already exists in the selected folder. Choose another location or open the existing library.
+Use default library icon
+Delete Library
+Continue

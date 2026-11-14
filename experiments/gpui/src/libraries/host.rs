@@ -182,9 +182,28 @@ pub fn create(path: PathBuf, cx: &mut App) {
 }
 
 /// Rename (`renameLibrary`): the folder renamed beside itself, keeping its
-/// place in the list and the user's consent; the open library is closed
-/// first and opened again after.
+/// place in the list, its colour and icon and the user's consent; the open
+/// library is closed first and opened again after.
 pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
+    relocate(from, to, Relocation::Rename, cx);
+}
+
+/// Move… (`relocateLibrary`): the folder moved into another (`files`), as
+/// a rename is.
+pub fn move_library(from: PathBuf, to: PathBuf, cx: &mut App) {
+    relocate(from, to, Relocation::Move, cx);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Relocation {
+    Rename,
+    Move,
+}
+
+fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
+    if host(cx).read(cx).busy {
+        return;
+    }
     let probes = host(cx).read(cx).probes.clone();
     // Production renames only what it has closed; this app cannot see
     // what the Electron app has open.
@@ -209,13 +228,23 @@ pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
         if let Some(previous) = previous {
             close_application(previous, cx).await;
         }
-        let renamed = std::fs::rename(&from, &to);
+        let (source, target) = (from.clone(), to.clone());
+        let done = cx
+            .background_executor()
+            .spawn(async move {
+                match how {
+                    Relocation::Rename => std::fs::rename(&source, &target)
+                        .map_err(|error| format!("Failed to rename library: {error}")),
+                    Relocation::Move => super::files::move_to(&source, &target),
+                }
+            })
+            .await;
         cx.update(|cx| {
             host(cx).update(cx, |host, cx| {
                 host.busy = false;
                 cx.notify();
             });
-            match renamed {
+            match done {
                 Ok(()) => {
                     let (from_text, to_text) = (
                         from.to_string_lossy().into_owned(),
@@ -229,6 +258,10 @@ pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
                             &from_text,
                             &to_text,
                         );
+                        history::rename_look(&mut state.library_meta, &from_text, &to_text);
+                        // The consent follows the path; it holds only while
+                        // the database file is the same one (a move across
+                        // volumes makes a new one, which is asked about).
                         for consent in &mut state.library_consents {
                             if consent.0 == from_text {
                                 consent.0 = to_text.clone();
@@ -236,16 +269,13 @@ pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
                         }
                     });
                     crate::set_app_menus(cx);
+                    host(cx).update(cx, |_, cx| cx.notify());
                     if is_open {
                         request(&to, Origin::Manager, cx);
                     }
                 }
                 Err(error) => {
-                    fail(
-                        en("Could not open Picto Library").to_owned(),
-                        format!("Failed to rename library: {error}"),
-                        cx,
-                    );
+                    fail(en("Could not open Picto Library").to_owned(), error, cx);
                     if is_open {
                         request(&from, Origin::Manager, cx);
                     }
@@ -254,6 +284,84 @@ pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
         });
     })
     .detach();
+}
+
+/// Delete… (`deleteLibrary`), once the user confirmed: the library's
+/// folder removed for good (`files::delete`), never the open one, and
+/// taken out of the list. Hands the outcome to `done`.
+pub fn delete(
+    path: PathBuf,
+    cx: &mut App,
+    done: impl FnOnce(Result<(), String>, &mut App) + 'static,
+) {
+    if host(cx).read(cx).busy {
+        return;
+    }
+    let open = current(cx).map(|(root, _)| root);
+    host(cx).update(cx, |host, _| host.busy = true);
+    let target = path.clone();
+    let work = cx
+        .background_executor()
+        .spawn(async move { super::files::delete(&target, open.as_deref()) });
+    cx.spawn(async move |cx| {
+        let result = work.await;
+        cx.update(|cx| {
+            host(cx).update(cx, |host, cx| {
+                host.busy = false;
+                cx.notify();
+            });
+            if result.is_ok() {
+                let text = path.to_string_lossy().into_owned();
+                crate::state::update(cx, |state| {
+                    history::remove(
+                        &mut state.library_history,
+                        &mut state.pinned_libraries,
+                        &mut state.last_library,
+                        &text,
+                    )
+                });
+                crate::set_app_menus(cx);
+            }
+            done(result, cx);
+        });
+    })
+    .detach();
+}
+
+/// Whether the library at `path` may be changed on disk or revealed from
+/// the Library Manager right now: what `admission::admit` decides for an
+/// open from the manager. A library the user has not agreed to yet comes
+/// back as `Ask`, so the manager asks first, as opening does.
+pub fn check(path: &Path, cx: &mut App) -> Decision {
+    let probes = host(cx).read(cx).probes.clone();
+    admission::admit(
+        path,
+        Origin::Manager,
+        &super::facts(),
+        &super::consents(cx),
+        &*probes,
+    )
+}
+
+/// The consent question's message for the library at `root`.
+pub fn consent_message(root: &Path) -> String {
+    format!(
+        "{}\n\n{}",
+        root.display(),
+        en(
+            "This app will read and write this library directly: what you change here changes the library itself, with no copy in between. Picto must not have it open at the same time. You are asked once for each library."
+        )
+    )
+}
+
+/// Keeps the user's consent for `identity`.
+pub fn agree(identity: &super::Identity, cx: &mut App) {
+    crate::state::update(cx, |state| {
+        let pair = (identity.path.clone(), identity.database.clone());
+        if !state.library_consents.contains(&pair) {
+            state.library_consents.push(pair);
+        }
+    });
 }
 
 /// Notes this instance as the one most recently active, and looks again
@@ -423,6 +531,7 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
                     &from,
                     &to,
                 );
+                history::rename_look(&mut state.library_meta, &from, &to);
             });
             crate::set_app_menus(cx);
             host(cx).update(cx, |_, cx| cx.notify());
@@ -458,12 +567,7 @@ fn consented(asking: Asking, cx: &mut App) {
         origin,
         ..
     } = asking;
-    crate::state::update(cx, |state| {
-        let pair = (identity.path.clone(), identity.database.clone());
-        if !state.library_consents.contains(&pair) {
-            state.library_consents.push(pair);
-        }
-    });
+    agree(&identity, cx);
     request(&root, origin, cx);
 }
 
@@ -849,13 +953,7 @@ impl Main {
 
     fn consent(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let asking = self.asking.as_ref()?;
-        let message = format!(
-            "{}\n\n{}",
-            asking.root.display(),
-            en(
-                "This app will read and write this library directly: what you change here changes the library itself, with no copy in between. Picto must not have it open at the same time. You are asked once for each library."
-            )
-        );
+        let message = consent_message(&asking.root);
         let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
             this.asking = None;
             cx.notify();

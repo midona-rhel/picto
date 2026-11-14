@@ -236,6 +236,34 @@ The session's scratch folder (the cover's crops, dropped data) is in a
 copy's own temporary folder, or the system's for a library the user keeps:
 nothing is written beside a library the user keeps.
 
+The Library Manager has what production's has, cloud aside. A library's
+colour and icon are kept in this app's `state.json` (`libraryMeta`, as
+production keeps them in its `config.json`) and drawn on its avatar; they
+follow a rename, move or Locate…. The actions menu's Rename, Show in File
+Manager, Move… and Delete… on a library that is not open first run
+`admission::admit` as an open from the manager would (`host::check`), and
+ask the consent question when the user has not agreed to that library yet;
+a refusal (Picto running, an older schema, a debug build without the flag)
+stops them with its words. Move… (`relocateLibrary`) asks for a folder,
+refuses one inside a library or holding a library of that name, closes the
+library first if it is open, renames the folder, or across volumes copies
+it beside the target, compares every file, renames the copy into place and
+only then removes the original (`libraries::files`); a library holding a
+symbolic link is not moved across volumes. Locate… on a missing row finds
+it as at start, without opening it. Delete… (`deleteLibrary`) is refused
+for the open library; production's question names the full path ("Delete
+library "…"? This will permanently delete all files in: … This cannot be
+undone."); once confirmed the rules are checked again and the folder is
+removed for good, as production removes it (`fs.rm`, not the system's
+Trash), only if it is a real `.library` folder (not a link) holding a
+`library.sqlite` file and no other holder has the core's lock
+(`delete_removes_only_a_library_that_is_neither_open_nor_held`,
+`move_puts_the_library_in_the_folder_chosen_and_nowhere_else`,
+`a_copy_across_volumes_is_verified_before_the_original_goes`). The Cloud
+Sync card, the cloud rows of the actions menu and Open from Cloud… are not
+built (cloud needs the network): the card and Open from Cloud… are drawn
+as production draws them for a library with no cloud location, disabled.
+
 What stays as it was: `--make-copy` reads its source read-only;
 `<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
 refuse paths outside the open library, whichever kind it is, and Show in

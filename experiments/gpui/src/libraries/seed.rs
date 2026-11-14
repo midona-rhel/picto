@@ -1,6 +1,7 @@
 //! The first run's list of libraries, seeded from the Electron app's. That
 //! app keeps its list in `config.json` (`globalConfig.mjs`:
-//! `libraryHistory`, `pinnedLibraries`) in its folder of the per-user
+//! `libraryHistory`, `pinnedLibraries`, and each library's colour and icon
+//! in `libraryMeta`) in its folder of the per-user
 //! application data (`app.getPath('appData')`/`picto`): on macOS
 //! `~/Library/Application Support/picto/config.json`, on Windows
 //! `%APPDATA%\picto\config.json`, on Linux
@@ -22,6 +23,8 @@ use std::path::{Path, PathBuf};
 pub struct Seed {
     pub history: Vec<String>,
     pub pinned: Vec<String>,
+    /// `libraryMeta`'s colours and icons, by path.
+    pub looks: std::collections::BTreeMap<String, crate::state::LibraryLook>,
 }
 
 /// Where production keeps its `config.json` on this platform.
@@ -54,9 +57,21 @@ pub fn read(path: &Path) -> Option<Seed> {
         }
         paths
     };
+    let history = paths("libraryHistory");
+    let pinned = paths("pinnedLibraries");
+    let looks = object
+        .get("libraryMeta")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(path, _)| history.contains(path) || pinned.contains(path))
+        .map(|(path, look)| (path.clone(), crate::state::LibraryLook::from_value(look)))
+        .filter(|(_, look)| !look.is_default())
+        .collect();
     Some(Seed {
-        history: paths("libraryHistory"),
-        pinned: paths("pinnedLibraries"),
+        history,
+        pinned,
+        looks,
     })
 }
 
@@ -76,6 +91,7 @@ pub fn apply(state: &mut crate::state::State, seed: impl FnOnce() -> Option<Seed
     };
     state.library_history = seed.history;
     state.pinned_libraries = seed.pinned;
+    state.library_meta.extend(seed.looks);
     !state.library_history.is_empty() || !state.pinned_libraries.is_empty()
 }
 
@@ -108,15 +124,18 @@ mod tests {
     #[test]
     fn the_list_is_read_from_productions_keys() {
         let (_folder, path) = fixture(
-            r#"{
+            r##"{
               "libraryHistory": ["/Users/me/Pictures/Main.library", "/Volumes/Art/Art.library",
                                  "relative.library", 3, "/Users/me/Pictures/Main.library"],
               "pinnedLibraries": ["/Volumes/Art/Art.library"],
               "cloudLocations": {},
               "lastLibrary": "/Users/me/Pictures/Main.library",
               "windowState": { "main": null },
-              "libraryMeta": {}
-            }"#,
+              "libraryMeta": {
+                "/Volumes/Art/Art.library": { "color": "#40C057", "icon": "IconStar", "imageHash": "ab" },
+                "/Elsewhere/Unlisted.library": { "color": "#40C057" }
+              }
+            }"##,
         );
         let seed = read(&path).unwrap();
         if cfg!(windows) {
@@ -132,6 +151,16 @@ mod tests {
             ]
         );
         assert_eq!(seed.pinned, ["/Volumes/Art/Art.library"]);
+        assert_eq!(
+            seed.looks.into_iter().collect::<Vec<_>>(),
+            [(
+                "/Volumes/Art/Art.library".to_owned(),
+                crate::state::LibraryLook {
+                    color: Some("#40C057".into()),
+                    icon: Some("IconStar".into()),
+                }
+            )]
+        );
     }
 
     #[test]
@@ -159,6 +188,7 @@ mod tests {
             Some(Seed {
                 history: vec!["/a/Main.library".into(), "/b/Art.library".into()],
                 pinned: vec!["/b/Art.library".into()],
+                looks: Default::default(),
             })
         };
         let mut state = State::default();

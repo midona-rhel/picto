@@ -245,7 +245,7 @@ fn is_database_file(name: &str) -> bool {
 }
 
 /// Copies `from` to `to`, folders and all, refusing symbolic links.
-fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     let kind = from
         .symlink_metadata()
         .map_err(|error| format!("{}: {error}", from.display()))?

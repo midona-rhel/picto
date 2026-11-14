@@ -156,6 +156,12 @@ impl IconPicker {
         }
     }
 
+    /// The default tile's name (`defaultLabel`).
+    pub fn default_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.default_label = label.into();
+        self
+    }
+
     fn pick(&mut self, value: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.value = value.clone();
         cx.notify();
