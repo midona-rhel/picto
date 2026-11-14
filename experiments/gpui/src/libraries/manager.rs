@@ -179,6 +179,8 @@ pub struct Manager {
     pane: Pane,
     name: Entity<TextInput>,
     renaming: Option<Entity<TextInput>>,
+    /// Hears Enter in the rename field.
+    renamed: Option<Subscription>,
     /// The open library's statistics (`library.stats`), and whether they
     /// are being read.
     stats: Option<serde_json::Value>,
@@ -204,10 +206,19 @@ pub struct Manager {
 
 impl Manager {
     fn new(create: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| TextInput::new(InputKind::Form, cx).placeholder("My Inspirations"));
+        let name = cx.new(|cx| {
+            TextInput::new(InputKind::Form, cx)
+                .placeholder("My Inspirations")
+                .submits()
+        });
         let host = host::host(cx);
         let subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
+            // Enter in the name chooses the location, as the button does.
+            cx.subscribe(
+                &name,
+                |this, _, _: &crate::ui::text_input::Submitted, cx| this.create(cx),
+            ),
             // An open, a switch, a failure: read the list again.
             cx.observe(&host, |this, host, cx| {
                 if let Some((_, message)) = host.read(cx).failure.clone() {
@@ -227,6 +238,7 @@ impl Manager {
             pane: if create { Pane::Create } else { Pane::Library },
             name,
             renaming: None,
+            renamed: None,
             stats: None,
             reading: false,
             message: None,
@@ -545,10 +557,15 @@ impl Manager {
         };
         let name = row.name.clone();
         let field = cx.new(|cx| {
-            let mut field = TextInput::new(InputKind::Form, cx);
+            let mut field = TextInput::new(InputKind::Form, cx).submits();
             field.set_text(name, cx);
             field
         });
+        // Enter saves (`onKeyDown` Enter).
+        self.renamed = Some(cx.subscribe(
+            &field,
+            |this, _, _: &crate::ui::text_input::Submitted, cx| this.save_rename(cx),
+        ));
         window.focus(&field.focus_handle(cx), cx);
         self.renaming = Some(field);
         cx.notify();
@@ -857,7 +874,10 @@ impl Manager {
                 .gap(px(6.))
                 .child(
                     div()
-                        .w(px(240.))
+                        // `width: min(240px, 100%)`.
+                        .flex_none()
+                        .w(relative(1.))
+                        .max_w(px(240.))
                         .h(px(28.))
                         .px(px(8.))
                         .rounded(px(theme::RADIUS_MD))
@@ -867,7 +887,6 @@ impl Manager {
                         .items_center()
                         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                             match event.keystroke.key.as_str() {
-                                "enter" => this.save_rename(cx),
                                 "escape" => {
                                     this.renaming = None;
                                     cx.notify();
@@ -1171,11 +1190,6 @@ impl Manager {
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         window.focus(&field, cx)
                     })
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "enter" {
-                            this.create(cx);
-                        }
-                    }))
                     .child(self.name.clone()),
             )
             .child(
@@ -1340,8 +1354,12 @@ impl Manager {
         let accept = cx.listener(|this: &mut Self, _: &(), window, cx| {
             if let Some((identity, root, act, _)) = this.asking.take() {
                 host::agree(&identity, cx);
-                this.perform(root.to_string_lossy().into_owned(), act, window, cx);
                 cx.notify();
+                // After the question has let the keyboard go, so a rename's
+                // field keeps it.
+                cx.defer_in(window, move |this, window, cx| {
+                    this.perform(root.to_string_lossy().into_owned(), act, window, cx)
+                });
             }
         });
         Some(

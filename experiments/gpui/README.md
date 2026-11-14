@@ -264,6 +264,14 @@ Sync card, the cloud rows of the actions menu and Open from Cloud… are not
 built (cloud needs the network): the card and Open from Cloud… are drawn
 as production draws them for a library with no cloud location, disabled.
 
+Rename, Show in File Manager, Move… and Delete… act on a library the user
+may not have opened here, so they ask the same consent as opening does
+(production has no such question; this app errs on the side of asking).
+Remove from List and Locate… only change this app's list, and ask nothing
+more than production does. Rename, Remove from List, Move…, Delete…, Show
+in File Manager, New Library and the blocking notice were run end to end
+in the off-screen tool on generated libraries.
+
 What stays as it was: `--make-copy` reads its source read-only;
 `<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
 refuse paths outside the open library, whichever kind it is, and Show in
@@ -274,7 +282,9 @@ For pictures of this path, the off-screen tool (a seam) takes
 libraries directly in that folder, which must lie inside a temporary
 folder, count as permitted by rules 2 and 3, and only they are listed.
 `PICTO_GPUI_TEST_PICTO_RUNNING=1` makes the Electron app's probe say it
-runs (unset there, it says it does not).
+runs, and `=after-open` says it does not for the open's own look and does
+from then on, as when it starts while a library is open (unset there, it
+says it does not).
 
 ### Making a copy and opening it
 
@@ -995,7 +1005,7 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
 | `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
 | `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen tool | start at the gate; the generated libraries directly in that temporary folder may be listed and opened |
-| `PICTO_GPUI_TEST_PICTO_RUNNING` | off-screen tool | the Electron app's probe says it runs |
+| `PICTO_GPUI_TEST_PICTO_RUNNING` | off-screen tool | the Electron app's probe says it runs (`after-open`: from after the open on) |
 | `PICTO_GPUI_TEST_LIBRARY`, `PICTO_GPUI_TEST_WEBM`, `PICTO_GPUI_TEST_AUDIO`, `PICTO_GPUI_TEST_VIDEO` | ignored tests | inputs |
 | `PICTO_GPUI_MATRIX_OUT`, `PICTO_GPUI_MEDIA`, `PICTO_GPUI_MEDIA_MIME` | format matrix tests | pictures folder, a real file, its type |
 | `PICTO_GPUI_COPY_ONLY` | `run.sh` | make the copy, print it, stop |

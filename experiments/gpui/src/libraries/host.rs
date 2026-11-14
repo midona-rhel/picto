@@ -70,19 +70,41 @@ pub fn host(cx: &mut App) -> Entity<Host> {
 }
 
 /// The system's probes; in a test build the Electron app is what
-/// `PICTO_GPUI_TEST_PICTO_RUNNING` says (unset: not running), so the
-/// off-screen tool never depends on what runs on the machine.
+/// `PICTO_GPUI_TEST_PICTO_RUNNING` says (unset: not running; `after-open`:
+/// not running for the first look, the open's, and running from then on,
+/// as when it starts while a library is open), so the off-screen tool
+/// never depends on what runs on the machine.
 fn probes() -> Rc<dyn Probes> {
     #[cfg(test)]
     {
-        Rc::new(admission::tests::Fake {
-            running: Ok(std::env::var_os("PICTO_GPUI_TEST_PICTO_RUNNING")
-                .map(|_| "Picto (PICTO_GPUI_TEST_PICTO_RUNNING)".to_owned())),
+        Rc::new(TestProbe {
+            setting: std::env::var("PICTO_GPUI_TEST_PICTO_RUNNING").ok(),
+            looks: std::cell::Cell::new(0),
         })
     }
     #[cfg(not(test))]
     {
         Rc::new(admission::System)
+    }
+}
+
+#[cfg(test)]
+struct TestProbe {
+    setting: Option<String>,
+    looks: std::cell::Cell<usize>,
+}
+
+#[cfg(test)]
+impl Probes for TestProbe {
+    fn picto_process(&self) -> Result<Option<String>, String> {
+        let looks = self.looks.get();
+        self.looks.set(looks + 1);
+        let running = match self.setting.as_deref() {
+            None => false,
+            Some("after-open") => looks > 0,
+            Some(_) => true,
+        };
+        Ok(running.then(|| "Picto (PICTO_GPUI_TEST_PICTO_RUNNING)".to_owned()))
     }
 }
 
@@ -318,7 +340,9 @@ pub fn delete(
                         &mut state.pinned_libraries,
                         &mut state.last_library,
                         &text,
-                    )
+                    );
+                    // A library put there later is asked about afresh.
+                    state.library_consents.retain(|(path, _)| *path != text);
                 });
                 crate::set_app_menus(cx);
             }
@@ -405,8 +429,10 @@ pub fn check_picto(cx: &mut App) {
         None
     };
     let _ = main.update(cx, |main, _, cx| {
-        if main.blocked != blocked {
-            main.blocked = blocked;
+        if main.blocked.as_ref().map(|(process, _)| process) != blocked.as_ref() {
+            // The notice keeps its own time on screen while it stays, so
+            // its entrance plays once.
+            main.blocked = blocked.map(|process| (process, ui::modal::Presence::new()));
             cx.notify();
         }
     });
@@ -832,7 +858,7 @@ pub struct Main {
     missing: Option<(PathBuf, ui::modal::Presence)>,
     /// The Electron app's process while it runs beside a library the user
     /// keeps.
-    blocked: Option<String>,
+    blocked: Option<(String, ui::modal::Presence)>,
     focus: FocusHandle,
     notifications: Entity<ui::notify::Host>,
     /// Whether the gate has opened the Library Manager by itself yet.
@@ -1062,14 +1088,14 @@ impl Main {
     }
 
     fn notice(&self) -> Option<AnyElement> {
-        self.blocked.as_ref()?;
+        let (_, presence) = self.blocked.as_ref()?;
         Some(
             ui::confirm::confirm(
                 "library-picto-running",
                 en("Quit Picto first"),
                 en("Picto is running while this app has a library you keep open. Both must never have a library open at the same time: quit Picto, then choose Check Again, or close the library here."),
                 t("Check Again"),
-                ui::modal::Presence::new(),
+                *presence,
             )
             .cancel_label(en("Close Library"))
             .layer(ui::layer::OVER_DIALOG)
