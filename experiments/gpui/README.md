@@ -859,8 +859,10 @@ version are kept. The app starts on All each launch, as production does.
   line. `i18n::guard::every_shown_text_goes_through_t` fails on a literal
   given to `t` that is not a key, on a key left outside `t`, and on a
   literal handed straight to a drawing call (`.child`, `.label`, a tooltip,
-  a notification, …); it cannot see a text built with `format!` and drawn
-  later, or a literal kept in a variable that is not a key.
+  a notification, …), and on a `format!` whose template is a key once its
+  placeholders are set aside (`{name}` against `{value0}`); it cannot see
+  a text of this app's own built with `format!` and drawn later, or a
+  literal kept in a variable that is not a key.
 - **Every control says what it is.** A clickable element sets a role
   (`.role(Role::Button)`, …) and a name, its visible label through `t` or
   production's `aria-label`, else its tooltip's text (shared controls do
@@ -1207,6 +1209,13 @@ re-checked by reading the code; the rest were checked against it.
   in production's bar (Edit's AutoFill, Dictation and Emoji & Symbols, the
   Window menu's tiling rows), and it titles the application menu with the
   process's name.
+- **The tail of a flick after an Inbox review.** Accept and Reject
+  swallow the rest of the scroll gesture under way, by production's rule
+  (`ui::momentum`, `scrollMomentum.ts`: until a 90 ms pause, a reversal, a
+  push 1.6 times stronger, or 1.2 s). Only the rule is tested: the
+  off-screen tool spends about 170 ms per input in the viewer, longer than
+  the pause that ends a gesture, so it cannot play a flick, and no
+  trackpad or wheel has tried it.
 - **Drops from a web browser.** No real browser drag has been dropped on
   any platform. On macOS the pasteboard reading was checked on a pasteboard
   of a test's own, and a drop of in-memory image data (played with
@@ -1327,12 +1336,10 @@ re-checked by reading the code; the rest were checked against it.
 
 ### Missing features
 
-- Libraries, partly: the Library Manager's Move…, Locate…, Delete… and
-  cloud rows and Open from Cloud… are not built (shown disabled or left
-  out), nor a library's colour and icon; a missing last library shows the
-  gate, not production's Locate…/Remove from List dialog; no library has
-  ever been opened in a real window, nor the consent, the blocking notice
-  or a switch seen on a screen.
+- Libraries, partly: the Library Manager's cloud rows and Open from
+  Cloud… are not built (shown disabled or left out); no library has ever
+  been opened in a real window, nor the consent, the blocking notice or a
+  switch seen on a screen.
 - Localization, partly: the application menu stays English, as production's
   (`menu.mjs` is not translated); texts production writes without a key
   stay English (`src/i18n/gpui_only.txt`), and so do texts built with
@@ -1365,7 +1372,10 @@ re-checked by reading the code; the rest were checked against it.
   task bar is a live region too; whether any platform announces a change
   there, or a notification, has not been heard.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
-  writes: drawn in Settings, not performed.
+  writes: drawn in Settings, disabled, not performed. On a library with a
+  cloud provider, Settings › Cloud says under its buttons that they are
+  not available in this version, and Restore History says its snapshots
+  are not listed rather than that there are none.
 - Site logins, partly. Seen working only on macOS against a local page; no
   real service has been signed in to (no real site is contacted from a
   check). Windows and Linux are built and tested in CI and have never opened
@@ -1406,8 +1416,6 @@ re-checked by reading the code; the rest were checked against it.
 - Detail windows: per-image zoom memory, "Loading..." placeholder†, a menu on
   a collection's members, and keeping the toolbar shown while the window is
   dragged.
-- "Ungroup N Collections..." names no count when the whole destination is
-  selected and not all loaded.
 - Reduced motion: the system setting is not read.
 - File choosers take every file type (GPUI's prompt has no type filter).
 
@@ -1417,8 +1425,8 @@ re-checked by reading the code; the rest were checked against it.
   (Library Manager): built under the rules of "Opening a library you keep"
   (section 2); a debug build stays copy-only without
   `--allow-real-libraries`.
-- Site logins use a web view inside the app, as production's do: being
-  built.
+- Site logins use a web view inside the app, as production's do: built
+  (section 4, "Site logins"; the gaps are under Missing features).
 - The two changes to the core made for this app stay: "Add
   open_library_reporting, which hands over the library before recovery
   runs" (the app depends on it) and "Make the open's media recovery pass
@@ -1437,10 +1445,7 @@ re-checked by reading the code; the rest were checked against it.
   Picto (the Electron app) adopts the core's `.picto-library.lock` (its
   own commit, "core/src/state.rs: hold an exclusive lock…"); until it
   does, only the process probe keeps the two apart, and it cannot see a
-  Picto started from an unusual name. Whether the list of libraries should
-  start from production's `config.json` (this app keeps its own and never
-  reads that file). Whether Delete Permanently and the other edits kept to
-  copies should be allowed on a library the user keeps.
+  Picto started from an unusual name.
 - Site logins: whether this app should ever write the system keychain
   (shared with the user's Picto, under the service's name alone, whatever
   the library) or keep its process-local store, as now, also when it opens
