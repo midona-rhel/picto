@@ -1,6 +1,7 @@
 //! `DatePickerButton.tsx`: a button showing a day, which opens a month's
 //! calendar below it (above it without room), with Today and Clear. Days
 //! are local `YYYY-MM-DD` keys; an empty key is no day.
+use super::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::theme;
 use crate::theme::Text as _;
 use chrono::{Datelike, Duration as Days, Local, NaiveDate};
@@ -13,7 +14,9 @@ type ChangeHandler = Rc<dyn Fn(String, &mut Window, &mut App) + 'static>;
 /// `.popover`'s width and the height it is placed by.
 const WIDTH: f32 = 278.;
 const HEIGHT: f32 = 340.;
-const MARGIN: f32 = 8.;
+/// `.popover`'s place: 5px under the button's left edge, kept 8px inside
+/// the window, or above the button when it does not fit below.
+const PLACEMENT: Placement = Placement::new(Side::Below, 5., 8.).flip(Flip::WhenNoRoom);
 
 struct State {
     open: bool,
@@ -27,7 +30,6 @@ pub struct DatePicker {
     id: ElementId,
     value: SharedString,
     on_change: Option<ChangeHandler>,
-    layer: usize,
 }
 
 pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> DatePicker {
@@ -35,17 +37,10 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
         id: id.into(),
         value: value.into(),
         on_change: None,
-        layer: super::layer::POPOVER,
     }
 }
 
 impl DatePicker {
-    /// The calendar's drawing order, above a dialog the picker sits in.
-    pub fn layer(mut self, priority: usize) -> Self {
-        self.layer = priority;
-        self
-    }
-
     /// Called with the day chosen, or an empty key for Clear.
     pub fn on_change(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -54,14 +49,14 @@ impl DatePicker {
 }
 
 /// `parseDate`: a valid `YYYY-MM-DD` day.
-pub fn parse_day(value: &str) -> Option<NaiveDate> {
+fn parse_day(value: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(value, crate::text::date_format::DAY)
         .ok()
         .filter(|date| date.format(crate::text::date_format::DAY).to_string() == value)
 }
 
 /// `calendarDays`: six weeks from the Sunday on or before the month's first.
-pub fn calendar_days(month: NaiveDate) -> Vec<NaiveDate> {
+fn calendar_days(month: NaiveDate) -> Vec<NaiveDate> {
     let first = month.with_day(1).unwrap_or(month);
     let start = first - Days::days(first.weekday().num_days_from_sunday() as i64);
     (0..42).map(|offset| start + Days::days(offset)).collect()
@@ -73,39 +68,10 @@ fn add_months(month: NaiveDate, delta: i32) -> NaiveDate {
         .unwrap_or(month)
 }
 
-/// `.popover`'s place: under the button's left edge, kept 8px inside the
-/// window, or above the button when it does not fit below.
-pub fn place(button: Bounds<Pixels>, viewport: Size<Pixels>) -> (f32, f32) {
-    place_sized(button, viewport, WIDTH, HEIGHT)
-}
-
-/// [`place`] for a popover of another size, as the smart-folder rules'
-/// colour popover is placed the same way.
-pub fn place_sized(
-    button: Bounds<Pixels>,
-    viewport: Size<Pixels>,
-    popover_width: f32,
-    popover_height: f32,
-) -> (f32, f32) {
-    let (left, top, bottom) = (
-        f32::from(button.left()),
-        f32::from(button.top()),
-        f32::from(button.bottom()),
-    );
-    let (width, height) = (f32::from(viewport.width), f32::from(viewport.height));
-    let x = left.min(width - popover_width - MARGIN).max(MARGIN);
-    let y = if bottom + popover_height <= height - MARGIN {
-        bottom + 5.
-    } else {
-        (top - popover_height - 5.).max(MARGIN)
-    };
-    (x, y)
-}
-
-/// `.navButton` and `.footerButton`: 26px, a faint border and fill that
-/// deepen under the pointer.
 /// Opens or closes the calendar, at the chosen day's month (today's
-/// without one).
+/// without one). The keyboard stays where it was: Escape reaches the
+/// dialog or menu the picker is in, as production's window listeners take
+/// it before the calendar's own.
 fn toggle_open(state: &Entity<State>, selected: Option<NaiveDate>, cx: &mut App) {
     state.update(cx, |state, cx| {
         state.open = !state.open;
@@ -115,6 +81,15 @@ fn toggle_open(state: &Entity<State>, selected: Option<NaiveDate>, cx: &mut App)
     });
 }
 
+fn close(state: &Entity<State>, cx: &mut App) {
+    state.update(cx, |state, cx| {
+        state.open = false;
+        cx.notify();
+    });
+}
+
+/// `.navButton` and `.footerButton`: 26px, a faint border and fill that
+/// deepen under the pointer.
 fn frame_button(id: impl Into<ElementId>, theme: theme::Theme) -> Stateful<Div> {
     div()
         .id(id)
@@ -247,21 +222,12 @@ impl RenderOnce for DatePicker {
 
         let today = Local::now().date_naive();
         let handler = self.on_change;
-        let close = {
-            let state = state.clone();
-            move |cx: &mut App| {
-                state.update(cx, |state, cx| {
-                    state.open = false;
-                    cx.notify();
-                })
-            }
-        };
         let choose = {
-            let close = close.clone();
+            let state = state.clone();
             let handler = handler.clone();
             Rc::new(
                 move |day: Option<NaiveDate>, window: &mut Window, cx: &mut App| {
-                    close(cx);
+                    close(&state, cx);
                     if let Some(handler) = &handler {
                         handler(
                             day.map(|day| day.format(crate::text::date_format::DAY).to_string())
@@ -474,64 +440,46 @@ impl RenderOnce for DatePicker {
             .border_color(theme.border_secondary())
             .child(today_button)
             .child(clear_button);
-        let (x, y) = place(bounds.get(), window.viewport_size());
+        let corner = place(
+            bounds.get(),
+            size(WIDTH, HEIGHT),
+            window.viewport_size(),
+            PLACEMENT,
+        );
         let popover = super::glass_panel(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "calendar".into()),
             theme::RADIUS_LG,
             cx,
         )
-        .occlude()
-        .absolute()
-        .left(px(x))
-        .top(px(y))
         .w(px(WIDTH))
         // `.popover`'s 9px padding inside its 1px glass border.
         .p(px(10.))
         .font_family(theme::FONT_UI)
         .text(theme::TEXT_SM)
         .text_color(theme.text())
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(header)
         .child(weekdays)
         .child(grid)
         .child(footer);
         // `.backdrop`: a press anywhere else closes the calendar.
-        let backdrop = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id.clone()),
-                "backdrop".into(),
-            ))
-            .occlude()
-            .absolute()
-            .inset_0()
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                cx.stop_propagation();
-                close(cx);
-            });
-        let viewport = window.viewport_size();
         div().w_full().child(trigger).child(
-            deferred(
-                anchored()
-                    .position_mode(AnchoredPositionMode::Window)
-                    .position(point(px(0.), px(0.)))
-                    .child(
-                        div()
-                            .w(viewport.width)
-                            .h(viewport.height)
-                            .child(backdrop)
-                            .child(popover),
-                    ),
+            floating(
+                ElementId::NamedChild(std::sync::Arc::new(self.id), "floating".into()),
+                super::layer::POPOVER,
             )
-            .with_priority(self.layer),
+            .at(corner)
+            .dismiss(Dismissal::Backdrop { right: false }, move |_, cx| {
+                close(&state, cx)
+            })
+            .child(popover),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{add_months, calendar_days, parse_day, place, place_sized};
+    use super::{add_months, calendar_days, parse_day};
     use chrono::NaiveDate;
-    use gpui::{Bounds, point, px, size};
 
     #[test]
     fn days_parse_only_when_real() {
@@ -559,19 +507,5 @@ mod tests {
             add_months(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(), -1),
             NaiveDate::from_ymd_opt(2024, 12, 1).unwrap()
         );
-    }
-
-    #[test]
-    fn the_calendar_opens_below_unless_it_does_not_fit() {
-        let viewport = size(px(1000.), px(800.));
-        let button = Bounds::new(point(px(900.), px(100.)), size(px(140.), px(26.)));
-        // Kept 8px inside the right edge, 5px below the button.
-        assert_eq!(place(button, viewport), (1000. - 278. - 8., 131.));
-        let low = Bounds::new(point(px(20.), px(700.)), size(px(140.), px(26.)));
-        assert_eq!(place(low, viewport), (20., 700. - 340. - 5.));
-        // A smaller popover (the rules' colour, 230×286) fits below there.
-        let middle = Bounds::new(point(px(20.), px(480.)), size(px(140.), px(26.)));
-        assert_eq!(place_sized(middle, viewport, 230., 286.), (20., 511.));
-        assert_eq!(place(middle, viewport), (20., 480. - 340. - 5.));
     }
 }

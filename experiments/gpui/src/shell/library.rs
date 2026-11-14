@@ -9,7 +9,7 @@
 use crate::grid::thumbnails::Thumbnails;
 use crate::session::Session;
 use crate::theme::Text as _;
-use crate::ui::popover::{self, Opening, Placement};
+use crate::ui::popover::{self, Opening, Placement, Side};
 use crate::ui::text_input::TextInput;
 use crate::{theme, ui};
 use gpui::*;
@@ -17,13 +17,14 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-/// `LibrarySwitcherPopover`'s placement: 300px wide, 8px under the button,
-/// and never so low that its 420px would leave the window.
-const PLACEMENT: Placement = Placement {
+/// `LibrarySwitcherPopover`'s placement: 8px under the button, kept 8px
+/// inside the window.
+const PLACEMENT: Placement = Placement::new(Side::Below, 8., 8.);
+/// 300px wide, and placed as if 422px tall, so its top is never lower than
+/// 430px above the window's bottom (`viewport.height - 430`).
+const SIZE: Size<f32> = Size {
     width: 300.,
-    gap: 8.,
-    margin: 8.,
-    reserve: 430.,
+    height: 422.,
 };
 const MAX_HEIGHT: f32 = 420.;
 /// `.list`'s padding, `.item`'s padding and the avatar's size and gap.
@@ -539,7 +540,7 @@ impl Render for LibraryPopover {
             return div().into_any_element();
         };
         let theme = theme::theme(cx);
-        let width = popover::width(PLACEMENT, window);
+        let width = popover::width(SIZE.width, PLACEMENT.margin, window);
         let query = self.search.read(cx).value();
         let names = self
             .libraries
@@ -645,6 +646,7 @@ impl Render for LibraryPopover {
             &self.focus,
             self.control.get(),
             PLACEMENT,
+            SIZE,
             MAX_HEIGHT,
             move |window, cx| {
                 let _ = this.update(cx, |this, cx| this.close(window, cx));

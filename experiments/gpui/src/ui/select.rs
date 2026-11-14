@@ -1,3 +1,4 @@
+use super::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::prelude::FluentBuilder as _;
@@ -104,6 +105,17 @@ const LIST_GAP: f32 = 2.;
 const LIST_MAX: f32 = VISIBLE as f32 * ROW + 6. * LIST_GAP + 12.;
 /// The list keeps this far below (or above) the button.
 const LIST_OFFSET: f32 = 4.;
+/// `CmSelect`'s placement: as wide as the button, 4px below it, or above it
+/// when the menu (as `CmSelect` measures it, 26px a choice and 8px, at
+/// most 164px) does not fit above the window's last 8px and there is more
+/// room above. It is never moved sideways.
+fn placement(choices: usize) -> Placement {
+    Placement::new(Side::Below, LIST_OFFSET, 8.)
+        .flip(Flip::ToRoomierSide {
+            needs: (choices as f32 * ROW + 8.).min(164.),
+        })
+        .unclamped()
+}
 /// Room around a pop-up list for its drawn shadow (`--shadow-panel`).
 const SHADOW_ROOM: f32 = 40.;
 
@@ -121,20 +133,21 @@ type Area = [f32; 4];
 
 /// Where a select's list goes when it opens as a pop-up window of its own
 /// (inside a pop-up menu): `button` and `area` (the display's usable part)
-/// in display coordinates. The list is as wide as the button, 4px below it
-/// or above it by the rule of [`opens_upward`] applied to the display, and
-/// moved sideways to stay on the display. Returns the list's rectangle and
-/// the window's, which leaves room for the shadow but not past the display.
-pub fn pop_up_list(button: Area, choices: usize, area: Area) -> (Area, Area) {
+/// in display coordinates. The list is placed as in the window, the
+/// display standing for the window, and moved sideways to stay on the
+/// display. Returns the list's rectangle and the window's, which leaves
+/// room for the shadow but not past the display.
+fn pop_up_list(button: Area, choices: usize, area: Area) -> (Area, Area) {
     let [bx, by, bw, bh] = button;
     let [ax, ay, aw, ah] = area;
     let height = list_height(choices);
-    let upward = opens_upward(choices, by - ay, by + bh - ay, ah);
-    let y = if upward {
-        by - LIST_OFFSET - height
-    } else {
-        by + bh + LIST_OFFSET
-    };
+    let placed = place(
+        Bounds::new(point(px(bx - ax), px(by - ay)), size(px(bw), px(bh))),
+        size(bw, height),
+        size(px(aw), px(ah)),
+        placement(choices),
+    );
+    let y = ay + placed.y;
     let x = bx.min(ax + aw - bw).max(ax);
     let list = [x, y, bw, height];
     let left = (x - SHADOW_ROOM).max(ax);
@@ -145,14 +158,6 @@ pub fn pop_up_list(button: Area, choices: usize, area: Area) -> (Area, Area) {
         list,
         [left, top, (right - left).max(0.), (bottom - top).max(0.)],
     )
-}
-
-/// Whether the menu opens above the button (`CmSelect`'s `flipUp`): when it
-/// does not fit below and there is more room above.
-pub fn opens_upward(choices: usize, button_top: f32, button_bottom: f32, viewport: f32) -> bool {
-    let menu = (choices as f32 * ROW + 8.).min(164.);
-    let below = viewport - button_bottom - 8.;
-    menu > below && button_top > below
 }
 
 fn glyph(icon: Option<(&'static str, bool)>, color: Rgba) -> Option<AnyElement> {
@@ -319,13 +324,7 @@ impl RenderOnce for Select {
         }
 
         let bounds = measured.get();
-        let viewport = window.viewport_size();
-        let upward = opens_upward(
-            self.choices.len(),
-            f32::from(bounds.top()),
-            f32::from(bounds.bottom()),
-            f32::from(viewport.height),
-        );
+        let choices = self.choices.len();
         let menu = list(
             &Listed {
                 choices: self.choices,
@@ -339,39 +338,27 @@ impl RenderOnce for Select {
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "menu".into()),
             window,
             cx,
-        )
-        .on_mouse_down_out({
-            let state = state.clone();
-            move |event, _, cx| {
-                // A press on the button itself is the button's to toggle.
-                if bounds.contains(&event.position) {
-                    return;
-                }
+        );
+        let corner = place(
+            bounds,
+            size(f32::from(bounds.size.width), list_height(choices)),
+            window.viewport_size(),
+            placement(choices),
+        );
+        div().flex().child(button).child(
+            floating(
+                ElementId::NamedChild(std::sync::Arc::new(self.id), "floating".into()),
+                LAYER,
+            )
+            .anchored(corner)
+            // A press on the button itself is the button's to toggle.
+            .dismiss(Dismissal::Outside(bounds), move |_, cx| {
                 state.update(cx, |state, cx| {
                     state.open = false;
                     cx.notify();
-                });
-            }
-        });
-        let origin = if upward {
-            // Its bottom 4px above the button's top.
-            point(bounds.left(), bounds.top() - px(LIST_OFFSET))
-        } else {
-            point(bounds.left(), bounds.bottom() + px(LIST_OFFSET))
-        };
-        div().flex().child(button).child(
-            deferred(
-                anchored()
-                    .position_mode(AnchoredPositionMode::Window)
-                    .anchor(if upward {
-                        Anchor::BottomLeft
-                    } else {
-                        Anchor::TopLeft
-                    })
-                    .position(origin)
-                    .child(menu),
-            )
-            .with_priority(LAYER),
+                })
+            })
+            .child(menu),
         )
     }
 }
@@ -782,17 +769,7 @@ impl Render for PopUpList {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_height, opens_upward, pop_up_list};
-
-    #[test]
-    fn the_menu_opens_upward_only_when_there_is_more_room_above() {
-        // Three choices need 86px; 400px below is plenty.
-        assert!(!opens_upward(3, 100., 126., 534.));
-        // 50px below is too little, and more is above.
-        assert!(opens_upward(3, 500., 526., 584.));
-        // Too little either way: below wins unless above is larger.
-        assert!(!opens_upward(8, 20., 46., 120.));
-    }
+    use super::{list_height, pop_up_list};
 
     #[test]
     fn a_pop_up_list_sits_below_its_button_with_room_for_its_shadow() {

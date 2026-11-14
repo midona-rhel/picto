@@ -3,6 +3,7 @@
 //! eight that are not chosen yet below the field; the arrow keys move
 //! through them, Enter or Tab adds the highlighted one, Enter with no list
 //! adds what was typed, Backspace in the empty search removes the last tag.
+use super::popover::{Placement, Side, floating, place};
 use super::text_input::{EmptyBackspace, Submitted, TextInput};
 use crate::theme;
 use crate::theme::Text as _;
@@ -44,6 +45,8 @@ pub struct Changed;
 
 const SEARCH_DELAY: Duration = Duration::from_millis(120);
 const RESULTS: usize = 8;
+/// `.results`' `max-height`.
+const RESULTS_HEIGHT: f32 = 200.;
 
 pub struct TagTokenInput {
     values: Vec<String>,
@@ -282,7 +285,7 @@ impl Render for TagTokenInput {
                     .id("tag-token-results")
                     .occlude()
                     .w(area.size.width)
-                    .max_h(px(200.))
+                    .max_h(px(RESULTS_HEIGHT))
                     .overflow_y_scroll()
                     .p(px(4.))
                     .border_1()
@@ -331,13 +334,18 @@ impl Render for TagTokenInput {
                         ),
                 );
             }
+            // `.results`: 2px under the field, as wide, where it falls; a
+            // dialog's suggestions show over it.
+            let corner = place(
+                area,
+                size(f32::from(area.size.width), RESULTS_HEIGHT),
+                window.viewport_size(),
+                Placement::new(Side::Below, 2., 0.).unclamped(),
+            );
             root = root.child(
-                deferred(
-                    anchored()
-                        .position(point(area.left(), area.bottom() + px(2.)))
-                        .child(list),
-                )
-                .with_priority(super::layer::OVER_DIALOG),
+                floating("tag-token-floating", super::layer::OVER_DIALOG)
+                    .anchored(corner)
+                    .child(list),
             );
         }
         root

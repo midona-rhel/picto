@@ -314,12 +314,8 @@ impl FolderPicker {
     ) {
         self.open(None, folders, window, cx);
         let view = window.viewport_size();
-        self.geometry = overlay_shell::place_above(
-            anchor,
-            size(f32::from(view.width), f32::from(view.height)),
-            WIDTH,
-            HEIGHT,
-        );
+        self.geometry =
+            overlay_shell::place(overlay_shell::Opens::Above(anchor), view, WIDTH, HEIGHT);
     }
 
     /// Opens in the filter mode below a control of the filter bar, on the
@@ -340,12 +336,8 @@ impl FolderPicker {
         });
         self.show(None, include, window, cx);
         let view = window.viewport_size();
-        self.geometry = overlay_shell::place_below(
-            below,
-            size(f32::from(view.width), f32::from(view.height)),
-            WIDTH,
-            HEIGHT,
-        );
+        self.geometry =
+            overlay_shell::place(overlay_shell::Opens::Below(below), view, WIDTH, HEIGHT);
     }
 
     fn show(
@@ -359,12 +351,8 @@ impl FolderPicker {
             self.opening = Some(ui::popover::Opening::new(window, cx));
         }
         let view = window.viewport_size();
-        self.geometry = overlay_shell::place(
-            anchor,
-            size(f32::from(view.width), f32::from(view.height)),
-            WIDTH,
-            HEIGHT,
-        );
+        self.geometry =
+            overlay_shell::place(overlay_shell::Opens::beside(anchor), view, WIDTH, HEIGHT);
         self.parent_mode = None;
         self.query.clear();
         self.search.update(cx, |search, cx| search.clear(cx));

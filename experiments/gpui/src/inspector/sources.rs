@@ -408,10 +408,9 @@ impl Inspector {
                 .child("Add URL")
                 .on_click(cx.listener(|this, _, window, cx| this.add_source(window, cx))),
         );
-        let field = self.sources.field.clone();
+        let field = self.sources.field.get();
         let dropdown = div()
             .id("source-list")
-            .occlude()
             .w(px(width.max(0.)))
             .min_h(px(32.))
             .max_h(px(240.))
@@ -435,17 +434,17 @@ impl Inspector {
                     cx.notify();
                 }),
             )
-            .on_mouse_down_out(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                if !field.get().contains(&event.position) {
-                    this.close_sources(true, cx);
-                }
-            }))
             .child(list);
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .child(deferred(anchored().child(dropdown)).with_priority(ui::layer::OVERLAY))
+        // Over the field where it is laid out; a press outside it and the
+        // field closes it.
+        let this = cx.entity().downgrade();
+        div().absolute().top_0().left_0().child(
+            ui::popover::floating("source-floating", ui::layer::OVERLAY)
+                .dismiss(ui::popover::Dismissal::Outside(field), move |_, cx| {
+                    let _ = this.update(cx, |this, cx| this.close_sources(true, cx));
+                })
+                .child(dropdown),
+        )
     }
 }
 

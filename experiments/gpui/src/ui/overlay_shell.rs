@@ -7,6 +7,7 @@
 //! Also the panel's own small controls (`OverlayShell.module.css`): the
 //! header buttons, the compact view tabs and the key hints. Its check box is
 //! [`super::check::check_box`]'s compact size.
+use super::popover::{self, Dismissal, Placement, Side, floating};
 use super::text_input;
 use super::tooltip::Tip;
 use crate::theme;
@@ -76,69 +77,59 @@ impl Geometry {
     }
 }
 
-/// Where a panel of `width` × `height` opens (`OverlayShell`'s placement):
-/// with an anchor, its right edge 12px left of the anchor's x (the
-/// inspector's left edge) and its top at the anchor's y; without one,
-/// centred. Either way it is kept 12px inside the window.
-pub fn place(anchor: Option<Point<f32>>, viewport: Size<f32>, width: f32, height: f32) -> Geometry {
-    match anchor {
-        Some(anchor) => {
-            let mut top = anchor.y;
-            if top + height > viewport.height - MARGIN {
-                top = viewport.height - height - MARGIN;
-            }
-            if top < MARGIN {
-                top = MARGIN;
-            }
-            // `right` as the CSS has it: the distance from the window's
-            // right edge.
-            let mut right = viewport.width - anchor.x + MARGIN;
-            if right < MARGIN {
-                right = MARGIN;
-            }
-            if viewport.width - right - width < MARGIN {
-                right = viewport.width - width - MARGIN;
-            }
-            let edge = (viewport.width - right).round();
+/// Where the panel opens (`OverlayShell`'s `anchor` and
+/// `anchorPlacement`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Opens {
+    /// Its right edge 12px left of this point's x (the inspector's left
+    /// edge), its top at its y.
+    Beside(Point<f32>),
+    /// Its left edge and top at this point (`'below'`).
+    Below(Point<f32>),
+    /// Its bottom 4px above this point, from its x (`'above'`).
+    Above(Point<f32>),
+    /// Centred in the window.
+    Centred,
+}
+
+impl Opens {
+    /// Beside `anchor`, or centred without one.
+    pub fn beside(anchor: Option<Point<f32>>) -> Self {
+        anchor.map_or(Opens::Centred, Opens::Beside)
+    }
+}
+
+/// Where a panel of `width` × `height` opens, kept 12px inside the window
+/// unless centred.
+pub fn place(opens: Opens, viewport: Size<Pixels>, width: f32, height: f32) -> Geometry {
+    let spot = |at: Point<f32>| Bounds::new(point(px(at.x), px(at.y)), Size::default());
+    let (anchor, placement) = match opens {
+        Opens::Beside(at) => (spot(at), Placement::new(Side::Left, MARGIN, MARGIN)),
+        Opens::Below(at) => (spot(at), Placement::new(Side::Below, 0., MARGIN)),
+        Opens::Above(at) => (spot(at), Placement::new(Side::Above, 4., MARGIN)),
+        Opens::Centred => (
+            Bounds::new(point(px(0.), px(0.)), viewport),
+            Placement::new(Side::Over { centred: true }, 0., MARGIN).unclamped(),
+        ),
+    };
+    let corner = popover::place(anchor, size(width, height), viewport, placement);
+    let (left, top) = (corner.x.round(), corner.y.round());
+    match opens {
+        // `right` as the CSS has it, so a change of width grows the panel
+        // to the left.
+        Opens::Beside(_) => {
+            let edge = (corner.x + width).round();
             Geometry {
                 right: Some(edge),
                 left: edge - width,
-                top: top.round(),
+                top,
             }
         }
-        None => Geometry {
+        _ => Geometry {
             right: None,
-            left: ((viewport.width - width) / 2.).round(),
-            top: ((viewport.height - height) / 2.).round(),
+            left,
+            top,
         },
-    }
-}
-
-/// Where a panel opens below a control (`anchorPlacement: 'below'`): its
-/// left edge and top at the anchor, kept 12px inside the window.
-pub fn place_below(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: f32) -> Geometry {
-    let mut top = anchor.y;
-    if top + height > viewport.height - MARGIN {
-        top = viewport.height - height - MARGIN;
-    }
-    let top = top.max(MARGIN);
-    let left = anchor.x.min(viewport.width - width - MARGIN).max(MARGIN);
-    Geometry {
-        right: None,
-        left: left.round(),
-        top: top.round(),
-    }
-}
-
-/// `anchorPlacement: 'above'`: the panel's bottom 4px above the anchor,
-/// from its left edge, kept 12px inside the window.
-pub fn place_above(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: f32) -> Geometry {
-    let left = anchor.x.min(viewport.width - width - MARGIN).max(MARGIN);
-    let top = (anchor.y - height - 4.).max(MARGIN);
-    Geometry {
-        right: None,
-        left: left.round(),
-        top: top.round(),
     }
 }
 
@@ -147,19 +138,21 @@ pub fn place_above(anchor: Point<f32>, viewport: Size<f32>, width: f32, height: 
 pub fn dragged(
     start: Geometry,
     delta: Point<f32>,
-    viewport: Size<f32>,
+    viewport: Size<Pixels>,
     width: f32,
     height: f32,
 ) -> Geometry {
-    let max_left = (viewport.width - width - MARGIN).max(MARGIN);
-    let max_top = (viewport.height - height - MARGIN).max(MARGIN);
-    let left = (start.left(width) + delta.x).clamp(MARGIN, max_left);
-    let min_top = theme::TITLEBAR_HEIGHT + MARGIN;
-    let top = (start.top + delta.y).clamp(min_top, max_top.max(min_top));
+    let moved = point(px(start.left(width) + delta.x), px(start.top + delta.y));
+    let corner = popover::place(
+        Bounds::new(moved, Size::default()),
+        size(width, height),
+        viewport,
+        Placement::new(Side::Over { centred: false }, 0., MARGIN).below_top(theme::TITLEBAR_HEIGHT),
+    );
     Geometry {
-        right: start.right.map(|_| left + width),
-        left,
-        top,
+        right: start.right.map(|_| corner.x + width),
+        left: corner.x,
+        top: corner.y,
     }
 }
 
@@ -217,8 +210,9 @@ pub fn overlay_shell(
 }
 
 impl OverlayShell {
-    /// The layer the panel is drawn on: above a dialog (`ui::modal`, 10)
-    /// when a dialog opened it, as the portal that follows the dialog's is.
+    /// The layer the panel is drawn on (`ui::layer::PANEL` unless set):
+    /// above the dialogs (`OVER_DIALOG`) when a dialog opened it, as the
+    /// portal that follows the dialog's is.
     pub fn layer(mut self, layer: usize) -> Self {
         self.layer = layer;
         self
@@ -271,8 +265,7 @@ fn grab(strip: Div, drag: Rc<Cell<Option<Drag>>>, geometry: Geometry) -> Div {
 impl RenderOnce for OverlayShell {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let viewport = window.viewport_size();
-        let view = size(f32::from(viewport.width), f32::from(viewport.height));
+        let view = window.viewport_size();
         let drag = window
             .use_keyed_state(
                 ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "drag".into()),
@@ -455,33 +448,19 @@ impl RenderOnce for OverlayShell {
         .absolute()
         .size_0();
 
-        let mut layer = div()
-            .id(ElementId::NamedChild(
-                std::sync::Arc::new(self.id),
-                "backdrop".into(),
-            ))
-            .w(viewport.width)
-            .h(viewport.height)
-            .child(tracker);
-        if !self.pinned {
-            let (click, right) = (self.on_close.clone(), self.on_close);
-            layer = layer
-                .occlude()
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| click(window, cx))
-                .on_mouse_down(MouseButton::Right, move |_, window, cx| right(window, cx))
-                .on_scroll(|_, _, cx| cx.stop_propagation());
-        }
-        let panel = div()
-            .absolute()
-            .left(px(left))
-            .top(px(self.geometry.top))
-            .child(panel);
-        deferred(
-            anchored()
-                .position(point(px(0.), px(0.)))
-                .child(layer.child(panel)),
+        let mut layer = floating(
+            ElementId::NamedChild(std::sync::Arc::new(self.id), "floating".into()),
+            self.layer,
         )
-        .with_priority(self.layer)
+        .at(point(left, self.geometry.top));
+        // Pinned, the backdrop goes and only Escape closes the panel.
+        if !self.pinned {
+            let close = self.on_close;
+            layer = layer.dismiss(Dismissal::Backdrop { right: true }, move |window, cx| {
+                close(window, cx)
+            });
+        }
+        layer.child(panel.child(tracker))
     }
 }
 
@@ -581,22 +560,24 @@ pub fn hint(cx: &App) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{Geometry, dragged, place, place_above};
-    use gpui::{point, size};
+    use super::{Geometry, Opens, dragged, place};
+    use gpui::{point, px, size};
 
     #[test]
     fn a_panel_opens_above_its_button_within_the_window() {
-        let geometry = place_above(point(420., 600.), size(1200., 800.), 340., 480.);
+        let view = size(px(1200.), px(800.));
+        let geometry = place(Opens::Above(point(420., 600.)), view, 340., 480.);
         assert_eq!((geometry.left(340.), geometry.top), (420., 116.));
         // Too near the top or the right edge, it stays 12px inside.
-        let geometry = place_above(point(1000., 300.), size(1200., 800.), 340., 480.);
+        let geometry = place(Opens::Above(point(1000., 300.)), view, 340., 480.);
         assert_eq!((geometry.left(340.), geometry.top), (848., 12.));
     }
 
     #[test]
     fn a_panel_opens_left_of_the_inspector_at_its_button() {
         // Inspector edge at x = 900, button top at y = 300, 1200 × 800 window.
-        let geometry = place(Some(point(900., 300.)), size(1200., 800.), 540., 480.);
+        let view = size(px(1200.), px(800.));
+        let geometry = place(Opens::Beside(point(900., 300.)), view, 540., 480.);
         assert_eq!(geometry.right, Some(888.));
         assert_eq!(geometry.left(540.), 348.);
         assert_eq!(geometry.top, 300.);
@@ -606,14 +587,15 @@ mod tests {
 
     #[test]
     fn a_panel_is_kept_inside_the_window() {
+        let view = size(px(1200.), px(800.));
         // Too low: it rises to 12px above the bottom.
-        let geometry = place(Some(point(900., 700.)), size(1200., 800.), 340., 480.);
+        let geometry = place(Opens::Beside(point(900., 700.)), view, 340., 480.);
         assert_eq!(geometry.top, 308.);
         // An inspector edge so far left the panel would leave the window.
-        let geometry = place(Some(point(200., 100.)), size(1200., 800.), 540., 480.);
+        let geometry = place(Opens::Beside(point(200., 100.)), view, 540., 480.);
         assert_eq!(geometry.left(540.), 12.);
         // No anchor: centred.
-        let geometry = place(None, size(1200., 800.), 360., 480.);
+        let geometry = place(Opens::beside(None), view, 360., 480.);
         assert_eq!(
             (geometry.right, geometry.left, geometry.top),
             (None, 420., 160.)
@@ -622,11 +604,11 @@ mod tests {
 
     #[test]
     fn a_panel_opens_below_its_control() {
-        let viewport = size(1000., 700.);
-        let below = super::place_below(point(100., 80.), viewport, 360., 480.);
+        let view = size(px(1000.), px(700.));
+        let below = place(Opens::Below(point(100., 80.)), view, 360., 480.);
         assert_eq!((below.right, below.left, below.top), (None, 100., 80.));
         // Pushed in from the right edge and up from the bottom.
-        let pushed = super::place_below(point(900., 400.), viewport, 360., 480.);
+        let pushed = place(Opens::Below(point(900., 400.)), view, 360., 480.);
         assert_eq!((pushed.left, pushed.top), (628., 208.));
     }
 
@@ -637,14 +619,15 @@ mod tests {
             left: 348.,
             top: 300.,
         };
-        let moved = dragged(start, point(-20., 10.), size(1200., 800.), 540., 480.);
+        let view = size(px(1200.), px(800.));
+        let moved = dragged(start, point(-20., 10.), view, 540., 480.);
         assert_eq!(moved.left(540.), 328.);
         assert_eq!(moved.right, Some(868.));
         assert_eq!(moved.top, 308.);
-        let far = dragged(start, point(-1000., 1000.), size(1200., 800.), 540., 480.);
+        let far = dragged(start, point(-1000., 1000.), view, 540., 480.);
         assert_eq!((far.left(540.), far.top), (12., 308.));
         // Never up under the titlebar and its window buttons.
-        let up = dragged(start, point(0., -1000.), size(1200., 800.), 540., 480.);
+        let up = dragged(start, point(0., -1000.), view, 540., 480.);
         assert_eq!(up.top, crate::theme::TITLEBAR_HEIGHT + 12.);
     }
 }

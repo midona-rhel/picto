@@ -10,6 +10,7 @@ use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::color_editor::{ColorCommitted, ColorEditor};
 use crate::ui::field::Look;
+use crate::ui::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::ui::tag_token_input::{self, TagTokenInput};
 use crate::ui::text_input::{Submitted, TextInput};
 use crate::ui::{self, action_button::Look as ButtonLook, modal::Presence, modal::Size};
@@ -51,11 +52,21 @@ impl EventEmitter<Event> for SmartFolderEditor {}
 const PREVIEW_DELAY: Duration = Duration::from_millis(100);
 /// `.rulesModal`: `min(760px, 100vw - 48px)`.
 const RULES_WIDTH: f32 = 760.;
-/// The pop-ups the dialog opens draw above it.
-const POPOVER_LAYER: usize = ui::layer::POPOVER;
-/// `.colorPickerPopover`: its width and the height it is placed by.
-const COLOR_POPOVER_WIDTH: f32 = 230.;
-const COLOR_POPOVER_HEIGHT: f32 = 286.;
+/// `.colorPickerPopover`: 230px wide and placed as if 286px tall, as the
+/// day picker's calendar is: 5px under its trigger, above it without room,
+/// kept 8px inside the window.
+const COLOR_POPOVER: gpui::Size<f32> = gpui::Size {
+    width: 230.,
+    height: 286.,
+};
+const COLOR_PLACEMENT: Placement = Placement::new(Side::Below, 5., 8.).flip(Flip::WhenNoRoom);
+/// `.pickerPopover`: 260×308, 4px under its trigger, kept 4px inside the
+/// window.
+const ICON_POPOVER: gpui::Size<f32> = gpui::Size {
+    width: 260.,
+    height: 308.,
+};
+const ICON_PLACEMENT: Placement = Placement::new(Side::Below, 4., 4.);
 
 /// One rule's editor: the rule and the fields its values are typed in.
 struct RuleRow {
@@ -889,13 +900,13 @@ impl SmartFolderEditor {
                 let date = |second: bool, input: &Entity<TextInput>, name: &str| {
                     let entity = entity.clone();
                     div().flex_1().min_w_0().child(
-                        ui::date_picker::date_picker(key(name), input.read(cx).value())
-                            .layer(POPOVER_LAYER)
-                            .on_change(move |day, _, cx| {
+                        ui::date_picker::date_picker(key(name), input.read(cx).value()).on_change(
+                            move |day, _, cx| {
                                 let _ = entity.update(cx, |this, cx| {
                                     this.set_date(group, index, second, day, cx)
                                 });
-                            }),
+                            },
+                        ),
                     )
                 };
                 div()
@@ -1204,53 +1215,34 @@ impl SmartFolderEditor {
     /// trigger (above it without room), over a backdrop that closes it.
     fn color_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let open = self.color_popover.as_ref()?;
-        let theme = theme::theme(cx);
-        let viewport = window.viewport_size();
-        let (left, top) = ui::date_picker::place_sized(
+        let corner = place(
             open.trigger,
-            viewport,
-            COLOR_POPOVER_WIDTH,
-            COLOR_POPOVER_HEIGHT,
+            COLOR_POPOVER,
+            window.viewport_size(),
+            COLOR_PLACEMENT,
         );
         Some(
-            deferred(
-                anchored().position(point(px(0.), px(0.))).child(
-                    div()
-                        .id("color-popover-backdrop")
-                        .occlude()
-                        .w(viewport.width)
-                        .h(viewport.height)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.color_popover = None;
-                                cx.notify();
-                            }),
-                        )
-                        .child(
-                            ui::GlassPanel::new(
-                                div()
-                                    .id("color-popover")
-                                    .absolute()
-                                    .left(px(left))
-                                    .top(px(top))
-                                    .w(px(COLOR_POPOVER_WIDTH))
-                                    .min_h(px(COLOR_POPOVER_HEIGHT))
-                                    .p(px(7.))
-                                    .bg(theme.glass())
-                                    .border_t_1()
-                                    .border_color(theme.glass_border_top()),
-                                theme::RADIUS_LG,
-                            )
-                            .backdrop_blur(theme.glass_blur())
-                            .drop_shadows(theme.panel_shadow())
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(open.editor.clone()),
-                        ),
-                ),
-            )
-            .with_priority(POPOVER_LAYER)
-            .into_any_element(),
+            floating("color-popover", ui::layer::POPOVER)
+                .at(corner)
+                .dismiss(Dismissal::Backdrop { right: false }, {
+                    let this = cx.entity().downgrade();
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.color_popover = None;
+                            cx.notify();
+                        });
+                    }
+                })
+                .child(
+                    ui::glass_panel("color-popover", theme::RADIUS_LG, cx)
+                        .w(px(COLOR_POPOVER.width))
+                        .min_h(px(COLOR_POPOVER.height))
+                        // `.colorPickerPopover`'s 7px padding inside its
+                        // 1px glass border.
+                        .p(px(8.))
+                        .child(open.editor.clone()),
+                )
+                .into_any_element(),
         )
     }
 
@@ -1258,45 +1250,35 @@ impl SmartFolderEditor {
     /// over a backdrop that closes it.
     fn icon_popover(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let picker = self.icon_picker.clone()?;
-        let trigger = self.icon_trigger.get();
-        let viewport = window.viewport_size();
-        let top = (trigger.bottom() + px(4.))
-            .min(viewport.height - px(312.))
-            .max(px(4.));
-        let left = trigger.left().min(viewport.width - px(264.)).max(px(4.));
+        let corner = place(
+            self.icon_trigger.get(),
+            ICON_POPOVER,
+            window.viewport_size(),
+            ICON_PLACEMENT,
+        );
         Some(
-            deferred(
-                anchored().position(point(px(0.), px(0.))).child(
-                    div()
-                        .id("icon-picker-backdrop")
-                        .occlude()
-                        .w(viewport.width)
-                        .h(viewport.height)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.icon_picker = None;
-                                cx.notify();
-                            }),
-                        )
-                        .child(
-                            ui::glass_panel("icon-picker-popover", theme::RADIUS_LG, cx)
-                                .absolute()
-                                .left(left)
-                                .top(top)
-                                .w(px(260.))
-                                .h(px(308.))
-                                // `.pickerPopover`'s 4px padding inside its
-                                // 1px glass border.
-                                .p(px(5.))
-                                .overflow_hidden()
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                                .child(picker),
-                        ),
-                ),
-            )
-            .with_priority(POPOVER_LAYER)
-            .into_any_element(),
+            floating("icon-picker-popover", ui::layer::POPOVER)
+                .at(corner)
+                .dismiss(Dismissal::Backdrop { right: false }, {
+                    let this = cx.entity().downgrade();
+                    move |_, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.icon_picker = None;
+                            cx.notify();
+                        });
+                    }
+                })
+                .child(
+                    ui::glass_panel("icon-picker-popover", theme::RADIUS_LG, cx)
+                        .w(px(ICON_POPOVER.width))
+                        .h(px(ICON_POPOVER.height))
+                        // `.pickerPopover`'s 4px padding inside its 1px
+                        // glass border.
+                        .p(px(5.))
+                        .overflow_hidden()
+                        .child(picker),
+                )
+                .into_any_element(),
         )
     }
 }

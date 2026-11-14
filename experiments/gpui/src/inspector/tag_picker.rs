@@ -223,9 +223,9 @@ impl TagPicker {
         self.layer = crate::ui::layer::OVER_DIALOG;
         self.show(None, entity, window, cx);
         let view = window.viewport_size();
-        self.geometry = overlay_shell::place_above(
-            anchor,
-            size(f32::from(view.width), f32::from(view.height)),
+        self.geometry = overlay_shell::place(
+            overlay_shell::Opens::Above(anchor),
+            view,
             if self.sidebar { WIDE } else { NARROW },
             HEIGHT,
         );
@@ -255,9 +255,9 @@ impl TagPicker {
         self.layer = crate::ui::layer::PANEL;
         self.show(None, include, window, cx);
         let view = window.viewport_size();
-        self.geometry = overlay_shell::place_below(
-            below,
-            size(f32::from(view.width), f32::from(view.height)),
+        self.geometry = overlay_shell::place(
+            overlay_shell::Opens::Below(below),
+            view,
             if self.sidebar { WIDE } else { NARROW },
             HEIGHT,
         );
@@ -276,12 +276,8 @@ impl TagPicker {
         }
         let view = window.viewport_size();
         let width = if self.sidebar { WIDE } else { NARROW };
-        self.geometry = overlay_shell::place(
-            anchor,
-            size(f32::from(view.width), f32::from(view.height)),
-            width,
-            HEIGHT,
-        );
+        self.geometry =
+            overlay_shell::place(overlay_shell::Opens::beside(anchor), view, width, HEIGHT);
         self.query.clear();
         self.search.update(cx, |search, cx| search.clear(cx));
         self.pager.settled = None;
