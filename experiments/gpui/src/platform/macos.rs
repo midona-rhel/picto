@@ -102,6 +102,32 @@ pub fn without_appear_animation(ns_window: &AnyObject) {
     }
 }
 
+/// Keeps AppKit from adding its own "Enter Full Screen" row to the View
+/// menu, which has the app's "Toggle Full Screen" already. A registered
+/// default, read when the menu bar is first shown: nothing is written to
+/// the user's preferences.
+pub fn one_full_screen_row() {
+    let (Some(defaults), Some(dictionary)) = (
+        AnyClass::get(c"NSUserDefaults"),
+        AnyClass::get(c"NSDictionary"),
+    ) else {
+        return;
+    };
+    let key = NSString::from_str("NSFullScreenMenuItemEverywhere");
+    let no = NSNumber::new_bool(false);
+    // SAFETY: `standardUserDefaults` takes nothing and returns the shared
+    // object; `dictionaryWithObject:forKey:` takes two objects and returns
+    // a dictionary; `registerDefaults:` takes that dictionary.
+    unsafe {
+        let defaults: Option<Retained<AnyObject>> = msg_send![defaults, standardUserDefaults];
+        let values: Option<Retained<AnyObject>> =
+            msg_send![dictionary, dictionaryWithObject: &*no, forKey: &*key];
+        if let (Some(defaults), Some(values)) = (defaults, values) {
+            let _: () = msg_send![&*defaults, registerDefaults: &*values];
+        }
+    }
+}
+
 /// `[NSApp arrangeInFront:nil]`: the app's windows in front of other apps',
 /// in their order.
 pub fn arrange_in_front() {

@@ -348,6 +348,8 @@ fn run(
     // Panics are recorded for the log window from here on, and those of
     // the previous session are shown there.
     diagnostics::crash::install();
+    #[cfg(target_os = "macos")]
+    platform::macos::one_full_screen_row();
     let app = gpui_platform::application().with_assets(assets::Assets);
     // A click on the Dock icon brings back the main window Close Window hid.
     app.on_reopen(app_menu::reopen);
