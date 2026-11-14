@@ -342,6 +342,24 @@ pub fn window_around(items: &[RootId], active: RootId) -> &[RootId] {
     &items[start..(start + WINDOW).min(items.len())]
 }
 
+/// What the footer names as the inference backend: the backends the
+/// `chosen` models' loaded sessions run on, each once, in the models' order
+/// ("Core ML GPU/ANE", or "Core ML GPU/ANE + CPU" when they differ). None
+/// until one of them has been loaded. (Production shows the status's
+/// `cachedBackend`, which is whichever loaded session the core finds first,
+/// chosen or not.)
+pub fn backend(models: &[AiModelStatus], chosen: &[String]) -> Option<String> {
+    let mut backends: Vec<&str> = Vec::new();
+    for model in models.iter().filter(|model| chosen.contains(&model.slug)) {
+        if let Some(backend) = model.backend.as_deref()
+            && !backends.contains(&backend)
+        {
+            backends.push(backend);
+        }
+    }
+    (!backends.is_empty()).then(|| backends.join(" + "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +381,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_footer_names_the_backends_of_the_chosen_models_only() {
+        let loaded = |slug: &str, backend: Option<&str>| AiModelStatus {
+            session_loaded: backend.is_some(),
+            backend: backend.map(String::from),
+            ..model(slug, true, true)
+        };
+        let models = [
+            loaded("convnext", Some("CPU")),
+            loaded("swin", Some("CPU")),
+            loaded("eva", Some("Core ML GPU/ANE")),
+            loaded("oracle", None),
+        ];
+        let chosen = |slugs: &[&str]| slugs.iter().map(|slug| (*slug).to_owned()).collect::<Vec<_>>();
+        // Another model loaded on the CPU does not name the chosen one's.
+        assert_eq!(
+            backend(&models, &chosen(&["eva"])).as_deref(),
+            Some("Core ML GPU/ANE")
+        );
+        assert_eq!(backend(&models, &chosen(&["convnext", "swin"])).as_deref(), Some("CPU"));
+        assert_eq!(
+            backend(&models, &chosen(&["swin", "eva"])).as_deref(),
+            Some("CPU + Core ML GPU/ANE")
+        );
+        // Not loaded yet: nothing to name.
+        assert_eq!(backend(&models, &chosen(&["oracle"])), None);
+    }
+
     fn model(slug: &str, downloaded: bool, recommended: bool) -> AiModelStatus {
         AiModelStatus {
             slug: slug.into(),
@@ -370,6 +416,7 @@ mod tests {
             enabled: false,
             downloaded,
             session_loaded: false,
+            backend: None,
             recommended,
             heavy: !recommended,
             optimization_supported: false,

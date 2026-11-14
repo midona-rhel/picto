@@ -303,13 +303,13 @@ impl AiTagger {
                         this.items = items;
                         this.resolved = true;
                         this.confidence = review::initial_confidence(status.thresholds.general);
-                        this.backend = status.cached_backend.clone();
                         this.active = this.items.first().copied();
                         this.run_models = review::initial_models(
                             &status.models,
                             &status.configured_model_slugs,
                             remembered.as_deref(),
                         );
+                        this.backend = review::backend(&status.models, &this.run_models);
                         this.models = status.models;
                         this.load_rail(cx);
                     }
@@ -574,15 +574,15 @@ impl AiTagger {
             else {
                 return;
             };
-            let backend = status.await.ok().map(|status| status.cached_backend);
+            let models = status.await.ok().map(|status| status.models);
             let _ = this.update(cx, |this, cx| {
                 if !current(this) {
                     return;
                 }
                 this.error = error;
                 this.backend = Some(
-                    backend
-                        .flatten()
+                    models
+                        .and_then(|models| review::backend(&models, &this.run_models))
                         .or(this.backend.take())
                         // i18n: production's default, not translated
                         .unwrap_or_else(|| "CPU".into()),

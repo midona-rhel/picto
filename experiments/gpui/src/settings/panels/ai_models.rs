@@ -622,6 +622,7 @@ mod tests {
             enabled: false,
             downloaded,
             session_loaded: false,
+            backend: None,
             recommended,
             heavy: !recommended,
             optimization_supported: false,
