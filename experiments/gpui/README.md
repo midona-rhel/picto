@@ -1747,7 +1747,8 @@ scale. It reads no existing library.
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
 often each view repainted, how long the grid took to build a frame (on the
 clock, and in the main thread's own time, with its layout and tile parts),
-the gap between grid frames, the longest the main thread kept a 4 ms timer
+the gap between the window's frames (their ends as the frame meter sees
+them), the longest the main thread kept a 4 ms timer
 waiting (a stall), how many thumbnail files were read, let go, let go
 without ever being painted, or dropped unfinished, the most bytes the
 decoded thumbnails held, and how many pictures were released from the

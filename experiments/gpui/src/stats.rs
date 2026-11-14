@@ -1,7 +1,9 @@
 //! Opt-in counters for what the app does while it is used: how often each
-//! view repaints, how long the grid takes to build a frame, and how many
-//! thumbnail files it reads. Set `PICTO_GPUI_STATS=1` to print one line per
-//! active second to standard error. Costs a few atomic adds when off.
+//! view repaints, how long the grid takes to build a frame, the gap between
+//! the window's frames (whose ends `meter.rs` records, for both), and how
+//! many thumbnail files are read. Set `PICTO_GPUI_STATS=1` to print one line
+//! per active second to standard error. When it is not set, the timings read
+//! no clock and the counters cost an atomic add each.
 use gpui::App;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
@@ -25,13 +27,13 @@ static GRID_BUILD_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 /// made to wait by other processes), which is the frame's own cost.
 static GRID_BUILD_CPU_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 static GRID_TILES: AtomicU64 = AtomicU64::new(0);
-/// Microseconds since `EPOCH` of the previous grid frame, for pacing.
-static GRID_LAST_FRAME: AtomicU64 = AtomicU64::new(0);
-static GRID_GAP_MICROS: AtomicU64 = AtomicU64::new(0);
-static GRID_GAP_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
-static GRID_GAPS: AtomicU64 = AtomicU64::new(0);
+/// Microseconds since `EPOCH` of the previous frame's end, for pacing.
+static LAST_FRAME: AtomicU64 = AtomicU64::new(0);
+static GAP_MICROS: AtomicU64 = AtomicU64::new(0);
+static GAP_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
+static GAPS: AtomicU64 = AtomicU64::new(0);
 /// Frames more than one and a half 60 Hz intervals after the one before.
-static GRID_LATE_FRAMES: AtomicU64 = AtomicU64::new(0);
+static LATE_FRAMES: AtomicU64 = AtomicU64::new(0);
 static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// The longest a grid frame took laying its window out again, and building
 /// its tiles' elements.
@@ -61,22 +63,17 @@ pub fn rendered(view: View) {
 }
 
 /// When a piece of work started, on the clock and in the running thread's
-/// own time.
-pub struct Started {
-    wall: Instant,
-    cpu: u64,
-}
+/// own time; nothing when the counters are off.
+pub struct Started(Option<(Instant, u64)>);
 
 impl Started {
     pub fn now() -> Self {
-        Self {
-            wall: Instant::now(),
-            cpu: thread_cpu_micros(),
-        }
+        Self(enabled().then(|| (Instant::now(), thread_cpu_micros())))
     }
 
-    fn cpu_micros(&self) -> u64 {
-        thread_cpu_micros().saturating_sub(self.cpu)
+    fn cpu_micros(&self) -> Option<u64> {
+        self.0
+            .map(|(_, cpu)| thread_cpu_micros().saturating_sub(cpu))
     }
 }
 
@@ -153,22 +150,32 @@ fn thread_cpu_micros() -> u64 {
 
 /// The grid built one frame of `tiles` tiles, starting at `started`.
 pub fn grid_built(started: Started, tiles: usize) {
-    GRID_BUILD_CPU_MAX_MICROS.fetch_max(started.cpu_micros(), Relaxed);
-    let started = started.wall;
-    let micros = started.elapsed().as_micros() as u64;
+    let (Some((wall, _)), Some(cpu)) = (started.0, started.cpu_micros()) else {
+        return;
+    };
+    GRID_BUILD_CPU_MAX_MICROS.fetch_max(cpu, Relaxed);
+    let micros = wall.elapsed().as_micros() as u64;
     GRID_BUILD_MICROS.fetch_add(micros, Relaxed);
     GRID_BUILD_MAX_MICROS.fetch_max(micros, Relaxed);
     GRID_TILES.fetch_add(tiles as u64, Relaxed);
-    // Pacing: the gap to the previous frame, while frames follow one another
-    // closely enough to be one continuous animation or scroll.
-    let now = EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64;
-    let gap = now.saturating_sub(GRID_LAST_FRAME.swap(now, Relaxed));
+}
+
+/// A frame of the window finished drawing at `ended` (`meter.rs` sees it
+/// end). Pacing: the gap to the previous frame, while frames follow one
+/// another closely enough to be one continuous animation or scroll.
+pub fn frame_drawn(ended: Instant) {
+    if !enabled() {
+        return;
+    }
+    let epoch = *EPOCH.get_or_init(Instant::now);
+    let now = ended.saturating_duration_since(epoch).as_micros() as u64;
+    let gap = now.saturating_sub(LAST_FRAME.swap(now, Relaxed));
     if gap < 100_000 {
-        GRID_GAP_MICROS.fetch_add(gap, Relaxed);
-        GRID_GAP_MAX_MICROS.fetch_max(gap, Relaxed);
-        GRID_GAPS.fetch_add(1, Relaxed);
+        GAP_MICROS.fetch_add(gap, Relaxed);
+        GAP_MAX_MICROS.fetch_max(gap, Relaxed);
+        GAPS.fetch_add(1, Relaxed);
         if gap > 25_000 {
-            GRID_LATE_FRAMES.fetch_add(1, Relaxed);
+            LATE_FRAMES.fetch_add(1, Relaxed);
         }
     }
 }
@@ -184,7 +191,9 @@ pub enum GridPart {
 /// A part of building one grid frame, started at `started`, is done. Its
 /// cost is the main thread's own time.
 pub fn grid_part(part: GridPart, started: Started) {
-    let micros = started.cpu_micros();
+    let Some(micros) = started.cpu_micros() else {
+        return;
+    };
     match part {
         GridPart::Layout => GRID_LAYOUT_MAX_MICROS.fetch_max(micros, Relaxed),
         GridPart::Tiles => GRID_TILES_MAX_MICROS.fetch_max(micros, Relaxed),
@@ -197,7 +206,7 @@ static LAUNCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// `LAUNCH`.
 static WINDOW_ASKED: AtomicU64 = AtomicU64::new(0);
 
-fn enabled() -> bool {
+pub fn enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("PICTO_GPUI_STATS").is_some())
 }
@@ -313,7 +322,7 @@ pub fn image_released(kept: bool) {
 
 pub fn start_reporting(cx: &mut App) {
     since_launch();
-    if std::env::var_os("PICTO_GPUI_STATS").is_none() {
+    if !enabled() {
         return;
     }
     // A timer of a few milliseconds that runs late ran behind work on the
@@ -321,10 +330,12 @@ pub fn start_reporting(cx: &mut App) {
     cx.spawn(async move |cx| {
         const TICK: Duration = Duration::from_millis(4);
         loop {
-            let asked = Started::now();
+            let asked = Instant::now();
+            let ran = thread_cpu_micros();
             cx.background_executor().timer(TICK).await;
-            let late = asked.wall.elapsed().saturating_sub(TICK).as_micros() as u64;
-            STALL_MAX_MICROS.fetch_max(late.min(asked.cpu_micros()), Relaxed);
+            let late = asked.elapsed().saturating_sub(TICK).as_micros() as u64;
+            let running = thread_cpu_micros().saturating_sub(ran);
+            STALL_MAX_MICROS.fetch_max(late.min(running), Relaxed);
         }
     })
     .detach();
@@ -344,10 +355,10 @@ pub fn start_reporting(cx: &mut App) {
             let released = IMAGES_RELEASED.swap(0, Relaxed);
             let cached = THUMBNAIL_BYTES_MAX.swap(0, Relaxed);
             let kept = IMAGES_KEPT.swap(0, Relaxed);
-            let gaps = GRID_GAPS.swap(0, Relaxed);
-            let gap = GRID_GAP_MICROS.swap(0, Relaxed);
-            let widest = GRID_GAP_MAX_MICROS.swap(0, Relaxed);
-            let late = GRID_LATE_FRAMES.swap(0, Relaxed);
+            let gaps = GAPS.swap(0, Relaxed);
+            let gap = GAP_MICROS.swap(0, Relaxed);
+            let widest = GAP_MAX_MICROS.swap(0, Relaxed);
+            let late = LATE_FRAMES.swap(0, Relaxed);
             let layout = GRID_LAYOUT_MAX_MICROS.swap(0, Relaxed);
             let tile_elements = GRID_TILES_MAX_MICROS.swap(0, Relaxed);
             let stall = STALL_MAX_MICROS.swap(0, Relaxed);
