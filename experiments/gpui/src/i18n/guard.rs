@@ -87,6 +87,7 @@ const CONVERTED: &[&str] = &[
     "shell/import.rs",
     "history.rs",
     "session/",
+    "export/",
 ];
 
 /// Calls whose literal argument is drawn.
@@ -426,7 +427,8 @@ fn usage(before: &str) -> Use {
 }
 
 /// A literal in a place where it names something rather than being shown:
-/// a match pattern, one side of a comparison, an icon's name.
+/// a match pattern, one side of a comparison, an icon's name, a JSON value
+/// sent to the library.
 fn identifier(literal: &Literal) -> bool {
     let before = literal.before.trim_end();
     let after = literal.after.trim_start();
@@ -438,6 +440,7 @@ fn identifier(literal: &Literal) -> bool {
         || before.ends_with("==")
         || before.ends_with("!=")
         || before.ends_with("icon(")
+        || before.rsplit('\n').next().is_some_and(|line| line.contains("json!("))
         || before.ends_with("Some(") && (after.starts_with(") =>") || after.starts_with(") |"))
 }
 
