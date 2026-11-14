@@ -390,6 +390,18 @@ pub fn agree(identity: &super::Identity, cx: &mut App) {
 
 /// Notes this instance as the one most recently active, and looks again
 /// for the Electron app while a library the user keeps is open.
+/// The launch has asked for its library (or found none to ask for): from
+/// here a closed gate means what it says.
+pub fn launched(cx: &mut App) {
+    let main = host(cx).read(cx).main;
+    if let Some(main) = main {
+        let _ = main.update(cx, |main, _, cx| {
+            main.launched = true;
+            cx.notify();
+        });
+    }
+}
+
 pub fn activated(cx: &mut App) {
     let host = host(cx);
     if let Some(instance) = host
@@ -863,6 +875,9 @@ pub struct Main {
     notifications: Entity<ui::notify::Host>,
     /// Whether the gate has opened the Library Manager by itself yet.
     offered: bool,
+    /// Whether the launch has asked for its library yet. The window draws
+    /// once before it does, with nothing open: that frame is not the gate.
+    launched: bool,
 }
 
 impl Main {
@@ -876,6 +891,7 @@ impl Main {
             focus: cx.focus_handle(),
             notifications: cx.new(ui::notify::Host::new),
             offered: false,
+            launched: false,
         }
     }
 
@@ -897,7 +913,11 @@ impl Main {
                 // `LibraryGate` opens the Library Manager once by itself,
                 // after the question about a missing library (production
                 // asks it before the window opens).
-                if !self.offered && self.missing.is_none() {
+                // Only once the launch has had its say and nothing is
+                // opening or being asked about: a library given at launch
+                // leaves the gate closed for a frame or two first.
+                let waiting = !self.launched || self.asking.is_some() || host(cx).read(cx).busy;
+                if !self.offered && self.missing.is_none() && !waiting {
                     self.offered = true;
                     cx.defer(|cx| super::manager::open(cx));
                 }

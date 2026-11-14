@@ -432,6 +432,7 @@ fn run(
             // Only a library this process may open is even looked at.
             Initial::Last => libraries::host::start_last(cx),
         }
+        libraries::host::launched(cx);
         // Stop the workers and checkpoint the library before the process
         // ends, as the Electron app closes its library before quitting.
         // Registered after the window opened, so the session's own quit

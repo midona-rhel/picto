@@ -170,6 +170,7 @@ fn plays_a_script() {
             // As a launch with no library named: the one last open, if any.
             None => crate::libraries::host::start_last(cx),
         }
+        crate::libraries::host::launched(cx);
     });
     // The frame the app's main window asks for, so its own chrome shows as
     // on the platform (the window's buttons and edges on Linux).
