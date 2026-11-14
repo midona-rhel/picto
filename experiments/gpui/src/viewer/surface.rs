@@ -32,10 +32,12 @@ pub enum Event {
 /// new item has something of its own to show, so a video's first frame or
 /// a document's first page is the first thing drawn in its place.
 enum Held {
-    /// A picture at its place in the pane: left, top, width, height.
+    /// A picture at its place in the pane: left, top, width, height, and
+    /// whether it was drawn pixelated.
     Image {
         image: Arc<RenderImage>,
         rect: (f32, f32, f32, f32),
+        pixelated: bool,
     },
     Document(Document),
     /// A video, paused, its last picture still drawn.
@@ -61,6 +63,9 @@ pub struct Options {
     /// `showTransparencyGrid`: a checkerboard behind images, which shows
     /// through their transparent parts.
     pub transparency_grid: bool,
+    /// `imageRendering: pixelated`: images (the thumbnail and the original,
+    /// not the navigator) sampled nearest-neighbour.
+    pub pixelated: bool,
 }
 
 impl Default for Options {
@@ -72,6 +77,7 @@ impl Default for Options {
             follows_resize: false,
             member: false,
             transparency_grid: false,
+            pixelated: false,
         }
     }
 }
@@ -245,6 +251,7 @@ impl MediaSurface {
                 Some(Held::Image {
                     image: picture,
                     rect: self.camera.image_rect(image, pane),
+                    pixelated: self.options.pixelated,
                 })
             }
             Mode::Flash | Mode::Other => {
@@ -260,6 +267,7 @@ impl MediaSurface {
                         fitted.0,
                         fitted.1,
                     ),
+                    pixelated: false,
                 })
             }
             Mode::Document => self.document.take().map(Held::Document),
@@ -936,6 +944,7 @@ impl MediaSurface {
     fn image_layers(&self, image: Size) -> Vec<AnyElement> {
         let (left, top, width, height) = self.camera.image_rect(image, self.pane());
         let key = self.shown.clone();
+        let pixelated = self.options.pixelated;
         let place = |source: Arc<RenderImage>| {
             // An image with several frames (GIF, animated WebP) animates only
             // with an id, which keeps its frame between draws.
@@ -948,6 +957,7 @@ impl MediaSurface {
                 .w(px(width))
                 .h(px(height))
                 .object_fit(ObjectFit::Fill)
+                .pixelated(pixelated)
                 .into_any_element()
         };
         let full = self.full.clone().filter(|_| self.full_key == self.shown);
@@ -1328,14 +1338,19 @@ impl Render for MediaSurface {
         if let Some(held) = &self.held {
             let layer = div().absolute().inset_0();
             surface = surface.child(match held {
-                Held::Image { image, rect } => layer.child(
+                Held::Image {
+                    image,
+                    rect,
+                    pixelated,
+                } => layer.child(
                     img(image.clone())
                         .absolute()
                         .left(px(rect.0))
                         .top(px(rect.1))
                         .w(px(rect.2))
                         .h(px(rect.3))
-                        .object_fit(ObjectFit::Fill),
+                        .object_fit(ObjectFit::Fill)
+                        .pixelated(*pixelated),
                 ),
                 Held::Document(document) => layer.child(document.element(None, cx)),
                 Held::Player(player) => layer.child(player.clone()),

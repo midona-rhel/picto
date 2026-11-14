@@ -246,10 +246,8 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
         follows_resize,
         member: false,
         transparency_grid: settings.show_transparency_grid,
+        pixelated: settings.image_rendering == "pixelated",
     }
-    // TODO: `imageRendering: pixelated` draws images with nearest-neighbour
-    // sampling; GPUI's image element samples linearly only, and nearest
-    // sampling needs a sampler choice in the vendored renderers.
 }
 
 /// `useRecordMediaView`: opening an item records it for Recently Viewed.

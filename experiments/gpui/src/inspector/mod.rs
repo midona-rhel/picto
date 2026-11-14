@@ -805,23 +805,42 @@ impl Inspector {
                     .relative()
                     .w(px(width.round()))
                     .h(px(height.round()))
-                    .rounded(px(theme::RADIUS_MD))
-                    .overflow_hidden()
-                    .shadow(vec![
-                        BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
-                            .blur_radius(px(5.)),
-                    ])
-                    .child(picture)
-                    // The glass edge: a 1px ring over the image.
+                    // `.previewGlass`'s `box-shadow: 0 0 5px`, outside the
+                    // frame only: CSS draws no shadow under its element, so
+                    // a picture's transparent parts show the panel.
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            |bounds, _, window, _| {
+                                window.paint_drop_shadows_outside(
+                                    bounds,
+                                    Corners::all(px(theme::RADIUS_MD)),
+                                    &[BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into())
+                                        .blur_radius(px(5.))],
+                                );
+                            },
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .child(
                         div()
                             .absolute()
                             .inset_0()
                             .rounded(px(theme::RADIUS_MD))
-                            .border_1()
-                            .border_color(rgba(theme::BLACK_10)),
-                    )
-                    .child(label),
+                            .overflow_hidden()
+                            .child(picture)
+                            // The glass edge: a 1px ring over the image.
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .rounded(px(theme::RADIUS_MD))
+                                    .border_1()
+                                    .border_color(rgba(theme::BLACK_10)),
+                            )
+                            .child(label),
+                    ),
             )
     }
 
