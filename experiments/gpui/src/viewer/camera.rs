@@ -41,7 +41,7 @@ fn clamp_scale(scale: f32) -> f32 {
 /// The scale at which the whole image fits the pane. An empty pane or image
 /// leaves it at 1.
 pub fn fit_scale(image: Size, pane: Size) -> f32 {
-    if pane.0 <= 0. || image.0 <= 0. || image.1 <= 0. {
+    if pane.0 <= 0. || pane.1 <= 0. || image.0 <= 0. || image.1 <= 0. {
         return 1.;
     }
     (pane.0 / image.0).min(pane.1 / image.1)
@@ -316,6 +316,15 @@ mod tests {
         assert!(close(fit_scale(IMAGE, PANE), 0.4));
         assert!(close(fit_scale((300., 1200.), PANE), 0.5));
         assert_eq!(fit_scale(IMAGE, (0., 0.)), 1.);
+        // A pane with no height (a window collapsed to a line) fits nothing,
+        // so no later zoom divides by a zero scale.
+        assert_eq!(fit_scale(IMAGE, (800., 0.)), 1.);
+        assert!(
+            Camera::fit(IMAGE, (800., 0.))
+                .zoomed(2., Some((1., 1.)))
+                .tx
+                .is_finite()
+        );
         let fitted = Camera::fit(IMAGE, PANE);
         assert_eq!(fitted.image_rect(IMAGE, PANE), (0., 100., 800., 400.));
         assert_eq!(fitted.percent(), 40.);

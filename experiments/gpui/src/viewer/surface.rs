@@ -945,6 +945,11 @@ impl MediaSurface {
                         let old = std::mem::replace(&mut this.full, result.ok());
                         this.retire(old);
                         this.full_key = key.clone();
+                        // Without the library's size the camera was fitted to
+                        // the thumbnail's pixels; the original's differ.
+                        if this.shown == key && this.shown_natural.is_none() {
+                            this.refit();
+                        }
                         this.present_key();
                         cx.emit(Event::Progressed);
                         cx.notify();
@@ -1002,7 +1007,9 @@ impl MediaSurface {
             more |= !done;
             self.set_camera(camera, cx);
         }
-        if let Some(mut drag) = self.navigator_drag {
+        if let Some(mut drag) = self.navigator_drag
+            && drag.current != drag.target
+        {
             drag.current = camera::follow(drag.current, drag.target);
             self.navigator_drag = Some(drag);
             self.centre_on(drag.current, cx);
@@ -1348,7 +1355,9 @@ impl Render for MediaSurface {
         }
         surface = surface
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" || event.keystroke.modifiers.platform {
+                // Escape and the command modifier's shortcuts (Ctrl off
+                // macOS) stay with the app.
+                if event.keystroke.key == "escape" || event.keystroke.modifiers.secondary(cx) {
                     return;
                 }
                 if let Some(flash) = &this.flash {

@@ -294,6 +294,9 @@ impl DetailWindow {
         let Some(entry) = self.entry().cloned() else {
             return;
         };
+        // Until the new entry's details arrive, the menu and the copy keys
+        // have no file to act on rather than the previous entry's.
+        self.details = None;
         window.set_window_title(&entry.title());
         if self.recorded != Some(entry.root) {
             self.recorded = Some(entry.root);
@@ -415,13 +418,10 @@ impl DetailWindow {
         cx.notify();
     }
 
+    /// The shown file's path: a collection's member opened by itself is
+    /// that member's, not the collection's first.
     fn copy_path(&mut self, cx: &mut Context<Self>) {
-        let path = self
-            .details
-            .as_ref()
-            .and_then(|details| details.media.first())
-            .map(|media| media.file_path.clone());
-        if let Some(path) = path {
+        if let Some((path, ..)) = self.shown_file() {
             cx.write_to_clipboard(ClipboardItem::new_string(path));
         }
     }

@@ -575,12 +575,17 @@ impl Viewer {
             return;
         }
         let closes = details.media.len() - ids.len() <= 1;
-        let answer = group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let root = details.root.root_id;
+        let answer = group::detach(&self.session, root, ids, trash, cx);
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
+                // The viewer has moved on to another item since.
+                if !this.shows_collection(root, cx) {
+                    return;
+                }
                 match result {
                     Err(error) => this.error = Some(error.to_string().into()),
                     Ok(()) if closes => {
@@ -612,26 +617,29 @@ impl Viewer {
             return;
         };
         let answer = group::sort(&self.session, &details, field, cx);
-        self.report(answer, cx);
-    }
-
-    /// A failed edit of the collection shows over its members; one that
-    /// went through takes the last failure away.
-    fn report(
-        &mut self,
-        answer: futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>>,
-        cx: &mut Context<Self>,
-    ) {
+        let root = details.root.root_id;
+        // A failed sort shows over the members, while they are still
+        // shown; one that went through takes the last failure away.
         cx.spawn(async move |this, cx| {
             let Ok(result) = answer.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.error = result.err().map(|error| error.to_string().into());
-                cx.notify();
+                if this.shows_collection(root, cx) {
+                    this.error = result.err().map(|error| error.to_string().into());
+                    cx.notify();
+                }
             });
         })
         .detach();
+    }
+
+    /// Whether the viewer still shows the collection `root`, for a reply to
+    /// an edit of it.
+    fn shows_collection(&self, root: RootId, cx: &App) -> bool {
+        let session = self.session.read(cx);
+        session.viewer
+            && shown_collection(session).is_some_and(|details| details.root.root_id == root)
     }
 
     /// The viewer has the keyboard while it is open, so its shortcuts apply,
