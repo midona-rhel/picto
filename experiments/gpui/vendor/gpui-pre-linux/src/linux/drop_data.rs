@@ -32,15 +32,12 @@ pub(crate) fn takes(offered: &[String]) -> bool {
 /// The types read from a drag that brought no files: the first image type
 /// offered, the address list, HTML and the first text type offered.
 pub fn wanted(offered: &[String]) -> Vec<String> {
-    let has = |kind: &&str| offered.iter().any(|offer| offer == kind);
-    IMAGE_TYPES
-        .iter()
-        .find(has)
-        .into_iter()
-        .chain([URI_LIST, HTML].iter().filter(has))
-        .chain(TEXT_TYPES.iter().find(has))
-        .map(|kind| (*kind).to_owned())
-        .collect()
+    let has = |kind: &str| offered.iter().any(|offer| offer == kind);
+    let mut wanted = Vec::new();
+    wanted.extend(IMAGE_TYPES.into_iter().find(|kind| has(kind)));
+    wanted.extend([URI_LIST, HTML].into_iter().filter(|kind| has(kind)));
+    wanted.extend(TEXT_TYPES.into_iter().find(|kind| has(kind)));
+    wanted.into_iter().map(str::to_owned).collect()
 }
 
 /// Text in UTF-8, or UTF-16 when it starts with a byte order mark (Firefox

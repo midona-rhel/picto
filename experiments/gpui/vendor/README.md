@@ -3205,7 +3205,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux.rs b/gpui-pre-linux/src/linux.
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/src/linux/drop_data.rs
 --- a/gpui-pre-linux/src/linux/drop_data.rs
 +++ b/gpui-pre-linux/src/linux/drop_data.rs
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,91 @@
 +//! What a drag from another application offers besides files, read from an
 +//! XDND selection or a Wayland data offer by media type: an image's data,
 +//! its addresses, the page's HTML for it and text, as a web browser drags
@@ -3240,15 +3240,12 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/
 +/// The types read from a drag that brought no files: the first image type
 +/// offered, the address list, HTML and the first text type offered.
 +pub fn wanted(offered: &[String]) -> Vec<String> {
-+    let has = |kind: &&str| offered.iter().any(|offer| offer == kind);
-+    IMAGE_TYPES
-+        .iter()
-+        .find(has)
-+        .into_iter()
-+        .chain([URI_LIST, HTML].iter().filter(has))
-+        .chain(TEXT_TYPES.iter().find(has))
-+        .map(|kind| (*kind).to_owned())
-+        .collect()
++    let has = |kind: &str| offered.iter().any(|offer| offer == kind);
++    let mut wanted = Vec::new();
++    wanted.extend(IMAGE_TYPES.into_iter().find(|kind| has(kind)));
++    wanted.extend([URI_LIST, HTML].into_iter().filter(|kind| has(kind)));
++    wanted.extend(TEXT_TYPES.into_iter().find(|kind| has(kind)));
++    wanted.into_iter().map(str::to_owned).collect()
 +}
 +
 +/// Text in UTF-8, or UTF-16 when it starts with a byte order mark (Firefox
