@@ -312,9 +312,18 @@ impl Shell {
                 // the results page; this needs that upload.
             }
             Action::SetLibraryCover => {
-                // TODO: open the library cover dialog (`MediaCoverDialog`)
-                // with this item chosen, where the square is framed before
-                // the cover is written beside the library's database.
+                // The shown file, framed at once (`initialCandidate`).
+                if let (Some(item), Some(file)) = (target.items.first(), file) {
+                    let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                        media_item: i64::from(item.root_id.0),
+                        size: (item.width.unwrap_or(1), item.height.unwrap_or(1)),
+                        thumbnail: crate::grid::thumbnails::present(
+                            &self.session.read(cx).thumbnail(&file.hash),
+                        ),
+                        hash: file.hash,
+                    };
+                    self.open_library_cover(Some(candidate), cx);
+                }
             }
             Action::FindMediaMatches => {
                 if let Some(item) = ids.first().copied() {
@@ -369,7 +378,15 @@ impl Shell {
                 }
             }
             Action::SetAsThumbnail => {
-                // TODO: capture the shown frame and make it the thumbnail.
+                let surface = self.items.surface.as_ref().and_then(|s| s.upgrade());
+                if let (Some(surface), Some(file)) = (surface, file) {
+                    crate::viewer::capture::set_as_thumbnail(
+                        &surface,
+                        &self.session,
+                        file.hash,
+                        cx,
+                    );
+                }
             }
         }
         if self.items.surface.is_none() {
@@ -403,46 +420,14 @@ impl Shell {
         );
     }
 
-    /// `media.regenerate_thumbnails` as the Electron main process performs
-    /// it (`regenerateThumbnail`), one file after another: the thumbnail is
-    /// kept aside, made again by the application (or drawn here for Flash
-    /// and paged documents), and the old one restored if no new one could
-    /// be made. Every view showing it reads it again. The first failure
-    /// stops the rest and is shown as production's menu shows it.
+    /// `media.regenerate_thumbnails` for these files (see
+    /// [`crate::grid::thumbnails::regenerate`]).
     pub(in crate::shell) fn regenerate_thumbnails(
         &mut self,
         files: Vec<(String, String)>,
         cx: &mut Context<Self>,
     ) {
-        if files.is_empty() {
-            return;
-        }
-        let session = self.session.clone();
-        // Thumbnails are rewritten only in a marked disposable copy, as
-        // every write of this app's own.
-        if !session.read(cx).disposable() {
-            return;
-        }
-        let files: Vec<_> = files
-            .into_iter()
-            .map(|(hash, mime)| {
-                let session = session.read(cx);
-                let (jpeg, original) = (session.thumbnail(&hash), session.original(&hash, &mime));
-                (hash, mime, jpeg, original)
-            })
-            .collect();
-        cx.spawn(async move |_, cx| {
-            for (hash, mime, jpeg, original) in files {
-                let made = regenerate_one(&session, &hash, &mime, &jpeg, &original, cx).await;
-                session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
-                if let Err(error) = made {
-                    let _ =
-                        cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
-                    break;
-                }
-            }
-        })
-        .detach();
+        crate::grid::thumbnails::regenerate(&self.session, files, cx);
     }
 
     /// `batchRenameModalAtom`: the dialog on these items, as the grid shows
@@ -465,6 +450,17 @@ impl Shell {
             .collect();
         self.batch_rename
             .update(cx, |dialog, cx| dialog.open(items, cx));
+    }
+
+    /// `openCurrentLibraryCoverPicker`, framing `candidate` at once when
+    /// it is given.
+    pub(crate) fn open_library_cover(
+        &mut self,
+        candidate: Option<crate::screens::subscriptions::cover_dialog::Candidate>,
+        cx: &mut Context<Self>,
+    ) {
+        self.library_cover
+            .update(cx, |dialog, cx| dialog.open(candidate, cx));
     }
 
     /// Sends an action for another part of the app from the shell, which
@@ -666,56 +662,6 @@ impl Shell {
             }),
             cx,
         );
-    }
-}
-
-/// One file of [`Shell::regenerate_thumbnails`].
-async fn regenerate_one(
-    session: &Entity<crate::session::Session>,
-    hash: &str,
-    mime: &str,
-    jpeg: &std::path::Path,
-    original: &std::path::Path,
-    cx: &mut AsyncApp,
-) -> Result<(), String> {
-    use crate::grid::{rendered, thumbnails};
-    let previous = thumbnails::present(jpeg);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis());
-    let backup = previous
-        .as_ref()
-        .map(|previous| thumbnails::backup_for(previous, std::process::id(), stamp));
-    if let (Some(previous), Some(backup)) = (&previous, &backup) {
-        std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
-    }
-    let answer = session.update(cx, |session, _| {
-        session.dispatch(
-            "media.render_thumbnail_now",
-            serde_json::json!({ "file_hash": hash }),
-        )
-    });
-    let _ = answer.await;
-    let png = thumbnails::png_for(jpeg);
-    if thumbnails::present(jpeg).is_none() && rendered::draws(mime) {
-        // A thread of its own: a movie plays for seconds first.
-        let (sent, drawn) = futures::channel::oneshot::channel();
-        let (mime, original) = (mime.to_owned(), original.to_path_buf());
-        std::thread::spawn(move || {
-            let _ = sent.send(rendered::render(&mime, &original, &png));
-        });
-        let _ = drawn.await;
-    }
-    if thumbnails::present(jpeg).is_some() {
-        if let Some(backup) = backup {
-            let _ = std::fs::remove_file(backup);
-        }
-        Ok(())
-    } else {
-        if let (Some(previous), Some(backup)) = (previous, backup) {
-            let _ = std::fs::rename(backup, previous);
-        }
-        Err("No thumbnail renderer supports this file.".into())
     }
 }
 

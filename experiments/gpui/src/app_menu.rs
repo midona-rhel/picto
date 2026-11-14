@@ -880,6 +880,11 @@ pub fn set_menus(cx: &mut App) {
     cx.set_menus(gpui_menus(&context, demos()));
 }
 
+/// The main window, for what other windows send to it.
+pub fn main_window(cx: &App) -> Option<WindowHandle<crate::shell::Shell>> {
+    cx.try_global::<Current>()?.main
+}
+
 /// The main window, for the rows production sends to it whichever window
 /// has the keyboard, and for Close Window.
 pub fn set_main_window(window: AnyWindowHandle, cx: &mut App) {

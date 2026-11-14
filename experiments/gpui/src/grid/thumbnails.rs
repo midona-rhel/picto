@@ -79,6 +79,93 @@ pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// `media.regenerate_thumbnails` as the Electron main process performs it
+/// (`regenerateThumbnail`), one file after another: the thumbnail is kept
+/// aside, made again by the application (or drawn here for Flash and paged
+/// documents), and the old one restored if no new one could be made. Every
+/// view showing it reads it again. The first failure stops the rest and is
+/// shown as production's menu shows it. Only a marked disposable copy is
+/// written to. `files` are content hashes and types.
+pub fn regenerate(
+    session: &gpui::Entity<crate::session::Session>,
+    files: Vec<(String, String)>,
+    cx: &mut App,
+) {
+    if files.is_empty() || !session.read(cx).disposable() {
+        return;
+    }
+    let files: Vec<_> = files
+        .into_iter()
+        .map(|(hash, mime)| {
+            let session = session.read(cx);
+            let (jpeg, original) = (session.thumbnail(&hash), session.original(&hash, &mime));
+            (hash, mime, jpeg, original)
+        })
+        .collect();
+    let session = session.clone();
+    cx.spawn(async move |cx| {
+        for (hash, mime, jpeg, original) in files {
+            let made = regenerate_one(&session, &hash, &mime, &jpeg, &original, cx).await;
+            session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
+            if let Err(error) = made {
+                cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+/// One file of [`regenerate`].
+async fn regenerate_one(
+    session: &gpui::Entity<crate::session::Session>,
+    hash: &str,
+    mime: &str,
+    jpeg: &std::path::Path,
+    original: &std::path::Path,
+    cx: &mut gpui::AsyncApp,
+) -> Result<(), String> {
+    use crate::grid::rendered;
+    let previous = present(jpeg);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let backup = previous
+        .as_ref()
+        .map(|previous| backup_for(previous, std::process::id(), stamp));
+    if let (Some(previous), Some(backup)) = (&previous, &backup) {
+        std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
+    }
+    let answer = session.update(cx, |session, _| {
+        session.dispatch(
+            "media.render_thumbnail_now",
+            serde_json::json!({ "file_hash": hash }),
+        )
+    });
+    let _ = answer.await;
+    let png = png_for(jpeg);
+    if present(jpeg).is_none() && rendered::draws(mime) {
+        // A thread of its own: a movie plays for seconds first.
+        let (sent, drawn) = futures::channel::oneshot::channel();
+        let (mime, original) = (mime.to_owned(), original.to_path_buf());
+        std::thread::spawn(move || {
+            let _ = sent.send(rendered::render(&mime, &original, &png));
+        });
+        let _ = drawn.await;
+    }
+    if present(jpeg).is_some() {
+        if let Some(backup) = backup {
+            let _ = std::fs::remove_file(backup);
+        }
+        Ok(())
+    } else {
+        if let (Some(previous), Some(backup)) = (previous, backup) {
+            let _ = std::fs::rename(backup, previous);
+        }
+        Err("No thumbnail renderer supports this file.".into())
+    }
+}
+
 /// The `.png` a `.jpg` thumbnail resource falls back to.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {

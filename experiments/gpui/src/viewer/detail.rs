@@ -450,7 +450,7 @@ impl DetailWindow {
         };
         let playback = rows::Playback {
             flash: self.surface.read(cx).flash_playback(),
-            capture: self.surface.read(cx).flash(),
+            capture: self.surface.read(cx).can_capture(cx),
         };
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
@@ -506,10 +506,37 @@ impl DetailWindow {
                 self.surface
                     .update(cx, |surface, cx| surface.control_flash(control, cx));
             }
+            Action::RegenerateThumbnails => {
+                crate::grid::thumbnails::regenerate(&self.session, vec![(hash, mime)], cx);
+            }
+            Action::SetAsThumbnail => {
+                super::capture::set_as_thumbnail(&self.surface, &self.session, hash, cx);
+            }
+            Action::SetLibraryCover => {
+                // Production's detail window has no dialog layer, so its row
+                // does nothing there; here the main window's dialog opens
+                // on the file, framed at once.
+                let Some(entry) = self.entry() else {
+                    return;
+                };
+                let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                    media_item: i64::from(entry.root.0),
+                    size: (entry.width.unwrap_or(1), entry.height.unwrap_or(1)),
+                    thumbnail: crate::grid::thumbnails::present(
+                        &self.session.read(cx).thumbnail(&hash),
+                    ),
+                    hash,
+                };
+                if let Some(main) = crate::app_menu::main_window(cx) {
+                    let _ = main.update(cx, move |shell, window, cx| {
+                        shell.open_library_cover(Some(candidate), cx);
+                        window.activate_window();
+                    });
+                }
+            }
             _ => {
-                // TODO: Copy (the file itself), Search by Image, Regenerate
-                // Thumbnails, Set as Library Cover and Set as Thumbnail, as
-                // the main window's viewer menu will once they exist there.
+                // TODO: Search by Image, which uploads the file to the
+                // engine from a hidden browser window (`runReverseImageSearch`).
             }
         }
     }

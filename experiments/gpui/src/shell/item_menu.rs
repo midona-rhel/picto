@@ -436,7 +436,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (position, flash) = (request.position, request.flash);
+        let position = request.position;
         let Some((item, file)) = self.shown_item(true, cx) else {
             return;
         };
@@ -490,11 +490,11 @@ impl Shell {
             },
             ..Default::default()
         };
-        // Production captures the current frame of a video or Flash movie;
-        // this viewer plays Flash only.
+        // The current frame of a video or Flash movie can become the
+        // thumbnail.
         let playback = Playback {
             flash: surface.read(cx).flash_playback(),
-            capture: flash,
+            capture: surface.read(cx).can_capture(cx),
         };
         self.items.surface = Some(surface.downgrade());
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);

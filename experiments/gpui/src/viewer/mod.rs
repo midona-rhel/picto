@@ -5,6 +5,7 @@
 //! view's controls are in the titlebar, where [`toolbar::ViewerToolbar`]
 //! takes the grid toolbar's place.
 pub mod camera;
+pub mod capture;
 pub mod detail;
 pub mod document;
 pub mod flash;
@@ -45,11 +46,10 @@ actions!(
     ]
 );
 
-/// The viewer was right-clicked at this window position; `flash` says a
-/// Flash movie is showing, `member` that a collection's member was.
+/// The viewer was right-clicked at this window position; `member` says a
+/// collection's member was.
 pub struct MenuRequested {
     pub position: Point<Pixels>,
-    pub flash: bool,
     pub member: bool,
 }
 
@@ -370,7 +370,6 @@ impl Viewer {
         });
         cx.emit(MenuRequested {
             position: event.position,
-            flash: false,
             member: true,
         });
     }
@@ -542,10 +541,8 @@ impl Render for Viewer {
                     if collection_selected(this.session.read(cx)) {
                         return;
                     }
-                    let flash = this.surface.read(cx).flash();
                     cx.emit(MenuRequested {
                         position: event.position,
-                        flash,
                         member: false,
                     });
                 }),

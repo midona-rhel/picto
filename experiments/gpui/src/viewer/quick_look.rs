@@ -64,7 +64,6 @@ impl QuickLook {
                 });
                 cx.emit(MenuRequested {
                     position: event.position,
-                    flash: false,
                     member: true,
                 });
             }),
@@ -301,10 +300,8 @@ impl Render for QuickLook {
                 if collection_selected(this.session.read(cx)) {
                     return;
                 }
-                let flash = this.surface.read(cx).flash();
                 cx.emit(MenuRequested {
                     position: event.position,
-                    flash,
                     member: false,
                 });
             }),
