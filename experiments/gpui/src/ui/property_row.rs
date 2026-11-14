@@ -73,16 +73,26 @@ impl RenderOnce for PropertyRow {
                 .font_family(self.mono)
                 .font_features(theme::tabular_figures())
                 .text_color(theme::theme(cx).contrast(80.))
-                .child(self.value),
+                .child(self.value.clone()),
         };
-        div()
-            .h(px(20.))
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .whitespace_nowrap()
-            .text(theme::TEXT_CAPTION)
-            .child(div().w(px(88.)).flex_none().child(self.label))
-            .child(value)
+        // Read as one line of text, its label then its value; while the
+        // value loads, `Loading …` as the spinner's `aria-label` says.
+        let read = match self.loading {
+            Some(_) => crate::tf!("Loading {value0}", self.label),
+            None => format!("{} {}", self.label, self.value),
+        };
+        super::a11y::text(
+            div().id(ElementId::Name(format!("property-{}", self.label).into())),
+            read,
+        )
+        .aria_busy(self.loading.is_some())
+        .h(px(20.))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .whitespace_nowrap()
+        .text(theme::TEXT_CAPTION)
+        .child(div().w(px(88.)).flex_none().child(self.label))
+        .child(value)
     }
 }

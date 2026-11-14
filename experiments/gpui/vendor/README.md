@@ -98,6 +98,30 @@ does not need: lens, dispersion, tint and rim light).
   as a browser plays it: a detail window beside the main window, or the
   main window while another application is in front, kept its GIFs on one
   frame. A covered or minimised window still draws nothing.
+- Accessibility. 0.3.12 already builds an AccessKit tree from every element
+  with an id and a role, hands it to each platform's adapter (macOS
+  NSAccessibility, Windows UI Automation, Linux AT-SPI) only while
+  assistive technology is attached, and routes its actions back. Added,
+  because the app needs them and they cannot be set from outside:
+  - `src/elements/div.rs`: the states `aria_disabled`, `aria_read_only`,
+    `aria_modal`, `aria_busy`, `aria_multiselectable` and a live region
+    (`aria_live`), written to the node like the published `aria_*`
+    properties (a disabled node offers no `Click`);
+    `StatefulInteractiveElement::a11y_focus(&FocusHandle)`, which makes an
+    element's node stand for a focus handle a descendant without a node
+    tracks (the app's controls keep their tab stop in a child of no size, so
+    that a click leaves the keyboard where it was): the node reads as
+    focused while the handle is, and its `Focus` action focuses it;
+    `a11y_presentational()`, which marks a click that is not a control (a
+    dialog's backdrop, a drag strip); and, while the tree is built, a record
+    of every element that takes a click but has no role.
+  - `src/window/a11y.rs`: the root node carries the interface zoom as a
+    scale transform, since nodes' bounds are in the window's zoomed points.
+  - `src/window.rs`, `src/window/a11y/debug.rs` (test support only):
+    `Window::set_a11y_active_for_test`, `last_a11y_tree_update`,
+    `dispatch_a11y_action_for_test` and `a11y_unexposed_clickables`, so
+    tests and the off-screen tool can build the tree without a screen
+    reader, read it and act on it.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -334,6 +358,166 @@ diff --color -ruN gpui-pre-0.3.12/src/app.rs b/gpui-pre/src/app.rs
      /// Returns the operating system's power mode, or [`PowerMode::Unknown`]
      /// when the platform cannot determine it.
      pub fn power_mode(&self) -> PowerMode {
+diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/div.rs
+--- a/gpui-pre/src/elements/div.rs
++++ b/gpui-pre/src/elements/div.rs
+@@ -1440,6 +1440,67 @@
+     /// Set the selected state for this element.
+     fn aria_selected(mut self, selected: bool) -> Self {
+         self.interactivity().aria.selected = Some(selected);
++        self
++    }
++
++    /// Set the disabled state for this element: assistive technology shows
++    /// it but does not offer to press or edit it.
++    fn aria_disabled(mut self, disabled: bool) -> Self {
++        self.interactivity().aria.disabled = disabled;
++        self
++    }
++
++    /// Set the read-only state for this element (a field whose text can be
++    /// read and selected but not changed).
++    fn aria_read_only(mut self, read_only: bool) -> Self {
++        self.interactivity().aria.read_only = read_only;
++        self
++    }
++
++    /// Mark this element as modal: while it is shown, assistive technology
++    /// treats what lies outside it as inert (`aria-modal`).
++    fn aria_modal(mut self, modal: bool) -> Self {
++        self.interactivity().aria.modal = modal;
++        self
++    }
++
++    /// Mark this element as busy (`aria-busy`): its contents are still
++    /// being loaded.
++    fn aria_busy(mut self, busy: bool) -> Self {
++        self.interactivity().aria.busy = busy;
++        self
++    }
++
++    /// Make this element a live region (`aria-live`): changes to its text
++    /// are announced, politely or at once.
++    fn aria_live(mut self, live: accesskit::Live) -> Self {
++        self.interactivity().aria.live = Some(live);
++        self
++    }
++
++    /// Mark this element as allowing more than one of its items to be
++    /// selected (`aria-multiselectable`).
++    fn aria_multiselectable(mut self, multiselectable: bool) -> Self {
++        self.interactivity().aria.multiselectable = multiselectable;
++        self
++    }
++
++    /// Declare that this element's click is not a control assistive
++    /// technology needs (a dialog's backdrop, a window's drag strip, a
++    /// surface whose click only focuses the field inside it), so it is left
++    /// out of [`crate::Window::a11y_unexposed_clickables`].
++    fn a11y_presentational(mut self) -> Self {
++        self.interactivity().aria.presentational = true;
++        self
++    }
++
++    /// Report this element's node as the one standing for `handle`, a focus
++    /// handle a descendant without a node of its own tracks: assistive
++    /// technology sees this node as focused while `handle` is, and its
++    /// `Focus` action focuses `handle`. Unlike `track_focus`, a click on the
++    /// element does not move the focus.
++    fn a11y_focus(mut self, handle: &FocusHandle) -> Self {
++        self.interactivity().a11y_focus_handle = Some(handle.clone());
+         self
+     }
+ 
+@@ -2175,6 +2236,13 @@
+     pub(crate) column_index: Option<usize>,
+     pub(crate) row_count: Option<usize>,
+     pub(crate) column_count: Option<usize>,
++    pub(crate) disabled: bool,
++    pub(crate) read_only: bool,
++    pub(crate) modal: bool,
++    pub(crate) busy: bool,
++    pub(crate) multiselectable: bool,
++    pub(crate) live: Option<accesskit::Live>,
++    pub(crate) presentational: bool,
+ }
+ 
+ /// The interactivity struct. Powers all of the general-purpose
+@@ -2247,6 +2315,7 @@
+     pub(crate) report_active_descendant_focus: bool,
+     pub(crate) override_role: Option<accesskit::Role>,
+     pub(crate) aria: AriaProperties,
++    pub(crate) a11y_focus_handle: Option<FocusHandle>,
+ 
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
+@@ -2395,6 +2464,32 @@
+             }
+         }
+ 
++        if window.a11y.is_active() {
++            if let Some(handle) = self.a11y_focus_handle.as_ref()
++                && let Some(global_id) = global_id
++                && self.override_role.is_some()
++            {
++                let node_id = global_id.accesskit_node_id();
++                window.a11y.set_focusable(node_id, handle.id);
++                if handle.is_focused(window) {
++                    window.a11y.set_focus(node_id);
++                }
++            }
++            if self.override_role.is_none()
++                && !self.click_listeners.is_empty()
++                && !self.aria.presentational
++            {
++                #[cfg(any(feature = "inspector", debug_assertions))]
++                let at = self
++                    .source_location
++                    .map(|location| location.to_string())
++                    .unwrap_or_default();
++                #[cfg(not(any(feature = "inspector", debug_assertions)))]
++                let at = String::new();
++                window.a11y.unexposed_clickables.push((at, bounds));
++            }
++        }
++
+         if self.report_active_descendant_focus && window.a11y.is_active() {
+             if let Some(global_id) = global_id {
+                 window
+@@ -3652,10 +3747,31 @@
+         if let Some(count) = self.aria.column_count {
+             node.set_column_count(count);
+         }
+-        if !self.click_listeners.is_empty() {
++        if self.aria.disabled {
++            node.set_disabled();
++        }
++        if self.aria.read_only {
++            node.set_read_only();
++        }
++        if self.aria.modal {
++            node.set_modal();
++        }
++        if self.aria.busy {
++            node.set_busy();
++        }
++        if self.aria.multiselectable {
++            node.set_multiselectable();
++        }
++        if let Some(live) = self.aria.live {
++            node.set_live(live);
++        }
++        if !self.click_listeners.is_empty() && !self.aria.disabled {
+             node.add_action(accesskit::Action::Click);
+         }
+-        if self.tracked_focus_handle.is_some() || self.focusable {
++        if self.tracked_focus_handle.is_some()
++            || self.focusable
++            || self.a11y_focus_handle.is_some()
++        {
+             node.add_action(accesskit::Action::Focus);
+         }
+         for (action, _) in &self.a11y_action_listeners {
 diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/img.rs
 --- a/gpui-pre/src/elements/img.rs
 +++ b/gpui-pre/src/elements/img.rs
@@ -986,12 +1170,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      pub(crate) bounds_observers: SingleSubscriberSet<AnyObserver>,
      appearance: WindowAppearance,
      pub(crate) appearance_observers: SingleSubscriberSet<AnyObserver>,
-@@ -1632,8 +1638,35 @@
-         (false, false) => display_bounds.origin,
-     };
+@@ -1634,6 +1640,33 @@
      window_bounds_ctor(Bounds::new(final_origin, base_size))
-+}
-+
+ }
+ 
 +/// What [`Window::paint_backdrop_blur`] does to the backdrop: CSS
 +/// `backdrop-filter: blur(blur_radius) saturate(saturation)
 +/// brightness(brightness)`.
@@ -1005,8 +1187,8 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    pub brightness: f32,
 +    /// How much of the filtered backdrop shows, on top of the element opacity.
 +    pub opacity: f32,
- }
- 
++}
++
 +impl BackdropFilter {
 +    /// A gaussian blur of `radius` and nothing else.
 +    pub fn blur(radius: Pixels) -> Self {
@@ -1073,21 +1255,21 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Return the `WindowBounds` to indicate that how a window should be opened
-@@ -2956,6 +3000,14 @@
-             callback(self, cx);
-         }
+@@ -2958,6 +3002,14 @@
          count
-+    }
-+
+     }
+ 
 +    /// Whether the window has been invalidated since it was last drawn: what
 +    /// the platform's frame loop asks before drawing a frame. Tests use it to
 +    /// draw only the frames a real window would.
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn is_dirty(&self) -> bool {
 +        self.invalidator.is_dirty()
-     }
- 
++    }
++
      /// Spawn the future returned by the given closure on the application thread pool.
+     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
+     /// use within your future.
 @@ -3001,9 +3053,9 @@
      /// the platform window, then notifies observers. Normally called automatically
      /// by the platform's resize callback, but exposed publicly for test infrastructure.
@@ -1141,15 +1323,15 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns the client_inset value by [`Self::set_client_inset`].
-@@ -3331,10 +3390,32 @@
+@@ -3331,7 +3390,29 @@
      /// Overrides the display scale factor for tests.
      #[cfg(any(test, feature = "test-support"))]
      pub fn set_scale_factor(&mut self, scale_factor: f32) {
 -        self.scale_factor = scale_factor;
 +        self.scale_factor = scale_factor * self.ui_zoom;
-         self.refresh();
-     }
- 
++        self.refresh();
++    }
++
 +    /// The interface zoom this window is laid out at ([`App::set_ui_zoom`]):
 +    /// a point of the window's content is this many screen points.
 +    pub fn ui_zoom(&self) -> f32 {
@@ -1169,12 +1351,9 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +        self.ui_zoom = zoom;
 +        self.scale_factor = device_scale * zoom;
 +        self.viewport_size = zoomed_size(self.platform_window.content_size(), zoom);
-+        self.refresh();
-+    }
-+
-     /// The size of an em for the base font of the application. Adjusting this value allows the
-     /// UI to scale, just like zooming a web page.
-     pub fn rem_size(&self) -> Pixels {
+         self.refresh();
+     }
+ 
 @@ -3672,6 +3753,7 @@
          if self.platform_window.prepare_frame() {
              self.refresh();
@@ -1183,6 +1362,15 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidate_entities();
          cx.entities.clear_accessed();
          debug_assert!(self.rendered_entity_stack.is_empty());
+@@ -3907,7 +3989,7 @@
+ 
+         self.a11y.sync_active_flag();
+         if self.a11y.is_active() {
+-            self.a11y.begin_frame();
++            self.a11y.begin_frame(self.ui_zoom);
+         }
+ 
+         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
 @@ -4806,11 +4888,36 @@
      ///
      /// This method should only be called as part of the paint phase of element drawing.
@@ -1228,7 +1416,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +                inset: if outside { 2 } else { 0 },
                  pad: 0,
              });
-         }
++        }
 +    }
 +
 +    /// Show what has been painted beneath `bounds` so far blurred inside its
@@ -1248,7 +1436,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +        let opacity = self.element_opacity() * filter.opacity;
 +        if opacity <= 0. {
 +            return;
-+        }
+         }
 +        let scale_factor = self.scale_factor();
 +        let content_mask = self.snapped_content_mask();
 +        // A radius past half the shorter side has no shape to round.
@@ -1375,7 +1563,49 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  }
                  window.platform_window.set_input_handler(input_handler);
              }
-@@ -8160,9 +8360,107 @@
+@@ -7302,6 +7502,41 @@
+     /// Debug representation of the last frame's accessibility information.
+     pub fn debug_a11y_tree_json(&self) -> Option<String> {
+         self.a11y.debug_tree_json()
++    }
++
++    /// Builds the accessibility tree from the next frame on as though
++    /// assistive technology had asked for it (or stops, with `false`), for
++    /// tests and off-screen tools, whose platform never asks.
++    #[cfg(any(test, feature = "test-support"))]
++    pub fn set_a11y_active_for_test(&mut self, active: bool) {
++        self.a11y.set_active_flag(active);
++        self.refresh();
++    }
++
++    /// The tree the last frame built (what was, or would have been, sent to
++    /// the platform's adapter), while the tree is being built.
++    #[cfg(any(test, feature = "test-support"))]
++    pub fn last_a11y_tree_update(&self) -> Option<accesskit::TreeUpdate> {
++        self.a11y.last_tree_update()
++    }
++
++    /// Performs an action assistive technology asked for, as the platform's
++    /// adapter hands it over.
++    #[cfg(all(any(test, feature = "test-support"), not(target_family = "wasm")))]
++    pub fn dispatch_a11y_action_for_test(
++        &mut self,
++        request: accesskit::ActionRequest,
++        cx: &mut App,
++    ) {
++        self.handle_a11y_action(request, cx);
++    }
++
++    /// Elements in the last frame that took a click but had no role, so
++    /// assistive technology could not see or press them: each one's source
++    /// location (debug builds) and bounds. Recorded while the tree is built.
++    #[cfg(any(test, feature = "test-support"))]
++    pub fn a11y_unexposed_clickables(&self) -> Vec<(String, Bounds<Pixels>)> {
++        self.a11y.unexposed_clickables.clone()
+     }
+ 
+     /// Register a listener for an accessibility action on a specific node.
+@@ -8160,6 +8395,104 @@
          Ok(())
      } else {
          ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
@@ -1387,13 +1617,13 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +fn zoomed_size(size: Size<Pixels>, zoom: f32) -> Size<Pixels> {
 +    if zoom == 1.0 {
 +        return size;
-     }
++    }
 +    Size {
 +        width: size.width / zoom,
 +        height: size.height / zoom,
 +    }
- }
- 
++}
++
 +/// Bounds in a window zoomed by `zoom`, in the window's screen points.
 +pub(crate) fn zoomed_out_bounds(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
 +    if zoom == 1.0 {
@@ -1477,12 +1707,93 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +        event @ (PlatformInput::KeyDown(_)
 +        | PlatformInput::KeyUp(_)
 +        | PlatformInput::ModifiersChanged(_)) => event,
+     }
+ }
+ 
+diff --color -ruN gpui-pre-0.3.12/src/window/a11y.rs b/gpui-pre/src/window/a11y.rs
+--- a/gpui-pre/src/window/a11y.rs
++++ b/gpui-pre/src/window/a11y.rs
+@@ -149,6 +149,9 @@
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
++    /// Elements this frame that took a click without having a role (see
++    /// [`crate::Window::a11y_unexposed_clickables`]).
++    pub(crate) unexposed_clickables: Vec<(String, Bounds<Pixels>)>,
+     /// The window's title, used to label the root node so assistive
+     /// technology can tell windows apart.
+     window_title: Option<SharedString>,
+@@ -177,6 +180,7 @@
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
++            unexposed_clickables: Vec::new(),
+             window_title,
+             last_focus_without_node: None,
+             debug: debug::A11yDebug::default(),
+@@ -213,6 +217,16 @@
+         self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
+     }
+ 
++    #[cfg(any(test, feature = "test-support"))]
++    pub(crate) fn set_active_flag(&mut self, active: bool) {
++        self.active_flag.store(active, Ordering::SeqCst);
 +    }
-+}
 +
- #[cfg(test)]
- mod tests {
-     use std::{
++    #[cfg(any(test, feature = "test-support"))]
++    pub(crate) fn last_tree_update(&self) -> Option<TreeUpdate> {
++        self.debug.last_tree_update()
++    }
++
+     pub(crate) fn is_enabled(&self) -> bool {
+         !self.force_disabled
+     }
+@@ -272,11 +286,20 @@
+     }
+ 
+     /// Clear per-frame state and push the root node to start a new frame.
+-    pub(crate) fn begin_frame(&mut self) {
++    ///
++    /// `ui_zoom` is the window's interface zoom: nodes' bounds are in its
++    /// points, which the root's transform scales to the window's.
++    pub(crate) fn begin_frame(&mut self, ui_zoom: f32) {
+         self.focus_ids.clear();
+         self.node_bounds.clear();
+         self.action_listeners.clear();
++        self.unexposed_clickables.clear();
+         self.nodes.begin_frame(self.window_title.as_ref());
++        if ui_zoom != 1.0
++            && let Some(root) = self.nodes.current_node_mut()
++        {
++            root.set_transform(accesskit::Affine::scale(ui_zoom as f64));
++        }
+     }
+ 
+     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
+@@ -654,7 +677,7 @@
+ 
+     fn new_a11y() -> A11y {
+         let mut a11y = A11y::new(Arc::new(AtomicBool::new(true)), false, None);
+-        a11y.begin_frame();
++        a11y.begin_frame(1.0);
+         a11y
+     }
+ 
+diff --color -ruN gpui-pre-0.3.12/src/window/a11y/debug.rs b/gpui-pre/src/window/a11y/debug.rs
+--- a/gpui-pre/src/window/a11y/debug.rs
++++ b/gpui-pre/src/window/a11y/debug.rs
+@@ -96,6 +96,11 @@
+         self.last_node_info = node_info.clone();
+     }
+ 
++    #[cfg(any(test, feature = "test-support"))]
++    pub(crate) fn last_tree_update(&self) -> Option<TreeUpdate> {
++        self.last_tree_update.clone()
++    }
++
+     /// Serialize the last tree update to a readable JSON string. Node ids are
+     /// replaced with short ephemeral ids (`a`, `b`, ..., `z`, `aa`, ...).
+     pub(crate) fn to_json(&self) -> Option<String> {
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_atlas.rs b/gpui-pre-apple/src/metal_atlas.rs
 --- a/gpui-pre-apple/src/metal_atlas.rs
 +++ b/gpui-pre-apple/src/metal_atlas.rs

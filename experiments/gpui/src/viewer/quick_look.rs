@@ -368,8 +368,12 @@ impl Render for QuickLook {
         // Quick Look's keys are the viewer's; Space closes it, even over
         // pages.
         let context = self.surface.read(cx).key_context("Viewer", false);
+        // A dialog over the window, holding the keyboard.
         let quick_look = div()
             .id("quick-look")
+            .role(Role::Dialog)
+            .aria_modal(true)
+            .aria_label(t("Quick Look"))
             .track_focus(&self.focus)
             .key_context(context);
         surface::host_actions(quick_look, &self.surface)

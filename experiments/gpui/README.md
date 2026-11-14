@@ -308,6 +308,30 @@ every view relies on:
   everything.
 - *Glass* (`ui/glass.rs`): the surface of every floating panel and its
   backdrop blur.
+- *Accessibility* (`ui/a11y.rs`): what screen readers are told. GPUI builds
+  an AccessKit tree from every element with an id and a role, only while
+  assistive technology is attached (VoiceOver on macOS through
+  NSAccessibility, Narrator and others on Windows through UI Automation,
+  Orca on Linux through AT-SPI), and sends it to the platform after each
+  frame. Every shared control sets its role, name, value and states (a
+  button pressed or disabled, a check box ticked, a select's choice and
+  whether its list is open, a slider's value and range, a field's text,
+  placeholder and selection), and does what assistive technology asks
+  (press, focus, step or set a slider). A control's tab stop is a child of
+  no size (`ui/focus.rs`); `Control::attach` makes the control's node stand
+  for it (`a11y_focus`), so the node reads as focused while the stop is.
+  Dialogs are modal dialogs named by their title; menus are menus of
+  items, check items and submenus, the highlighted row read as focused;
+  notifications are alerts or statuses in a live region, announced as they
+  arrive. The views: the sidebar is a tree (each row an item at its level,
+  selected, expanded, named by its label and count as production's row
+  reads); the grid is a list box of the tiles drawn, each an option named
+  by its file, selected or not, at its place in the whole destination
+  (`3 of 2,673`), the tile the keyboard is on read as focused inside the
+  window's content; inspector sections are groups with headings;
+  Settings' sections are tabs over a tab panel with its rows' labels as
+  text. `a11y::text` and `a11y::heading` make a container read as text or a
+  heading, since GPUI's own text is not in the tree.
 
 **Theme, motion, keymap** (`theme.rs`, `motion.rs`, `keymap.rs`,
 `settings/registry.rs`). `theme.rs` derives every colour from a theme's
@@ -524,6 +548,19 @@ version are kept. The app starts on All each launch, as production does.
   literal handed straight to a drawing call (`.child`, `.label`, a tooltip,
   a notification, …); it cannot see a text built with `format!` and drawn
   later, or a literal kept in a variable that is not a key.
+- **Every control says what it is.** A clickable element sets a role
+  (`.role(Role::Button)`, …) and a name, its visible label through `t` or
+  production's `aria-label`, else its tooltip's text (shared controls do
+  this themselves; give `icon_button` a `.tip` or a `.name`). A click that
+  is not a control (a backdrop, a drag strip) says so with
+  `.a11y_presentational()`. Work done only to describe something (a name
+  formatted per tile or row) is gated on `ui::a11y::active(window)`. Ids
+  must not repeat under one node with a role: a debug build stops on a
+  repeated id while the tree is built. `ui::a11y::tests` guards it: every
+  glyph button is named, every interactive file of `ui/` sets a role, and
+  each shared control's tree is asserted (role, name, states, actions, no
+  clickable element without a role); `i18n::guard` reads `aria_label`,
+  `aria_value`, `aria_placeholder` and `aria_description` as drawn text.
 - **Comments describe behaviour**: no ticket numbers. A missing behaviour is
   a `TODO:` saying what is missing, and a `TODO` is never removed until the
   behaviour exists.
@@ -537,15 +574,17 @@ cd experiments/gpui
 cargo test --locked
 ```
 
-About 600 tests, most of them pure: layout geometry against hand-computed
+About 700 tests, most of them pure: layout geometry against hand-computed
 values, the grid's window and banded visibility (including
 `a_frame_does_the_same_work_whatever_the_library_size`, at 3,000, a million
 and fifty million items), the context menus against the cases of production's
 `gridContextMenu.test.tsx`, the smart-folder rule model and the filter model
 compiled to the library's `FilterExpr` and back, the keymap and text-field
 keys per platform, the viewers' arithmetic, the media player's model and
-audio processing, the safety guard and detach, the state file, and the
-format matrix's fixtures.
+audio processing, the safety guard and detach, the state file, the
+format matrix's fixtures, and the accessibility tree of each shared control
+(`ui::a11y::tests`, in a test window with the tree switched on: its role,
+name, states and the actions assistive technology performs).
 
 The ignored tests need something a plain run does not have. Run them by
 name:
@@ -622,6 +661,7 @@ show a restart. Script lines (blank lines and `#` comments are skipped):
 | `action <name> [n]` | choose an application menu row (`action app_menu::SetRating 3`) |
 | `invoke <command> <json>` | send a core command and print its answer |
 | `focused` | print the control with the keyboard and whether Tab put it there |
+| `a11y <name>` | build the window's accessibility tree from then on, as when a screen reader is attached, and write it to `<name>.a11y.txt` as indented text (role, name, value, states; then every element that took a click without a role); with `PICTO_GPUI_STATS` also print its node count and, at the end, the eager frames' drawing times |
 | `answer <path>`, `answer` | answer the next system file, folder or save dialog with that path, or cancel it; give it before the line that opens the dialog |
 | `desktop` | append the desktop requests since the last one, and the clipboard's text, to `desktop.log` in the output folder |
 | `reload`, `size W H`, `js …` | for the reference only; skipped here |
@@ -800,6 +840,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
 | AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
 | Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
+| Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
@@ -925,8 +966,22 @@ re-checked by reading the code; the rest were checked against it.
   glyphs there; real windows use DirectWrite's system fallback on Windows
   and the system's fonts through fontconfig on Linux (a CJK font must be
   installed).
-- Accessibility: the native window is exposed, the control tree is not (the
-  vendored GPUI includes AccessKit; the app sets no roles or labels).
+- Accessibility, partly (see section 4): no screen reader has been run
+  against the app; the tree has been read only through the off-screen
+  tool and tests, and has not been compared with production's live
+  accessibility tree (only with production's source). On macOS the
+  pop-up menu windows hold their rows while the keyboard stays in the main
+  window, so the highlighted row is not read as focused there (it is with
+  `PICTO_GPUI_MENU=window` and on Windows and Linux); while a menu's
+  search field has the keyboard, the highlighted row is not read as
+  focused either. Text the app draws as plain text (a tile's badges, a
+  table's cells, most of the viewer's document text, the Subscriptions
+  screen's tables) is not in the tree unless the container was made text;
+  a dialog's body text is, its other plain text is not. Settings' row
+  labels are text beside their controls rather than their names. A radio
+  group's arrows do not move the choice (as for the keyboard). The import
+  task bar is a live region too; whether any platform announces a change
+  there, or a notification, has not been heard.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
 - Site logins and the Accounts window: the Accounts button and a source's
