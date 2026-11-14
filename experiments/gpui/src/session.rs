@@ -297,6 +297,9 @@ pub struct Session {
     blobs: PathBuf,
     /// The disposable copy the application opened.
     root: PathBuf,
+    /// Whether `root` passed the guard when the session began. The root
+    /// never changes, so the guard's file checks are not run again.
+    disposable: bool,
     pub library_cover: Option<PathBuf>,
     /// The grid draws its thumbnails without colour.
     pub grayscale: bool,
@@ -348,6 +351,7 @@ impl Session {
         cx: &mut Context<Self>,
     ) -> Self {
         let blobs = root.join("blobs");
+        let disposable = crate::application::guard(&root).is_ok();
         let (recent_folders, recent_tags) = {
             let kept = crate::state::get(cx);
             let folders = kept
@@ -452,6 +456,7 @@ impl Session {
             view_patch: None,
             blobs,
             root,
+            disposable,
             library_cover,
             grayscale: false,
             scratch,
@@ -470,10 +475,10 @@ impl Session {
         }
     }
 
-    /// Whether the open library is still a marked disposable copy, which
-    /// edits that cannot be undone require.
+    /// Whether the open library is a marked disposable copy, which edits
+    /// that cannot be undone require.
     pub fn disposable(&self) -> bool {
-        crate::application::guard(&self.root).is_ok()
+        self.disposable
     }
 
     /// The disposable copy's canonical root.
