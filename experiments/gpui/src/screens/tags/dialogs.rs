@@ -102,7 +102,7 @@ fn input_with(
             .submits();
         if let Some(text) = text {
             input.set_text(text, cx);
-            input.caret_to_end(cx);
+            input.caret_at_end(cx);
         }
         input
     })
