@@ -13,7 +13,7 @@ use crate::ui::{
     menu::{self, Menu},
     modal::{self},
     overlay_shell::{self, Geometry, Nav},
-    text_input::{Submitted, TextInput},
+    text_input::{Kind, Submitted, TextInput},
 };
 use gpui::*;
 use picto_library::FolderId;
@@ -249,7 +249,7 @@ pub struct FolderPicker {
 
 impl FolderPicker {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(TextInput::menu_search);
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search..."));
         let menu = menu::Host::deferred(30, menu::Return::To(search.read(cx).focus_handle(cx)));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
@@ -673,7 +673,11 @@ impl FolderPicker {
         parent: Option<FolderId>,
         cx: &mut Context<Self>,
     ) {
-        let name = cx.new(|cx| TextInput::dialog("Folder name", cx));
+        let name = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Folder name")
+                .submits()
+        });
         let subscriptions = vec![
             cx.subscribe(&name, |this, _, _: &Submitted, cx| this.submit_create(cx)),
             // The Create button follows what is typed.

@@ -18,7 +18,7 @@ use crate::session::{Change, Session};
 use crate::ui;
 use crate::ui::menu::{self, Menu};
 use crate::ui::modal;
-use crate::ui::text_input::{Submitted, TextInput};
+use crate::ui::text_input::{Kind, Submitted, TextInput};
 use gpui::*;
 use requests::{Outbox, Request};
 use serde_json::Value;
@@ -286,7 +286,7 @@ impl SubscriptionsScreen {
     ) -> Self {
         let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));
         let folder_picker = cx.new(|cx| FolderPicker::new(session.clone(), cx));
-        let add_query = cx.new(|cx| TextInput::dialog("", cx));
+        let add_query = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
         let add_site = format::query_sites().first().map_or("", |site| site.id);
         add_query.update(cx, |input, _| {
             input.set_placeholder(placeholder(add_site));

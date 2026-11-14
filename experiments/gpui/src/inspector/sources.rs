@@ -5,7 +5,11 @@
 use super::Inspector;
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::{self, text_input::TextInput, tooltip::Tip};
+use crate::ui::{
+    self,
+    text_input::{Kind, TextInput},
+    tooltip::Tip,
+};
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
@@ -77,7 +81,11 @@ impl SourcesState {
         Self {
             open: false,
             editing: None,
-            input: cx.new(|cx| TextInput::inline("https://...", cx)),
+            input: cx.new(|cx| {
+                TextInput::new(Kind::Inspector, cx)
+                    .placeholder("https://...")
+                    .submits()
+            }),
             field: Rc::new(Cell::new(Bounds::default())),
         }
     }

@@ -115,9 +115,6 @@ pub struct TextInput {
     area: gpui::ScrollHandle,
     /// The caret offset the expanded area last scrolled to show.
     revealed: Option<usize>,
-    /// A text area (`GlassTextarea`): its text is always drawn wrapped
-    /// from the top of its box, and Enter is a line break.
-    text_area: bool,
     /// The field's own Undo and Redo, with typing gathered into runs.
     history: editing::History,
     /// A caret at a wrap stands after the upper row's last character
@@ -151,9 +148,11 @@ pub enum Kind {
     Search,
     /// The sidebar's tree filter.
     Sidebar,
-    /// The inspector's name and notes.
+    /// The inspector's name and notes, and the source list's address
+    /// editor.
     Inspector,
-    /// A form field at the UI font's 13px: the settings searches.
+    /// A form field at the UI font's 13px: dialog fields, the settings
+    /// searches, a grid subfolder tile's rename (`FolderRenameInput`).
     Form,
     /// A number, at 12px and against the right edge (`CompactNumberInput`).
     Number,
@@ -162,14 +161,16 @@ pub enum Kind {
     SidebarRename,
     /// The search at the top of a popover (`LibrarySwitcherPopover`).
     Popover,
-    /// A context menu's search row (`.searchInput`).
+    /// A context menu's search row (`.searchInput`), and the search of the
+    /// Add Tags and Folders dialogs.
     Menu,
     /// A small field at 12px on a 26px line: the filter bar's ranges.
     Compact,
     /// A colour's hex code, in the monospaced font at 12px (`.hexField`).
     Mono,
     /// A dialog's text area (`GlassInput.module.css` `.textarea`): 13px on
-    /// a 1.4 line.
+    /// a 1.4 line, wrapped from the top of its box, where Enter starts a
+    /// new line and Escape is left to the dialog.
     Area,
 }
 
@@ -226,7 +227,7 @@ impl Kind {
 /// A stored field's new value, with the key it was set for.
 pub struct Committed(pub u64, pub String);
 impl gpui::EventEmitter<Committed> for TextInput {}
-/// Enter was pressed in a field made with [`TextInput::dialog`].
+/// Enter was pressed in a field made with [`TextInput::submits`].
 pub struct Submitted;
 impl gpui::EventEmitter<Submitted> for TextInput {}
 /// Backspace was pressed in an empty field.
@@ -247,7 +248,7 @@ impl Render for TextInput {
         // centred in the field.
         let root = if self.expanded(window) {
             div().w_full()
-        } else if self.text_area {
+        } else if self.text_area() {
             // From the top of the box, filling it, so a press below the
             // text still lands in the field.
             div().size_full()
@@ -332,7 +333,7 @@ impl Render for TextInput {
         .on_action(cx.listener(Self::redo))
         .on_key_down(cx.listener(Self::on_key_down))
         .on_action(cx.listener(|this, _: &Commit, window, cx| {
-            if this.text_area {
+            if this.text_area() {
                 this.edit(this.selected_range.clone(), "\n", Some(Typing::Insert), cx);
                 return;
             }
@@ -393,12 +394,16 @@ impl Focusable for TextInput {
 }
 
 impl TextInput {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    /// A field of `kind`, empty and with no placeholder. The builder
+    /// methods below give it the rest: a placeholder, Enter that submits,
+    /// a value committed when it loses focus, line breaks, an in-place
+    /// rename.
+    pub fn new(kind: Kind, cx: &mut Context<Self>) -> Self {
         Self {
             // A field is a stop for Tab, as an `<input>` is.
             focus_handle: cx.focus_handle().tab_stop(true),
             content: "".into(),
-            placeholder: "Search".into(),
+            placeholder: "".into(),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -407,18 +412,18 @@ impl TextInput {
             is_selecting: false,
             field_key: None,
             original: "".into(),
-            kind: Kind::Search,
-            submits: false,
+            kind,
+            // A text area leaves Escape to the dialog that holds it.
+            submits: kind == Kind::Area,
             scroll: px(0.),
             blink: std::time::Instant::now(),
             blink_task: None,
             renaming: false,
-            multiline: false,
+            multiline: kind == Kind::Area,
             overflowing: false,
             last_lines: None,
             area: gpui::ScrollHandle::new(),
             revealed: None,
-            text_area: false,
             history: editing::History::default(),
             upstream: false,
             goal_x: None,
@@ -429,37 +434,56 @@ impl TextInput {
             killing: false,
         }
     }
-    /// The sidebar's tree filter.
-    pub fn sidebar(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Sidebar;
-        input
+
+    /// What the empty field shows.
+    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
     }
-    /// A sidebar row's in-place rename, holding the current name selected.
-    /// Losing focus commits it.
-    pub fn sidebar_rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = "".into();
-        input.kind = Kind::SidebarRename;
-        input.content = value.to_owned().into();
-        input.original = input.content.clone();
-        input.selected_range = 0..input.content.len();
-        input.renaming = true;
-        cx.on_blur(&input.focus_handle, window, |this, _, cx| {
+
+    /// Enter submits the field ([`Submitted`]) and Escape is left to what
+    /// holds it: dialog fields, the Tags screen's search, the source list's
+    /// address editor.
+    pub fn submits(mut self) -> Self {
+        self.submits = true;
+        self
+    }
+
+    /// A stored field (the inspector's): losing focus commits its value
+    /// ([`Committed`]) and takes an expanded field back to its one line.
+    pub fn commits_on_blur(self, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+            this.commit(cx);
+            // An expanded field goes back to its one line.
+            cx.notify();
+        })
+        .detach();
+        self
+    }
+
+    /// The field takes line breaks with Shift+Enter and, while focused
+    /// text overflows its line, is drawn expanded by its frame
+    /// (`InspectorField`).
+    pub fn expanding(mut self) -> Self {
+        self.multiline = true;
+        self
+    }
+
+    /// An in-place rename (a sidebar row's, a grid subfolder tile's),
+    /// holding the current name selected. Enter or losing focus commits it
+    /// and Escape cancels it ([`Renamed`]).
+    pub fn renaming(mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        self.content = value.to_owned().into();
+        self.original = self.content.clone();
+        self.selected_range = 0..self.content.len();
+        self.renaming = true;
+        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
             this.finish_rename(true, cx)
         })
         .detach();
-        input
+        self
     }
-    /// A grid subfolder tile's in-place rename (`FolderRenameInput`, a
-    /// `GlassInput`): the UI font at 13px, otherwise as
-    /// [`TextInput::sidebar_rename`].
-    pub fn glass_rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::sidebar_rename(value, window, cx);
-        input.kind = Kind::Form;
-        input
-    }
+
     /// Ends an in-place rename once: committed, or cancelled.
     pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.renaming) {
@@ -470,28 +494,6 @@ impl TextInput {
         } else {
             Renamed::Cancel
         });
-    }
-    /// The search field of a popover.
-    pub fn popover(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Popover;
-        input
-    }
-    /// A context menu's search field. The menu takes its Enter, Escape and
-    /// arrows before the field sees them.
-    pub fn menu_search(cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = "Search...".into();
-        input.kind = Kind::Menu;
-        input
-    }
-    /// The search of the Add Tags and Folders dialogs (`.searchInput`): a
-    /// menu search's type with its own placeholder.
-    pub fn list_search(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::menu_search(cx);
-        input.placeholder = placeholder.into();
-        input
     }
     pub fn select_everything(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
@@ -523,63 +525,6 @@ impl TextInput {
     pub fn value(&self) -> String {
         self.content.to_string()
     }
-    /// A form field whose Enter submits it ([`Submitted`]) and whose Escape
-    /// is left to what holds it: dialog fields and the Tags screen's search.
-    pub fn dialog(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::form(placeholder, cx);
-        input.submits = true;
-        input
-    }
-    /// A field set into an inspector row, in the inspector's type, whose
-    /// Enter submits it ([`Submitted`]) and whose Escape is left to what
-    /// holds it: the source list's address editor.
-    pub fn inline(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Inspector;
-        input.submits = true;
-        input
-    }
-    /// A form field, at the UI font's 13px.
-    pub fn form(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Form;
-        input
-    }
-    /// A dialog's text area (`GlassTextarea`), wrapped from the top of its
-    /// box, where Enter starts a new line.
-    pub fn text_area(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Area;
-        input.multiline = true;
-        input.text_area = true;
-        // Escape is left to the dialog.
-        input.submits = true;
-        input
-    }
-    /// A small field of the filter bar's editors, at 12px.
-    pub fn compact(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Compact;
-        input
-    }
-    /// A colour's hex code.
-    pub fn mono(cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = "".into();
-        input.kind = Kind::Mono;
-        input
-    }
-    /// A number field, set against its right edge.
-    pub fn number(cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = "".into();
-        input.kind = Kind::Number;
-        input
-    }
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
     }
@@ -597,29 +542,10 @@ impl TextInput {
         self.moved();
         cx.notify();
     }
-    pub fn field(placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mut input = Self::new(cx);
-        input.placeholder = placeholder.into();
-        input.kind = Kind::Inspector;
-        cx.on_blur(&input.focus_handle, window, |this, _, cx| {
-            this.commit(cx);
-            // An expanded field goes back to its one line.
-            cx.notify();
-        })
-        .detach();
-        input
-    }
-    /// An inspector field that takes line breaks with Shift+Enter and, while
-    /// focused text overflows its line, is drawn expanded by its frame
-    /// (`InspectorField`).
-    pub fn expanding(
-        placeholder: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut input = Self::field(placeholder, window, cx);
-        input.multiline = true;
-        input
+    /// A dialog's text area (`GlassTextarea`): its text is always drawn
+    /// wrapped from the top of its box, and Enter is a line break.
+    fn text_area(&self) -> bool {
+        self.kind == Kind::Area
     }
     /// Whether the field is focused and its text needs more than one line,
     /// so its frame draws it expanded over what follows.

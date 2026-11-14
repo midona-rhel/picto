@@ -11,7 +11,7 @@ use crate::ui::{
     field::Look,
     menu::Return,
     modal::Size,
-    text_input::{Submitted, TextInput},
+    text_input::{Kind, Submitted, TextInput},
 };
 use crate::{theme, ui::confirm::confirm};
 use gpui::{prelude::FluentBuilder as _, *};
@@ -158,7 +158,11 @@ impl SubscriptionsScreen {
         submit: fn(&mut Self, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> (Entity<TextInput>, Vec<Subscription>) {
-        let input = cx.new(|cx| TextInput::dialog(placeholder, cx));
+        let input = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder(placeholder)
+                .submits()
+        });
         if !text.is_empty() {
             input.update(cx, |input, cx| input.set_text(text.to_owned(), cx));
         }

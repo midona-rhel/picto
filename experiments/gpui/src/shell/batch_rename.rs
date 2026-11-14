@@ -7,7 +7,7 @@ use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
 use crate::ui::modal::{form_field, form_row, form_stack, help_text};
-use crate::ui::text_input::{Submitted, TextInput};
+use crate::ui::text_input::{Kind, Submitted, TextInput};
 use crate::{theme, ui};
 use gpui::*;
 use picto_library::RootId;
@@ -122,9 +122,13 @@ pub struct BatchRename {
 
 impl BatchRename {
     pub fn new(session: Entity<Session>, back: FocusHandle, cx: &mut Context<Self>) -> Self {
-        let pattern = cx.new(|cx| TextInput::dialog("", cx));
-        let replacement = cx.new(|cx| TextInput::dialog("Replace with", cx));
-        let start = cx.new(|cx| TextInput::dialog("", cx));
+        let pattern = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
+        let replacement = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Replace with")
+                .submits()
+        });
+        let start = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
         let mut subscriptions = Vec::new();
         for input in [&pattern, &replacement] {
             subscriptions.push(cx.observe(input, |_, _, cx| cx.notify()));

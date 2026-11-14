@@ -8,7 +8,7 @@ use super::GridView;
 use super::selection::Press;
 use crate::backend::Navigation;
 use crate::theme::{self, Text as _};
-use crate::ui::{self, text_input::Renamed, text_input::TextInput};
+use crate::ui::{self, text_input::Kind, text_input::Renamed, text_input::TextInput};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use picto_library::FolderId;
@@ -545,7 +545,7 @@ impl GridView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let input = cx.new(|cx| TextInput::glass_rename(&name, window, cx));
+        let input = cx.new(|cx| TextInput::new(Kind::Form, cx).renaming(&name, window, cx));
         let subscription = cx.subscribe_in(
             &input,
             window,

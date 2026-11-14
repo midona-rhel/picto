@@ -14,7 +14,7 @@ use crate::tags::{Answer, Page, Preferences, TagPager, View as Browse};
 use crate::ui::{
     menu::{self},
     modal::Presence,
-    text_input::TextInput,
+    text_input::{Kind, TextInput},
 };
 use dialogs::{Dialog, Layer};
 use gpui::*;
@@ -134,7 +134,11 @@ impl TagsScreen {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| TextInput::dialog("Search tags", cx));
+        let search = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Search tags")
+                .submits()
+        });
         let toolbar = cx.new(|cx| TagsToolbar {
             _observe: cx.observe(&search, |_, _, cx| cx.notify()),
             search: search.clone(),

@@ -4,7 +4,7 @@
 //! and notes are written here for the inspector too.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
 use crate::session::{Change, Report, Reread, Session, edit_then, edit_then_in};
-use crate::ui::text_input::{Renamed, TextInput};
+use crate::ui::text_input::{Kind, Renamed, TextInput};
 use gpui::*;
 use picto_library::model::ContentSortField;
 use picto_library::{FolderId, Library, LibraryError, SmartFolderId, SmartFolderInput};
@@ -641,7 +641,8 @@ impl Sidebar {
             let value = open.input.read(cx).value().trim().to_owned();
             self.apply_rename(&open.node, &open.original, value, cx);
         }
-        let input = cx.new(|cx| TextInput::sidebar_rename(&name, window, cx));
+        let input =
+            cx.new(|cx| TextInput::new(Kind::SidebarRename, cx).renaming(&name, window, cx));
         let subscription = cx.subscribe_in(
             &input,
             window,

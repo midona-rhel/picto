@@ -1,5 +1,5 @@
 use super::field::{Look, field};
-use super::text_input::TextInput;
+use super::text_input::{Kind, TextInput};
 use crate::{motion, theme};
 use gpui::*;
 use std::{cell::RefCell, rc::Rc};
@@ -164,7 +164,7 @@ impl RenderOnce for NumberInput {
         let (value, min, max) = (self.value, self.min, self.max);
         let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| {
             let input = cx.new(|cx| {
-                let mut input = TextInput::number(cx);
+                let mut input = TextInput::new(Kind::Number, cx);
                 input.set_text(value.to_string(), cx);
                 input
             });

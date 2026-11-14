@@ -12,7 +12,10 @@
 mod view;
 
 use crate::session::Session;
-use crate::ui::{self, text_input::TextInput};
+use crate::ui::{
+    self,
+    text_input::{Kind, TextInput},
+};
 use gpui::*;
 use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, SmartFolderId};
@@ -376,8 +379,16 @@ impl Exports {
 
     /// `ExportModal`, for `count` items, starting from the original format.
     pub fn export_as(&mut self, target: SelectionTarget, count: u64, cx: &mut Context<Self>) {
-        let width = cx.new(|cx| TextInput::dialog("Width", cx));
-        let height = cx.new(|cx| TextInput::dialog("Height", cx));
+        let width = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Width")
+                .submits()
+        });
+        let height = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Height")
+                .submits()
+        });
         let typed = |input: &Entity<TextInput>, cx: &mut Context<Self>| {
             cx.observe(input, |_, input, cx| {
                 let text = input.read(cx).value();

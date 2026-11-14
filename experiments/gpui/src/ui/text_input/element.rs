@@ -281,7 +281,7 @@ impl TextElement {
     fn wrapped(&self, window: &Window, cx: &App) -> bool {
         let input = self.input.read(cx);
         input.multiline
-            && ((input.text_area && !input.content.is_empty())
+            && ((input.text_area() && !input.content.is_empty())
                 || (input.overflowing && input.focus_handle.is_focused(window)))
     }
 

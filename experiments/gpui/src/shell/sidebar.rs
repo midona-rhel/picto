@@ -10,7 +10,7 @@ use crate::session::{Change, Session};
 use crate::ui;
 use crate::ui::menu::Menu;
 use crate::ui::sidebar_row::DropPosition;
-use crate::ui::text_input::TextInput;
+use crate::ui::text_input::{Kind, TextInput};
 use gpui::*;
 use picto_library::query::ItemScope;
 use picto_library::{FolderId, SmartFolderId};
@@ -327,7 +327,7 @@ impl Sidebar {
         home: FocusHandle,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter = cx.new(|cx| TextInput::sidebar("Filter", cx));
+        let filter = cx.new(|cx| TextInput::new(Kind::Sidebar, cx).placeholder("Filter"));
         let switcher = Rc::new(Cell::new(Bounds::default()));
         let library_popover = cx.new(|cx| {
             LibraryPopover::new(session.clone(), thumbnails.clone(), switcher.clone(), cx)

@@ -65,7 +65,11 @@ impl EventEmitter<Changed> for TagTokenInput {}
 
 impl TagTokenInput {
     pub fn new(values: Vec<String>, search: Search, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextInput::dialog("Search tags...", cx));
+        let input = cx.new(|cx| {
+            TextInput::new(super::text_input::Kind::Form, cx)
+                .placeholder("Search tags...")
+                .submits()
+        });
         let subscriptions = vec![
             cx.observe(&input, |this, input, cx| {
                 let query = input.read(cx).value();

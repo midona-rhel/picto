@@ -7,7 +7,11 @@ use crate::grid::format::grouped;
 use crate::session::{Report, Reread, Session};
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::{self, check, field::Look, text_input::TextInput};
+use crate::ui::{
+    self, check,
+    field::Look,
+    text_input::{Kind, TextInput},
+};
 use gpui::*;
 use picto_library::RootId;
 use picto_library::selection::{SelectionCollectionCandidate, SelectionTarget};
@@ -62,9 +66,14 @@ pub fn submittable(
 
 impl Organizer {
     pub fn new(session: Entity<Session>, request: Request, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| TextInput::dialog("Group name", cx));
+        let name = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Group name")
+                .submits()
+        });
         let notes = cx.new(|cx| {
-            let mut input = TextInput::text_area("Optional notes for the collection", cx);
+            let mut input =
+                TextInput::new(Kind::Area, cx).placeholder("Optional notes for the collection");
             input.set_text(request.notes, cx);
             input
         });
