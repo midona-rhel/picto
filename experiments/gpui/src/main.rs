@@ -18,6 +18,7 @@ mod motion;
 // Pictures of the app drawn off-screen, for checks without a screen.
 #[cfg(test)]
 mod offscreen;
+mod platform;
 mod pointer;
 mod prompt;
 mod screens;

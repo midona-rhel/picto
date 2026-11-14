@@ -11,37 +11,10 @@ pub fn enabled() -> bool {
 
 #[cfg(target_os = "macos")]
 pub fn keep_painting(window: &Window) {
-    use crate::ui::window_chrome::appkit;
-    use std::ffi::c_void;
-    /// `NSWindowOcclusionStateVisible`.
-    extern "C" fn visible(_: *mut c_void, _: *const c_void) -> usize {
-        1 << 1
+    if enabled() {
+        use crate::platform::macos;
+        macos::with_ns_window(window, macos::keep_painting_while_covered);
     }
-    if !enabled() {
-        return;
-    }
-    appkit::with_ns_window(window, |ns_window| {
-        // SAFETY: GPUI's window class is its own delegate and implements
-        // `windowDidChangeOcclusionState:`; `occlusionState` returns an
-        // `NSUInteger` and takes no arguments, as `visible` does. Called on
-        // the main thread.
-        unsafe {
-            appkit::replace_method(
-                ns_window,
-                appkit::selector(c"occlusionState"),
-                visible as *const c_void,
-                c"Q@:",
-            );
-            // Have the window look at its (new) state and start its frames.
-            let send_object: extern "C" fn(*mut c_void, *const c_void, *mut c_void) =
-                std::mem::transmute(appkit::send());
-            send_object(
-                ns_window,
-                appkit::selector(c"windowDidChangeOcclusionState:"),
-                std::ptr::null_mut(),
-            );
-        }
-    });
 }
 
 #[cfg(not(target_os = "macos"))]

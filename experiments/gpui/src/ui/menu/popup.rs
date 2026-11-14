@@ -301,16 +301,8 @@ pub(super) fn close_window(window: AnyWindowHandle, cx: &mut App) {
 /// is turned off. GPUI has no option for this, so it asks AppKit directly.
 #[cfg(target_os = "macos")]
 pub(crate) fn without_system_shadow(window: &Window) {
-    use crate::ui::window_chrome::appkit;
-    appkit::with_ns_window(window, |ns_window| {
-        // SAFETY: `setHasShadow:` is an NSWindow method taking a BOOL,
-        // called on the main thread.
-        unsafe {
-            let send_bool: extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void, bool) =
-                std::mem::transmute(appkit::send());
-            send_bool(ns_window, appkit::selector(c"setHasShadow:"), false);
-        }
-    });
+    use crate::platform::macos;
+    macos::with_ns_window(window, macos::without_shadow);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -319,7 +311,7 @@ pub(crate) fn without_system_shadow(_: &Window) {}
 /// The point a menu asked for at `pointer` scales in about: the pointer,
 /// or the nearest point of its `panel` where the panel was moved away from
 /// it to fit. Given in the window `bounds` from the window's centre with y
-/// upwards, as `appkit::pop_in` takes it.
+/// upwards, as `platform::macos::pop_in` takes it.
 fn pop_point(pointer: (f32, f32), panel: Rect, bounds: Rect) -> (f32, f32) {
     let x = pointer.0.clamp(panel.x, panel.x + panel.w) - bounds.x;
     let y = pointer.1.clamp(panel.y, panel.y + panel.h) - bounds.y;
@@ -330,18 +322,16 @@ fn pop_point(pointer: (f32, f32), panel: Rect, bounds: Rect) -> (f32, f32) {
 /// turns off the system's own animation for every pop-up.
 #[cfg(target_os = "macos")]
 fn pop_in(window: &Window, about: Option<(f32, f32)>) {
-    use crate::ui::window_chrome::appkit;
-    appkit::with_ns_window(window, |ns_window| {
-        appkit::without_appear_animation(ns_window);
+    use crate::{motion, platform::macos};
+    macos::with_ns_window(window, |ns_window| {
+        macos::without_appear_animation(ns_window);
         if let Some(about) = about {
-            use crate::motion;
-            let curve = motion::EASE_SCALE_IN;
-            appkit::pop_in(
+            macos::pop_in(
                 ns_window,
                 about,
                 motion::MENU_IN_SCALE,
                 motion::MENU_IN.as_secs_f64(),
-                curve.points(),
+                motion::EASE_SCALE_IN.points(),
             );
         }
     });
