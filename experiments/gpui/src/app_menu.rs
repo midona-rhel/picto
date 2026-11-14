@@ -1031,8 +1031,8 @@ pub fn bind(cx: &mut App) {
             Some(Box::new(crate::shell::SelectAll)),
         )
     });
-    // A text field undoes its own edits first, and passes the action on to
-    // the library's history when it has none.
+    // In a text field Undo and Redo are the field's own; elsewhere they
+    // walk the library's history.
     cx.on_action(|_: &EditUndo, cx| {
         edit(
             cx,

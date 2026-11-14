@@ -505,6 +505,10 @@ pub const BADGE_TEXT: u32 = 0xffffffcc;
 // The viewer's overlays are fixed, not themed (`MediaView.module.css`).
 /// `.boundaryLeft` / `.boundaryRight`: `rgba(0, 0, 0, 0.6)`.
 pub const VIEWER_NOTICE_BACKGROUND: u32 = 0x00000099;
+/// `.transparencyGrid` (`ImageCrossfadeFrame.module.css`): white, with
+/// `#d9d9d9` squares 8 image pixels wide.
+pub const TRANSPARENCY_GRID_LIGHT: u32 = 0xffffff;
+pub const TRANSPARENCY_GRID_DARK: u32 = 0xd9d9d9;
 /// `.navigator`: `rgba(0, 0, 0, 0.4)`, bordered `rgba(255, 255, 255, 0.15)`.
 pub const NAVIGATOR_BACKGROUND: u32 = 0x00000066;
 pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
