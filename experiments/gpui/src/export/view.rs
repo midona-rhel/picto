@@ -160,7 +160,7 @@ impl Exports {
                 ui::action_button("export-cancel", ButtonLook::Standard)
                     .label("Cancel")
                     .on_click(on_click(this, |exports, cx| {
-                        exports.dialog.close(cx);
+                        exports.close(cx);
                     })),
             )
             .footer(
@@ -283,7 +283,7 @@ impl Exports {
                 .label("Cancel")
                 .disabled(busy)
                 .on_click(on_click(this, |exports, cx| {
-                    exports.dialog.close(cx);
+                    exports.close(cx);
                 })),
         )
         .footer(

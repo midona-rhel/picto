@@ -113,9 +113,22 @@ with the guard. A failed copy leaves nothing behind. Run the binary through
 (`libwebgpu_dawn.so` among them), which cargo puts on the loader's path and a
 bare `target/debug/picto-gpui-spike` does not find.
 
-The binary takes one argument, the copy's root. `<copy> --detach` detaches
-the copy and exits without opening a window; `reference.sh` uses it before
-the Electron app opens the same copy.
+The binary takes the copy's root first. `<copy> --detach` detaches the copy
+and exits without opening a window; `reference.sh` uses it before the
+Electron app opens the same copy. Files after the copy are opened as
+production opens files from the file manager (`src/opening/`): a
+`.picto-pack` goes to the pack's import dialog (several wait their turn),
+a `.library` that is the open copy only brings the window forward, and any
+other `.library` is refused, since the app opens only the copy it started
+on. There is one instance per copy: a second launch on a copy already open
+hands its files to that instance, which comes forward, and exits; launches
+on other copies run side by side. A launch with files and no copy (what a
+file manager starts) hands them to the instance whose window was active
+last, or fails when none is open. On macOS the same files also arrive
+through `application:openURLs:` (Open With, `open -a`, a drop on the Dock
+icon) while the app runs. No file type is registered with the system: the
+bundle `run.sh` makes declares none, and nothing is written to the
+registry or to a `.desktop` file.
 
 `million.sh [items]` generates a synthetic library (a million items by
 default, sharing 4,096 generated JPEGs through hard links, with five smart
@@ -379,6 +392,16 @@ collection questions and the task dialog and task bar; exports through
 `media.export` and `picto_pack.*`. `prompt.rs` opens the system's file,
 folder and save dialogs.
 
+**Opening files** (`src/opening/`). The command line (`parse`: the copy,
+then files), production's classification of opened files
+(`associatedFileService.mjs`: `.picto-pack` and `.library`, made absolute
+against the launch's working folder), and `accept`, which queues packs on
+the export view's pack dialog and brings the window forward.
+`opening/instance/` keeps one instance per copy: an exclusive lock on a file
+named after the copy's identity in a folder of the user's own, and a Unix
+socket (`unix.rs`) or named pipe (`windows.rs`) beside it that takes a later
+launch's working folder and arguments as one JSON line.
+
 **Desktop** (`src/desktop/`). What production's main process does around the
 window: the Inbox badge, the "Subscriptions finished" system notification,
 and the guarded file hand-offs. `mod.rs` is portable; `macos.rs`,
@@ -430,7 +453,9 @@ version are kept. The app starts on All each launch, as production does.
   `keymap::bind_written`. Every registry id is either bound or listed with
   its reason in `keymap::NOT_YET`, and a test keeps it so.
 - **Platform code** lives only in the platform leaves: `src/desktop/macos.rs`,
-  `windows.rs` and `linux.rs` for the desktop hand-offs, and
+  `windows.rs` and `linux.rs` for the desktop hand-offs,
+  `src/opening/instance/unix.rs` and `windows.rs` for the single-instance
+  socket and pipe, and
   `src/platform/macos.rs` and `windows.rs` for window-level calls (AppKit and
   Core Animation for the pop-up menus, the traffic lights, the aspect lock,
   the window level; `SetWindowPos` on Windows), each reached through one
@@ -720,7 +745,9 @@ re-checked by reading the code; the rest were checked against it.
   process's name.
 - **macOS system integration.** Dragging items out to Finder; the Dock
   badge and the system notification (which need the app to run from its
-  bundle); a real pasteboard copy of files; launching an application through
+  bundle); a real pasteboard copy of files; files arriving through
+  `application:openURLs:` (the hand-over between two launches and packs on
+  the command line were seen working); launching an application through
   Open With; the media player's full-screen transition; restoring the window
   maximised or on a second display (only the pure placement code is tested).
 - **Pop-up menus on macOS.** They have been seen reaching past the window,
@@ -769,9 +796,13 @@ re-checked by reading the code; the rest were checked against it.
   detail tooltip; a subscription run's own pop-ups ("Subscription paused",
   "Query completed", "Subscription completed").
 - Search by Image (disabled in every menu).
-- Single instance, opening files and `.picto-pack` packs from the file
-  manager, and drops from a browser (GPUI delivers only file paths, so
-  in-memory files and links do not arrive).
+- Drops from a browser (GPUI delivers only file paths, so in-memory files
+  and links do not arrive).
+- Opening another library from the file manager or the command line of a
+  running instance (production's `switchLibrary`): it is refused with a
+  notification.
+- On macOS, a pack opened with the app while no instance runs: the system
+  launches the bundle without a copy, which the app refuses.
 - Thumbnails for text, Markdown, JSON, RTF, EPUB, Word and PowerPoint files
   (production draws them in a hidden window); they show the torn page.
 - Document viewers: PDF text selection, text selection on text and book
@@ -945,6 +976,8 @@ Smaller differences by area†
 | Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
 | Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
 | Drag items out of the window | not built (needs OLE `DoDragDrop` outside GPUI's event dispatch) | not built (needs an XDND source) | GPUI's native drag |
+| Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
+| Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |
 | Detail window aspect lock | not built | not built | not built |
 | Detail window always on top | yes | no; the pin is hidden | no; the pin is hidden |
 | UI font | the system's (production bundles Geist) | the system's | the system's |

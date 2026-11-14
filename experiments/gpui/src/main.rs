@@ -17,6 +17,7 @@ mod motion;
 // Pictures of the app drawn off-screen, for checks without a screen.
 #[cfg(test)]
 mod offscreen;
+mod opening;
 mod platform;
 // Input playback, a test seam a release build does not hold (`seams.rs`).
 #[cfg(any(test, debug_assertions))]
@@ -37,7 +38,6 @@ mod viewer;
 
 use gpui::*;
 use shell::*;
-use std::path::PathBuf;
 
 /// Now, in milliseconds since 1970, as the library stamps its records.
 pub fn now_ms() -> i64 {
@@ -186,53 +186,113 @@ fn remember_window(window: &Window, cx: &mut App) {
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
-    // `--make-copy <library>`: make a disposable copy of the library, print
-    // where it is, and stop; the copy is then opened by passing that path.
-    if std::env::args().nth(1).as_deref() == Some("--make-copy") {
-        let Some(source) = std::env::args().nth(2) else {
-            eprintln!("picto: --make-copy takes the library to copy");
-            std::process::exit(2);
-        };
-        match application::make_copy(std::path::Path::new(&source)) {
-            Ok(copy) => println!("{}", desktop::system_path(&copy).display()),
-            Err(error) => {
-                eprintln!("picto: {error}");
-                std::process::exit(2);
-            }
-        }
-        return;
-    }
-    // The one argument is the root of a disposable copy that run.sh or
-    // `--make-copy` made. Anything else, and the library it was copied from,
-    // is refused.
-    let Some(root) = std::env::args().nth(1).map(PathBuf::from) else {
-        eprintln!("picto: pass the disposable library copy that run.sh or --make-copy made");
-        std::process::exit(2);
-    };
-    let root = match application::guard(&root) {
-        Ok(root) => root,
+    let working_directory = std::env::current_dir().unwrap_or_default();
+    // The one argument the app needs is the root of a disposable copy that
+    // run.sh or `--make-copy` made; anything else, and the library it was
+    // copied from, is refused. Files after it (or, with no copy, files a
+    // file manager opens with the app) are opened as production opens them
+    // (`opening`).
+    let launch = match opening::parse(std::env::args_os().skip(1).collect(), application::guard) {
+        Ok(launch) => launch,
         Err(error) => {
             eprintln!("picto: {error}");
             std::process::exit(2);
         }
     };
-    // `--detach` after the copy: cut it loose from the real library's cloud
-    // sync, watched folders and queued runs, and stop. For opening the copy
-    // with another app (the Electron reference) that would otherwise resume
-    // that work.
-    if std::env::args().nth(2).as_deref() == Some("--detach") {
-        if let Err(error) = application::detach(&root) {
+    let (root, rest) = match launch {
+        // `--make-copy <library>`: make a disposable copy of the library,
+        // print where it is, and stop; the copy is then opened by passing
+        // that path.
+        opening::Launch::MakeCopy(source) => {
+            match application::make_copy(&source) {
+                Ok(copy) => println!("{}", desktop::system_path(&copy).display()),
+                Err(error) => {
+                    eprintln!("picto: {error}");
+                    std::process::exit(2);
+                }
+            }
+            return;
+        }
+        // `--detach` after the copy: cut it loose from the real library's
+        // cloud sync, watched folders and queued runs, and stop. For opening
+        // the copy with another app (the Electron reference) that would
+        // otherwise resume that work.
+        opening::Launch::Open {
+            copy, detach: true, ..
+        } => {
+            if let Err(error) = application::detach(&copy) {
+                eprintln!("picto: {error}");
+                std::process::exit(2);
+            }
+            return;
+        }
+        opening::Launch::Open { copy, rest, .. } => (copy, rest),
+        // Files and no copy: they go to the instance most recently active.
+        opening::Launch::HandOver { files, refused } => {
+            let request = opening::instance::Request {
+                cwd: working_directory,
+                args: files,
+            };
+            match opening::instance::hand_to_latest(&request) {
+                Ok(copy) => {
+                    eprintln!("picto: handed to the app open on {}", copy.display());
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("picto: {refused}");
+                    eprintln!("picto: and the files could not be handed over: {error}");
+                    std::process::exit(2);
+                }
+            }
+        }
+    };
+    // What the app is asked to open, from this launch, later launches on
+    // the same copy, and the system (macOS `application:openURLs:`).
+    let (incoming, mut arrived) = futures::channel::mpsc::unbounded::<opening::Incoming>();
+    let from_launches = incoming.clone();
+    let request = opening::instance::Request {
+        cwd: working_directory.clone(),
+        args: rest.clone(),
+    };
+    // One instance per copy: a launch on a copy already open hands its
+    // files to that instance, which comes forward, and ends.
+    let instance = match opening::instance::start(&root, &request, move |request| {
+        let _ = from_launches.unbounded_send(opening::Incoming {
+            entries: opening::from_arguments(&request.args, &request.cwd),
+            forward: true,
+        });
+    }) {
+        Ok(opening::instance::Started::Primary(instance)) => &*Box::leak(Box::new(instance)),
+        Ok(opening::instance::Started::HandedOver) => {
+            eprintln!(
+                "picto: handed to the app already open on {}",
+                root.display()
+            );
+            return;
+        }
+        Err(error) => {
             eprintln!("picto: {error}");
             std::process::exit(2);
         }
-        return;
-    }
+    };
+    let _ = incoming.unbounded_send(opening::Incoming {
+        entries: opening::from_arguments(&rest, &working_directory),
+        forward: false,
+    });
     let (events, delivered) = std::sync::mpsc::channel();
     let application = application::Application::new(root.clone(), events);
     let closing = application.clone();
     let app = gpui_platform::application().with_assets(assets::Assets);
     // A click on the Dock icon brings back the main window Close Window hid.
     app.on_reopen(app_menu::reopen);
+    let from_system = incoming.clone();
+    app.on_open_urls(move |urls| {
+        let _ = from_system.unbounded_send(opening::Incoming {
+            entries: opening::from_arguments(&urls, &working_directory),
+            forward: true,
+        });
+    });
+    let opened_root = root.clone();
     app.run(move |cx: &mut App| {
         prepare(cx);
         // The dock badge and the system notifications, for the app proper
@@ -272,6 +332,14 @@ fn main() {
                             remember_window(window, cx)
                         })
                         .detach();
+                        // A launch with files and no copy goes to the
+                        // instance whose window was active last.
+                        cx.observe_window_activation(window, move |_, window, _| {
+                            if window.is_window_active() {
+                                instance.mark_active();
+                            }
+                        })
+                        .detach();
                         Shell::new(root, application, delivered, window, cx)
                     })
                 },
@@ -292,6 +360,15 @@ fn main() {
         pointer::start(window.into(), cx);
         #[cfg(not(debug_assertions))]
         let _ = window;
+        // Opened as production's `drainAssociatedFiles` opens them, once
+        // the window is up.
+        cx.spawn(async move |cx| {
+            use futures::StreamExt as _;
+            while let Some(incoming) = arrived.next().await {
+                cx.update(|cx| opening::accept(incoming, &opened_root, cx));
+            }
+        })
+        .detach();
         if !background {
             cx.activate(true);
         }
