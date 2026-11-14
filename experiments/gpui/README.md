@@ -175,7 +175,8 @@ of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
 Metal and wgpu renderers, ignored by the DirectX one), drop shadows that cut
 their element out as CSS does, nearest-neighbour image sampling for the
 "Pixelated" preview setting, a native file drag the app can start itself
-(`Window::start_platform_drag`), and test-only hooks for the off-screen
+(`Window::start_platform_drag`), an interface zoom for every window
+(`App::set_ui_zoom`), and test-only hooks for the off-screen
 checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
 that keep client decorations). `vendor/README.md` explains each change and
 holds the full diff against 0.3.12, so it can be re-applied to a newer
@@ -297,6 +298,19 @@ theme swatches, the colour editor's presets, a chip's label shades) sit with
 the code that lists them, and a size that belongs to one component stays with
 it, beside the CSS rule it ports.
 
+**Interface zoom** (`zoom.rs`). Production's `zoomController.ts`: Cmd+= /
+Cmd++ / Cmd+− / Cmd+0 (Control off macOS, and also on it) zoom the whole
+interface by 5% between 50% and 200%, kept per machine. It works as a
+browser's page zoom, in the vendored GPUI rather than in the views: each
+window lays out in its size divided by the zoom and draws at the display's
+scale times the zoom (text rasterized at the zoomed size), and positions
+from the system are divided by it, so the app's pixel sizes, hit-testing
+and drag maths need no change. Rule: anything that turns window points
+into screen points (pop-up windows' frames, AppKit's blur views) goes
+through `zoom::content_origin_in_ui`, `screen_to_ui` and `ui_to_screen`,
+and input played as though from the system goes through
+`Window::dispatch_platform_input`.
+
 **Grid** (`src/grid/`). `layout.rs` ports `layoutMath.ts` (waterfall, grid,
 justified) in double precision. `window.rs` is the windowed model of
 production's `gridWindow.ts`: at most 1,500 items are held, read at an exact
@@ -406,7 +420,7 @@ edits a draft and Save & Close or Apply write it back. What production keeps
 per machine (window bounds, rail widths and visibility, folded sidebar
 sections, filter bar pins and saved filters, the tag picker's layout, recent
 tags and folders, keyboard preset and rebound shortcuts, language, audio
-visualization) is kept in `state.json` in the platform's configuration folder
+visualization, interface zoom) is kept in `state.json` in the platform's configuration folder
 under `Picto GPUI` (`~/Library/Application Support`, `%APPDATA%`,
 `$XDG_CONFIG_HOME` or `~/.config`), never in the Electron app's folder or the
 copy. It is written 250 ms after the last change through a renamed temporary
@@ -552,11 +566,11 @@ show a restart. Script lines (blank lines and `#` comments are skipped):
 
 | Line | Effect |
 | --- | --- |
-| `move X Y`, `drag X Y` | pointer moved, `drag` with the left button held (window points) |
+| `move X Y`, `drag X Y` | pointer moved, `drag` with the left button held (window points as the system gives them; a zoomed window divides them by its zoom) |
 | `down X Y [clicks]`, `up X Y [clicks]` | left button, with a click count |
 | `rdown X Y`, `rup X Y` | right button |
 | `scroll X Y DISTANCE` | wheel by DISTANCE points (negative scrolls down) |
-| `key <keystroke>` | a keystroke as GPUI writes them (`space`, `cmd-shift-j`), held modifiers reported around it |
+| `key <keystroke>` | a keystroke as GPUI writes them (`space`, `cmd-shift-j`; `secondary-` is Command on macOS, Control elsewhere), held modifiers reported around it |
 | `type <text>` | text typed into the focused field |
 | `dragfiles X Y PATH…`, `drop X Y PATH…`, `dragexit` | files from the system over the window, dropped there (imports into the copy), or taken away; paths cannot hold spaces |
 | `wait <ms>` | let the app run |
@@ -673,7 +687,9 @@ generates a 2,000-item synthetic library in the system's temporary folder,
 copies it with `--make-copy`, and plays `ci/smoke.txt` with the off-screen
 tool: the grid, a hovered tile, the grid scrolled, the viewer, an item's
 menu, the window's close button hovered, the application menu (both drawn by
-the app on these platforms) and the Settings window. The eight pictures are
+the app on these platforms) and the Settings window, then the interface
+zoomed to 150% (the grid; an item's menu opened by a press at window
+points) and to 80% (the grid; the Settings window). The twelve pictures are
 uploaded as the `pictures-linux` and `pictures-windows` artifacts
 (`gh run download <run> -n pictures-linux`). They show the app's own drawing
 on each system, not the system's: no window frame, no system menus, no
@@ -715,7 +731,8 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Text fields | Chromium's editing on each platform: words (with Chinese, Japanese and Thai dictionaries), rows, paragraphs, Emacs keys, the field's own undo, input method | tests |
 | Glass and blur | backdrop blur behind panels on Metal and wgpu, shadows cut out as CSS draws them, menus in pop-up windows over the system's blur on macOS | read; seen on macOS |
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
-| Kept across launches | window place, rails, folds, filters, recents, shortcuts | tests (pure parts) |
+| Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
+| Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); 100% byte-identical to before |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
@@ -759,6 +776,13 @@ re-checked by reading the code; the rest were checked against it.
   pointing-hand cursor in them (GPUI sets the cursor from the key window);
   the input method's candidate window for the menu's search field. A select's
   list inside a pop-up menu is checked by placement tests only.
+- **The interface zoom on a screen.** Its keys have reached a real window
+  on macOS (the zoom was kept), but the window has not been looked at
+  zoomed: the screen was locked. Not seen at all: the macOS pop-up menu
+  windows and their system blur at a zoom other than 100% (placed by the
+  same numbers as the in-window menus, which the pictures show), the input
+  method's candidate window, a file dropped from Finder, a trackpad scroll
+  and the resize edges on Linux, zoomed.
 - **Network work.** No subscription run, source run or gallery download has
   been started from this app; their commands were checked with
   `PICTO_GPUI_HOLD_RUNS`.
@@ -796,9 +820,6 @@ re-checked by reading the code; the rest were checked against it.
   glyphs there; real windows use DirectWrite's system fallback on Windows
   and the system's fonts through fontconfig on Linux (a CJK font must be
   installed).
-- App-wide UI zoom (production's ⌘= / ⌘− / ⌘0 outside the viewer): every
-  size is in pixels. Settings' Zoom Level is saved and, as in production,
-  not applied.
 - Accessibility: the native window is exposed, the control tree is not (the
   vendored GPUI includes AccessKit; the app sets no roles or labels).
 - The AI tagger: Auto Tag in the item menu, the inspector and the Organize
@@ -848,6 +869,13 @@ re-checked by reading the code; the rest were checked against it.
 - A verdict on the context menu's pop-in and the pop-up menus' blur.
 
 ### Kept different on purpose
+
+- The interface zoom reaches every window at once: the main window, detail
+  windows, Settings and the pop-up menus. Production zooms the main window
+  and takes the kept zoom into a detail window only when it opens (its
+  bundle loads `zoomController.ts`); its Settings window is never zoomed.
+  The keys work in the main window only, as there. Settings' Zoom Level is
+  the library's `zoomFactor`, saved and not applied, as in production.
 
 - PDF, DjVu and comic pages scroll as one continuous column, because the
   owner asked; production shows one page at a time. In a collection the

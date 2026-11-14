@@ -544,6 +544,28 @@ impl MediaSurface {
     }
 
     /// Cmd+= and Cmd+−: the font preview's size.
+    /// Whether Cmd+0 (Ctrl+0) is this item's own Actual Size: an image, a
+    /// paged document or a font preview. Otherwise the key goes on to the
+    /// window, where it resets the interface zoom, as `MediaView`'s scope
+    /// lets it through to `AppShell`'s when it has no zoom.
+    pub fn has_actual_size(&self) -> bool {
+        match self.mode {
+            Mode::Image => true,
+            Mode::Document => matches!(
+                self.document(),
+                Some(Document::Paged(_) | Document::Font(_))
+            ),
+            Mode::Flash | Mode::Media => false,
+        }
+    }
+
+    /// Whether Cmd+= and Cmd+− (Ctrl off macOS) size this item's own
+    /// preview: a font's, as `FontViewer.tsx`'s scope takes them. Otherwise
+    /// they go on to the window and zoom the interface.
+    pub fn has_preview_size(&self) -> bool {
+        matches!(self.document(), Some(Document::Font(_)))
+    }
+
     pub fn preview_size(&mut self, larger: bool, cx: &mut Context<Self>) {
         if let Some(document) = self.document() {
             document.preview_size(larger, cx);
@@ -1554,15 +1576,52 @@ pub fn host_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSur
         })
     }
     let element = forward::<FitToWindow, _>(element, surface, |this, cx| this.fit(cx));
-    let element = forward::<ActualSize, _>(element, surface, |this, cx| this.actual_size(cx));
+    /// Like `forward`, for a key this item may not use: then the key goes
+    /// on to the next binding (the interface zoom's).
+    fn forward_if<A: Action, E: InteractiveElement>(
+        element: E,
+        surface: &Entity<MediaSurface>,
+        applies: fn(&MediaSurface) -> bool,
+        run: Run,
+    ) -> E {
+        let surface = surface.downgrade();
+        element.on_action(move |_: &A, _, cx| {
+            let handled = surface
+                .update(cx, |this, cx| {
+                    let applies = applies(this);
+                    if applies {
+                        run(this, cx);
+                    }
+                    applies
+                })
+                .unwrap_or(false);
+            if !handled {
+                cx.propagate();
+            }
+        })
+    }
+    let element = forward_if::<ActualSize, _>(
+        element,
+        surface,
+        MediaSurface::has_actual_size,
+        |this, cx| this.actual_size(cx),
+    );
     let element = forward::<ZoomIn, _>(element, surface, |this, cx| this.step_zoom(true, cx));
     let element = forward::<ZoomOut, _>(element, surface, |this, cx| this.step_zoom(false, cx));
     let element = forward::<PreviousPage, _>(element, surface, |this, cx| this.previous_page(cx));
     let element = forward::<NextPage, _>(element, surface, |this, cx| this.next_page(cx));
-    let element =
-        forward::<PreviewLarger, _>(element, surface, |this, cx| this.preview_size(true, cx));
-    let element =
-        forward::<PreviewSmaller, _>(element, surface, |this, cx| this.preview_size(false, cx));
+    let element = forward_if::<PreviewLarger, _>(
+        element,
+        surface,
+        MediaSurface::has_preview_size,
+        |this, cx| this.preview_size(true, cx),
+    );
+    let element = forward_if::<PreviewSmaller, _>(
+        element,
+        surface,
+        MediaSurface::has_preview_size,
+        |this, cx| this.preview_size(false, cx),
+    );
     let element = forward::<ScrollToStart, _>(element, surface, |this, cx| {
         this.scroll_pages(Scroll::Start, cx)
     });

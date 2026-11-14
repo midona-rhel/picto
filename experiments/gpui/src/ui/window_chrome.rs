@@ -131,10 +131,15 @@ const RESIZE_CORNER: f32 = 10.;
 
 /// The strips along a window of `size` that resize it, and which edge or
 /// corner each moves. A side tiled against the screen's edge (or every
-/// side of a maximised window) has none.
-fn resize_zones(size: Size<Pixels>, tiling: Tiling) -> Vec<(ResizeEdge, Bounds<Pixels>)> {
+/// side of a maximised window) has none. The strips keep their width on the screen whatever the interface `zoom`,
+/// as a system's resize border does.
+fn resize_zones(
+    size: Size<Pixels>,
+    tiling: Tiling,
+    zoom: f32,
+) -> Vec<(ResizeEdge, Bounds<Pixels>)> {
     let (width, height) = (f32::from(size.width), f32::from(size.height));
-    let (edge, corner) = (RESIZE_EDGE, RESIZE_CORNER);
+    let (edge, corner) = (RESIZE_EDGE / zoom, RESIZE_CORNER / zoom);
     let rect = |x: f32, y: f32, w: f32, h: f32| Bounds::new(point(px(x), px(y)), size_of(w, h));
     fn size_of(w: f32, h: f32) -> Size<Pixels> {
         gpui::size(px(w.max(0.)), px(h.max(0.)))
@@ -211,7 +216,7 @@ pub fn resize_edges(window: &Window) -> Option<impl IntoElement + use<>> {
     if !window.is_resizable() {
         return None;
     }
-    let zones = resize_zones(window.viewport_size(), tiling);
+    let zones = resize_zones(window.viewport_size(), tiling, window.ui_zoom());
     Some(
         div()
             .absolute()
@@ -309,13 +314,17 @@ pub fn system_blur_behind(window: &Window) {
 pub fn place_system_blur(window: &Window, panel: Bounds<Pixels>, radius: f32, alpha: f32) {
     #[cfg(target_os = "macos")]
     {
-        let height = f32::from(window.viewport_size().height);
+        // AppKit's points are the window's screen points: the drawn
+        // panel's times the interface zoom.
+        let zoom = window.ui_zoom();
+        let height = f32::from(window.viewport_size().height) * zoom;
         let rect = (
-            f32::from(panel.origin.x),
-            f32::from(panel.origin.y),
-            f32::from(panel.size.width),
-            f32::from(panel.size.height),
+            f32::from(panel.origin.x) * zoom,
+            f32::from(panel.origin.y) * zoom,
+            f32::from(panel.size.width) * zoom,
+            f32::from(panel.size.height) * zoom,
         );
+        let radius = radius * zoom;
         macos::with_ns_window(window, |ns_window| {
             macos::backdrop::place(ns_window, rect, height, radius, alpha)
         });
@@ -355,7 +364,7 @@ mod tests {
 
     #[test]
     fn a_floating_window_resizes_from_every_edge_and_corner() {
-        let zones = resize_zones(size(px(800.), px(600.)), Tiling::default());
+        let zones = resize_zones(size(px(800.), px(600.)), Tiling::default(), 1.);
         assert_eq!(zones.len(), 8);
         let at = |edge| zones.iter().find(|(which, _)| *which == edge).unwrap().1;
         assert_eq!(
@@ -379,11 +388,25 @@ mod tests {
             left: true,
             right: false,
         };
-        let edges: Vec<ResizeEdge> = resize_zones(size(px(800.), px(600.)), left_half)
+        let edges: Vec<ResizeEdge> = resize_zones(size(px(800.), px(600.)), left_half, 1.)
             .into_iter()
             .map(|(edge, _)| edge)
             .collect();
         assert_eq!(edges, [ResizeEdge::Right]);
-        assert!(resize_zones(size(px(800.), px(600.)), Tiling::tiled()).is_empty());
+        assert!(resize_zones(size(px(800.), px(600.)), Tiling::tiled(), 1.).is_empty());
+    }
+
+    #[test]
+    fn the_edges_keep_their_width_on_the_screen_under_zoom() {
+        // A 1200-point window at 150% is laid out 800 points wide; its right
+        // edge is still 5 screen points, 5 / 1.5 of the window's own.
+        let zones = resize_zones(size(px(800.), px(600.)), Tiling::default(), 1.5);
+        let right = zones
+            .iter()
+            .find(|(which, _)| *which == ResizeEdge::Right)
+            .unwrap()
+            .1;
+        assert_eq!(right.size.width * 1.5, px(RESIZE_EDGE));
+        assert_eq!(right.origin.x + right.size.width, px(800.));
     }
 }

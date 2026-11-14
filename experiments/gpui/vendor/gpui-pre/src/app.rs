@@ -970,6 +970,8 @@ pub struct App {
     #[cfg(any(test, feature = "test-support", debug_assertions))]
     pub(crate) name: Option<&'static str>,
     pub(crate) text_rendering_mode: Rc<Cell<TextRenderingMode>>,
+    /// The interface zoom every window draws at (see [`App::set_ui_zoom`]).
+    pub(crate) ui_zoom: Rc<Cell<f32>>,
 
     pub(crate) window_update_stack: Vec<WindowId>,
     pub(crate) mode: GpuiMode,
@@ -1024,6 +1026,7 @@ impl App {
                 platform: platform.clone(),
                 text_system,
                 text_rendering_mode: Rc::new(Cell::new(TextRenderingMode::default())),
+                ui_zoom: Rc::new(Cell::new(1.0)),
                 mode: GpuiMode::Production,
                 actions: Rc::new(ActionRegistry::default()),
                 pending_updates: 0,
@@ -1856,6 +1859,35 @@ impl App {
     /// Returns the current text rendering mode for the application.
     pub fn text_rendering_mode(&self) -> TextRenderingMode {
         self.text_rendering_mode.get()
+    }
+
+    /// Zooms the interface of every window, as a browser's page zoom does:
+    /// each window lays out in a viewport of its size divided by `zoom` and
+    /// draws at its display's scale factor times `zoom`, so everything
+    /// sized in pixels (text rasterized at the zoomed size, not stretched)
+    /// grows or shrinks together, and pointer positions from the system are
+    /// divided by `zoom` before they reach the window. What the window
+    /// hands back to the system (input method rectangles, the window menu's
+    /// position, input regions, the client inset) is multiplied by it. The
+    /// window's frame, its minimum size and `Window::bounds` stay in screen
+    /// points. Windows opened later start at this zoom; open windows take
+    /// it on their next frame. A value that is not finite and positive is
+    /// taken as 1.
+    pub fn set_ui_zoom(&mut self, zoom: f32) {
+        let zoom = if zoom.is_finite() && zoom > 0.0 {
+            zoom
+        } else {
+            1.0
+        };
+        if self.ui_zoom.get() != zoom {
+            self.ui_zoom.set(zoom);
+            self.refresh_windows();
+        }
+    }
+
+    /// The interface zoom set by [`App::set_ui_zoom`]; 1 unless set.
+    pub fn ui_zoom(&self) -> f32 {
+        self.ui_zoom.get()
     }
 
     /// Returns the operating system's power mode, or [`PowerMode::Unknown`]

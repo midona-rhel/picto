@@ -88,15 +88,14 @@ impl Menu {
             self.presentation = Presentation::InWindow;
             return;
         };
-        // `Window::bounds` is the frame on its display; the content starts
-        // below any system titlebar, at the frame's bottom less its height.
-        let frame = window.bounds();
-        let content = window.viewport_size();
-        let origin = (
-            f32::from(frame.origin.x),
-            f32::from(frame.origin.y) + f32::from(frame.size.height - content.height),
-        );
-        let area = Rect::from_bounds(display.visible_bounds());
+        // The display and the owner's content on it, in the interface
+        // zoom's points, as the menu is laid out; the windows' frames are
+        // these times the zoom (`open_pop_up`).
+        let origin = crate::zoom::content_origin_in_ui(window);
+        let area = Rect::from_bounds(crate::zoom::screen_to_ui(
+            display.visible_bounds(),
+            window.ui_zoom(),
+        ));
         self.screen = Some(Screen {
             area,
             origin,
@@ -169,7 +168,10 @@ impl Menu {
                 return;
             }
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds.to_bounds())),
+                window_bounds: Some(WindowBounds::Windowed(crate::zoom::ui_to_screen(
+                    bounds.to_bounds(),
+                    cx.ui_zoom(),
+                ))),
                 display_id: Some(display),
                 titlebar: None,
                 focus: false,

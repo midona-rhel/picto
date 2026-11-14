@@ -2,7 +2,10 @@
 # into a synthetic library (the million_grid_demo example): the grid, a
 # hovered tile, the grid scrolled, the viewer, an item's menu, the window's
 # close button hovered and the application menu (both drawn by the app on
-# Windows and Linux only), and the Settings window.
+# Windows and Linux only), and the Settings window; then the interface zoomed
+# to 150% (the grid, and an item's menu opened by a press at window points,
+# which lands on the tile drawn there) and to 80% (the grid and the open
+# Settings window, which follows).
 reload
 size 1213 865
 wait 800
@@ -51,3 +54,48 @@ wait 1500
 window 1
 wait 600
 shot 08-settings
+window 0
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+wait 1200
+shot 09-zoom-150-grid
+move 580 170
+rdown 580 170
+rup 580 170
+wait 600
+shot 10-zoom-150-item-menu
+key escape
+wait 400
+key secondary-0
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+key secondary--
+wait 100
+wait 1200
+shot 11-zoom-80-grid
+window 1
+wait 600
+shot 12-zoom-80-settings

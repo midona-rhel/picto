@@ -35,6 +35,7 @@ mod text;
 mod theme;
 mod ui;
 mod viewer;
+mod zoom;
 
 use gpui::*;
 use shell::*;
@@ -110,6 +111,7 @@ fn prepare(cx: &mut App) {
     imports::bind(cx);
     viewer::document::bind(cx);
     viewer::video::bind(cx);
+    zoom::bind(cx);
     // The registry's shortcuts, with the preset and the bindings the user
     // changed.
     let (preset, overrides) = settings::keyboard(cx);
