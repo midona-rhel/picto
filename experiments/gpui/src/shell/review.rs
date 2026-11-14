@@ -228,6 +228,8 @@ impl Shell {
         if !self.reviewer.move_on(ticket, destination) {
             return;
         }
+        // The rest of a flick must not pan or zoom the next item.
+        crate::ui::momentum::suppress();
         self.show_for_review(view, destination, window, cx);
         if destination.is_none() {
             self.session

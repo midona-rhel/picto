@@ -1018,6 +1018,8 @@ impl Render for Shell {
             )
             // A review key reviews once per press, not per repeat.
             .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| this.review_keys.released()))
+            // Before any view: the tail of a flick a review moved on from.
+            .child(ui::momentum::watcher())
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 this.move_selection(nav::Move::Right, window, cx)
             }))

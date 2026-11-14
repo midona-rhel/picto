@@ -26,6 +26,7 @@ pub mod icon_picker;
 pub mod layer;
 pub mod menu;
 pub mod modal;
+pub mod momentum;
 pub mod notify;
 pub mod number_input;
 pub mod overlay_shell;
