@@ -23,26 +23,6 @@ pub struct Shown {
     _load: Task<()>,
 }
 
-impl Shown {
-    pub fn new(hash: String, load: Task<()>) -> Self {
-        Self {
-            hash,
-            opened: Instant::now(),
-            image: None,
-            _load: load,
-        }
-    }
-
-    pub fn decoded(&mut self, image: Arc<RenderImage>) {
-        self.image = Some((image, Instant::now()));
-    }
-
-    /// The decoded original, to release when the preview closes.
-    pub fn take_image(&mut self) -> Option<Arc<RenderImage>> {
-        self.image.take().map(|(image, _)| image)
-    }
-}
-
 /// The timers and the open preview of a view of tiles (the library's grid,
 /// a collection's editor). The view says where the pointer rests and how to
 /// find the hovered file; `of` finds this preview in the view again when a
@@ -120,7 +100,7 @@ impl HoverPreview {
         self.hide = None;
         let shown = self.shown.take();
         let open = shown.is_some();
-        if let Some(image) = shown.and_then(|mut shown| shown.take_image()) {
+        if let Some((image, _)) = shown.and_then(|shown| shown.image) {
             crate::atlas::release(image, cx);
         }
         open
@@ -138,7 +118,7 @@ impl HoverPreview {
         if self.shown.as_ref().is_some_and(|shown| shown.hash == hash) {
             return;
         }
-        if let Some(image) = self.shown.take().and_then(|mut shown| shown.take_image()) {
+        if let Some((image, _)) = self.shown.take().and_then(|shown| shown.image) {
             crate::atlas::release(image, cx);
         }
         let expected = hash.clone();
@@ -155,13 +135,18 @@ impl HoverPreview {
             };
             let _ = this.update(cx, |this, cx| match &mut of(this).shown {
                 Some(shown) if shown.hash == expected => {
-                    shown.decoded(image);
+                    shown.image = Some((image, Instant::now()));
                     cx.notify();
                 }
                 _ => crate::atlas::release(image, cx),
             });
         });
-        self.shown = Some(Shown::new(hash, load));
+        self.shown = Some(Shown {
+            hash,
+            opened: Instant::now(),
+            image: None,
+            _load: load,
+        });
         cx.notify();
     }
 }

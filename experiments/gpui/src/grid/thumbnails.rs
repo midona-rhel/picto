@@ -312,15 +312,18 @@ impl Thumbnails {
         }
     }
 
-    /// Where a tile's thumbnail is. A font draws its card and has nothing
-    /// to load.
+    /// Where a tile's thumbnail is: decoded (it, or the `.png` it falls
+    /// back to), failed (both), or on its way. A font draws its card and
+    /// has nothing to load.
     pub fn thumb(&self, resource: &Resource, mime: &str) -> Thumb {
-        if mime.starts_with("font/") || self.is_loaded(resource) {
-            Thumb::Loaded
-        } else if self.is_failed(resource) {
-            Thumb::Failed
-        } else {
-            Thumb::Pending
+        if mime.starts_with("font/") {
+            return Thumb::Loaded;
+        }
+        let png = fallback(resource).map(|png| self.state(&png));
+        match (self.state(resource), png) {
+            (Some(true), _) | (Some(false), Some(Some(true))) => Thumb::Loaded,
+            (Some(false), None | Some(Some(false))) => Thumb::Failed,
+            _ => Thumb::Pending,
         }
     }
 
@@ -375,22 +378,10 @@ impl Thumbnails {
         }
     }
 
-    /// Whether this thumbnail (or the `.png` it falls back to) is decoded
-    /// and ready to paint.
-    fn is_loaded(&self, resource: &Resource) -> bool {
-        match self.state(resource) {
-            Some(loaded) => {
-                loaded || fallback(resource).is_some_and(|png| self.state(&png) == Some(true))
-            }
-            None => false,
-        }
-    }
-
     /// Whether this thumbnail was tried and could not be read or decoded,
     /// nor its `.png`.
     pub fn is_failed(&self, resource: &Resource) -> bool {
-        self.state(resource) == Some(false)
-            && fallback(resource).is_none_or(|png| self.state(&png) == Some(false))
+        self.thumb(resource, "") == Thumb::Failed
     }
 
     fn held(&self, resource: &Resource) -> bool {

@@ -89,10 +89,10 @@ enum Entry {
 
 impl Entry {
     /// The image this entry has on screen, if any.
-    fn image(self) -> Option<Arc<RenderImage>> {
+    fn image(&self) -> Option<Arc<RenderImage>> {
         match self {
-            Entry::Ready(_, image) => Some(image),
-            Entry::Loading { showing, .. } => showing,
+            Entry::Ready(_, image) => Some(image.clone()),
+            Entry::Loading { showing, .. } => showing.clone(),
             Entry::Failed => None,
         }
     }
@@ -125,11 +125,7 @@ impl Originals {
 
     /// The decoded original for a tile, once it is ready.
     pub fn get(&self, hash: &str) -> Option<Arc<RenderImage>> {
-        match self.entries.get(hash)? {
-            Entry::Ready(_, image) => Some(image.clone()),
-            Entry::Loading { showing, .. } => showing.clone(),
-            Entry::Failed => None,
-        }
+        self.entries.get(hash)?.image()
     }
 
     /// The tiles in the viewport that should show their original. One that
@@ -146,7 +142,7 @@ impl Originals {
             .cloned()
             .collect::<Vec<_>>();
         for hash in gone {
-            if let Some(image) = self.entries.remove(&hash).and_then(Entry::image) {
+            if let Some(image) = self.entries.remove(&hash).and_then(|entry| entry.image()) {
                 crate::atlas::release(image, cx);
             }
         }
@@ -204,7 +200,7 @@ impl Originals {
                     if !waiting {
                         return;
                     }
-                    let previous = this.entries.remove(&key).and_then(Entry::image);
+                    let previous = this.entries.remove(&key).and_then(|entry| entry.image());
                     let entry = match (decoded, previous.clone()) {
                         (Some(image), _) => Entry::Ready(size, image),
                         // A failed re-decode keeps what was showing.
@@ -220,7 +216,7 @@ impl Originals {
                     cx.notify();
                 });
             });
-            let showing = self.entries.remove(&hash).and_then(Entry::image);
+            let showing = self.entries.remove(&hash).and_then(|entry| entry.image());
             self.entries.insert(
                 hash,
                 Entry::Loading {
