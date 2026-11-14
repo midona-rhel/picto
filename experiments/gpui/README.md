@@ -177,6 +177,23 @@ generated libraries and injected probes). In a debug build the core's
 application data for a library the user keeps is `app-data` in this app's
 own folder, never beside the library.
 
+The first run lists the Electron app's libraries (`libraries::seed`): when
+this app's own list is empty and was never seeded, a process that may list
+libraries the user keeps (a release build, or a debug build with the flag
+and no automation) reads production's `config.json` read-only, copies its
+`libraryHistory` and `pinnedLibraries` (absolute paths, each once) into
+this app's `state.json`, and keeps `librariesSeeded` so it never happens
+again, even after the list is emptied. Production keeps the file in its
+per-user application data: `~/Library/Application Support/picto/config.json`
+on macOS, `%APPDATA%\picto\config.json` on Windows,
+`$XDG_CONFIG_HOME/picto/config.json` or `~/.config/picto/config.json` on
+Linux. A missing, unreadable or malformed file seeds nothing and is not an
+error. Seeding only lists: it gives no consent, sets no last library and
+opens nothing; every rule above still applies to each listed library
+(`seeding_happens_once_into_an_empty_list_and_only_lists`,
+`a_missing_unreadable_or_malformed_file_seeds_nothing`,
+`a_process_that_cannot_list_kept_libraries_never_reads_the_file`).
+
 Listing reads nothing it need not: the Library Manager, the switcher and
 Recent Libraries list only the libraries this process may open
 (`libraries::listed`), so a debug build without the flag, or any automation,

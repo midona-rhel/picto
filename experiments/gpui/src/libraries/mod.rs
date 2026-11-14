@@ -11,10 +11,13 @@
 //!   opening, switching and closing, the consent dialog, and the notice
 //!   that blocks the window while the Electron app runs.
 //! - [`manager`]: the Library Manager window.
+//! - [`seed`]: the first run's list, read once from the Electron app's
+//!   `config.json`.
 pub mod admission;
 pub mod host;
 pub mod manager;
 pub(crate) mod platform;
+pub mod seed;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

@@ -96,6 +96,8 @@ pub fn attach(
         host.main = Some(main);
         host.incoming = Some(incoming);
     });
+    // The first run lists the Electron app's libraries; nothing opens.
+    super::seed::once(cx);
 }
 
 /// The open library's root and kind.

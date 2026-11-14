@@ -158,6 +158,9 @@ pub struct State {
     /// by path and database file (`libraries::Identity`). This app's own;
     /// production has none.
     pub library_consents: Vec<(String, String)>,
+    /// Whether the list of libraries was once seeded from the Electron
+    /// app's `config.json` (`libraries::seed`), so it never is again.
+    pub libraries_seeded: bool,
 }
 
 impl Default for State {
@@ -186,6 +189,7 @@ impl Default for State {
             pinned_libraries: Vec::new(),
             last_library: None,
             library_consents: Vec::new(),
+            libraries_seeded: false,
         }
     }
 }
@@ -346,6 +350,9 @@ impl State {
                 })
                 .collect();
         }
+        if let Some(seeded) = get("librariesSeeded").and_then(Value::as_bool) {
+            state.libraries_seeded = seeded;
+        }
         let extra = migrated
             .into_iter()
             .filter(|(key, _)| !KNOWN.contains(&key.as_str()))
@@ -431,6 +438,7 @@ impl State {
                     .collect(),
             ),
         );
+        put("librariesSeeded", json!(self.libraries_seeded));
         Value::Object(object)
     }
 
@@ -442,7 +450,7 @@ impl State {
 }
 
 /// The fields this version reads and writes.
-const KNOWN: [&str; 22] = [
+const KNOWN: [&str; 23] = [
     "version",
     "window",
     "sidebarWidth",
@@ -465,6 +473,7 @@ const KNOWN: [&str; 22] = [
     "pinnedLibraries",
     "lastLibrary",
     "libraryConsents",
+    "librariesSeeded",
 ];
 
 /// Brings a file written by an earlier version to this version's layout,
@@ -692,6 +701,7 @@ mod tests {
             pinned_libraries: vec!["/a/One.library".into()],
             last_library: Some("/b/Two.library".into()),
             library_consents: vec![("/b/Two.library".into(), "16777234:991".into())],
+            libraries_seeded: true,
             ..State::default()
         };
         state
