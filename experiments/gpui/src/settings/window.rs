@@ -82,7 +82,7 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
     let _ = handle.update(cx, |_, window, _| {
         // Settings draws its own close button (`setWindowButtonVisibility(false)`).
         ui::window_chrome::hide_window_buttons(window);
-        window.activate_window();
+        ui::window_chrome::activate(window);
     });
     Some(handle)
 }
