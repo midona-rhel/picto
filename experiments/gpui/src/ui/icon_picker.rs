@@ -183,6 +183,9 @@ impl IconPicker {
         }
         let tile = div()
             .id(("icon-tile", index))
+            .role(Role::Button)
+            .aria_label(label.clone())
+            .aria_toggled(super::a11y::toggled(selected))
             .group("icon-tile")
             .size(px(TILE))
             .flex()

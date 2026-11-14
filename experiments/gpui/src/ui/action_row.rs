@@ -68,6 +68,9 @@ impl RenderOnce for ActionRow {
         );
         let row = div()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(self.label.clone())
+            .aria_disabled(self.disabled)
             .w_full()
             .h(px(self.height))
             .pl(px(16.))

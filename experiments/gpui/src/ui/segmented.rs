@@ -85,6 +85,9 @@ pub struct Segmented {
     segments: Vec<Segment>,
     selected: Option<usize>,
     tips: bool,
+    /// The group's accessible name (production's `aria-label` on its
+    /// `role="group"` or `role="tablist"`).
+    name: Option<SharedString>,
     on_select: Option<SelectHandler>,
 }
 
@@ -102,11 +105,18 @@ pub fn segmented(
         // `FilterLogicTabs` wraps each button in a `KbdTooltip`; the
         // direction pill has only accessible labels, a tab its label.
         tips: matches!(look, Look::Logic | Look::View),
+        name: None,
         on_select: None,
     }
 }
 
 impl Segmented {
+    /// What assistive technology calls the group of choices.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
     pub fn on_select(mut self, handler: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(handler));
         self
@@ -117,11 +127,19 @@ impl RenderOnce for Segmented {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (width, height) = self.look.button();
-        let root = div()
+        // Tabs are a tab list whose chosen tab is selected; the glyph pills
+        // a group of buttons, the chosen one pressed (`FilterLogicTabs`).
+        let tabs = self.look.labelled();
+        let count = self.segments.len();
+        let mut root = div()
             .id(self.id.clone())
+            .role(if tabs { Role::TabList } else { Role::Group })
             .flex()
             .items_center()
             .gap(px(self.look.gap()));
+        if let Some(name) = self.name.clone() {
+            root = root.aria_label(name);
+        }
         let mut root = match self.look {
             Look::Tabs => root
                 .p(px(3.))
@@ -146,10 +164,20 @@ impl RenderOnce for Segmented {
             let focus = super::focus::control(&id, window, cx);
             let mut button = div()
                 .id(id)
+                .aria_label(segment.label.clone())
+                .aria_position_in_set(index + 1)
+                .aria_size_of_set(count)
                 .h(px(height))
                 .flex()
                 .items_center()
                 .justify_center();
+            button = if tabs {
+                button.role(Role::Tab).aria_selected(chosen)
+            } else {
+                button
+                    .role(Role::Button)
+                    .aria_toggled(super::a11y::toggled(chosen))
+            };
             if !self.look.labelled() {
                 button = button
                     .w(px(width))

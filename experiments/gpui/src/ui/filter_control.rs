@@ -130,8 +130,11 @@ impl RenderOnce for FilterControl {
         } else {
             self.label.to_string()
         };
+        // `role="button"` named by its label.
         let mut control = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_label(self.label.clone())
             .occlude()
             .relative()
             .h(px(24.))
@@ -176,6 +179,8 @@ impl RenderOnce for FilterControl {
             control = control.child(
                 div()
                     .id("filter-clear")
+                    .role(Role::Button)
+                    .aria_label(crate::tf!("Clear {value0} filter", self.label))
                     .absolute()
                     .top(px(-6.))
                     .right(px(-6.))
@@ -238,6 +243,8 @@ pub struct FilterAction {
     active: bool,
     disabled: bool,
     tip: Option<Tip>,
+    name: Option<SharedString>,
+    pressed: Option<bool>,
     on_click: Option<ClickHandler>,
 }
 
@@ -248,11 +255,24 @@ pub fn filter_action(id: impl Into<ElementId>, icon: &'static str) -> FilterActi
         active: false,
         disabled: false,
         tip: None,
+        name: None,
+        pressed: None,
         on_click: None,
     }
 }
 
 impl FilterAction {
+    /// What assistive technology calls the button when its tooltip says
+    /// something else (production's `aria-label`).
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    /// Reports the button as a toggle (`aria-pressed`).
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = Some(pressed);
+        self
+    }
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
         self
@@ -298,6 +318,12 @@ impl RenderOnce for FilterAction {
             .child(probe);
         if let Some(tip) = self.tip {
             button = button.tip(tip);
+        }
+        if let Some(name) = self.name {
+            button = button.name(name);
+        }
+        if let Some(pressed) = self.pressed {
+            button = button.pressed(pressed);
         }
         if let Some(handler) = self.on_click {
             button = button.on_click(move |_, window, cx| handler(bounds.get(), window, cx));

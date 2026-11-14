@@ -363,8 +363,10 @@ pub fn close_button(
     id: impl Into<ElementId>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> super::icon_button::IconButton {
+    // `WindowCloseButton`'s `ariaLabel`, "Close" unless a caller names it.
     super::icon_button(id, "window-close")
         .look(super::icon_button::Look::WindowClose)
+        .name(crate::i18n::t("Close"))
         .on_click(on_click)
 }
 

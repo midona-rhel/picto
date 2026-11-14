@@ -114,8 +114,15 @@ impl RenderOnce for Chip {
         let label = div().h(px(16.)).line_height(px(16.)).child(shown);
         let tint = |percent: f32| rgba(self.color << 8 | (percent / 100. * 255.).round() as u32);
         let removable = self.on_remove.is_some();
+        // Read as its whole name (namespace and tag), however it is cut.
+        let name: SharedString = match &self.namespace {
+            Some(namespace) => format!("{namespace}:{}", self.label).into(),
+            None => self.label.clone(),
+        };
         let mut chip = div()
             .id(self.id.clone())
+            .role(Role::ListItem)
+            .aria_label(name)
             .h(px(theme::CONTROL_SM))
             .pl(px(8.))
             .pr(px(if removable { 4. } else { 8. }))
@@ -147,6 +154,8 @@ impl RenderOnce for Chip {
             let pressed = handler.clone();
             let remove = div()
                 .id("remove")
+                .role(Role::Button)
+                .aria_label(t("Remove"))
                 .size(px(18.))
                 .flex_none()
                 .flex()

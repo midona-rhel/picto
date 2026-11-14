@@ -364,8 +364,27 @@ impl RenderOnce for SidebarRow {
         };
 
         let row_state = state.clone();
+        // A tree item at its level, read as production's row text (its
+        // label, then its count), selected while it is the destination or
+        // in the selection, expanded or collapsed when it has children.
+        // Named only while the window builds its tree: the sidebar draws
+        // every row each frame.
+        let name: SharedString = if super::a11y::active(window) {
+            let shown_label = crate::i18n::t_shared(self.label.clone());
+            match self.count {
+                Some(count) => format!("{shown_label} {}", format::grouped(count)).into(),
+                None => shown_label,
+            }
+        } else {
+            SharedString::default()
+        };
         let mut row = div()
             .id(self.id)
+            .role(Role::TreeItem)
+            .aria_label(name.clone())
+            .aria_level(self.depth + 1)
+            .aria_selected(self.active || self.selected)
+            .when_some(self.disclosure, |row, expanded| row.aria_expanded(expanded))
             .relative()
             .flex()
             .items_center()
@@ -422,8 +441,16 @@ impl RenderOnce for SidebarRow {
         }
         if self.disclosure.is_some() {
             let arrow_state = state.clone();
+            let expanded = self.disclosure == Some(true);
             let mut disclosure = div()
                 .id("disclosure")
+                .role(Role::Button)
+                .aria_label(if expanded {
+                    crate::tf!("Collapse {value0}", name)
+                } else {
+                    crate::tf!("Expand {value0}", name)
+                })
+                .aria_expanded(expanded)
                 .absolute()
                 .left(px(theme::SIDEBAR_INSET + indent - theme::SIDEBAR_DISCLOSURE))
                 .w(px(theme::SIDEBAR_DISCLOSURE))
@@ -613,6 +640,9 @@ fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> imp
         .child(
             div()
                 .id("subscriptions-activity")
+                .role(Role::Button)
+                .aria_label(activity.label.clone())
+                .aria_busy(busy)
                 .relative()
                 .size(px(22.))
                 .flex()

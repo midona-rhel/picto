@@ -33,6 +33,8 @@ pub struct Slider {
     step: f64,
     width: f32,
     look: Look,
+    /// Its accessible name (the range input's `aria-label`).
+    name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
 
@@ -45,6 +47,7 @@ pub fn slider(id: impl Into<ElementId>, value: f64, min: f64, max: f64, step: f6
         step,
         width: WIDTH,
         look: Look::Settings,
+        name: None,
         on_change: None,
     }
 }
@@ -58,6 +61,12 @@ impl Slider {
 
     pub fn look(mut self, look: Look) -> Self {
         self.look = look;
+        self
+    }
+
+    /// What assistive technology calls the slider.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
@@ -102,7 +111,36 @@ impl RenderOnce for Slider {
         let filled = self.look == Look::Filled;
         let focus = super::focus::control(&self.id, window, cx);
         let keyed = handler.clone();
-        let root = div().id(self.id).occlude().relative().cursor_pointer();
+        let mut root = div()
+            .id(self.id)
+            .role(Role::Slider)
+            .aria_numeric_value(value)
+            .aria_min_numeric_value(min)
+            .aria_max_numeric_value(max)
+            .aria_numeric_value_step(step)
+            .occlude()
+            .relative()
+            .cursor_pointer();
+        if let Some(name) = self.name {
+            root = root.aria_label(name);
+        }
+        // Assistive technology steps it as the arrow keys do, or sets it.
+        if let Some(handler) = handler.clone() {
+            let (up, down, set) = (handler.clone(), handler.clone(), handler);
+            root = root
+                .on_a11y_action(AccessibleAction::Increment, move |_, _, cx| {
+                    up(slider_key(SliderKey::Up, value, min, max, step), cx)
+                })
+                .on_a11y_action(AccessibleAction::Decrement, move |_, _, cx| {
+                    down(slider_key(SliderKey::Down, value, min, max, step), cx)
+                })
+                .on_a11y_action(AccessibleAction::SetValue, move |data, _, cx| {
+                    if let Some(accesskit::ActionData::NumericValue(next)) = data {
+                        let next = min + ((next - min) / step).round() * step;
+                        set(next.clamp(min, max), cx)
+                    }
+                });
+        }
         let root = if dialog {
             // The track's 4px are the element's layout; the thumb hangs
             // over it, centred, and its travel is the track less a thumb.

@@ -113,13 +113,15 @@ impl RenderOnce for Confirm {
         dialog
             // The message at 13px on a 1.5 line height (`.helpText`, as
             // `ConfirmModal` styles it).
-            .child(
+            .child(crate::ui::a11y::text(
                 div()
+                    .id("confirm-message")
                     .text(theme::TEXT_MD)
                     .line_height(px(19.5))
                     .text_color(theme.text_secondary())
-                    .child(self.message),
-            )
+                    .child(self.message.clone()),
+                self.message,
+            ))
             .footer(
                 action_button("confirm-cancel", Look::Standard)
                     .label(self.cancel_label)

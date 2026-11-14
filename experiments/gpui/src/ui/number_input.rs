@@ -43,6 +43,9 @@ pub struct NumberInput {
     min: i64,
     max: i64,
     disabled: bool,
+    /// `CompactNumberInput`'s `label`: the field's accessible name, and its
+    /// steppers' ("Increase …", "Decrease …").
+    name: Option<SharedString>,
     on_commit: Option<CommitHandler>,
 }
 
@@ -53,6 +56,7 @@ pub fn number_input(id: impl Into<ElementId>, value: i64, min: i64, max: i64) ->
         min,
         max,
         disabled: false,
+        name: None,
         on_commit: None,
     }
 }
@@ -64,18 +68,25 @@ impl NumberInput {
         self.disabled = disabled;
         self
     }
+    /// What assistive technology calls the field (production's `label`).
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
     pub fn on_commit(mut self, handler: impl Fn(i64, &mut App) + 'static) -> Self {
         self.on_commit = Some(Rc::new(handler));
         self
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stepper(
     id: &'static str,
     icon: &'static str,
     delta: i64,
     state: Entity<State>,
     disabled: bool,
+    name: Option<SharedString>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -87,8 +98,10 @@ fn stepper(
         window,
         cx,
     );
-    let arrow = div()
+    let mut arrow = div()
         .id(id)
+        .role(Role::Button)
+        .aria_disabled(disabled)
         .flex_1()
         .min_h_0()
         .flex()
@@ -96,6 +109,9 @@ fn stepper(
         .justify_center()
         .rounded(px(2.))
         .child(super::icon(icon, 11., theme.text()));
+    if let Some(name) = name {
+        arrow = arrow.aria_label(name);
+    }
     if disabled {
         return arrow.opacity(0.2).into_any_element();
     }
@@ -191,6 +207,22 @@ impl RenderOnce for NumberInput {
             }
         });
         let input = state.read(cx).input.clone();
+        if let Some(name) = &self.name {
+            input.update(cx, |input, _| input.set_name(name.clone()));
+        }
+        let (increase, decrease) = match &self.name {
+            Some(name) => (
+                Some(SharedString::from(crate::tf!(
+                    "Increase {value0}",
+                    name.to_lowercase()
+                ))),
+                Some(SharedString::from(crate::tf!(
+                    "Decrease {value0}",
+                    name.to_lowercase()
+                ))),
+            ),
+            None => (None, None),
+        };
         let focused = input.read(cx).focus_handle(cx).is_focused(window);
         // Outside editing, the field shows the value it was given.
         if !focused && input.read(cx).value() != value.to_string() {
@@ -206,6 +238,7 @@ impl RenderOnce for NumberInput {
             *state.handler.borrow_mut() = self.on_commit.clone();
         });
         div()
+            .id(self.id.clone())
             .relative()
             .w(px(100.))
             .flex_none()
@@ -243,6 +276,7 @@ impl RenderOnce for NumberInput {
                         1,
                         state.clone(),
                         self.disabled,
+                        increase,
                         window,
                         cx,
                     ))
@@ -252,6 +286,7 @@ impl RenderOnce for NumberInput {
                         -1,
                         state,
                         self.disabled,
+                        decrease,
                         window,
                         cx,
                     )),

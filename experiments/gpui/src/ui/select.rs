@@ -64,6 +64,9 @@ pub struct Select {
     value: SharedString,
     choices: Vec<Choice>,
     width: Option<f32>,
+    /// Its accessible name (`CmSelect`'s `ariaLabel`); without one it is
+    /// known by the choice it shows.
+    name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
 
@@ -77,6 +80,7 @@ pub fn select(
         value: value.into(),
         choices,
         width: None,
+        name: None,
         on_change: None,
     }
 }
@@ -84,6 +88,11 @@ pub fn select(
 impl Select {
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
+        self
+    }
+    /// What assistive technology calls the select (and its list).
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
         self
     }
     pub fn on_change(
@@ -228,8 +237,16 @@ impl RenderOnce for Select {
             }
         }
         let toggle_state = state.clone();
+        let shown = current
+            .map(|at| self.choices[at].label.clone())
+            .unwrap_or_else(|| self.value.clone());
+        // `aria-haspopup="listbox"` with `aria-expanded`: a combo box whose
+        // value is the choice it shows.
         let mut button = div()
             .id(self.id.clone())
+            .role(Role::ComboBox)
+            .aria_expanded(open)
+            .aria_value(shown)
             .occlude()
             .relative()
             .h(px(ROW))
@@ -293,6 +310,9 @@ impl RenderOnce for Select {
         if let Some(width) = self.width {
             button = button.w(px(width));
         }
+        if let Some(name) = self.name.clone() {
+            button = button.aria_label(name);
+        }
         let handler = self.on_change.map(Rc::new);
         button = keys(
             button,
@@ -313,6 +333,7 @@ impl RenderOnce for Select {
                     has_icons,
                     state,
                     handler,
+                    name: self.name,
                 },
                 open,
                 window,
@@ -332,6 +353,7 @@ impl RenderOnce for Select {
                 has_icons,
                 state: state.clone(),
                 handler,
+                name: self.name,
             },
             highlighted,
             bounds.size.width,
@@ -482,6 +504,7 @@ struct Listed {
     has_icons: bool,
     state: Entity<State>,
     handler: Option<Rc<ChangeHandler>>,
+    name: Option<SharedString>,
 }
 
 /// `.drop` with its rows (`.opt`), the current choice and the row under the
@@ -505,6 +528,8 @@ fn list(
             std::sync::Arc::new(id.clone()),
             "list".into(),
         ))
+        .role(Role::ListBox)
+        .when_some(listed.name.clone(), |list, name| list.aria_label(name))
         .w_full()
         // Seven rows, their gaps and the padding, inside the border.
         .max_h(px(LIST_MAX - 2.))
@@ -537,6 +562,11 @@ fn list(
         menu = menu.child(
             div()
                 .id(index)
+                .role(Role::ListBoxOption)
+                .aria_label(choice.label.clone())
+                .aria_selected(listed.current == Some(index))
+                .aria_position_in_set(index + 1)
+                .aria_size_of_set(listed.choices.len())
                 .h(px(ROW))
                 .flex_none()
                 .px(px(8.))

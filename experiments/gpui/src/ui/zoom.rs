@@ -206,8 +206,34 @@ impl Render for Zoom {
             },
         )
         .size_full();
+        // `<input type="range" aria-label="Zoom">`, stepped by assistive
+        // technology as by its buttons.
+        let (minimum, maximum) = self.bounds();
+        let stepped = |up: bool| {
+            let zoom = cx.entity().downgrade();
+            move |_: Option<&gpui::accesskit::ActionData>, _: &mut Window, cx: &mut App| {
+                let _ = zoom.update(cx, |zoom, cx| {
+                    let next = match zoom.scale {
+                        Scale::TileSize => step_tile(zoom.value, up),
+                        Scale::Percent => {
+                            let along = percent_to_position(zoom.value);
+                            let step = if up { POSITION_STEP } else { -POSITION_STEP };
+                            position_to_percent((along + step).clamp(0., 100.))
+                        }
+                    };
+                    zoom.set(next, cx)
+                });
+            }
+        };
         let slider = div()
             .id("zoom-slider")
+            .role(Role::Slider)
+            .aria_label(t("Zoom"))
+            .aria_numeric_value(self.value as f64)
+            .aria_min_numeric_value(minimum as f64)
+            .aria_max_numeric_value(maximum as f64)
+            .on_a11y_action(AccessibleAction::Increment, stepped(true))
+            .on_a11y_action(AccessibleAction::Decrement, stepped(false))
             .relative()
             .w(px(TRACK))
             .h(px(theme::ICON_BUTTON))

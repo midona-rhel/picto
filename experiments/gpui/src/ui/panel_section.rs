@@ -93,8 +93,10 @@ impl RenderOnce for PanelSection {
         // Closed: 30%, 50% with the pointer in the section, 55% on the header.
         let chevron = (1. - open) * (0.3 + 0.2 * over_section + 0.05 * over_header);
         let (section_state, header_state) = (state.clone(), state);
-        let mut header = div()
-            .id("header")
+        let title = self.title.clone();
+        // A heading that folds the section, expanded while it is open.
+        let mut header = super::a11y::heading(div().id("header"), title.clone(), 2)
+            .aria_expanded(expanded)
             .h(px(theme::CONTROL_SM))
             .flex()
             .items_center()
@@ -139,6 +141,8 @@ impl RenderOnce for PanelSection {
         }
         let mut section = div()
             .id(self.id)
+            .role(Role::Group)
+            .aria_label(title)
             .w_full()
             .mt(px(10.))
             .pt(px(10.))

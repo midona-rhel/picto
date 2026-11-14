@@ -286,6 +286,9 @@ pub fn read_only_modal(
     let id = id.into();
     let field = div()
         .id(id.clone())
+        .role(Role::TextInput)
+        .aria_read_only(true)
+        .aria_value(text.clone())
         .relative()
         .flex_1()
         .min_w_0()
@@ -323,6 +326,8 @@ pub struct Field {
     /// Glyph, size, distance from the left edge, colour.
     icon: Option<(&'static str, f32, f32, Rgba)>,
     clearable: bool,
+    /// What assistive technology calls the clear button.
+    clear_name: Option<SharedString>,
     /// A text area this many lines tall (`rows`), rather than three.
     rows: Option<usize>,
 }
@@ -334,6 +339,7 @@ pub fn field(id: impl Into<ElementId>, input: &Entity<TextInput>, look: Look) ->
         look,
         icon: None,
         clearable: false,
+        clear_name: None,
         rows: None,
     }
 }
@@ -341,6 +347,13 @@ pub fn field(id: impl Into<ElementId>, input: &Entity<TextInput>, look: Look) ->
 impl Field {
     pub fn icon(mut self, name: &'static str, size: f32, left: f32, color: Rgba) -> Self {
         self.icon = Some((name, size, left, color));
+        self
+    }
+
+    /// Names the clear button (production's `aria-label` for it, "Clear"
+    /// unless given).
+    pub fn clear_name(mut self, name: impl Into<SharedString>) -> Self {
+        self.clear_name = Some(name.into());
         self
     }
 
@@ -377,6 +390,10 @@ impl RenderOnce for Field {
         }
         let has_text = !self.input.read(cx).is_empty();
         let clear = self.clearable && has_text;
+        let clear_name = self
+            .clear_name
+            .clone()
+            .unwrap_or_else(|| crate::i18n::t("Clear").into());
         // The field's width, measured each frame, for the expanded overlay
         // that is drawn outside the field's own layout.
         let width = window.use_keyed_state(
@@ -501,6 +518,8 @@ impl RenderOnce for Field {
             field = field.child(
                 div()
                     .id("clear")
+                    .role(Role::Button)
+                    .aria_label(clear_name.clone())
                     .absolute()
                     .top_0()
                     .bottom_0()
@@ -520,6 +539,8 @@ impl RenderOnce for Field {
             field = field.child(
                 div()
                     .id("clear")
+                    .role(Role::Button)
+                    .aria_label(clear_name.clone())
                     .absolute()
                     .top_0()
                     .right_0()
@@ -547,6 +568,8 @@ impl RenderOnce for Field {
             field = field.child(
                 div()
                     .id("clear")
+                    .role(Role::Button)
+                    .aria_label(clear_name.clone())
                     .absolute()
                     .top_0()
                     .right_0()

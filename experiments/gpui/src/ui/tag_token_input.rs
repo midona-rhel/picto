@@ -194,6 +194,7 @@ impl Render for TagTokenInput {
             .update(cx, |input, _| input.set_placeholder(placeholder));
         let mut surface = div()
             .id("tag-token-surface")
+            .role(Role::Group)
             .relative()
             .w_full()
             .min_h(px(if self.compact { 32. } else { 56. }))

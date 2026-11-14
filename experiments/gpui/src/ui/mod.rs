@@ -181,13 +181,18 @@ pub fn track_drag(
 /// and snapping. Controls inside the strip opt out by occluding it.
 pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let id = id.into();
+    // Assistive technology knows it as the window's title bar.
     if cfg!(target_os = "windows") {
-        return div().id(id).window_control_area(WindowControlArea::Drag);
+        return div()
+            .id(id)
+            .role(Role::TitleBar)
+            .window_control_area(WindowControlArea::Drag);
     }
     let pressed = window.use_keyed_state(id.clone(), cx, |_, _| false);
     let (down, up, out, moved) = (pressed.clone(), pressed.clone(), pressed.clone(), pressed);
     div()
         .id(id)
+        .role(Role::TitleBar)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             down.update(cx, |pressed, _| *pressed = true)
         })

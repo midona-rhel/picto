@@ -35,7 +35,13 @@ pub fn scroll_to_top(
     let scroll = scroll.clone();
     let view = window.current_view();
     Some(
-        super::GlassPanel::new(div().id(id), theme::RADIUS_MD)
+        super::GlassPanel::new(
+            div()
+                .id(id)
+                .role(Role::Button)
+                .aria_label(crate::i18n::t("Return to Top")),
+            theme::RADIUS_MD,
+        )
             .backdrop_blur(theme.glass_blur())
             .drop_shadows(theme.panel_shadow_small())
             .group("return-to-top")

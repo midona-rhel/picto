@@ -78,6 +78,21 @@ impl ProgressBar {
 impl RenderOnce for ProgressBar {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
+        // `role="progressbar"`: its percent, or none while indeterminate.
+        let (id, percent) = match &self.filled {
+            Some((id, share)) => (
+                ElementId::NamedChild(std::sync::Arc::new(id.clone()), "progress".into()),
+                Some((*share as f64 * 100.).round()),
+            ),
+            None => ("progress".into(), None),
+        };
+        let mut root = div().id(id).role(Role::ProgressIndicator);
+        if let Some(percent) = percent {
+            root = root
+                .aria_numeric_value(percent)
+                .aria_min_numeric_value(0.)
+                .aria_max_numeric_value(100.);
+        }
         let fill = match self.filled {
             Some((id, share)) => {
                 let now = Instant::now();
@@ -119,8 +134,7 @@ impl RenderOnce for ProgressBar {
                     .bg(theme.primary())
             }
         };
-        div()
-            .relative()
+        root.relative()
             .w_full()
             .h(px(self.height))
             .flex_none()

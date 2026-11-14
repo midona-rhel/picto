@@ -145,7 +145,7 @@ impl ColorEditor {
             .map(str::to_uppercase)
             .unwrap_or_else(|| "#808080".into());
         let hex = cx.new(|cx| {
-            let mut input = TextInput::new(Kind::Mono, cx);
+            let mut input = TextInput::new(Kind::Mono, cx).name(t("Hex color"));
             input.set_text(shown.clone(), cx);
             input
         });
@@ -318,6 +318,9 @@ impl Render for ColorEditor {
         // `linear-gradient(to right, #fff, <hue>)`.
         let square = div()
             .id("color-square")
+            .role(Role::Slider)
+            .aria_label(t("Color saturation and brightness"))
+            .aria_value(self.shown.clone())
             .relative()
             .w(px(SQUARE_W))
             .h(px(SQUARE_H))
@@ -359,6 +362,11 @@ impl Render for ColorEditor {
         let band = SQUARE_H / 6.;
         let mut strip = div()
             .id("color-hue")
+            .role(Role::Slider)
+            .aria_label(t("Color hue"))
+            .aria_numeric_value(self.hsv.hue as f64)
+            .aria_min_numeric_value(0.)
+            .aria_max_numeric_value(359.)
             .relative()
             .w(px(HUE_W))
             .h(px(SQUARE_H))
@@ -448,6 +456,7 @@ impl Render for ColorEditor {
                             filters::MAXIMUM_DELTA_E as f64,
                             1.,
                         )
+                        .name(t("Tolerance"))
                         .look(super::slider::Look::Filled)
                         .on_change(move |value, cx| {
                             let _ = editor_handle.update(cx, |this, cx| {
@@ -466,6 +475,9 @@ impl Render for ColorEditor {
         swatches.extend(self.clear.then(|| {
             div()
                 .id("color-none")
+                .role(Role::Button)
+                .aria_label(t("No color"))
+                .aria_toggled(super::a11y::toggled(none_active))
                 .relative()
                 .size(px(20.))
                 .rounded(px(5.))
@@ -496,6 +508,9 @@ impl Render for ColorEditor {
             swatches.push(
                 div()
                     .id(("color-preset", index))
+                    .role(Role::Button)
+                    .aria_label(format!("#{preset:06X}"))
+                    .aria_toggled(super::a11y::toggled(active))
                     .size(px(20.))
                     .rounded(px(5.))
                     .bg(rgb(preset))

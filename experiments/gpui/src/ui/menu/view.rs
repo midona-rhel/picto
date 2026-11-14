@@ -18,7 +18,11 @@ impl Menu {
     /// search field binds Enter, Escape and the side arrows itself; they are
     /// taken here before it sees them.
     fn keyboard(&self, element: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        // `role="menu"`: the element with the keyboard, whose highlighted
+        // row assistive technology reads as focused.
         element
+            .role(gpui::Role::Menu)
+            .aria_label(crate::i18n::t("Context menu"))
             .track_focus(&self.focus)
             .key_context("Menu")
             .on_action(cx.listener(|this, _: &Up, _, cx| this.arrow(false, cx)))
@@ -148,6 +152,7 @@ impl Menu {
         highlight: f32,
         current: bool,
         has_icons: bool,
+        state: RowState,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
@@ -169,8 +174,26 @@ impl Menu {
         } else {
             theme.text()
         };
+        // `role="menuitem"` (a check row as a checkable item, a submenu's
+        // row expanded while its submenu shows), named by its label.
         let mut row = div()
             .id(id)
+            .role(match item {
+                Some(item) if item.checked.is_some() || item.excluded => {
+                    gpui::Role::MenuItemCheckBox
+                }
+                _ => gpui::Role::MenuItem,
+            })
+            .aria_label(label.clone())
+            .aria_disabled(item.is_some_and(|item| item.disabled))
+            .when(state.active, |row| row.aria_active_descendant())
+            .when_some(state.expanded, |row, open| row.aria_expanded(open))
+            .when_some(item.and_then(|item| item.checked), |row, checked| {
+                row.aria_toggled(crate::ui::a11y::toggled(checked))
+            })
+            .when_some(item.and_then(|item| item.shortcut.clone()), |row, keys| {
+                row.aria_keyshortcuts(keys)
+            })
             .relative()
             .h(px(theme::CONTROL_SM))
             .flex_none()
@@ -301,12 +324,24 @@ impl Menu {
                 }
             };
             let entry = self.entry(path);
+            // While a row of the open submenu is current, that row is the
+            // one assistive technology reads as focused.
+            let in_submenu = self
+                .submenu
+                .as_ref()
+                .is_some_and(|open| open.current.is_some());
+            let state = RowState {
+                active: self.current == Some(index) && !in_submenu,
+                expanded: matches!(entry, Entry::Submenu(_))
+                    .then(|| self.submenu.as_ref().is_some_and(|open| open.row == index)),
+            };
             let element = self.row(
                 ("menu-row", index),
                 entry,
                 self.highlights.value(("row", index)),
                 self.current == Some(index),
                 has_icons,
+                state,
                 cx,
             );
             list = list.child(match entry {
@@ -447,6 +482,10 @@ impl Menu {
                 self.submenu_highlights.value(("row", index)),
                 open.current == Some(index),
                 has_icons,
+                RowState {
+                    active: open.current == Some(index),
+                    expanded: None,
+                },
                 cx,
             );
             list = list.child(match entry {
@@ -470,6 +509,8 @@ impl Menu {
         let content = div().child(
             div()
                 .id("submenu-items")
+                .role(gpui::Role::Menu)
+                .aria_label(crate::i18n::t("Context submenu"))
                 .relative()
                 .h(px(open.rect.h))
                 .overflow_y_scroll()
@@ -623,6 +664,9 @@ impl Menu {
             let ring = super::color_picker::swatch(color, selected.then_some(check), cx);
             let target = div()
                 .id(("menu-swatch", position))
+                .role(gpui::Role::MenuItemRadio)
+                .aria_label(swatch.label.clone())
+                .aria_toggled(crate::ui::a11y::toggled(selected))
                 .cursor_pointer()
                 .child(ring)
                 .on_click(cx.listener(move |this, _, _, cx| this.pick_swatch(path, position, cx)));
@@ -661,6 +705,15 @@ impl Menu {
             }))
             .child(entry.view.clone())
     }
+}
+
+/// What assistive technology is told about a row beyond its entry.
+#[derive(Clone, Copy)]
+struct RowState {
+    /// The row is the one the keyboard is on (`aria-activedescendant`).
+    active: bool,
+    /// A submenu's row: whether its submenu shows.
+    expanded: Option<bool>,
 }
 
 fn separator(cx: &App) -> Div {

@@ -141,7 +141,7 @@ impl RenderOnce for SectionHeader {
                     .child(
                         div()
                             .text_color(if hovered { theme.text() } else { tertiary })
-                            .child(self.label),
+                            .child(self.label.clone()),
                     )
                     // The count follows the title with no space: the space
                     // the markup has is a flex item's leading space, which
@@ -168,8 +168,18 @@ impl RenderOnce for SectionHeader {
             );
         }
         let header_state = state.clone();
+        // `role="button"` with `aria-expanded`, read as its text: the label
+        // and the count after it.
+        let name: SharedString = if self.count > 0 {
+            format!("{} ({})", self.label, format::grouped(self.count as u64)).into()
+        } else {
+            self.label.clone()
+        };
         let mut header = div()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(name)
+            .aria_expanded(self.expanded)
             .relative()
             .mt(px(8.))
             .h(px(24.))
@@ -191,6 +201,8 @@ impl RenderOnce for SectionHeader {
             header = header.child(
                 div()
                     .id("add")
+                    .role(Role::Button)
+                    .aria_label(tip.label().clone())
                     .group("add")
                     .relative()
                     .size(px(20.))

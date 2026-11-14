@@ -133,8 +133,12 @@ impl RenderOnce for ColorPicker {
             let handler = self.on_pick.clone();
             let pressed = handler.clone();
             let hex = *hex;
+            // Named by its colour, as its tooltip; the chosen one checked.
             let target = div()
                 .id(("swatch", position))
+                .role(Role::RadioButton)
+                .aria_label(*label)
+                .aria_toggled(super::a11y::toggled(chosen == Some(position)))
                 .cursor_pointer()
                 .child(ring)
                 .on_click(move |_, window, cx| {

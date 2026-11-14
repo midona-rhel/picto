@@ -8,6 +8,7 @@ use crate::i18n::t;
 use crate::theme::{self, Text as _};
 use crate::{motion, ui};
 use gpui::prelude::FluentBuilder as _;
+use gpui::accesskit::Live;
 use gpui::*;
 use std::rc::Rc;
 use std::time::Duration;
@@ -367,9 +368,20 @@ impl Host {
 
 impl Render for Host {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(notification) = self.displayed.clone() else {
-            return div().into_any_element();
+        // `NotificationHost`'s layer is a live region, there whether or not
+        // a notification shows, so assistive technology announces each one
+        // as it arrives: at once for an error or warning, politely
+        // otherwise.
+        let region = |urgent: bool| {
+            div()
+                .id("notification-region")
+                .role(Role::Group)
+                .aria_live(if urgent { Live::Assertive } else { Live::Polite })
         };
+        let Some(notification) = self.displayed.clone() else {
+            return region(false).into_any_element();
+        };
+        let urgent = matches!(notification.tone, Tone::Error | Tone::Warning);
         if self.shown.animating() {
             window.request_animation_frame();
         }
@@ -383,6 +395,8 @@ impl Render for Host {
         let action = notification.action.clone().map(|action| {
             div()
                 .id("notification-action")
+                .role(Role::Button)
+                .aria_label(action.label.clone())
                 .flex_none()
                 .ml(px(12.))
                 .underline()
@@ -395,6 +409,9 @@ impl Render for Host {
         });
         let close = div()
             .id("notification-close")
+            .role(Role::Button)
+            .aria_label(crate::i18n::t("Dismiss notification"))
+            .aria_disabled(leaving)
             .relative()
             .flex_none()
             .size(px(24.))
@@ -422,6 +439,8 @@ impl Render for Host {
             )
             .child(ui::icon("notify-close", 14., theme.text()));
         let panel = ui::glass_panel("notification", theme::RADIUS_LG, cx)
+            .role(if urgent { Role::Alert } else { Role::Status })
+            .aria_label(notification.text())
             .flex()
             .items_center()
             .min_w(px(100.))
@@ -458,7 +477,7 @@ impl Render for Host {
             )
             .child(close);
         deferred(
-            div()
+            region(urgent)
                 .absolute()
                 .top(px(theme::NOTIFICATION_TOP - rise))
                 .left_0()

@@ -30,6 +30,9 @@ struct State {
 pub struct DatePicker {
     id: ElementId,
     value: SharedString,
+    /// `DatePickerButton`'s `ariaLabel`: the trigger's and the calendar's
+    /// accessible name.
+    name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
 }
 
@@ -37,11 +40,18 @@ pub fn date_picker(id: impl Into<ElementId>, value: impl Into<SharedString>) -> 
     DatePicker {
         id: id.into(),
         value: value.into(),
+        name: None,
         on_change: None,
     }
 }
 
 impl DatePicker {
+    /// What assistive technology calls the picker ("From", "To").
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
     /// Called with the day chosen, or an empty key for Clear.
     pub fn on_change(mut self, handler: impl Fn(String, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(handler));
@@ -117,10 +127,12 @@ fn ring(theme: &theme::Theme) -> super::focus::Ring {
 
 /// A button of the calendar: a stop that Enter and Space press, with its
 /// ring. `border` is how thick the button's own border is.
+#[allow(clippy::too_many_arguments)]
 fn calendar_button(
     button: Stateful<Div>,
     id: ElementId,
     border: f32,
+    name: impl Into<SharedString>,
     window: &mut Window,
     cx: &mut App,
     press: impl Fn(&mut Window, &mut App) + 'static,
@@ -128,6 +140,8 @@ fn calendar_button(
     let theme = theme::theme(cx);
     let focus = super::focus::control(&id, window, cx);
     let button = button
+        .role(Role::Button)
+        .aria_label(name)
         .relative()
         .children(focus.ring(ring(&theme), theme::RADIUS_MD, border));
     focus.attach(button, super::focus::Kind::Button, move |_, window, cx| {
@@ -154,6 +168,10 @@ impl RenderOnce for DatePicker {
         let toggle = state.clone();
         let mut trigger = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_expanded(open)
+            .aria_value(display.clone())
+            .when_some(self.name.clone(), |trigger, name| trigger.aria_label(name))
             .occlude()
             .relative()
             .w_full()
@@ -240,7 +258,7 @@ impl RenderOnce for DatePicker {
         let named = |name: &str| {
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), name.to_owned().into())
         };
-        let mut step = |delta: i32, label: &'static str, icon: &'static str| {
+        let mut step = |delta: i32, label: &'static str, icon: &'static str, name: &str| {
             let state = state.clone();
             let turn = move |cx: &mut App| {
                 state.update(cx, |state, cx| {
@@ -261,7 +279,7 @@ impl RenderOnce for DatePicker {
                     cx.stop_propagation();
                     turn(cx);
                 });
-            calendar_button(button, named(label), 1., window, cx, move |_, cx| {
+            calendar_button(button, named(label), 1., t(name), window, cx, move |_, cx| {
                 pressed(cx)
             })
         };
@@ -270,7 +288,12 @@ impl RenderOnce for DatePicker {
             .items_center()
             .gap(px(6.))
             .mb(px(7.))
-            .child(step(-1, "date-previous-month", "date-previous"))
+            .child(step(
+                -1,
+                "date-previous-month",
+                "date-previous",
+                "Previous month",
+            ))
             .child(
                 div()
                     .flex_1()
@@ -282,7 +305,7 @@ impl RenderOnce for DatePicker {
                     .font_weight(FontWeight::MEDIUM)
                     .child(crate::i18n::format::month_year(month)),
             )
-            .child(step(1, "date-next-month", "date-next"));
+            .child(step(1, "date-next-month", "date-next", "Next month"));
         let weekdays = div()
             .flex()
             .gap(px(2.))
@@ -318,6 +341,7 @@ impl RenderOnce for DatePicker {
                 let pressed = choose.clone();
                 let mut cell = div()
                     .id(SharedString::from(format!("date-{day}")))
+                    .aria_toggled(super::a11y::toggled(is_selected))
                     .relative()
                     .flex_1()
                     // `aspect-ratio: 1` on a seventh of the 260px grid.
@@ -371,6 +395,7 @@ impl RenderOnce for DatePicker {
                     cell,
                     named(&format!("day-{day}")),
                     0.,
+                    crate::i18n::format::date(day),
                     window,
                     cx,
                     move |window, cx| pressed(Some(day), window, cx),
@@ -399,6 +424,7 @@ impl RenderOnce for DatePicker {
                 }),
             named("today"),
             1.,
+            t("Today"),
             window,
             cx,
             move |window, cx| today_press(Some(today), window, cx),
@@ -423,11 +449,17 @@ impl RenderOnce for DatePicker {
             })
             .child(t("Clear"));
         // Disabled with no day, and then no stop.
-        if selected.is_some() {
+        if selected.is_none() {
+            clear_button = clear_button
+                .role(Role::Button)
+                .aria_label(t("Clear"))
+                .aria_disabled(true);
+        } else {
             clear_button = calendar_button(
                 clear_button,
                 named("clear"),
                 1.,
+                t("Clear"),
                 window,
                 cx,
                 move |window, cx| clear_press(None, window, cx),
@@ -454,6 +486,8 @@ impl RenderOnce for DatePicker {
             theme::RADIUS_LG,
             cx,
         )
+        .role(Role::Dialog)
+        .when_some(self.name.clone(), |popover, name| popover.aria_label(name))
         .w(px(WIDTH))
         // `.popover`'s 9px padding inside its 1px glass border.
         .p(px(10.))

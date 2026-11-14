@@ -15,6 +15,7 @@ pub fn empty_state(
     cx: &App,
 ) -> Div {
     let theme = theme::theme(cx);
+    let (title, description) = (title.into(), description.into());
     // One border colour per element: the sides, the top and the bottom are
     // each their own edge laid over the box, and the box keeps a pixel of
     // padding where its border would be.
@@ -93,21 +94,22 @@ pub fn empty_state(
         .p(px(40.))
         .text_center()
         .child(frame)
+        // Read as a heading and its text.
         .child(
-            div()
+            super::a11y::heading(div().id("empty-title"), title.clone(), 2)
                 .text_size(px(theme::TEXT_XL))
                 .line_height(px(24.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text())
-                .child(title.into()),
+                .child(title),
         )
         .child(
-            div()
+            super::a11y::text(div().id("empty-description"), description.clone())
                 .max_w(px(560.))
                 .text_size(px(theme::TEXT_SM))
                 .line_height(px(18.))
                 .text_color(theme.text_secondary())
-                .child(description.into()),
+                .child(description),
         )
         .when(!actions.is_empty(), |root| {
             root.child(
@@ -175,6 +177,9 @@ impl RenderOnce for EmptyStateAction {
         );
         let mut button = div()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(self.label.clone())
+            .aria_disabled(self.disabled)
             .occlude()
             .h(px(theme::CONTROL_LG))
             .flex_none()

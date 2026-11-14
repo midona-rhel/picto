@@ -2,6 +2,7 @@
 //! window and a glass panel with a title, a body and an optional footer.
 use crate::theme::Text as _;
 use crate::{motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::{rc::Rc, time::Instant};
 
@@ -295,7 +296,7 @@ impl RenderOnce for Modal {
                             .line_height(px(theme::LINE_HEIGHT_MD))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text())
-                            .child(self.title),
+                            .child(self.title.clone()),
                     )
                     .child({
                         // `WindowCloseButton`, which closes the dialog.
@@ -354,8 +355,15 @@ impl RenderOnce for Modal {
                     .children(self.footer),
             );
         }
-        // `.panel`: the glass, with its edges.
+        // `.panel`: the glass, with its edges; `role="dialog"` with
+        // `aria-modal` and its title as its name. While no control in it has
+        // the keyboard, the dialog is what assistive technology reads as
+        // focused.
         let mut panel = super::glass_panel(self.id.clone(), theme::RADIUS_LG, cx)
+            .role(Role::Dialog)
+            .aria_modal(true)
+            .aria_label(self.title.clone())
+            .when_some(self.focus.clone(), |panel, focus| panel.a11y_focus(&focus))
             .relative()
             .flex_none()
             .overflow_hidden()

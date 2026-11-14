@@ -19,7 +19,7 @@
 //!   and its text as a label.
 //! - Ids under one node with a role must not repeat in a frame: a debug
 //!   build stops on a repeated one while the tree is built.
-use gpui::{Toggled, Window};
+use gpui::{Role, SharedString, StatefulInteractiveElement, Toggled, Window};
 
 /// `aria-checked` / `aria-pressed` from a boolean.
 pub fn toggled(on: bool) -> Toggled {
@@ -30,6 +30,21 @@ pub fn toggled(on: bool) -> Toggled {
 /// work that only describes the window to assistive technology on it.
 pub fn active(window: &Window) -> bool {
     window.is_a11y_active()
+}
+
+/// Makes `element` text assistive technology reads (GPUI's own text is
+/// not in the tree): a dialog's message, a status line, an empty state.
+pub fn text<E: StatefulInteractiveElement>(element: E, text: impl Into<SharedString>) -> E {
+    element.role(Role::Label).aria_value(text)
+}
+
+/// Makes `element` a heading of `level` named `text`: a section's title.
+pub fn heading<E: StatefulInteractiveElement>(
+    element: E,
+    text: impl Into<SharedString>,
+    level: usize,
+) -> E {
+    element.role(Role::Heading).aria_label(text).aria_level(level)
 }
 
 #[cfg(test)]

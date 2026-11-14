@@ -138,6 +138,9 @@ pub struct TextInput {
     killing: bool,
     /// The face the field draws in instead of its kind's.
     face: Option<Face>,
+    /// What assistive technology calls the field (production's
+    /// `aria-label`, or the label it sits under).
+    name: Option<SharedString>,
 }
 
 /// A face a field draws its text in, for text edited in place in the face
@@ -191,7 +194,74 @@ impl TextInput {
             autoscroll: None,
             killing: false,
             face: None,
+            name: None,
         }
+    }
+
+    /// What assistive technology calls the field; without a name it is
+    /// known by its placeholder.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Changes the field's accessible name (see [`TextInput::name`]).
+    pub fn set_name(&mut self, name: impl Into<SharedString>) {
+        self.name = Some(name.into());
+    }
+
+    /// The field as assistive technology reads it: its role, name, text,
+    /// placeholder and, as a text run inside it, the selection or caret.
+    /// Built only while the window builds its tree.
+    fn describe(&self, root: gpui::Stateful<gpui::Div>, window: &Window) -> gpui::Stateful<gpui::Div> {
+        if !crate::ui::a11y::active(window) {
+            return root;
+        }
+        let role = match self.kind {
+            Kind::Number => gpui::Role::SpinButton,
+            Kind::Search | Kind::Sidebar | Kind::Popover | Kind::Menu => gpui::Role::SearchInput,
+            _ if self.multiline => gpui::Role::MultilineTextInput,
+            _ => gpui::Role::TextInput,
+        };
+        let mut root = root.role(role).aria_value(self.content.clone());
+        if !self.placeholder.is_empty() {
+            root = root.aria_placeholder(crate::i18n::t_shared(self.placeholder.clone()));
+        }
+        if let Some(name) = &self.name {
+            root = root.aria_label(name.clone());
+        }
+        if self.kind == Kind::Number
+            && let Ok(number) = self.content.trim().parse::<f64>()
+        {
+            root = root.aria_numeric_value(number);
+        }
+        let text = self.content.clone();
+        let (start, end) = (self.selected_range.start, self.selected_range.end);
+        let (anchor, focus) = if self.selection_reversed {
+            (end, start)
+        } else {
+            (start, end)
+        };
+        root.a11y_synthetic_children(move |builder| {
+            let lengths: Vec<u8> = text.chars().map(|c| c.len_utf8() as u8).collect();
+            // A byte offset as the run's character index.
+            let index = |offset: usize| text[..offset.min(text.len())].chars().count();
+            let mut run = gpui::accesskit::Node::new(gpui::Role::TextRun);
+            run.set_value(text.to_string());
+            run.set_character_lengths(lengths);
+            let id = builder.synthetic_node_id("run");
+            builder.push_child(id, run);
+            let at = |offset| gpui::accesskit::TextPosition {
+                node: id,
+                character_index: index(offset),
+            };
+            builder
+                .parent_node()
+                .set_text_selection(gpui::accesskit::TextSelection {
+                    anchor: at(anchor),
+                    focus: at(focus),
+                });
+        })
     }
 
     /// Draws the field in `face` rather than its kind's.
@@ -479,12 +549,13 @@ impl Render for TextInput {
             let name = format!("field \"{}\"", self.placeholder);
             crate::ui::focus::names::name_text(&self.focus_handle(cx), name, cx);
         }
-        root.key_context(if self.multiline {
-            "TextInput TextArea"
-        } else {
-            "TextInput"
-        })
-        .track_focus(&self.focus_handle(cx))
+        self.describe(root.id("text-input"), window)
+            .key_context(if self.multiline {
+                "TextInput TextArea"
+            } else {
+                "TextInput"
+            })
+            .track_focus(&self.focus_handle(cx))
         .cursor(CursorStyle::IBeam)
         .on_action(cx.listener(Self::backspace))
         .on_action(cx.listener(Self::delete))

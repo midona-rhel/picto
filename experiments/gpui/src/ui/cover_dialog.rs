@@ -446,6 +446,8 @@ pub fn cover_layer<V: CoverHost>(
                                 };
                                 let tile = div()
                                     .id(id.clone())
+                                    .role(Role::Button)
+                                    .aria_label(t("Set cover photo"))
                                     .relative()
                                     .size(px(cell))
                                     .flex_none()
