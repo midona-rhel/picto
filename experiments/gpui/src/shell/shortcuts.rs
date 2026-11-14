@@ -5,23 +5,17 @@
 //! on (`cx.propagate()`), as an unhandled key does in production.
 use super::Shell;
 use crate::app_menu::ScopeKind;
+use crate::grid::menu::Action as Row;
 use crate::keymap::*;
-use crate::session::Reread;
 use crate::settings;
 use gpui::*;
+use picto_library::RootKind;
 use picto_library::query::ItemScope;
-use picto_library::selection::SelectionTarget;
-use picto_library::{Lifecycle, Rating, RootId, RootKind};
 
 impl Shell {
     /// Whether the grid shows this kind of destination.
     fn in_scope(&self, kind: ScopeKind, cx: &App) -> bool {
         self.grid_scope(cx).kind() == kind
-    }
-
-    /// The selected items, in grid order.
-    fn selected_ids(&self, cx: &App) -> Vec<RootId> {
-        self.session.read(cx).selected_ids()
     }
 
     /// The one selected item, unless it is a collection (`singleFileHash`
@@ -96,152 +90,56 @@ impl Shell {
     }
 
     /// `rate.0`–`rate.5`: the selection in the grid, the item shown in the
-    /// viewer.
-    fn rate(&mut self, stars: usize, cx: &mut Context<Self>) {
-        let rating = Rating::ALL[stars];
+    /// viewer, as Set Rating's rows rate them.
+    fn rate(&mut self, stars: u8, window: &mut Window, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
-        let ids = if session.viewer {
-            session
-                .selected_item()
-                .map(|item| vec![item.root_id])
-                .unwrap_or_default()
-        } else {
-            self.selected_ids(cx)
-        };
-        if ids.is_empty() {
-            if !self.session.read(cx).viewer {
-                cx.propagate();
-            }
+        if !session.viewer && session.selection.is_empty() {
+            cx.propagate();
             return;
         }
-        self.edit_selection(
-            ids,
-            move |library, target| library.set_rating(target, rating).map(|_| ()),
-            false,
-            cx,
-        );
+        self.act_on_selection(Row::Rate(stars), window, cx);
     }
 
-    /// Runs an edit of these items on the library's thread, then shows its
-    /// result: the details and the selection's summary again, or with
-    /// `reload` the destination read again in place, when items may have
-    /// left it.
-    fn edit_selection(
+    /// Runs a menu row on the selection when there is one, else lets the
+    /// key go on.
+    fn on_selection(
         &mut self,
-        ids: Vec<RootId>,
-        work: impl FnOnce(&picto_library::Library, &SelectionTarget) -> picto_library::Result<()>
-        + Send
-        + 'static,
-        reload: bool,
+        applies: bool,
+        row: Row,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = self.session.read(cx).target_for(ids);
-        let reread = if reload {
-            Reread::RESULTS
+        if applies && !self.session.read(cx).selection.is_empty() {
+            self.act_on_selection(row, window, cx);
         } else {
-            Reread::SELECTION
-        };
-        self.session.update(cx, |session, cx| {
-            let _ = session.edit(move |library| work(library, &target), reread, cx);
-        });
+            cx.propagate();
+        }
     }
 
     /// `file.delete`, as `gridRemovalAction` reads it: in a folder the key
-    /// belongs to Remove from Folder, in the Trash it deletes permanently,
-    /// elsewhere it moves the selection to the Trash.
+    /// belongs to Remove from Folder, in the Trash it deletes permanently
+    /// (after the confirmation the menu row shows), elsewhere it moves the
+    /// selection to the Trash.
     fn delete_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let grid = self.grid_scope(cx);
-        let trash = grid.kind() == ScopeKind::Trash;
-        let count = self.session.read(cx).selection_count();
-        if grid.folder().is_some() || count == 0 {
-            cx.propagate();
-        } else if trash {
-            // Permanently, after the confirmation the menu row shows.
-            self.act_on_selection(crate::grid::menu::Action::DeletePermanently, window, cx);
+        let row = if grid.kind() == ScopeKind::Trash {
+            Row::DeletePermanently
         } else {
-            self.session.update(cx, |session, cx| {
-                session.move_selection_to(Lifecycle::Trash, cx)
-            });
-        }
+            Row::MoveToTrash
+        };
+        self.on_selection(grid.folder().is_none(), row, window, cx);
     }
 
-    /// `file.removeFromFolder`: takes the selection out of the open folder.
-    fn remove_from_folder(&mut self, cx: &mut Context<Self>) {
-        match self.grid_scope(cx).folder() {
-            Some(folder) if !self.session.read(cx).selection.is_empty() => {
-                let ids = self.selected_ids(cx);
-                self.edit_selection(
-                    ids,
-                    move |library, target| library.remove_from_folder(target, folder).map(|_| ()),
-                    true,
-                    cx,
-                );
-            }
-            _ => cx.propagate(),
-        }
-    }
-
-    /// Moves the selection to a lifecycle when the destination is the one
-    /// the shortcut belongs to (`file.restore` in the Trash,
-    /// `inbox.accept` in the Inbox).
-    fn move_in(&mut self, here: bool, lifecycle: Lifecycle, cx: &mut Context<Self>) {
-        if here && !self.session.read(cx).selection.is_empty() {
-            self.session
-                .update(cx, |session, cx| session.move_selection_to(lifecycle, cx));
-        } else {
-            cx.propagate();
-        }
-    }
-
-    /// `inbox.reject` (`rejectTarget`): to the Trash, or deleted, as the
-    /// Inbox & Deleting setting says.
-    fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.in_scope(ScopeKind::Inbox, cx) || self.session.read(cx).selection.is_empty() {
-            cx.propagate();
-        } else if settings::current(cx).reject_action == "trash" {
-            self.session.update(cx, |session, cx| {
-                session.move_selection_to(Lifecycle::Trash, cx)
-            });
-        } else {
-            // Deleted, asking first only when it cannot be undone, as the
-            // menu's Reject row does.
-            self.act_on_selection(crate::grid::menu::Action::Reject, window, cx);
-        }
-    }
-
-    /// `edit.copyFilePath`: the selection's file paths, one per line.
+    /// `edit.copyFilePath`: the file shown of one item, as the context menu
+    /// copies it, or every file of several, one per line.
     fn copy_file_paths(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids = self.selected_ids(cx);
-        if ids.is_empty() || !self.selection_shown(cx) {
-            cx.propagate();
-            return;
-        }
-        if ids.len() == 1 {
-            // The shown member of one item, as the context menu copies it.
-            self.act_on_selection(crate::grid::menu::Action::CopyPath, window, cx);
-            return;
-        }
-        let job = self.session.read(cx).run(move |library| {
-            let mut paths = Vec::new();
-            for id in ids {
-                paths.extend(
-                    library
-                        .details(id)?
-                        .media
-                        .into_iter()
-                        .map(|media| media.file_path),
-                );
-            }
-            Ok::<_, picto_library::LibraryError>(paths)
-        });
-        cx.spawn(async move |_, cx| match job.await {
-            Ok(Ok(paths)) => {
-                cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string(paths.join("\n"))));
-            }
-            Ok(Err(error)) => eprintln!("picto: {error}"),
-            Err(_) => {}
-        })
-        .detach();
+        let row = if self.session.read(cx).selection_count() == 1 {
+            Row::CopyPath
+        } else {
+            Row::CopySelectionPaths
+        };
+        let shown = self.selection_shown(cx);
+        self.on_selection(shown, row, window, cx);
     }
 
     /// `edit.copy`: the files themselves on the clipboard. Over the grid,
@@ -250,7 +148,7 @@ impl Shell {
     /// file shown.
     fn copy_files_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.viewing(cx) {
-            self.act_on_selection(crate::grid::menu::Action::CopyFile, window, cx);
+            self.act_on_selection(Row::CopyFile, window, cx);
             return;
         }
         let session = self.session.read(cx);
@@ -258,7 +156,7 @@ impl Shell {
             cx.propagate();
             return;
         }
-        let ids = self.selected_ids(cx);
+        let ids = session.selected_ids();
         self.copy_files(ids, cx);
     }
 
@@ -340,14 +238,14 @@ impl Shell {
         .on_action(cx.listener(|this, _: &QuickLook, window, cx| this.quick_look(window, cx)))
         .on_action(cx.listener(|this, _: &OpenDefaultApp, window, cx| {
             if this.single_media(cx) {
-                this.act_on_selection(crate::grid::menu::Action::OpenDefault, window, cx);
+                this.act_on_selection(Row::OpenDefault, window, cx);
             } else {
                 cx.propagate();
             }
         }))
         .on_action(cx.listener(|this, _: &RevealInFinder, window, cx| {
             if this.single_media(cx) {
-                this.act_on_selection(crate::grid::menu::Action::Reveal, window, cx);
+                this.act_on_selection(Row::Reveal, window, cx);
             } else {
                 cx.propagate();
             }
@@ -364,17 +262,20 @@ impl Shell {
                 .update(cx, |session, cx| session.toggle_grayscale(cx))
         }))
         .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
-        .on_action(cx.listener(|this, _: &Rate0, _, cx| this.rate(0, cx)))
-        .on_action(cx.listener(|this, _: &Rate1, _, cx| this.rate(1, cx)))
-        .on_action(cx.listener(|this, _: &Rate2, _, cx| this.rate(2, cx)))
-        .on_action(cx.listener(|this, _: &Rate3, _, cx| this.rate(3, cx)))
-        .on_action(cx.listener(|this, _: &Rate4, _, cx| this.rate(4, cx)))
-        .on_action(cx.listener(|this, _: &Rate5, _, cx| this.rate(5, cx)))
+        .on_action(cx.listener(|this, _: &Rate0, window, cx| this.rate(0, window, cx)))
+        .on_action(cx.listener(|this, _: &Rate1, window, cx| this.rate(1, window, cx)))
+        .on_action(cx.listener(|this, _: &Rate2, window, cx| this.rate(2, window, cx)))
+        .on_action(cx.listener(|this, _: &Rate3, window, cx| this.rate(3, window, cx)))
+        .on_action(cx.listener(|this, _: &Rate4, window, cx| this.rate(4, window, cx)))
+        .on_action(cx.listener(|this, _: &Rate5, window, cx| this.rate(5, window, cx)))
         .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
-        .on_action(cx.listener(|this, _: &RemoveFromFolder, _, cx| this.remove_from_folder(cx)))
-        .on_action(cx.listener(|this, _: &RestoreItems, _, cx| {
+        .on_action(cx.listener(|this, _: &RemoveFromFolder, window, cx| {
+            let folder = this.grid_scope(cx).folder().is_some();
+            this.on_selection(folder, Row::RemoveFromFolder, window, cx)
+        }))
+        .on_action(cx.listener(|this, _: &RestoreItems, window, cx| {
             let trash = this.in_scope(ScopeKind::Trash, cx);
-            this.move_in(trash, Lifecycle::Active, cx)
+            this.on_selection(trash, Row::Restore, window, cx)
         }))
         // Over the media view or Quick Look, the keys review the item
         // being viewed (`InboxReviewControls`); over the grid, the
@@ -385,14 +286,17 @@ impl Shell {
                 return;
             }
             let inbox = this.in_scope(ScopeKind::Inbox, cx);
-            this.move_in(inbox, Lifecycle::Active, cx)
+            this.on_selection(inbox, Row::Accept, window, cx)
         }))
+        // Reject sends the selection to the Trash or deletes it, as the
+        // Inbox & Deleting setting says (`rejectTarget`).
         .on_action(cx.listener(|this, _: &RejectInbox, window, cx| {
             if this.viewing(cx) {
                 this.review_key(crate::viewer::review::Decision::Reject, window, cx);
                 return;
             }
-            this.reject(window, cx)
+            let inbox = this.in_scope(ScopeKind::Inbox, cx);
+            this.on_selection(inbox, Row::Reject, window, cx)
         }))
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar

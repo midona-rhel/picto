@@ -2221,21 +2221,6 @@ impl Session {
         }
     }
 
-    /// Moves the selected items to the trash, or back out of it, and reads
-    /// the destination again in place.
-    pub fn move_selection_to(
-        &mut self,
-        lifecycle: picto_library::Lifecycle,
-        cx: &mut Context<Self>,
-    ) {
-        let ids = self.selected_ids();
-        if !ids.is_empty() {
-            self.close_viewer(cx);
-            let target = self.target_for(ids);
-            let _ = self.set_lifecycle(target, lifecycle, cx);
-        }
-    }
-
     /// Moves `target` to the trash, the Inbox or the library, and reads the
     /// destination again in place. The answer says whether it went through.
     pub fn set_lifecycle(

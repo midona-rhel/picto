@@ -139,8 +139,9 @@ impl Shell {
         })
     }
 
-    /// Performs a row's action without its menu, for a shortcut: on the
-    /// item the viewer shows while it is open, else on the selection.
+    /// Performs a row's action without its menu, for a shortcut or an
+    /// application menu row: on the item the viewer shows while it is open
+    /// (in the folder it was opened from), else on the selection.
     pub(super) fn act_on_selection(
         &mut self,
         action: Action,
@@ -151,6 +152,7 @@ impl Shell {
             self.shown_item(true, cx).map(|(item, file)| Target {
                 items: vec![item],
                 file: Some(file),
+                folder: self.grid_scope(cx).folder(),
                 ..Default::default()
             })
         } else {
