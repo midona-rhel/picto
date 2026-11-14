@@ -800,6 +800,8 @@ impl Render for DetailWindow {
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
         .child(pane)
         .children(self.menu.layer(window, cx))
+        // A video player that has the window to itself, over everything.
+        .children(super::video::fullscreen_layer(window, cx))
     }
 }
 

@@ -272,6 +272,8 @@ impl MediaSurface {
             }
             Mode::Document => self.document.take().map(Held::Document),
             Mode::Media => self.player.take().map(|player| {
+                // The fullscreen element leaves the page with its item.
+                super::video::release_fullscreen(&player, cx);
                 player.update(cx, |player, _| player.pause());
                 Held::Player(player)
             }),
@@ -1328,8 +1330,13 @@ impl Render for MediaSurface {
             surface = surface.child(document.element(self.thumbnail.clone(), cx));
         } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
             // The player draws nothing until its first frame; the held
-            // picture, or the pane's background, shows until then.
-            surface = surface.child(div().absolute().inset_0().child(player));
+            // picture, or the pane's background, shows until then. While it
+            // has its window to itself, its host keeps the black behind it.
+            surface = surface.child(if super::video::is_fullscreen(&player, cx) {
+                div().absolute().inset_0().bg(rgba(theme::MEDIA_BACKGROUND))
+            } else {
+                div().absolute().inset_0().child(player)
+            });
         } else {
             if let Some(thumbnail) = &self.thumbnail {
                 surface = surface.child(
