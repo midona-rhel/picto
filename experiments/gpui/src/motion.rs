@@ -453,6 +453,38 @@ pub fn loop_clock() -> Duration {
     START.get_or_init(std::time::Instant::now).elapsed()
 }
 
+/// How often a looping indicator is drawn again: a pulse or a sweep that
+/// runs for as long as work does. Asking for every frame the display can
+/// show would redraw the whole window at its refresh rate (120 a second on
+/// some) for a dot that changes slowly.
+pub const LOOP_FRAME: Duration = Duration::from_millis(33);
+
+/// The views with a redraw for their loop already on its way, per window.
+#[derive(Default)]
+struct LoopFrames(std::collections::HashSet<(gpui::WindowId, gpui::EntityId)>);
+
+impl gpui::Global for LoopFrames {}
+
+/// Has the view being drawn drawn again [`LOOP_FRAME`] from now, for a
+/// looping indicator read off [`loop_clock`]. One redraw is under way per
+/// view however many indicators it holds; a window that is not drawn (hidden
+/// or covered) asks for no more.
+pub fn loop_frame(window: &gpui::Window, cx: &mut gpui::App) {
+    let view = window.current_view();
+    let key = (window.window_handle().window_id(), view);
+    if !cx.default_global::<LoopFrames>().0.insert(key) {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(LOOP_FRAME).await;
+        let _ = cx.update(|cx| {
+            cx.default_global::<LoopFrames>().0.remove(&key);
+            cx.notify(view);
+        });
+    })
+    .detach();
+}
+
 /// The subscription pulses' timing (`subscriptionStatusPulse`,
 /// `subscriptionActivityPulse`): from 0 to 1 and back over
 /// [`STATUS_PULSE`], each half on `ease-in-out`.
@@ -588,5 +620,53 @@ mod tests {
         assert_eq!(progress(Duration::ZERO, duration), 0.);
         assert_eq!(progress(Duration::from_millis(85), duration), 0.5);
         assert_eq!(progress(Duration::from_secs(1), duration), 1.);
+    }
+}
+
+#[cfg(test)]
+mod loop_tests {
+    use super::{LOOP_FRAME, loop_frame};
+    use gpui::{AppContext as _, Context, IntoElement, Render, Window, div};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    /// A view with two looping indicators.
+    struct Dots;
+
+    impl Render for Dots {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            loop_frame(window, cx);
+            loop_frame(window, cx);
+            div()
+        }
+    }
+
+    #[test]
+    fn a_looping_view_is_drawn_again_once_an_interval() {
+        let mut cx = gpui::TestAppContext::single();
+        let window = cx.add_window(|_, _| Dots);
+        let handle: gpui::AnyWindowHandle = window.into();
+        let view = window.root(&mut cx).unwrap();
+        let count = Rc::new(Cell::new(0));
+        let seen = count.clone();
+        cx.update(|cx| {
+            cx.observe(&view, move |_, _| seen.set(seen.get() + 1)).detach();
+        });
+        cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        cx.executor().advance_clock(LOOP_FRAME - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(count.get(), 0);
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        // Two indicators, one redraw.
+        assert_eq!(count.get(), 1);
+
+        // Each redraw asks for the next: ten intervals, ten more, however
+        // many frames the display could have shown meanwhile.
+        cx.executor().advance_clock(LOOP_FRAME * 10);
+        cx.run_until_parked();
+        assert_eq!(count.get(), 11);
     }
 }

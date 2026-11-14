@@ -123,7 +123,7 @@ impl RenderOnce for ProgressBar {
                     .bg(theme.primary())
             }
             None => {
-                window.request_animation_frame();
+                motion::loop_frame(window, cx);
                 div()
                     .absolute()
                     .top_0()

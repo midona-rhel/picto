@@ -791,7 +791,7 @@ fn progress(task: &Task, height: f32, top: f32, window: &mut Window, cx: &mut Ap
         Tone::Done => rgb(theme::TASK_DONE_FILL),
     };
     let fill = if task.indeterminate() {
-        window.request_animation_frame();
+        motion::loop_frame(window, cx);
         div()
             .absolute()
             .top_0()

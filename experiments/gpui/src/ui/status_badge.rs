@@ -76,7 +76,7 @@ impl RenderOnce for StatusBadge {
             ..color
         };
         let opacity = if self.tone == Tone::Running {
-            window.request_animation_frame();
+            motion::loop_frame(window, cx);
             pulse(motion::loop_clock())
         } else {
             1.

@@ -612,7 +612,7 @@ fn activity_button(activity: Activity, window: &mut Window, cx: &mut App) -> imp
     let inside = match glyph {
         Some(name) => super::icon(name, 14., theme.primary()).into_any_element(),
         None => {
-            window.request_animation_frame();
+            motion::loop_frame(window, cx);
             let (opacity, blur, strength) = activity_pulse(motion::loop_clock());
             div()
                 .size(px(8.))
