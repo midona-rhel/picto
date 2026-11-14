@@ -133,6 +133,9 @@ fn plays_a_script() {
     std::fs::create_dir_all(&out).unwrap();
     let (width, height) = crate::seams::exact_window().unwrap_or((1213., 865.));
 
+    // As the app does at launch: the previous session's panics are shown in
+    // the log window (from `PICTO_GPUI_STATE`'s `logs/`), and panics recorded.
+    crate::diagnostics::crash::install();
     let (events, delivered) = std::sync::mpsc::channel();
     let application = crate::application::Application::new(root.clone(), events);
     let closing = application.clone();

@@ -132,6 +132,8 @@ pub struct Shell {
     review_focus: Option<(crate::viewer::review::Decision, bool)>,
     /// The notifications, drawn above everything.
     notifications: Entity<ui::notify::Host>,
+    /// The log window while it is open, and what it says.
+    diagnostics: Option<(Entity<crate::diagnostics::panel::Panel>, Subscription)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -407,6 +409,7 @@ impl Shell {
             review_keys: Default::default(),
             review_focus: None,
             notifications: cx.new(ui::notify::Host::new),
+            diagnostics: None,
             _subscriptions: subscriptions,
         }
     }
@@ -1095,6 +1098,23 @@ impl Render for Shell {
         // below the context menus (`--layer-overlay`).
         if quick_look_open {
             root = root.child(self.quick_look.clone());
+        }
+        // The log window along the bottom, over Quick Look
+        // (`--z-overlay`, mounted after it), under the menus and dialogs.
+        if let Some((panel, _)) = &self.diagnostics {
+            root = root.child(panel.clone()).capture_key_down(cx.listener(
+                |this, event: &KeyDownEvent, window, cx| {
+                    // Escape closes it first, wherever the keyboard is
+                    // (its shortcut scope's priority 100, in text fields too).
+                    if event.keystroke.key == "escape"
+                        && event.keystroke.modifiers.number_of_modifiers() == 0
+                        && !this.menu.close(cx)
+                    {
+                        this.close_diagnostics(window, cx);
+                        cx.stop_propagation();
+                    }
+                },
+            ));
         }
         // Imports in progress, below the menus and dialogs.
         root = root.child(self.imports.clone());

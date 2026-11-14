@@ -401,6 +401,11 @@ impl Application {
         picto_core::state::init_tracing();
         let events = std::sync::Mutex::new(events);
         picto_core::events::set_event_callback(move |name, payload| {
+            // The core's tracing, for the log window (`diagnosticsRuntime`).
+            if name == picto_core::events::event_names::LOG {
+                crate::diagnostics::accept_core(payload);
+                return;
+            }
             if let Some(event) = Event::parse(name, payload)
                 && let Ok(events) = events.lock()
             {
@@ -456,6 +461,7 @@ impl Application {
         let (answer, receiver) = oneshot::channel();
         let command = command.into();
         let mut opened = self.opened.clone();
+        let started = std::time::Instant::now();
         self.runtime.spawn(async move {
             let ready = match opened.wait_for(Option::is_some).await {
                 Ok(state) => state.clone().unwrap_or(Ok(())),
@@ -469,6 +475,12 @@ impl Application {
                     }),
                 Err(error) => Err(error),
             };
+            // The round trip, for the log window (`recordIpcCall`).
+            crate::diagnostics::record_ipc(
+                &command,
+                started.elapsed().as_secs_f64() * 1000.,
+                result.as_ref().err().map(String::as_str),
+            );
             let _ = answer.send(result);
         });
         receiver

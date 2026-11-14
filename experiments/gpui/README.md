@@ -733,12 +733,12 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
 | Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
+| Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
 add to last folder, copy and paste tags, slideshow, navigator, the layout and
-tile-label keys (all deferred in production too), Auto Tag (no AI tagger) and
-Toggle Logs (no log window).
+tile-label keys (all deferred in production too) and Auto Tag (no AI tagger).
 
 Measured once on the million-item synthetic library on a macOS development
 machine: every grid window read took 0.3–9 ms wherever it lay; the summary of
@@ -824,7 +824,6 @@ re-checked by reading the code; the rest were checked against it.
 - The AI tagger: Auto Tag in the item menu, the inspector and the Organize
   menu is disabled, its shortcut unbound; every AI model shows as not
   downloaded and download, optimise and delete do nothing.
-- The log window, diagnostics and support report; no panic hook.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
 - Site logins and the Accounts window; a login problem's Fix login; the
@@ -1007,6 +1006,10 @@ Smaller differences by area†
   say so; a PDF page is drawn at most 8,192 px on its longest side;
   encrypted PDFs show a message; Quick Look scrolls a document's pages with
   the pointer only.
+- Log window: its lines cannot be selected with the pointer (Copy copies
+  them); the `main` source holds only panics of earlier sessions, since this
+  app's own messages go to standard error, not to the log; a command's time
+  is its whole round trip, without production's native and delivery split.
 - Settings: a stored vibrancy, Liquid Glass, Mica or Acrylic theme shows as
   Dark; a shortcut field cannot capture keys the app binds itself (⌘Q, ⌘,);
   "Pixelated" scaling does not apply to a collection's members or the
