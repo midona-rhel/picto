@@ -17,6 +17,7 @@ use picto_library::{FolderId, Lifecycle, RootId, RootKind};
 use std::rc::Rc;
 
 mod actions;
+mod organizer;
 
 /// The item menus' state in the shell.
 #[derive(Default)]
@@ -29,6 +30,8 @@ pub(super) struct ItemMenus {
     /// the window, beside the JSON it writes to the clipboard).
     tag_clipboard: Vec<String>,
     confirm: ui::modal::Host<Confirmation>,
+    /// The group organizer, when grouping needs a decision.
+    organizer: ui::modal::Host<Entity<organizer::Organizer>>,
     /// The media surface the open viewer menu was opened on (the media
     /// view's or Quick Look's), whose Flash movie its rows control.
     surface: Option<WeakEntity<MediaSurface>>,
@@ -47,6 +50,14 @@ pub(super) struct Target {
     /// A collection member's menu: `file` is the member, `items` its
     /// collection.
     member: bool,
+    /// A menu of a collection's view (a member's, or the space between
+    /// them): its sort and ungroup rows act on that collection.
+    group: bool,
+    /// The members a member's menu acts on, by their place in the
+    /// collection.
+    members: Vec<usize>,
+    /// Quick Look opened it, which closes when the collection is gone.
+    quick_look: bool,
 }
 
 #[derive(Clone)]
@@ -133,7 +144,7 @@ impl Shell {
             items,
             file,
             folder: self.grid_scope(cx).2,
-            member: false,
+            ..Default::default()
         })
     }
 
@@ -149,8 +160,7 @@ impl Shell {
             self.shown_item(true, cx).map(|(item, file)| Target {
                 items: vec![item],
                 file: Some(file),
-                folder: None,
-                member: false,
+                ..Default::default()
             })
         } else {
             self.selection_target(cx)
@@ -283,7 +293,7 @@ impl Shell {
             items,
             file,
             folder,
-            member: false,
+            ..Default::default()
         };
         self.show_item_menu(built, target, true, position, window, cx);
     }
@@ -370,23 +380,45 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let (position, flash) = (request.position, request.flash);
-        let Some((item, file)) = self.shown_item(true, cx) else {
+        let quick_look = self.quick_look.read(cx).surface().entity_id() == surface.entity_id();
+        if request.collection {
+            self.open_collection_menu(position, quick_look, window, cx);
+            return;
+        }
+        let Some((item, mut file)) = self.shown_item(true, cx) else {
             return;
         };
+        if request.member {
+            // A member is named by its own media (`memberToGridItem`).
+            let session = self.session.read(cx);
+            if let Some(media) = session
+                .selected_details()
+                .and_then(|details| details.media.get(session.member))
+            {
+                file.name = media.media_name.clone();
+            }
+        }
         // A member's menu (`openMemberMenu`) describes the member, a media
         // item, with no lifecycle of its own; its edits go to the
-        // collection.
+        // collection. A member open by itself has `MediaView`'s menu for a
+        // file with no item to edit.
         let member = request.member;
         let media = member || item.kind == RootKind::Media;
         let trash = !member && item.lifecycle == Lifecycle::Trash;
-        let description = Description {
+        let count = request.members.len().max(1);
+        let image = file.mime.starts_with("image/");
+        let mut description = Description {
             surface: Surface::Viewer,
             selection_count: 1,
-            ai_tag_enabled: Some(media && file.mime.starts_with("image/")),
+            ai_tag_enabled: Some(media && image),
             single: true,
             single_hash: Some(file.hash.clone()),
             single_kind: Some(if member { Kind::Media } else { kind(item.kind) }),
-            single_name: Some(item.name.clone()),
+            single_name: Some(if member {
+                file.name.clone()
+            } else {
+                item.name.clone()
+            }),
             single_mime: Some(file.mime.clone()),
             contains_group: !media,
             status: (!member).then_some(match item.lifecycle {
@@ -405,7 +437,7 @@ impl Shell {
                 copy_link: true,
                 add_to_folder: true,
                 tag_select: true,
-                ai_tagger: media && file.mime.starts_with("image/"),
+                ai_tagger: media && image,
                 copy_tags: true,
                 paste_tags: true,
                 set_rating: true,
@@ -423,6 +455,62 @@ impl Shell {
             },
             ..Default::default()
         };
+        if request.alone {
+            // No item to edit: the file's own rows only.
+            description.selection_count = 0;
+            description.ai_tag_enabled = Some(image);
+            description.status = None;
+            description.handlers = Handlers {
+                open_default: true,
+                reveal: true,
+                open_new_window: true,
+                copy_file: true,
+                copy_path: true,
+                copy_name: true,
+                copy_link: true,
+                search_by_image: true,
+                regenerate: true,
+                library_cover: true,
+                ..Default::default()
+            };
+        } else if member {
+            // `openMemberMenu`: the editor's selection, or the one member.
+            let mimes: Vec<String> = {
+                let session = self.session.read(cx);
+                let details = session.selected_details();
+                request
+                    .members
+                    .iter()
+                    .filter_map(|index| details.and_then(|details| details.media.get(*index)))
+                    .map(|media| media.facts.mime.clone())
+                    .collect()
+            };
+            let single = count == 1;
+            description.surface = if request.editor {
+                Surface::Grid
+            } else {
+                Surface::Viewer
+            };
+            description.selection_count = count;
+            description.ai_tag_enabled = Some(mimes.iter().all(|mime| mime.starts_with("image/")));
+            description.single = single;
+            if !single {
+                description.single_hash = None;
+                description.single_kind = None;
+                description.single_name = None;
+                description.single_mime = None;
+            } else {
+                description.single_item_id = self
+                    .session
+                    .read(cx)
+                    .selected_details()
+                    .and_then(|details| details.media.get(request.members[0]))
+                    .map(|media| i64::from(media.media_id.0));
+            }
+            description.contains_group = false;
+            description.handlers = rows::member_handlers(single, request.editor);
+            description.sort_fields = Some(rows::COLLECTION_SORT.to_vec());
+        }
         // Production captures the current frame of a video or Flash movie;
         // this viewer plays Flash only.
         let playback = Playback {
@@ -431,19 +519,50 @@ impl Shell {
         };
         self.items.surface = Some(surface.downgrade());
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
-        let built = rows::viewer_menu(&description, playback, &hints);
+        let mut built = rows::viewer_menu(&description, playback, &hints);
+        if member && !request.alone {
+            built = rows::with_remove_from_group(built, count);
+        }
         let target = Target {
             items: vec![item],
             file: Some(file),
-            folder: None,
             member,
+            group: member && !request.alone,
+            members: request.members.clone(),
+            quick_look,
+            ..Default::default()
         };
         // A collection member's menu has the search field, as the grid's
         // menus do (`contextMenu.openAt`).
-        // TODO: it also has "Remove from Group" above "Move to Trash", and
-        // its Trash row moves the member out of the collection into the
-        // Trash (`detachMembers`).
-        self.show_item_menu(built, target, request.member, position, window, cx);
+        self.show_item_menu(
+            built,
+            target,
+            member && !request.alone,
+            position,
+            window,
+            cx,
+        );
+    }
+
+    /// `openEmptyMenu`: the space between a collection's members, or
+    /// around its tiles in the editor.
+    fn open_collection_menu(
+        &mut self,
+        position: Point<Pixels>,
+        quick_look: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(item) = self.session.read(cx).selected_item().cloned() else {
+            return;
+        };
+        let target = Target {
+            items: vec![item],
+            group: true,
+            quick_look,
+            ..Default::default()
+        };
+        self.show_item_menu(rows::collection_menu(), target, true, position, window, cx);
     }
 
     /// The inspector's preview was right-clicked.
@@ -473,8 +592,7 @@ impl Shell {
         let target = Target {
             items: vec![item],
             file: Some(file),
-            folder: None,
-            member: false,
+            ..Default::default()
         };
         self.show_item_menu(built, target, true, position, window, cx);
     }
@@ -597,6 +715,76 @@ impl Shell {
             .confirm
             .get_mut()
             .is_some_and(|dialog| !dialog.presence.closing())
+    }
+
+    /// Opens the group organizer on `request` (`groupOrganizerModalAtom`).
+    pub(super) fn open_organizer(&mut self, request: organizer::Request, cx: &mut Context<Self>) {
+        let session = self.session.clone();
+        let content = cx.new(|cx| organizer::Organizer::new(session, request, cx));
+        let first = content.read(cx).first_focus(cx);
+        cx.subscribe(&content, |this, _, _: &organizer::Organized, cx| {
+            this.items.organizer.dismiss(cx);
+        })
+        .detach();
+        cx.observe(&content, |_, _, cx| cx.notify()).detach();
+        let back = ui::menu::Return::To(self.focus.clone());
+        let dialog = self.items.organizer.open(content, back, cx);
+        if let Some(first) = first {
+            dialog.focus_first(first);
+        }
+    }
+
+    /// The open group organizer: the decision in its body, Cancel and the
+    /// grouping button in its footer.
+    pub(super) fn group_organizer(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.items.organizer.layer(window, cx)?;
+        let organizer = dialog.content.clone();
+        let (title, label, saving, ready) = {
+            let organizer = organizer.read(cx);
+            (
+                organizer.title(),
+                organizer.submit_label(),
+                organizer.saving(),
+                organizer.can_submit(cx),
+            )
+        };
+        let close = cx.listener(|this, _: &(), _, cx| this.items.organizer.dismiss(cx));
+        let cancel = cx.listener(|this, _: &(), _, cx| {
+            this.items.organizer.close(cx);
+        });
+        let submit = organizer.downgrade();
+        Some(
+            ui::modal::modal("group-organizer", title, dialog.presence)
+                .size(ui::modal::Size::Medium)
+                .focus(&dialog.focus)
+                .on_close(move |window, cx| close(&(), window, cx))
+                .child(organizer)
+                .footer(
+                    ui::action_button::action_button(
+                        "group-organizer-cancel",
+                        ui::action_button::Look::Standard,
+                    )
+                    .label("Cancel")
+                    .disabled(saving)
+                    .on_click(move |_, window, cx| cancel(&(), window, cx)),
+                )
+                .footer(
+                    ui::action_button::action_button(
+                        "group-organizer-submit",
+                        ui::action_button::Look::Primary,
+                    )
+                    .label(label)
+                    .disabled(!ready)
+                    .on_click(move |_, _, cx| {
+                        let _ = submit.update(cx, |organizer, cx| organizer.submit(cx));
+                    }),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The open confirmation, drawn over everything. The keyboard goes back

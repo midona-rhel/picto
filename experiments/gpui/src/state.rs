@@ -431,10 +431,20 @@ fn config_folder() -> Option<PathBuf> {
 /// not lost, and the defaults are used.
 pub fn load(folder: &Path) -> (State, Map<String, Value>) {
     let path = folder.join(FILE);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return (State::default(), Map::new());
+    // Only a missing file is no state; one that cannot be read as text is
+    // set aside below like any other unreadable file, rather than written
+    // over by the next save.
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (State::default(), Map::new());
+        }
+        Err(error) => {
+            eprintln!("picto: {} could not be read: {error}", path.display());
+            Vec::new()
+        }
     };
-    match State::parse(&text) {
+    match std::str::from_utf8(&bytes).ok().and_then(State::parse) {
         Some(read) => read,
         None => {
             eprintln!(
@@ -674,6 +684,14 @@ mod tests {
         assert!(!folder.path().join("state.json").exists());
         // No file at all is the defaults too.
         assert_eq!(load(folder.path()).0, State::default());
+        // A file that is not even text is set aside as well, not left to
+        // be written over.
+        std::fs::write(folder.path().join("state.json"), b"\x00\xff{{").unwrap();
+        assert_eq!(load(folder.path()).0, State::default());
+        assert_eq!(
+            std::fs::read(folder.path().join("state.json.corrupt")).unwrap(),
+            b"\x00\xff{{"
+        );
     }
 
     #[test]

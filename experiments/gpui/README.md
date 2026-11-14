@@ -364,8 +364,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   ↑/↓ to the ends of a one-line field); the text's ends (⌘↑/↓); paragraphs
   (⌥↑/↓, ⌃A/E, ⌃K with its kill buffer and ⌃Y); the Emacs keys
   (⌃F/B/N/P/D/H/T/O); Undo and Redo of the field's own edits on the
-  registry's keys, typing gathered into runs, passing on to the library's
-  Undo when the field has nothing to take back; double-click a word,
+  registry's keys, typing gathered into runs, never reaching the library's
+  Undo, as in production; double-click a word,
   triple-click the line, drags by word or line that scroll past the edge;
   a secondary click selects the word; pasted line breaks become spaces in a
   one-line field; Chromium's selection on wrapped rows, and the caret at the
@@ -624,8 +624,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   collection opens, so its frame has its final height before it is in view
   (production shows one page fitted in the member's frame with a page
   footer). The viewer toolbar then has no zoom and
-  shows "Edit group". A right-click on a member opens the viewer's menu for
-  it, with the search field.
+  shows "Edit group". A right-click on a member opens its menu
+  (`openMemberMenu`, with the search field and "Remove from Group" above
+  "Move to Trash", which moves it out into the Trash); between members, the
+  collection's (Sort by Name or Size, Ungroup...). A double-click opens a
+  member by itself: "Back to group" and Escape return, the counter and the
+  arrows step through the members (in Quick Look and the detail window
+  too). "This group is empty." for a collection with no members.
+- The collection editor (`viewer/group_editor.rs`, "Edit group" or the item
+  menu's "Edit Group"): the members as 180px grid tiles drawn by the grid's
+  own `grid::tile_art`, names without extensions, with the breadcrumb (where
+  it was opened from / the collection) in the toolbar. Click, ⌘-click,
+  ⇧-click and the rubber band select members; ⌘A selects them all; Escape
+  clears the selection, then closes; Delete removes them; Space opens Quick
+  Look on the one selected member, stepping through the members; a
+  double-click opens a member by itself. Dragging tiles reorders them, with
+  the drop line and the drag ghost. The members' menu acts on the
+  selection (Sort by Name or Size and the view rows included); the space
+  around the tiles has the collection's menu. Edits go through the library
+  with production's history and notifications; with one member or none
+  left the collection closes; a failure shows in the `.inlineError` band.
+- The group organizer (`GroupOrganizerModal`): "Group..." / "Merge into One
+  Group..." that needs a decision asks which collection to keep, or the new
+  group's name, with the collection notes and their byte count.
 - Enter or a double-click opens the media view on the one selected item;
   Enter, Space or Escape close it. Originals decode off the drawing thread;
   stale loads are fenced.
@@ -886,7 +907,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Restore, Delete Permanently (after `ConfirmModal`'s question, only on a
   marked disposable copy), Add to Folder's last folder, New Folder (with
   Selection) renamed in the sidebar, Remove from Folder, Sort by, Set as
-  Folder Cover, Group (when it needs no organizer), Ungroup (after its
+  Folder Cover, Group (with the group organizer when it needs one), Edit
+  Group, Ungroup (after its
   question), Rename (in the inspector's name field), Copy Tags and Paste
   Tags (an in-app tag clipboard, and the JSON on the clipboard), Set Rating
   for any selection, and the view options as production embeds them: the
@@ -1161,8 +1183,10 @@ element (`shell/rails.rs`).
   row's sticky position and the 60 ms row highlight transitions.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong (language, the grid's wheel action, image rendering
-  and the transparency grid, imports, subscriptions).
+  belong: language and image scaling ("Pixelated" needs nearest-neighbour
+  sampling in the vendored renderers). Zoom Level is saved and not applied,
+  as in production. The grid's
+  mouse wheel (scroll or zoom) and the transparency grid are applied.
   Update checks, cloud sync, pause, snapshots, restore points and retention
   writes, and the AI model runtime (download, optimize, delete, which models
   are downloaded) are drawn but not performed; every model shows as not
@@ -1284,11 +1308,11 @@ element (`shell/rails.rs`).
   MP3 with the visualizer, each with its controls. Not checked: timings,
   hover states, the volume and rate popups; what was checked headlessly is
   listed under Checks.
-- Collection reader: no collection editor ("Edit group" does nothing yet,
-  so the breadcrumb never shows), no double-click opening a member alone,
-  no menu between members (Sort Contents, Ungroup...), and a member's menu
-  lacks "Remove from Group" and acts on the collection for its Trash row
-  only by a TODO. In the detail window members have no menu.
+- Collections: in the detail window members and the space between them
+  have no menu. The editor's drag does not become a drag of files out of
+  the window, and ⌘C copies no files (GPUI's clipboard holds no files).
+  After grouping, the new group is not selected. The organizer's radio is
+  the app's round check, not the system's.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
   corners do not clip a zoomed image. No Copy (the file itself).
   Its counter follows the selection at once, where production's trails until
@@ -1375,8 +1399,7 @@ element (`shell/rails.rs`).
   dialog, the collection question, the task dialog and bar have been played
   off-screen and compared with the reference.
 - Viewer: the breadcrumb belongs to the collection editor, which does not
-  exist yet. No
-  transparency checkerboard (off by default in Picto), no per-image zoom
+  exist yet. No per-image zoom
   memory and no copy shortcut. Next stops at the last loaded item
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
@@ -1388,18 +1411,13 @@ element (`shell/rails.rs`).
   are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
-  itself. Export and Export As are bound to the export actions, which
-  nothing handles yet.
+  itself.
 - Application menu: rows whose feature is missing are present and disabled:
   Library Manager, New Library, Open Library and Recent Libraries (only the
-  open library is listed; opening real libraries awaits a decision), Import
-  Picto Pack, the three Export rows (until the export area handles
-  `keymap::ExportOriginals`, `ExportAs`, `ExportPictoPack`), Check for
-  Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
-  outside a text field copies nothing (production's ⌘C copies files), and
-  Undo and Redo do nothing while a text field has the keyboard (fields keep
-  no history). A row is enabled by whether its action has a handler where
-  the keyboard is, so the selection's rows are disabled while Settings or a
+  open library is listed; opening real libraries awaits a decision), Check
+  for Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
+  outside a text field copies nothing (production's ⌘C copies files). A
+  row is enabled by whether its action has a handler where the keyboard is, so the selection's rows are disabled while Settings or a
   detail window is in front, where production's stay enabled and do
   nothing; Set Rating's submenu title stays enabled (AppKit enables a row
   with a submenu), its rows are not. A key the window leaves alone reaches

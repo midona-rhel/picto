@@ -387,8 +387,8 @@ impl SettingsWindow {
         let model = &self.model;
         let draft = &model.read(cx).draft;
         let app = &draft.app;
-        // TODO: the viewer's image scaling and transparency grid follow
-        // these once they exist here.
+        // TODO: "Pixelated" image scaling: the viewer samples images linearly
+        // only (see `viewer::options`). The transparency grid is applied.
         vec![
             block()
                 .child(
@@ -521,7 +521,8 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // TODO: the multiple-file prompt.
+        // The multiple-file prompt follows these settings (`imports`), and
+        // the application's watched-folder worker reads Auto-Import.
         vec![
             block()
                 .child(
@@ -621,7 +622,7 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // TODO: subscriptions read these defaults once they can be created here.
+        // A new subscription starts from these defaults (`subscriptions`).
         vec![
             block()
                 .child(
