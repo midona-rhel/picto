@@ -2865,15 +2865,16 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 diff --color -ruN gpui-pre-windows-0.3.12/src/gpui_windows.rs b/gpui-pre-windows/src/gpui_windows.rs
 --- a/gpui-pre-windows/src/gpui_windows.rs
 +++ b/gpui-pre-windows/src/gpui_windows.rs
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,8 @@
  mod directx_renderer;
  mod dispatcher;
  mod display;
++mod drag_source;
 +mod drop_data;
  mod events;
  mod keyboard;
  mod platform;
-@@ -38,6 +39,8 @@
+@@ -38,6 +40,8 @@
  pub(crate) use window::*;
  pub(crate) use wrapper::*;
  

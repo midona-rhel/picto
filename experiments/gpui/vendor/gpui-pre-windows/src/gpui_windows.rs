@@ -10,6 +10,7 @@ mod directx_devices;
 mod directx_renderer;
 mod dispatcher;
 mod display;
+mod drag_source;
 mod drop_data;
 mod events;
 mod keyboard;
