@@ -155,8 +155,9 @@ is named, and proven by the test named.
    path, that this app will read and write the library directly and that
    Picto must not have it open at the same time. The answer is kept in
    this app's `state.json` (`libraryConsents`: canonical path and the
-   database file's identity, device and inode on macOS and Linux, creation
-   time on Windows), never in the library; a different library later at the
+   database file's identity: device, inode and creation time on macOS and
+   Linux, since a freed inode goes to the next file made; creation time on
+   Windows), never in the library; a different library later at the
    same path is asked about again. A library made with New Library here
    needs no question; a rename carries the consent along
    (`consent_is_asked_once_per_library_and_its_database`).
