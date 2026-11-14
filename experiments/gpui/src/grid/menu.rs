@@ -179,6 +179,9 @@ pub struct Description {
     /// Another import is running, so none can start.
     pub import_blocked: bool,
     pub handlers: Handlers,
+    /// `sortFields`: the fields "Sort by" offers, when not all of them (a
+    /// collection's contents sort by name or size only).
+    pub sort_fields: Option<Vec<ContentSortField>>,
 }
 
 /// What a row does when chosen.
@@ -238,6 +241,8 @@ pub enum Action {
     FlashStop,
     FlashMute,
     SetAsThumbnail,
+    /// A collection's members leave it (`detachMembers`).
+    RemoveFromGroup,
 }
 
 impl Action {
@@ -313,6 +318,7 @@ impl Action {
             FlashStop => "flash-stop",
             FlashMute => "flash-mute",
             SetAsThumbnail => "set-as-thumbnail",
+            RemoveFromGroup => "remove-from-group",
         }
     }
 }
@@ -514,18 +520,6 @@ impl Builder<'_> {
         }
     }
 
-    /// `contentSortSubmenu`.
-    fn content_sort(&self) -> Row {
-        submenu(
-            "Sort by",
-            Some("menu-sort"),
-            CONTENT_SORT
-                .iter()
-                .map(|(field, label)| item(Action::SortContents(*field), *label, true).into())
-                .collect(),
-        )
-    }
-
     /// `buildContextMenuViewEntries`: the layout and sort panel inline,
     /// then the display panel inside "Display".
     fn view_entries(&self, rows: &mut Vec<Row>) {
@@ -636,7 +630,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
 
     if !viewer {
         if h.sort_contents {
-            rows.push(b.content_sort());
+            rows.push(content_sort(d.sort_fields.as_deref()));
             rows.push(Row::Separator);
         }
         b.view_entries(&mut rows);
@@ -998,12 +992,99 @@ pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec
         rows.push(Row::Separator);
     }
     if h.sort_contents {
-        rows.push(b.content_sort());
+        rows.push(content_sort(None));
         rows.push(Row::Separator);
     }
     b.view_entries(&mut rows);
     rows.push(Row::Separator);
     rows
+}
+
+/// `contentSortSubmenu`: "Sort by" with each field, or only `fields`, in
+/// production's order.
+fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
+    submenu(
+        "Sort by",
+        Some("menu-sort"),
+        CONTENT_SORT
+            .iter()
+            .filter(|(field, _)| fields.is_none_or(|fields| fields.contains(field)))
+            .map(|(field, label)| item(Action::SortContents(*field), *label, true).into())
+            .collect(),
+    )
+}
+
+/// The fields a collection's contents sort by (`sortCollectionContents`).
+pub const COLLECTION_SORT: [ContentSortField; 2] = [ContentSortField::Name, ContentSortField::Size];
+
+/// `openMemberMenu`: a collection member's menu is the tile menu with
+/// "Remove from Group" (or "Remove N from Group") after a separator, just
+/// above the Trash row, or at the end when there is none.
+pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
+    let label = if count > 1 {
+        format!("Remove {count} from Group")
+    } else {
+        "Remove from Group".to_owned()
+    };
+    let remove: Row = item(Action::RemoveFromGroup, label, true)
+        .icon("menu-group-remove")
+        .into();
+    let trash = rows.iter().position(|row| {
+        matches!(row, Row::Item(item) if item.label.starts_with("Move") && item.label.ends_with("to Trash"))
+    });
+    match trash {
+        Some(at) => {
+            rows.splice(at..at, [Row::Separator, remove]);
+        }
+        None => rows.extend([Row::Separator, remove]),
+    }
+    rows
+}
+
+/// The handlers `openMemberMenu` gives a collection's members: one member
+/// or the editor's selection of them. Sorting the contents is the editor's
+/// (`selectionEnabled`); the edits that act on items act on the collection.
+pub fn member_handlers(single: bool, editor: bool) -> Handlers {
+    Handlers {
+        open_default: true,
+        reveal: true,
+        open_new_window: single,
+        copy_file: true,
+        copy_selection: true,
+        copy_selection_paths: true,
+        copy_selection_names: true,
+        copy_selection_links: true,
+        copy_path: true,
+        copy_name: true,
+        copy_link: true,
+        add_to_folder: true,
+        tag_select: true,
+        ai_tagger: true,
+        copy_tags: true,
+        paste_tags: true,
+        set_rating: true,
+        export: true,
+        export_originals: true,
+        search_by_image: true,
+        find_media_matches: true,
+        regenerate: true,
+        library_cover: single,
+        move_to_trash: true,
+        sort_contents: editor,
+        ..Default::default()
+    }
+}
+
+/// `openEmptyMenu`: the space between a collection's members, or around its
+/// tiles in the editor: sort its contents, then ungroup it.
+pub fn collection_menu() -> Vec<Row> {
+    vec![
+        content_sort(Some(&COLLECTION_SORT)),
+        Row::Separator,
+        item(Action::Ungroup, "Ungroup...", true)
+            .icon("menu-group-remove")
+            .into(),
+    ]
 }
 
 /// What the viewer shows that has its own commands: the Flash movie's

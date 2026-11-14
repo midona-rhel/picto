@@ -9,6 +9,7 @@ use crate::theme::Text as _;
 use crate::ui::menu::{self, Menu};
 use crate::ui::zoom::{self, Zoom};
 use crate::{theme, ui};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 /// The zoom menu's levels, in percent, with the action each reports.
@@ -165,31 +166,80 @@ impl ViewerToolbar {
 impl Render for ViewerToolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
+        // How a collection shows (`GroupSurface`'s display controls): its
+        // reader offers "Edit group"; its editor has the breadcrumb and
+        // nothing to step through; a member open by itself (`MediaView`
+        // over the members) steps through the members and goes back to
+        // the group.
+        let (mode, member_open) = self
+            .viewer
+            .upgrade()
+            .map(|viewer| viewer.read(cx).collection_view())
+            .unwrap_or_default();
+        let collection = super::collection_selected(self.session.read(cx));
+        let member_open = collection && member_open;
+        let shown = collection && !member_open;
+        let editing = shown && mode == super::group::Mode::Editor;
         let (index, total) = {
             let session = self.session.read(cx);
-            (
-                session.focus_ordinal().filter(|_| session.demo.is_none()),
-                session.total,
-            )
+            if member_open {
+                (
+                    Some(session.member),
+                    session
+                        .selected_details()
+                        .map_or(0, |details| details.media.len() as u64),
+                )
+            } else {
+                (
+                    session
+                        .focus_ordinal()
+                        .filter(|_| session.demo.is_none() && !editing),
+                    session.total,
+                )
+            }
         };
-        // A collection's reader has no zoom, and offers "Edit group".
-        let collection = super::collection_selected(self.session.read(cx));
         let (zoomable, percent) = {
             let surface = self.surface.read(cx);
-            (surface.zoomable() && !collection, surface.percent())
+            (surface.zoomable() && !shown, surface.percent())
         };
         let can_previous = index.is_some_and(|index| index > 0);
         let can_next = index.is_some_and(|index| (index as u64) + 1 < total);
-        // TODO: the collection editor sets this to the scope's name and the
-        // collection's; the prototype has no collection editor yet.
-        let breadcrumb: Option<(SharedString, SharedString)> = None;
+        // The editor names where the collection was opened from, or
+        // "Collections", and the collection, or "Untitled".
+        let breadcrumb: Option<(SharedString, SharedString)> = editing.then(|| {
+            let session = self.session.read(cx);
+            let parent = session
+                .nav
+                .get(session.displayed)
+                .map(|entry| entry.label.clone())
+                .filter(|label| !label.is_empty())
+                .unwrap_or_else(|| "Collections".to_owned());
+            let name = session
+                .selected_details()
+                .map(|details| details.root.name.clone())
+                .or_else(|| session.selected_item().map(|item| item.name.clone()))
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "Untitled".to_owned());
+            (parent.into(), name.into())
+        });
 
+        let back = if member_open {
+            "Back to group"
+        } else {
+            "Back to grid"
+        };
         let mut left = div().flex().items_center().gap(px(4.)).flex_none().child(
             ui::icon_button("viewer-back", "history-back")
-                .tip(ui::tip("Back to grid").shortcut("view.closeDetail", cx))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.session
-                        .update(cx, |session, cx| session.close_viewer(cx));
+                .tip(ui::tip(back).shortcut("view.closeDetail", cx))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if member_open {
+                        let _ = this
+                            .viewer
+                            .update(cx, |viewer, cx| viewer.close_member(window, cx));
+                    } else {
+                        this.session
+                            .update(cx, |session, cx| session.close_viewer(cx));
+                    }
                 })),
         );
         if let Some((parent, current)) = breadcrumb {
@@ -270,44 +320,47 @@ impl Render for ViewerToolbar {
                         })),
                 );
         }
-        if collection {
+        if shown && !editing {
             right = right.child(
                 ui::icon_button("viewer-edit-group", "menu-group-edit")
                     .tip(ui::tip("Edit group"))
-                    .on_click(|_, _, _| {
-                        // TODO: switch the reader to the collection editor
-                        // (`setMode('editor')`): the members as a grid to
-                        // select, reorder and remove, with the breadcrumb.
-                    }),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let _ = this
+                            .viewer
+                            .update(cx, |viewer, cx| viewer.edit_collection(window, cx));
+                    })),
             );
         }
-        right = right.child(
-            // `TitlebarControlGroup`
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .child(
-                    ui::icon_button("viewer-previous", "toolbar-chevron-left")
-                        .disabled(!can_previous)
-                        .tip(ui::tip("Previous").shortcut("view.prevImage", cx))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let _ = this
-                                .viewer
-                                .update(cx, |viewer, cx| viewer.step(-1, window, cx));
-                        })),
-                )
-                .child(
-                    ui::icon_button("viewer-next", "toolbar-chevron-right")
-                        .disabled(!can_next)
-                        .tip(ui::tip("Next").shortcut("view.nextImage", cx))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let _ = this
-                                .viewer
-                                .update(cx, |viewer, cx| viewer.step(1, window, cx));
-                        })),
-                ),
-        );
+        // The editor has nothing to step through.
+        right = right.when(!editing, |right| {
+            right.child(
+                // `TitlebarControlGroup`
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .child(
+                        ui::icon_button("viewer-previous", "toolbar-chevron-left")
+                            .disabled(!can_previous)
+                            .tip(ui::tip("Previous").shortcut("view.prevImage", cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let _ = this
+                                    .viewer
+                                    .update(cx, |viewer, cx| viewer.arrow(-1, window, cx));
+                            })),
+                    )
+                    .child(
+                        ui::icon_button("viewer-next", "toolbar-chevron-right")
+                            .disabled(!can_next)
+                            .tip(ui::tip("Next").shortcut("view.nextImage", cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                let _ = this
+                                    .viewer
+                                    .update(cx, |viewer, cx| viewer.arrow(1, window, cx));
+                            })),
+                    ),
+            )
+        });
 
         let menu = self.menu.layer(window, cx);
 

@@ -223,6 +223,16 @@ impl Shell {
                     this.open_viewer_menu(event, surface, window, cx)
                 },
             ),
+            // The collection editor's Space: Quick Look on the member.
+            cx.subscribe_in(
+                &viewer,
+                window,
+                |this, _, event: &crate::viewer::MemberQuickLook, window, cx| {
+                    this.quick_look.update(cx, |quick_look, cx| {
+                        quick_look.open_member(event.0, window, cx)
+                    });
+                },
+            ),
             cx.subscribe_in(
                 &quick_look,
                 window,
@@ -1034,14 +1044,6 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
-            // A text field with nothing of its own to undo or redo passes
-            // the key on to the library's history.
-            .on_action(cx.listener(|this, _: &crate::ui::text_input::Undo, _, cx| {
-                this.session.update(cx, |session, cx| session.undo(cx))
-            }))
-            .on_action(cx.listener(|this, _: &crate::ui::text_input::Redo, _, cx| {
-                this.session.update(cx, |session, cx| session.redo(cx))
-            }))
             .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
                 this.session.update(cx, |session, cx| {
                     session.show_demo("vector.svg", "image/svg+xml", cx)
@@ -1076,6 +1078,7 @@ impl Render for Shell {
         root = self.file_drop(root, cx);
 
         root = root.children(self.menu.layer(window, cx));
+        root = root.children(self.group_organizer(window, cx));
         root = root.children(self.confirmation(window, cx));
         // The Inbox review pill, over the media view and Quick Look, and
         // over the question a reject may ask, which it waits on

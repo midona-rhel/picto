@@ -505,6 +505,10 @@ pub const BADGE_TEXT: u32 = 0xffffffcc;
 // The viewer's overlays are fixed, not themed (`MediaView.module.css`).
 /// `.boundaryLeft` / `.boundaryRight`: `rgba(0, 0, 0, 0.6)`.
 pub const VIEWER_NOTICE_BACKGROUND: u32 = 0x00000099;
+/// `.transparencyGrid` (`ImageCrossfadeFrame.module.css`): white, with
+/// `#d9d9d9` squares 8 image pixels wide.
+pub const TRANSPARENCY_GRID_LIGHT: u32 = 0xffffff;
+pub const TRANSPARENCY_GRID_DARK: u32 = 0xd9d9d9;
 /// `.navigator`: `rgba(0, 0, 0, 0.4)`, bordered `rgba(255, 255, 255, 0.15)`.
 pub const NAVIGATOR_BACKGROUND: u32 = 0x00000066;
 pub const NAVIGATOR_BORDER: u32 = 0xffffff26;
@@ -574,6 +578,13 @@ pub const MEDIA_HUD: u32 = 0x000000b3;
 /// rgba(51, 154, 240, 0.12), and its 1px edge at 0.5.
 pub const MARQUEE_FILL: u32 = 0x339af01f;
 pub const MARQUEE_BORDER: u32 = 0x339af080;
+/// `CanvasGrid.tsx`'s reorder drop indicator: a 2px line and a triangle
+/// at its top, #228be6.
+pub const REORDER_INDICATOR: u32 = 0x228be6;
+/// `.inlineError` in `GroupSurface.module.css`: rgba(255, 71, 87, 0.08)
+/// behind #ff9aa4.
+pub const GROUP_ERROR_BACKGROUND: u32 = 0xff475714;
+pub const GROUP_ERROR_TEXT: u32 = 0xff9aa4;
 /// `HoverPreviewPortal.tsx`: the backdrop, rgba(0, 0, 0, 0.6), and the
 /// image's shadow colour, rgba(0, 0, 0, 0.7).
 pub const PREVIEW_BACKDROP: u32 = 0x00000099;

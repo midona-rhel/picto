@@ -245,9 +245,64 @@ impl Glide {
     }
 }
 
+/// `.transparencyGrid`'s squares: 8 image pixels wide, the one at the
+/// image's top left white and its neighbours grey. Given the image's
+/// on-screen rectangle (left, top, width, height), the visible part of the
+/// window and the side of one square on screen, the grey squares that show,
+/// each cut to the image, as (left, top, width, height).
+pub fn checker_squares(
+    image: (f32, f32, f32, f32),
+    visible: (f32, f32, f32, f32),
+    side: f32,
+) -> Vec<(f32, f32, f32, f32)> {
+    let left = image.0.max(visible.0);
+    let top = image.1.max(visible.1);
+    let right = (image.0 + image.2).min(visible.0 + visible.2);
+    let bottom = (image.1 + image.3).min(visible.1 + visible.3);
+    if side <= 0. || right <= left || bottom <= top {
+        return Vec::new();
+    }
+    let first_column = ((left - image.0) / side).floor() as i64;
+    let last_column = ((right - image.0) / side).ceil() as i64;
+    let first_row = ((top - image.1) / side).floor() as i64;
+    let last_row = ((bottom - image.1) / side).ceil() as i64;
+    let mut squares = Vec::new();
+    for row in first_row..last_row {
+        for column in first_column..last_column {
+            if (row + column) % 2 == 0 {
+                continue;
+            }
+            let x = (image.0 + column as f32 * side).max(left);
+            let y = (image.1 + row as f32 * side).max(top);
+            let x_end = (image.0 + (column + 1) as f32 * side).min(right);
+            let y_end = (image.1 + (row + 1) as f32 * side).min(bottom);
+            if x_end > x && y_end > y {
+                squares.push((x, y, x_end - x, y_end - y));
+            }
+        }
+    }
+    squares
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checker_squares_alternate_from_a_white_corner_and_stay_visible() {
+        // A 32-pixel image at 100%: 4×4 squares of 8, half of them grey.
+        let squares = checker_squares((0., 0., 32., 32.), (0., 0., 100., 100.), 8.);
+        assert_eq!(squares.len(), 8);
+        assert_eq!(squares[0], (8., 0., 8., 8.));
+        assert!(squares.contains(&(0., 8., 8., 8.)));
+        assert!(!squares.contains(&(0., 0., 8., 8.)));
+        // Only the visible part is drawn, cut at its edge.
+        let squares = checker_squares((-100., 0., 132., 16.), (0., 0., 10., 100.), 8.);
+        assert!(squares.iter().all(|s| s.0 >= 0. && s.0 + s.2 <= 10.));
+        assert_eq!(squares.len(), 2);
+        // Nothing when the image is out of sight.
+        assert!(checker_squares((200., 0., 8., 8.), (0., 0., 100., 100.), 8.).is_empty());
+    }
 
     const IMAGE: Size = (2000., 1000.);
     const PANE: Size = (800., 600.);

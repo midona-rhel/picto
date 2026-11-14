@@ -79,6 +79,45 @@ pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// `scheduleThumbnailAfterMiss`: asks the application to render a missing
+/// thumbnail (`media.render_thumbnail_now`), as the media protocol does on a
+/// miss, and draws one it cannot make (Flash, PDF and the other paged
+/// documents) as the Electron main process does (`renderExternalThumbnail`).
+/// Resolves to whether there is a thumbnail now. The library's grid and a
+/// collection's editor both ask through this.
+pub fn render_missing(
+    session: &gpui::Entity<crate::session::Session>,
+    hash: String,
+    mime: String,
+    jpeg: PathBuf,
+    cx: &mut App,
+) -> Task<bool> {
+    let answer = session.read(cx).dispatch(
+        "media.render_thumbnail_now",
+        serde_json::json!({ "file_hash": hash }),
+    );
+    let (original, disposable) = {
+        let session = session.read(cx);
+        (session.original(&hash, &mime), session.disposable())
+    };
+    cx.spawn(async move |_| {
+        let _ = answer.await;
+        let png = png_for(&jpeg);
+        // Only into a marked disposable copy, as every write here.
+        if present(&jpeg).is_none() && disposable && crate::grid::rendered::draws(&mime) {
+            // A thread of its own: a movie plays for seconds first.
+            let (sent, drawn) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = sent.send(crate::grid::rendered::render(&mime, &original, &png));
+            });
+            if let Ok(Err(error)) = drawn.await {
+                eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
+            }
+        }
+        present(&jpeg).is_some()
+    })
+}
+
 /// `media.regenerate_thumbnails` as the Electron main process performs it
 /// (`regenerateThumbnail`), one file after another: the thumbnail is kept
 /// aside, made again by the application (or drawn here for Flash and paged
