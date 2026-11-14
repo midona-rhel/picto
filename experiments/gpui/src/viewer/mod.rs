@@ -10,6 +10,7 @@ pub mod document;
 pub mod flash;
 mod flash_controls;
 pub mod group;
+pub mod group_editor;
 pub mod quick_look;
 pub mod review;
 mod review_art;
@@ -47,13 +48,31 @@ actions!(
 
 /// The viewer was right-clicked at this window position; `flash` says a
 /// Flash movie is showing, `member` that a collection's member was.
+#[derive(Default)]
 pub struct MenuRequested {
     pub position: Point<Pixels>,
     pub flash: bool,
     pub member: bool,
+    /// The members a member's menu acts on, by their place in the
+    /// collection: the editor's selection, or the one right-clicked.
+    pub members: Vec<usize>,
+    /// The collection's editor opened it (`selectionEnabled`): its contents
+    /// can be sorted and the view rows show.
+    pub editor: bool,
+    /// The space between a collection's members: the collection's own menu
+    /// (`openEmptyMenu`).
+    pub collection: bool,
+    /// A member open by itself: `MediaView`'s menu for a file with no item
+    /// to edit (`ratingItemId={null}`).
+    pub alone: bool,
 }
 
 impl EventEmitter<MenuRequested> for Viewer {}
+
+/// Quick Look on a member of the collection the editor shows.
+pub struct MemberQuickLook(pub usize);
+
+impl EventEmitter<MemberQuickLook> for Viewer {}
 
 /// Which end of the results a step ran into.
 #[derive(Clone, Copy, PartialEq)]
@@ -226,10 +245,11 @@ pub fn options(cx: &App, navigator: bool, follows_resize: bool) -> surface::Opti
         scroll_pans: settings.viewer_trackpad_gestures,
         follows_resize,
         member: false,
+        transparency_grid: settings.show_transparency_grid,
     }
     // TODO: `imageRendering: pixelated` draws images with nearest-neighbour
-    // sampling and `showTransparencyGrid` draws the checkerboard behind
-    // them; GPUI's image element has neither yet.
+    // sampling; GPUI's image element samples linearly only, and nearest
+    // sampling needs a sampler choice in the vendored renderers.
 }
 
 /// `useRecordMediaView`: opening an item records it for Recently Viewed.
@@ -253,6 +273,17 @@ pub struct Viewer {
     surface: Entity<MediaSurface>,
     /// A collection's members, while one is open.
     group: Entity<group::GroupReader>,
+    /// The same members as a grid to arrange, in the editor.
+    editor: Entity<group_editor::GroupEditor>,
+    /// How the open collection shows, and the collection that is for:
+    /// another one opens in the reader.
+    mode: group::Mode,
+    mode_root: Option<RootId>,
+    /// A member opened by itself from the collection (`viewerIndex`): the
+    /// media view shows it, "Back to group" returning to the collection.
+    member_open: bool,
+    /// Why the last edit of the collection failed (`.inlineError`).
+    error: Option<SharedString>,
     toolbar: Entity<ViewerToolbar>,
     focus: FocusHandle,
     /// Whether the viewer was open at the last change.
@@ -278,10 +309,65 @@ impl Viewer {
         let viewer = cx.entity().downgrade();
         let toolbar = cx.new(|cx| ViewerToolbar::new(session.clone(), surface.clone(), viewer, cx));
         let group = cx.new(|_| group::GroupReader::new(session.clone()));
+        let editor = cx.new(|cx| group_editor::GroupEditor::new(session.clone(), cx));
         let subscriptions = vec![
             cx.subscribe(&group, |this, _, event: &group::MemberMenu, cx| {
                 this.member_menu(event, cx)
             }),
+            cx.subscribe_in(
+                &group,
+                window,
+                |this, _, event: &group::MemberOpened, window, cx| {
+                    this.open_member(event.0, window, cx)
+                },
+            ),
+            cx.subscribe(&group, |_, _, event: &group::CollectionMenu, cx| {
+                cx.emit(MenuRequested {
+                    position: event.0,
+                    collection: true,
+                    ..Default::default()
+                });
+            }),
+            cx.subscribe_in(
+                &editor,
+                window,
+                |this, _, event: &group::MemberOpened, window, cx| {
+                    this.open_member(event.0, window, cx)
+                },
+            ),
+            cx.subscribe(&editor, |_, _, event: &group::CollectionMenu, cx| {
+                cx.emit(MenuRequested {
+                    position: event.0,
+                    collection: true,
+                    editor: true,
+                    ..Default::default()
+                });
+            }),
+            cx.subscribe(&editor, |this, _, event: &group_editor::MemberMenu, cx| {
+                // The member the single-file rows act on is the first.
+                if let Some(first) = event.members.first() {
+                    this.show_member(*first, cx);
+                }
+                cx.emit(MenuRequested {
+                    position: event.position,
+                    member: true,
+                    members: event.members.clone(),
+                    editor: true,
+                    ..Default::default()
+                });
+            }),
+            cx.subscribe(
+                &editor,
+                |_, _, event: &group_editor::QuickLookRequested, cx| {
+                    cx.emit(MemberQuickLook(event.0));
+                },
+            ),
+            cx.subscribe(
+                &editor,
+                |this, _, event: &group_editor::RemoveRequested, cx| {
+                    this.detach_members(event.0.clone(), false, cx);
+                },
+            ),
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 match change {
                     Change::Selection => {
@@ -304,6 +390,14 @@ impl Viewer {
                             this.surface.update(cx, |surface, _| surface.refit());
                         }
                         this.leaving = !open && this.open && fading_out;
+                        if !open {
+                            // Closed, the next collection opens in the
+                            // reader.
+                            this.mode = group::Mode::Reader;
+                            this.mode_root = None;
+                            this.member_open = false;
+                            this.error = None;
+                        }
                         this.open = open;
                         if !this.leaving {
                             this.present(cx);
@@ -339,6 +433,11 @@ impl Viewer {
             session,
             surface,
             group,
+            editor,
+            mode: group::Mode::Reader,
+            mode_root: None,
+            member_open: false,
+            error: None,
             toolbar,
             focus: cx.focus_handle(),
             open: false,
@@ -362,17 +461,183 @@ impl Viewer {
 
     /// A collection member was right-clicked: the viewer's menu for it.
     fn member_menu(&mut self, event: &group::MemberMenu, cx: &mut Context<Self>) {
+        self.show_member(event.member, cx);
+        cx.emit(MenuRequested {
+            position: event.position,
+            member: true,
+            members: vec![event.member],
+            ..Default::default()
+        });
+    }
+
+    /// Points the session at the collection's member at `member`, the one
+    /// the single-file rows and a member opened by itself show.
+    fn show_member(&mut self, member: usize, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
-            let delta = event.member as isize - session.member as isize;
+            let delta = member as isize - session.member as isize;
             if delta != 0 {
                 session.step_member(delta, cx);
             }
         });
-        cx.emit(MenuRequested {
-            position: event.position,
-            flash: false,
-            member: true,
+    }
+
+    /// The toolbar shows the collection's controls: it draws again once
+    /// whatever changed them, which may be the toolbar itself, is done.
+    fn refresh_toolbar(&self, cx: &mut Context<Self>) {
+        let toolbar = self.toolbar.downgrade();
+        cx.defer(move |cx| {
+            let _ = toolbar.update(cx, |_, cx| cx.notify());
         });
+    }
+
+    /// How the open collection shows, and whether a member of it is open
+    /// by itself.
+    pub fn collection_view(&self) -> (group::Mode, bool) {
+        (self.mode, self.member_open)
+    }
+
+    /// "Edit group" and the item menu's "Edit Group": the collection opens,
+    /// or switches, to the editor (`setMode('editor')`).
+    pub fn edit_collection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self
+            .session
+            .read(cx)
+            .selected_item()
+            .map(|item| item.root_id);
+        self.mode = group::Mode::Editor;
+        self.mode_root = root;
+        self.member_open = false;
+        self.present(cx);
+        if self.session.read(cx).viewer {
+            self.take_keyboard(window, cx);
+        }
+        self.refresh_toolbar(cx);
+        cx.notify();
+    }
+
+    /// A member opens by itself (`setViewerIndex`).
+    fn open_member(&mut self, member: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_member(member, cx);
+        self.member_open = true;
+        self.boundary.clear();
+        self.surface.update(cx, |surface, _| surface.refit());
+        self.present(cx);
+        self.take_keyboard(window, cx);
+        self.refresh_toolbar(cx);
+        cx.notify();
+    }
+
+    /// "Back to group": the member closes and the collection shows again,
+    /// as it was.
+    pub fn close_member(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.member_open {
+            return;
+        }
+        self.member_open = false;
+        self.boundary.clear();
+        self.present(cx);
+        self.take_keyboard(window, cx);
+        self.refresh_toolbar(cx);
+        cx.notify();
+    }
+
+    /// Steps through the members while one is open by itself; a step past
+    /// either end shows the notice instead.
+    pub fn step_member(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let (member, count) = {
+            let session = self.session.read(cx);
+            (
+                session.member,
+                session
+                    .selected_details()
+                    .map_or(0, |details| details.media.len()),
+            )
+        };
+        let target = member as isize + delta;
+        if target < 0 || target as usize >= count {
+            let end = if target < 0 { End::First } else { End::Last };
+            self.boundary.show(end, cx, |this| &mut this.boundary);
+            return;
+        }
+        self.boundary.clear();
+        self.show_member(target as usize, cx);
+        self.refresh_toolbar(cx);
+    }
+
+    /// `detachMembers`: the members at these places leave the collection,
+    /// into the Trash when `trash`. With one member or none left the
+    /// collection is gone, and the media view closes; otherwise the
+    /// selection clears. A failure shows over the members.
+    pub fn detach_members(&mut self, members: Vec<usize>, trash: bool, cx: &mut Context<Self>) {
+        let Some(details) = shown_collection(self.session.read(cx)).cloned() else {
+            return;
+        };
+        let ids: Vec<_> = members
+            .iter()
+            .filter_map(|index| details.media.get(*index))
+            .map(|media| media.media_id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let closes = details.media.len() - ids.len() <= 1;
+        let answer = group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = answer.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Err(error) => this.error = Some(error.to_string().into()),
+                    Ok(()) if closes => {
+                        this.session
+                            .update(cx, |session, cx| session.close_viewer(cx));
+                    }
+                    Ok(()) => {
+                        this.error = None;
+                        this.member_open = false;
+                        this.editor.update(cx, |editor, cx| {
+                            editor.deselect(cx);
+                        });
+                        this.refresh_toolbar(cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Sorts the open collection's contents by `field` (`saveOrder`).
+    pub fn sort_collection(
+        &mut self,
+        field: picto_library::ContentSortField,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(details) = shown_collection(self.session.read(cx)).cloned() else {
+            return;
+        };
+        let answer = group::sort(&self.session, &details, field, cx);
+        self.report(answer, cx);
+    }
+
+    /// A failed edit of the collection shows over its members; one that
+    /// went through takes the last failure away.
+    fn report(
+        &mut self,
+        answer: futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let Ok(result) = answer.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.error = result.err().map(|error| error.to_string().into());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// The viewer has the keyboard while it is open, so its shortcuts apply,
@@ -384,6 +649,20 @@ impl Viewer {
             window.focus(&self.focus, cx);
         } else if !open && let Some(focus) = self.return_focus.take() {
             window.focus(&focus, cx);
+        }
+        // The editor's grid has the keyboard while it shows, so its keys
+        // (select all, remove, Quick Look) apply; the viewer's own keys
+        // still reach the viewer around it.
+        if open {
+            let editing = self.mode == group::Mode::Editor
+                && !self.member_open
+                && collection_selected(self.session.read(cx));
+            let editor = self.editor.read(cx).focus_handle().clone();
+            if editing && !editor.is_focused(window) {
+                window.focus(&editor, cx);
+            } else if !editing && editor.contains_focused(window, cx) {
+                window.focus(&self.focus, cx);
+            }
         }
     }
 
@@ -418,10 +697,60 @@ impl Viewer {
                 .cloned()
         };
         if let Some(details) = collection {
+            // Another collection opens in the reader, with nothing open by
+            // itself.
+            if self.mode_root != Some(details.root.root_id) {
+                self.mode = group::Mode::Reader;
+                self.mode_root = Some(details.root.root_id);
+                self.member_open = false;
+                self.error = None;
+            }
+            if self.member_open {
+                // A member by itself: the surface shows it, the collection
+                // keeps its place underneath.
+                let media = Media::of(
+                    self.session.read(cx),
+                    &details,
+                    self.session.read(cx).member,
+                );
+                self.surface.update(cx, |surface, cx| match media {
+                    Some(media) => media.open(surface, cx),
+                    None => surface.rest(),
+                });
+                return;
+            }
             self.surface.update(cx, |surface, _| surface.rest());
-            self.group.update(cx, |group, cx| group.show(&details, cx));
+            match self.mode {
+                group::Mode::Reader => {
+                    self.editor.update(cx, |editor, cx| {
+                        if editor.collection().is_some() {
+                            editor.clear(cx)
+                        }
+                    });
+                    self.group.update(cx, |group, cx| group.show(&details, cx));
+                }
+                group::Mode::Editor => {
+                    self.group.update(cx, |group, cx| {
+                        if group.root().is_some() {
+                            group.clear(cx)
+                        }
+                    });
+                    self.editor
+                        .update(cx, |editor, cx| editor.show(&details, cx));
+                }
+            }
             return;
         }
+        // A collection whose details are on their way keeps its mode.
+        if !collection_selected(self.session.read(cx)) {
+            self.mode_root = None;
+            self.member_open = false;
+        }
+        self.editor.update(cx, |editor, cx| {
+            if editor.collection().is_some() {
+                editor.clear(cx)
+            }
+        });
         self.group.update(cx, |group, cx| {
             if group.root().is_some() {
                 group.clear(cx)
@@ -431,6 +760,38 @@ impl Viewer {
             Some(media) => media.open(surface, cx),
             None => surface.rest(),
         });
+    }
+
+    /// Escape, Enter and Space: a member open by itself goes back to its
+    /// collection; the editor clears its selection first; anything else
+    /// closes the media view.
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.member_open {
+            self.close_member(window, cx);
+            return;
+        }
+        if self.editing(cx) && self.editor.update(cx, |editor, cx| editor.deselect(cx)) {
+            return;
+        }
+        self.session
+            .update(cx, |session, cx| session.close_viewer(cx));
+    }
+
+    /// Whether the editor shows.
+    fn editing(&self, cx: &App) -> bool {
+        self.mode == group::Mode::Editor
+            && !self.member_open
+            && collection_selected(self.session.read(cx))
+    }
+
+    /// The arrow keys: through the members of one open by itself, through
+    /// the results otherwise; the editor's grid does not move with them.
+    fn arrow(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.member_open {
+            self.step_member(delta, cx);
+        } else if !self.editing(cx) {
+            self.step(delta, window, cx);
+        }
     }
 
     /// `navigate` in `MediaView.tsx`: a step past either end of the results
@@ -500,7 +861,7 @@ impl Render for Viewer {
         let mut context = video::key_context("Viewer", media);
         // A document's pages take the scrolling keys; a collection's reader
         // is not a document.
-        if !collection && self.surface.read(cx).shows_pages() {
+        if (!collection || self.member_open) && self.surface.read(cx).shows_pages() {
             context.add(document::PAGES_CONTEXT);
         }
         let pane = div()
@@ -511,12 +872,9 @@ impl Render for Viewer {
             .size_full()
             .overflow_hidden()
             .bg(theme::theme(cx).background())
-            .on_action(cx.listener(|this, _: &Close, _, cx| {
-                this.session
-                    .update(cx, |session, cx| session.close_viewer(cx));
-            }))
-            .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
-            .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.arrow(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &NextItem, window, cx| this.arrow(1, window, cx)))
             .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
                 this.surface.update(cx, |surface, cx| surface.fit(cx));
             }))
@@ -536,25 +894,54 @@ impl Render for Viewer {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    // A collection's members have their own menu; the space
-                    // between them has the collection's, which the reader
-                    // does not offer yet.
+                    let flash = this.surface.read(cx).flash();
+                    if this.member_open {
+                        // `MediaView`'s menu for the member by itself.
+                        let member = this.session.read(cx).member;
+                        cx.emit(MenuRequested {
+                            position: event.position,
+                            flash,
+                            member: true,
+                            members: vec![member],
+                            alone: true,
+                            ..Default::default()
+                        });
+                        return;
+                    }
+                    // A collection's members, and the space between them,
+                    // have their own menus.
                     if collection_selected(this.session.read(cx)) {
                         return;
                     }
-                    let flash = this.surface.read(cx).flash();
                     cx.emit(MenuRequested {
                         position: event.position,
                         flash,
-                        member: false,
+                        ..Default::default()
                     });
                 }),
             )
-            .child(if collection {
-                self.group.clone().into_any_element()
-            } else {
-                self.surface.clone().into_any_element()
-            });
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .when_some(
+                        self.error
+                            .clone()
+                            .filter(|_| collection && !self.member_open),
+                        |column, error| column.child(group::inline_error(error, cx)),
+                    )
+                    .child(div().relative().flex_1().min_h_0().child(
+                        if collection && !self.member_open {
+                            match self.mode {
+                                group::Mode::Reader => self.group.clone().into_any_element(),
+                                group::Mode::Editor => self.editor.clone().into_any_element(),
+                            }
+                        } else {
+                            self.surface.clone().into_any_element()
+                        },
+                    )),
+            );
         let surface = self.surface.downgrade();
         video::on_actions(pane, move |cx| {
             surface

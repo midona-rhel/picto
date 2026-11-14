@@ -243,8 +243,12 @@ impl Exports {
                 "Smart-folder exports contain only the current matching items. The smart-folder rule and container are not included.",
             ));
         }
+        // The tile is 48 wide and 53 tall in production: its icon is an
+        // inline SVG, which sits on a text line and leaves the line's
+        // descender below it.
         let glyph = div()
             .flex_none()
+            .h(px(53.))
             .p(px(10.))
             .rounded(px(12.))
             .bg(rgba(theme::PACK_GLYPH_TILE))

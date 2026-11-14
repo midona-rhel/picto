@@ -6,7 +6,7 @@
 //   move X Y | down X Y [clicks] | up X Y [clicks] | drag X Y | rdown X Y | rup X Y
 //   scroll X Y DISTANCE | key <keystroke> | type <text> | wait <ms>
 //   shot <name> | size W H | js <expression> | reload | window <n> | pace <ms>
-//   dragfiles X Y PATH... | drop X Y PATH... | dragexit
+//   dragfiles X Y PATH... | drop X Y PATH... | dragexit | invoke COMMAND JSON
 //
 // `size` sets the viewport in points (pictures are twice that), `js` prints
 // an expression's value, and `reload` loads the window again so that a
@@ -207,6 +207,15 @@ for (const raw of readFileSync(script, 'utf8').split('\n')) {
   } else if (kind === 'js') {
     const result = await send('Runtime.evaluate', { expression: rest.join(' '), returnByValue: true, awaitPromise: true });
     console.log(JSON.stringify(result.result?.value ?? result.exceptionDetails?.text ?? null));
+  } else if (kind === 'invoke') {
+    // `invoke <command> <json>`: an application command, as the renderer
+    // sends it; the GPUI tool takes the same line.
+    const expression = `window.picto.api.invoke(${JSON.stringify(rest[0])}, ${rest.slice(1).join(' ') || '{}'})`
+      + `.then((r) => r && r.__pictoCoreJson ? JSON.parse(r.__pictoCoreJson) : r)`
+      + `.then((r) => JSON.stringify(r), (e) => 'error: ' + e)`;
+    const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    console.log(`${rest[0]} -> ${result.result?.value ?? result.exceptionDetails?.text ?? null}`);
+    await sleep(pace);
   } else if (kind === 'move') await mouse('mouseMoved', numbers[0], numbers[1]);
   // A move with the left button held, as a drag delivers it.
   else if (kind === 'drag') await mouse('mouseMoved', numbers[0], numbers[1], 'left', 0, { buttons: 1 });

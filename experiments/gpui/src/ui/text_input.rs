@@ -693,14 +693,16 @@ impl TextInput {
     }
 
     /// Takes back the last step of editing in the field. With nothing left
-    /// to take back, the key goes on to the app's own Undo.
+    /// to take back it does nothing: as in production
+    /// (`runNativeEditHistory`), Undo in a text field is the field's alone
+    /// and never reaches the library's history, so an extra ⌘Z while typing
+    /// in a dialog cannot undo a library edit behind it.
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range.is_some() {
             return;
         }
-        match self.history.undo(self.snapshot()) {
-            Some(state) => self.restore(state, true, cx),
-            None => cx.propagate(),
+        if let Some(state) = self.history.undo(self.snapshot()) {
+            self.restore(state, true, cx);
         }
     }
 
@@ -708,9 +710,8 @@ impl TextInput {
         if self.marked_range.is_some() {
             return;
         }
-        match self.history.redo(self.snapshot()) {
-            Some(state) => self.restore(state, false, cx),
-            None => cx.propagate(),
+        if let Some(state) = self.history.redo(self.snapshot()) {
+            self.restore(state, false, cx);
         }
     }
 
@@ -2013,6 +2014,14 @@ impl TextInput {
             this.finish_rename(true, cx)
         })
         .detach();
+        input
+    }
+    /// A grid subfolder tile's in-place rename (`FolderRenameInput`, a
+    /// `GlassInput`): the UI font at 13px, otherwise as
+    /// [`TextInput::sidebar_rename`].
+    pub fn glass_rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::sidebar_rename(value, window, cx);
+        input.kind = Kind::Form;
         input
     }
     /// Ends an in-place rename once: committed, or cancelled.

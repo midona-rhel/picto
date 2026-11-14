@@ -93,7 +93,10 @@ impl Sidebar {
                 _ => {}
             },
             Target::Node(node) => self.choose_for_node(node, action, value, window, cx),
-            Target::Bulk(nodes) => self.choose_for_selection(nodes, action, value, window, cx),
+            Target::Bulk(nodes) | Target::Tiles(nodes) => {
+                self.choose_for_selection(nodes, action, value, window, cx)
+            }
+            Target::Tile(node) => self.choose_for_tile(node, action, value, window, cx),
         }
     }
 
@@ -178,6 +181,72 @@ impl Sidebar {
             "move-to" => self.pick_folder_parent(nodes.to_vec(), window, cx),
             "auto-tags" => self.edit_auto_tags(folders, window, cx),
             _ => {}
+        }
+    }
+
+    /// A subfolder tile's row: opening it, and the renames, happen in the
+    /// grid; the rest is what the folder's own row does.
+    fn choose_for_tile(
+        &mut self,
+        node: &str,
+        action: &str,
+        value: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let grid = self.tile_grid.clone();
+        let rename_later = move |made: String, cx: &mut App| {
+            if let Some(grid) = grid.as_ref().and_then(WeakEntity::upgrade) {
+                grid.update(cx, |grid, cx| grid.rename_subfolder_when_shown(made, cx));
+            }
+        };
+        match action {
+            "open" => {
+                let index = {
+                    let nav = &self.session.read(cx).nav;
+                    nav.iter().position(|entry| entry.id() == node)
+                };
+                if let Some(index) = index {
+                    self.session
+                        .update(cx, |session, cx| session.navigate(index, cx));
+                }
+            }
+            "rename" => {
+                let label = self.label_of(node, cx).unwrap_or_default();
+                if let Some(grid) = self.tile_grid.as_ref().and_then(WeakEntity::upgrade) {
+                    let node = node.to_owned();
+                    grid.update(cx, |grid, cx| {
+                        grid.rename_subfolder(node, label, window, cx)
+                    });
+                }
+            }
+            // `foldersController.create('New Folder', folderId)`, then the
+            // new tile renamed.
+            "new-subfolder" => {
+                let parent = folder_id(node);
+                self.edit_reporting(
+                    crate::session::Report::folder_depth(),
+                    move |library| library.create_folder("New Folder", parent),
+                    Reread::NAVIGATION,
+                    move |_, (id, _), _, cx| rename_later(format!("folder:{}", id.0), cx),
+                    window,
+                    cx,
+                );
+            }
+            "duplicate" => {
+                let Some(id) = folder_id(node) else {
+                    return;
+                };
+                self.edit_reporting(
+                    crate::session::Report::folder_depth(),
+                    move |library| library.duplicate_folder(id),
+                    Reread::NAVIGATION,
+                    move |_, (copy, _), _, cx| rename_later(format!("folder:{}", copy.0), cx),
+                    window,
+                    cx,
+                );
+            }
+            _ => self.choose_for_node(node, action, value, window, cx),
         }
     }
 
