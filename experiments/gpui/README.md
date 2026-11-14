@@ -724,7 +724,8 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Video and audio | the media player, its controls, speeds, loop, volume, visualizer; AVFoundation and `ffmpeg` paths on macOS | pictures (`.mov`, `.webm`, MP3); seen playing in a real window on macOS |
 | Flash | Ruffle playback, controls, Set as Thumbnail | tests (GPU tests: frames, mouse, Stop) |
 | Tags screen | rail, groups, sections, paging, search, every edit | pictures |
-| Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables, every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
+| Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables (a problem's message and detail in its tooltip), every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
+| Subscription run pop-ups | "Subscription paused" and "Gallery download paused", "Query completed", "Subscription completed", and a settled gallery download's "Gallery downloaded", "Gallery already exists" or "Gallery import failed" with its transient subscription removed, for the whole app whichever view shows | tests (production's settle test cases as recorded sequences of `subscriptions.list`, `subscriptions.runs.get` and `subscriptions.runs.list` answers); pictures of the pop-ups; never seen after a real run (no network) |
 | Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
 | Imports and exports | drops, choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
 | Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
@@ -827,10 +828,10 @@ re-checked by reading the code; the rest were checked against it.
   downloaded and download, optimise and delete do nothing.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
-- Site logins and the Accounts window; a login problem's Fix login; the
-  Problems tab's other recovery actions (Retry now, Review source) and its
-  detail tooltip; a subscription run's own pop-ups ("Subscription paused",
-  "Query completed", "Subscription completed").
+- Site logins and the Accounts window: the Accounts button and a source's
+  login chip do nothing, and a login problem's Fix login shows disabled.
+  (Production derives no Retry now or Review source action for a problem,
+  so neither button shows in either app.)
 - Search by Image (disabled in every menu).
 - Single instance, opening files and `.picto-pack` packs from the file
   manager, and drops from a browser (GPUI delivers only file paths, so

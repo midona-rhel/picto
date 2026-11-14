@@ -1,11 +1,24 @@
 //! The application's events and what follows them: the sidebar's
 //! destinations and subscription activity read again, and the recents kept.
 use super::edits::when_answered;
-use super::{Change, SUBSCRIPTION_POLL, Session, SubscriptionActivity};
+use super::{Change, SUBSCRIPTION_POLL, Session, SubscriptionActivity, settle};
 use crate::application::{self, Event};
 use crate::backend;
 use crate::i18n::t;
+use crate::screens::subscriptions::requests;
 use gpui::*;
+
+/// Shows what the settle model announces.
+fn show(popups: impl IntoIterator<Item = settle::Popup>, cx: &mut App) {
+    for popup in popups {
+        match popup {
+            settle::Popup::Success { title, message } => {
+                crate::ui::notify::success(title, message, cx)
+            }
+            settle::Popup::Error { title, message } => crate::ui::notify::error(title, message, cx),
+        }
+    }
+}
 
 impl Session {
     // ── The application's events ────────────────────────────────
@@ -103,6 +116,7 @@ impl Session {
                     this.subscriptions = activity;
                     cx.emit(Change::Activity);
                 }
+                this.settle_runs(&list, cx);
                 if !again {
                     this.poll_activity(cx);
                 }
@@ -111,6 +125,87 @@ impl Session {
                 this.refresh_activity(cx);
             }
         });
+    }
+
+    /// `subscriptionsSettle.ts`: what a read of the list announces, and
+    /// the run and gallery reads it asks for, whose answers announce more.
+    fn settle_runs(&mut self, list: &serde_json::Value, cx: &mut Context<Self>) {
+        let (progress, galleries) = settle::read_list(list);
+        let plan = self
+            .settle
+            .observe(progress, &galleries, std::time::Instant::now());
+        show(plan.popups, cx);
+        let activity = |this: &Self, run: i64| {
+            this.dispatch(
+                "subscriptions.runs.get",
+                serde_json::json!({ "run_id": run, "source_item_limit": 1 }),
+            )
+        };
+        for (entry, checked) in plan.query_reads {
+            let Some(run) = entry.run else { continue };
+            when_answered(
+                activity(self, run),
+                cx,
+                move |this: &mut Self, result, cx| match result {
+                    Some(Ok(activity)) => {
+                        let popups = this.settle.query_activity(&entry, &activity);
+                        show(popups, cx);
+                    }
+                    _ => this.settle.query_activity_failed(&entry, checked),
+                },
+            );
+        }
+        for entry in plan.finished_reads {
+            let Some(run) = entry.run else { continue };
+            // A failed read never affects the run itself; nothing is shown.
+            when_answered(
+                activity(self, run),
+                cx,
+                move |this: &mut Self, result, cx| {
+                    if let Some(Ok(activity)) = result {
+                        let popup = this.settle.run_finished(&entry, &activity);
+                        show(popup, cx);
+                    }
+                },
+            );
+        }
+        for gallery in plan.galleries {
+            let runs = requests::runs(gallery.id);
+            let runs = self.dispatch(runs.name, runs.args);
+            when_answered(runs, cx, move |this: &mut Self, result, cx| {
+                let Some(Ok(runs)) = result else {
+                    this.settle.gallery_failed(&gallery);
+                    return;
+                };
+                let Some(run) = this.settle.gallery_runs(&gallery, &runs) else {
+                    return;
+                };
+                let cleanup = requests::clean_up_gallery(gallery.id);
+                let cleanup = this.dispatch(cleanup.name, cleanup.args);
+                when_answered(cleanup, cx, move |this: &mut Self, result, cx| {
+                    // A cleanup that failed is logged and announces
+                    // nothing; the gallery is looked at again.
+                    let cleaned = match result {
+                        Some(Ok(cleaned)) => cleaned,
+                        Some(Err(error)) => {
+                            eprintln!("picto: gallery import cleanup failed: {error}");
+                            this.settle.gallery_failed(&gallery);
+                            return;
+                        }
+                        None => {
+                            this.settle.gallery_failed(&gallery);
+                            return;
+                        }
+                    };
+                    let popup = this.settle.gallery_cleaned(
+                        &gallery,
+                        &run,
+                        Some(&cleaned).filter(|value| !value.is_null()),
+                    );
+                    show(popup, cx);
+                });
+            });
+        }
     }
 
     /// Polls while a run is going, as the renderer does every 1.5 s.

@@ -1210,15 +1210,41 @@ impl SubscriptionsScreen {
                         .child(target_label)
                         .into_any_element(),
                 };
-                // TODO: open the accounts window for a login problem.
+                // `recovery_action` is `fix_credentials` for a login
+                // problem; production derives no other action a row shows
+                // (`mapIssue`: Retry now and Review source never appear).
+                // TODO: open the accounts window for a login problem; until
+                // site logins are built the button shows disabled.
                 let fix = (issue.kind.contains("auth")
                     || issue.kind.contains("credential")
                     || issue.kind == "unauthorized")
                     .then(|| {
                         ui::small_button(("issue-fix", issue.id as usize), "shield-lock")
                             .glyph(13.)
+                            .disabled(true)
                             .tip(ui::tip(t("Fix login")))
                     });
+                // The message's tooltip holds it with its detail
+                // (`title={[message, detail].join('\n')}`).
+                let full = [Some(issue.message.as_str()), issue.detail.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let message = ui::tooltip::attach(
+                    div()
+                        .id(("issue-message", issue.id as usize))
+                        .w_full()
+                        .truncate()
+                        .text_color(theme.text_secondary())
+                        .child(issue.message.clone()),
+                    ("issue-message-tip", issue.id as usize),
+                    ui::tip(full),
+                    20.,
+                    window,
+                    cx,
+                );
                 let row = table_row(cells(vec![
                     div()
                         .flex()
@@ -1229,12 +1255,7 @@ impl SubscriptionsScreen {
                         ))
                         .into_any_element(),
                     target,
-                    div()
-                        .w_full()
-                        .truncate()
-                        .text_color(theme.text_secondary())
-                        .child(issue.message.clone())
-                        .into_any_element(),
+                    message.into_any_element(),
                     time(format::relative_time(Some(&issue.last_seen_at), now), cx),
                     div()
                         .w_full()
