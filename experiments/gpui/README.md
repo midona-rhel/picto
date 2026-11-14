@@ -827,6 +827,11 @@ re-checked by reading the code; the rest were checked against it.
   marker and then fails; here there is no marker.
 - With one subfolder tile selected the inspector shows that folder;
   production keeps the parent's scope (or shows no covers or size).
+- A folder's or smart folder's inspector shows Export here. Production's
+  inspector offers it too (`exportScope` in `Inspector.tsx`), but the
+  sidebar nodes it reads carry no `folder_id` or `smart_folder_id`
+  (`sidebarController.ts`), so it never shows, and Auto tags always reads
+  No there.
 - A cover saved as a rendered crop shows here; production's media protocol
   falls back to the download glyph for it.
 - One dropped path that is not a directory is never sent to the folder
