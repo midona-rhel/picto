@@ -94,3 +94,27 @@ The dropped browser item did not contain media data.
 Could not open Picto Library
 This is not the library open here. Start the app on a disposable copy of it instead.
 Seek
+Library Not Found
+The library could not be found.
+Invalid Library
+The selected folder is not a library.
+This build opens disposable library copies only. Start it with --allow-real-libraries to open a library you keep.
+A library you keep is never opened while the app is driven by automation.
+A library you keep is opened only from the Library Manager, Open Library…, Recent Libraries or the library switcher.
+Quit Picto first
+Picto is running. It must not have a library open while this app has it open: quit Picto, then open the library again.
+Whether Picto is running could not be checked, so the library was not opened.
+This app does not update libraries. Open the library in Picto to update it.
+Select a .library folder
+Please select a folder ending in .library
+This library is open in another window of this app, which was brought forward.
+Picto GPUI
+This app will read and write this library directly: what you change here changes the library itself, with no copy in between. Picto must not have it open at the same time. You are asked once for each library.
+Open this library directly?
+Picto is running while this app has a library you keep open. Both must never have a library open at the same time: quit Picto, then choose Check Again, or close the library here.
+Close Library
+Library name cannot be empty
+Library copy
+Library name cannot contain slashes
+A library cannot be created inside another Picto library
+A library with that name already exists in the selected folder. Choose another location or open the existing library.

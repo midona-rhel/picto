@@ -2,10 +2,12 @@
 //! header, the libraries the app knows with their covers, names and folders,
 //! the open one checked, and the library actions at the foot.
 //!
-//! The list is the Electron app's own: `config.json` in its application-data
-//! folder, which it keeps as `libraryHistory` and `pinnedLibraries`. This
-//! view only reads that file and the covers beside each library; it writes
-//! the cropped covers into the session's scratch folder and nowhere else.
+//! The list is this app's own (`libraryHistory` and `pinnedLibraries` in
+//! its `state.json`, `crate::libraries`), never the Electron app's
+//! `config.json`, and holds only the libraries this process may open. This
+//! view reads the covers beside each library; it writes the cropped covers
+//! into the session's scratch folder and nowhere else. A row opens its
+//! library under the rules of `libraries::admission`.
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::t;
 use crate::session::Session;
@@ -116,35 +118,16 @@ pub fn info_widths(name: f32, available: f32) -> (f32, f32) {
     (name, (available - GAP - name).max(0.))
 }
 
-/// Where the Electron app keeps `config.json` (`app.getPath('appData')`
-/// joined with `picto`).
-fn config_path() -> Option<PathBuf> {
-    Some(
-        crate::state::config_folder()?
-            .join("picto")
-            .join("config.json"),
-    )
-}
-
-/// Reads the known libraries and prepares their covers. Blocking: run it
-/// off the thread that draws.
-fn read(current: Option<PathBuf>, current_cover: Option<PathBuf>, scratch: PathBuf) -> Vec<Known> {
-    let config = config_path()
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let list = |key: &str| {
-        config
-            .as_ref()
-            .and_then(|config| config.get(key))
-            .and_then(serde_json::Value::as_array)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .filter_map(|path| path.as_str().map(str::to_owned))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
+/// Reads the known libraries (`pinned` and `history`, already only those
+/// this process may list) and prepares their covers. Blocking: run it off
+/// the thread that draws.
+fn read(
+    pinned: Vec<String>,
+    history: Vec<String>,
+    current: Option<PathBuf>,
+    current_cover: Option<PathBuf>,
+    scratch: PathBuf,
+) -> Vec<Known> {
     let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let current_canonical = current.as_deref().map(canonical);
     let is_current = |path: &str| {
@@ -156,8 +139,8 @@ fn read(current: Option<PathBuf>, current_cover: Option<PathBuf>, scratch: PathB
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
     let mut rows = order(
-        &list("pinnedLibraries"),
-        &list("libraryHistory"),
+        &pinned,
+        &history,
         |path| Path::new(path).exists(),
         is_current,
         current_text.as_deref(),
@@ -279,9 +262,24 @@ impl LibraryPopover {
                 session.scratch().to_path_buf(),
             )
         };
+        let facts = crate::libraries::facts();
+        let (pinned, history) = {
+            let state = crate::state::get(cx);
+            let listed = |paths: &Vec<String>| {
+                paths
+                    .iter()
+                    .filter(|path| crate::libraries::listed(path, &facts))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            (
+                listed(&state.pinned_libraries),
+                listed(&state.library_history),
+            )
+        };
         let task = cx
             .background_executor()
-            .spawn(async move { read(current, cover, scratch) });
+            .spawn(async move { read(pinned, history, current, cover, scratch) });
         cx.spawn(async move |this, cx| {
             let libraries = task.await;
             let _ = this.update(cx, |this, cx| {
@@ -366,14 +364,25 @@ impl LibraryPopover {
             ))
     }
 
-    /// A known library chosen: the popover closes.
-    fn pick(&mut self, current: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if !current {
-            // TODO: switch the app to this library, as
-            // `picto.library.switch` does: close this library's
-            // session and open that one's database and blobs.
-        }
+    /// A known library chosen: the popover closes, and the app switches
+    /// to it (`picto.library.switch`) if the rules let it.
+    fn pick(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let library = self.libraries.get(index).cloned();
         self.close(window, cx);
+        if let Some(library) = library
+            && !library.current
+        {
+            let path = PathBuf::from(library.path);
+            cx.defer(move |cx| {
+                crate::libraries::host::request(&path, crate::libraries::Origin::Switcher, cx)
+            });
+        }
+    }
+
+    /// A function at the foot chosen: the popover closes first.
+    fn function(&mut self, run: fn(&mut App), window: &mut Window, cx: &mut Context<Self>) {
+        self.close(window, cx);
+        cx.defer(run);
     }
 
     /// One known library (`.item`).
@@ -434,7 +443,7 @@ impl LibraryPopover {
                 }
                 cx.notify();
             }))
-            .on_click(cx.listener(move |this, _, window, cx| this.pick(current, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.pick(index, window, cx)))
             .child({
                 let avatar = ui::library_avatar(
                     ("known-library-avatar", index),
@@ -481,7 +490,7 @@ impl LibraryPopover {
                     .child(ui::icon("check", CHECK, theme.text()))
             }));
         // `.item` is a `<button>`: Enter and Space choose it.
-        let press = cx.listener(move |this, _, window, cx| this.pick(current, window, cx));
+        let press = cx.listener(move |this, _, window, cx| this.pick(index, window, cx));
         ui::focus::button(
             row,
             &ElementId::from(("known-library", index)),
@@ -599,18 +608,20 @@ impl Render for LibraryPopover {
             // corners to the panel's.
             .rounded_b(px(theme::RADIUS_LG))
             .child(
-                // TODO: open the Library Manager on its form for a new
-                // library (`open_library_manager`).
+                // `open_library_manager`, as production's row does.
                 ui::focus::stop(
                     "create-library",
                     self.action("create-library", "plus", t("Create Library…"), cx)
-                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.function(crate::libraries::manager::open, window, cx)
+                        })),
+                    cx.listener(|this, _, window, cx| {
+                        this.function(crate::libraries::manager::open, window, cx)
+                    }),
                 ),
             )
             .child(
-                // TODO: choose a library folder and switch to it, as
-                // `picto.library.open` does.
+                // `picto.library.open`: a library folder chosen and opened.
                 ui::focus::stop(
                     "open-library",
                     self.action(
@@ -619,19 +630,24 @@ impl Render for LibraryPopover {
                         t("Open Library…"),
                         cx,
                     )
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                    cx.listener(|this, _, window, cx| this.close(window, cx)),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.function(crate::libraries::host::open_dialog, window, cx)
+                    })),
+                    cx.listener(|this, _, window, cx| {
+                        this.function(crate::libraries::host::open_dialog, window, cx)
+                    }),
                 ),
             )
-            .child(
-                // TODO: open the Library Manager (`open_library_manager`).
-                ui::focus::stop(
-                    "library-manager",
-                    self.action("library-manager", "adjustments", t("Library Manager…"), cx)
-                        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                    cx.listener(|this, _, window, cx| this.close(window, cx)),
-                ),
-            );
+            .child(ui::focus::stop(
+                "library-manager",
+                self.action("library-manager", "adjustments", t("Library Manager…"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.function(crate::libraries::manager::open, window, cx)
+                    })),
+                cx.listener(|this, _, window, cx| {
+                    this.function(crate::libraries::manager::open, window, cx)
+                }),
+            ));
         let this = cx.entity().downgrade();
         popover::popover(
             "library-switcher-popover",

@@ -284,11 +284,6 @@ pub fn configure<'a>(enabled: bool, tones: impl IntoIterator<Item = &'a str>, cx
     });
 }
 
-/// Whether Settings › Notifications lets a notification of `tone` pop up.
-pub fn shows(tone: Tone, cx: &mut App) -> bool {
-    notifications(cx).read(cx).popups.shows(tone)
-}
-
 /// Where a notification is drawn when it has got `shown` of the way in (1
 /// in place, 0 gone, eased): how far above its place it is, and its
 /// opacity. The curve overshoots, so a leaving notification rises a little

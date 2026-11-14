@@ -10,8 +10,9 @@ through its native addon, so commands, background workers and events are
 production's. It covers most of what a user does day to day (browsing,
 selecting, the inspector, menus, the viewers, imports, exports, the Tags,
 Subscriptions and Duplicates screens, Settings), but it is not a replacement:
-section 8 lists what is missing and what has never been checked. It opens
-only a disposable copy of a library, never a library the user keeps. It is
+section 8 lists what is missing and what has never been checked. It opens a
+disposable copy of a library as it always has, and a library the user keeps
+only under the rules of "Opening a library you keep" below. It is
 developed and used on macOS; Windows and Linux are built, tested and
 photographed off-screen in CI and have never been used on a screen.
 Issue: https://github.com/midona-rhel/picto/issues/163
@@ -82,6 +83,113 @@ Delete Permanently, Empty Trash and the Duplicates screen's Keep and Smart
 merge therefore remove files from the copy's blobs only. The source library
 is only ever read, to copy it.
 
+### Opening a library you keep
+
+A library the user keeps (a `.library` folder with `library.sqlite` and no
+`.gpui-disposable` marker) is that user's only copy of years of work. This
+app opens one only by a deliberate act of the user, and nothing in this
+project's automation can reach one. `src/libraries/admission.rs` decides
+every open, in this order; each rule is enforced there unless another place
+is named, and proven by the test named.
+
+1. **It is a library, and not a copy out of place.** A folder that passes
+   `application::guard` is a disposable copy and opens exactly as before
+   (detached, from any origin but a file the system handed over). A marked
+   folder that fails the guard is refused with the guard's words, never
+   taken for a library the user keeps. Anything else must be a `.library`
+   folder holding `library.sqlite`; production would create a library in an
+   empty `.library` folder, this app does not
+   (`a_copy_opens_as_before_and_a_marked_folder_elsewhere_is_refused`,
+   `what_is_not_a_library_is_refused`).
+2. **The build permits it.** A release build does. A debug or test build
+   only when started with `--allow-real-libraries` as its first argument
+   (`main.rs`, `libraries::set_flag`), so every agent, script, test and CI
+   run is copy-only by default
+   (`a_debug_build_refuses_a_kept_library_without_the_flag`).
+3. **No automation seam is active.** Any variable of `src/seams.rs`
+   (pointer FIFO, background, window size, menus, state folder, inspector,
+   held runs and downloads, silent, application data) or a test build (the
+   off-screen tool, dialog answers, recorded desktop requests) refuses a
+   library the user keeps even with the flag (`seams::automation`;
+   `an_automation_seam_refuses_a_kept_library_even_with_the_flag`, which
+   also checks the test process itself). A release build has no seams.
+4. **The user asked for it**: the Library Manager (a row, Open Library, New
+   Library), Open Library…, File › Recent Libraries, the sidebar's library
+   switcher, the library this app last had open (`lastLibrary` in this
+   app's own `state.json`, looked at only when this process may open it),
+   or the command line with the flag. A file the system hands over (a
+   launch with files, Open With, a drop on the Dock icon, a second launch)
+   never opens a library; `opening::accept` refuses it as before
+   (`only_a_library_the_user_chose_is_opened`).
+5. **The Electron app is not running.** The core has no lock production
+   honours yet, and production's single-instance lock does not know this
+   app, so a process of the Electron app running at all refuses the open,
+   and so does a failure to look (`src/libraries/platform/`: every
+   process's executable on macOS, `/proc` on Linux, a Tool Help snapshot on
+   Windows; names `Picto.app`/`Picto`/`Picto Helper…`, `picto` or a
+   `Picto…AppImage`, `Picto.exe`). While a library the user keeps is open,
+   the check runs again whenever the main window becomes active, and a
+   running Electron app puts a notice over the window that stays until it
+   has quit (Check Again) or the library is closed (Close Library)
+   (`libraries::host::check_picto`;
+   `a_kept_library_is_refused_while_picto_runs_or_cannot_be_checked`). The
+   probe is injectable (`admission::Probes`).
+6. **The core finds its schema current**, read through SQLite's
+   `immutable` flag, which writes nothing, not even a shared-memory file
+   (`admission::compatibility`, `picto_library::schema::validate`). The
+   core's open would migrate an older schema in place; this app refuses it
+   with the core's words ("incompatible library: expected generation 1 (…),
+   found …"; "… missing schema-generation-1 metadata" for another database)
+   and asks the user to open it in Picto
+   (`an_incompatible_schema_is_refused_with_the_cores_words_and_left_alone`).
+7. **The user agreed, once per library.** The first open asks, naming the
+   path, that this app will read and write the library directly and that
+   Picto must not have it open at the same time. The answer is kept in
+   this app's `state.json` (`libraryConsents`: canonical path and the
+   database file's identity, device and inode on macOS and Linux, creation
+   time on Windows), never in the library; a different library later at the
+   same path is asked about again. A library made with New Library here
+   needs no question; a rename carries the consent along
+   (`consent_is_asked_once_per_library_and_its_database`).
+
+Then, as it opens (`libraries::host::begin`): this app's own instance lock
+for the library (`opening::instance`) refuses a second instance of this app,
+which comes forward instead; and the core takes `.picto-library.lock` in the
+library's folder, an exclusive lock held for as long as it is open, which
+refuses any other holder (another instance, or Picto once it takes the same
+lock). A library the user keeps is never detached or marked: it is opened
+exactly as production opens it (`Application::open`; `detach` itself refuses
+a folder without the marker,
+`detach_never_touches_a_library_without_the_marker`). A switch closes the
+library first (`Application::close`, after which the old application refuses
+every command so nothing of its session reaches the next library) and opens
+the next (`a_kept_library_opens_as_it_is_and_a_switch_closes_it_first`, with
+generated libraries and injected probes). In a debug build the core's
+application data for a library the user keeps is `app-data` in this app's
+own folder, never beside the library.
+
+Listing reads nothing it need not: the Library Manager, the switcher and
+Recent Libraries list only the libraries this process may open
+(`libraries::listed`), so a debug build without the flag, or any automation,
+reads nothing of a library the user keeps, not even whether its folder
+exists. Listing reads a listed library's folder and its cover file and
+writes nothing there (`listing_a_kept_library_writes_nothing_to_it`);
+statistics are read only for the open library, through its application.
+Edits that cannot be undone and that the app already kept to copies
+(Delete Permanently, rendered thumbnails, captures) still are.
+
+What stays as it was: `--make-copy` reads its source read-only;
+`<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
+refuse paths outside the open library, whichever kind it is, and Show in
+File Manager in the Library Manager reveals only a listed library's folder.
+
+For pictures of this path, the off-screen tool (a seam) takes
+`PICTO_GPUI_TEST_LIBRARIES=<folder>`, read in test builds only: the
+libraries directly in that folder, which must lie inside a temporary
+folder, count as permitted by rules 2 and 3, and only they are listed.
+`PICTO_GPUI_TEST_PICTO_RUNNING=1` makes the Electron app's probe say it
+runs (unset there, it says it does not).
+
 ### Making a copy and opening it
 
 On macOS, `run.sh` copies a library, builds the app and opens it:
@@ -119,14 +227,21 @@ with the guard. A failed copy leaves nothing behind. Run the binary through
 (`libwebgpu_dawn.so` among them), which cargo puts on the loader's path and a
 bare `target/debug/picto-gpui-spike` does not find.
 
+With no argument the app opens the library it had open last, if it may
+(rules above), and otherwise shows production's gate ("Open a library to
+start", Choose Library…), which opens the Library Manager by itself.
+`--allow-real-libraries [<library>]` first lets a debug build open
+libraries the user keeps, and opens the one named.
+
 The binary takes the copy's root first. `<copy> --detach` detaches the copy
 and exits without opening a window; `reference.sh` uses it before the
 Electron app opens the same copy. Files after the copy are opened as
 production opens files from the file manager (`src/opening/`): a
 `.picto-pack` goes to the pack's import dialog (several wait their turn),
-a `.library` that is the open copy only brings the window forward, and any
-other `.library` is refused, since the app opens only the copy it started
-on. There is one instance per copy: a second launch on a copy already open
+a `.library` that is the open library only brings the window forward, and
+any other `.library` is refused, since a file the system hands over never
+opens a library here (rule 4 above). There is one instance per library
+(the copy it started on, or each library it opens later): a second launch on a copy already open
 hands its files to that instance, which comes forward, and exits; launches
 on other copies run side by side. A launch with files and no copy (what a
 file manager starts) hands them to the instance whose window was active
@@ -449,6 +564,15 @@ named after the copy's identity in a folder of the user's own, and a Unix
 socket (`unix.rs`) or named pipe (`windows.rs`) beside it that takes a later
 launch's working folder and arguments as one JSON line.
 
+**Libraries** (`src/libraries/`). Which library opens (`admission.rs`, the
+rules above), this app's list of libraries and the consents in
+`state.json` (`mod.rs`, production's `globalConfig.mjs` rules), the main
+window's content (`host.rs`: the gate or the library's shell, opening,
+switching as production's `switchLibrary`, the consent dialog and the
+blocking notice), the Library Manager window (`manager.rs`), and the
+platform leaves for the process probe (`platform/`). Rule: every open goes
+through `host::request` (or `host::create` for New Library).
+
 **Desktop** (`src/desktop/`). What production's main process does around the
 window: the Inbox badge, the "Subscriptions finished" system notification,
 and the guarded file hand-offs. `mod.rs` is portable; `macos.rs`,
@@ -521,6 +645,8 @@ version are kept. The app starts on All each launch, as production does.
   its reason in `keymap::NOT_YET`, and a test keeps it so.
 - **Platform code** lives only in the platform leaves: `src/desktop/macos.rs`,
   `windows.rs` and `linux.rs` for the desktop hand-offs,
+  `src/libraries/platform/macos.rs`, `windows.rs` and `linux.rs` for the
+  Electron app's process probe and a file's identity,
   `src/opening/instance/unix.rs` and `windows.rs` for the single-instance
   socket and pipe, and
   `src/platform/macos.rs` and `windows.rs` for window-level calls (AppKit and
@@ -782,6 +908,8 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once |
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
 | `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
+| `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen tool | start at the gate; the generated libraries directly in that temporary folder may be listed and opened |
+| `PICTO_GPUI_TEST_PICTO_RUNNING` | off-screen tool | the Electron app's probe says it runs |
 | `PICTO_GPUI_TEST_LIBRARY`, `PICTO_GPUI_TEST_WEBM`, `PICTO_GPUI_TEST_AUDIO`, `PICTO_GPUI_TEST_VIDEO` | ignored tests | inputs |
 | `PICTO_GPUI_MATRIX_OUT`, `PICTO_GPUI_MEDIA`, `PICTO_GPUI_MEDIA_MIME` | format matrix tests | pictures folder, a real file, its type |
 | `PICTO_GPUI_COPY_ONLY` | `run.sh` | make the copy, print it, stop |
@@ -849,6 +977,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
 | Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
 | Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
+| Libraries | the gate, the Library Manager (list, Open Library, New Library, Open Existing…, Add to and Remove from Quick Access, Rename, Show in File Manager, Remove from List, the cover, statistics), Open Library…, Recent Libraries and Clear History, the switcher's rows and functions, switching, the last library at start, under the rules of section 2 | pictures (Library Manager against production's: same layout, header, sidebar and footer; the switcher; production's gate could not be shown, its reference opens a library by itself); tests (each rule; an open and a switch of generated libraries); off-screen with `PICTO_GPUI_TEST_LIBRARIES` (consent, open, switch, statistics, an incompatible schema refused) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
@@ -991,10 +1120,12 @@ re-checked by reading the code; the rest were checked against it.
 
 ### Missing features
 
-- Opening, creating or switching libraries: the library switcher's rows,
-  Create Library, Open Library and Library Manager only close the popover;
-  the application menu's Library Manager, New Library, Open Library, Recent
-  Libraries and Clear History are disabled.
+- Libraries, partly: the Library Manager's Move…, Locate…, Delete… and
+  cloud rows and Open from Cloud… are not built (shown disabled or left
+  out), nor a library's colour and icon; a missing last library shows the
+  gate, not production's Locate…/Remove from List dialog; no library has
+  ever been opened in a real window, nor the consent, the blocking notice
+  or a switch seen on a screen.
 - Localization, partly: the application menu stays English, as production's
   (`menu.mjs` is not translated); texts production writes without a key
   stay English (`src/i18n/gpui_only.txt`), and so do texts built with
@@ -1038,9 +1169,9 @@ re-checked by reading the code; the rest were checked against it.
 - Files a source promises on macOS (`NSFilePromiseReceiver`, which some
   browsers drag an image as without its data): such a drag shows as links
   only and is refused.
-- Opening another library from the file manager or the command line of a
-  running instance (production's `switchLibrary`): it is refused with a
-  notification.
+- Opening another library from the file manager or a second launch
+  (production's `switchLibrary` from `drainAssociatedFiles`): refused with
+  a notification, on purpose (rule 4 above).
 - On macOS, a pack opened with the app while no instance runs: the system
   launches the bundle without a copy, which the app refuses.
 - Thumbnails of Word and PowerPoint files without an embedded picture (and
@@ -1060,25 +1191,51 @@ re-checked by reading the code; the rest were checked against it.
 - Reduced motion: the system setting is not read.
 - File choosers take every file type (GPUI's prompt has no type filter).
 
+### Decided by the owner, and what follows from each
+
+- Real libraries are to be opened, created and switched as production does
+  (Library Manager): built under the rules of "Opening a library you keep"
+  (section 2); a debug build stays copy-only without
+  `--allow-real-libraries`.
+- Site logins use a web view inside the app, as production's do: being
+  built.
+- The two changes to the core made for this app stay: "Add
+  open_library_reporting, which hands over the library before recovery
+  runs" (the app depends on it) and "Make the open's media recovery pass
+  list thumbnails once instead of looking for each".
+- A release build keeps the AI models where production keeps them, so both
+  apps share them; a debug build keeps them beside the copy (or, for a
+  library the user keeps, in this app's own folder).
+- The context menu's look in its pop-up window (shadow, outline, blur) is
+  accepted as it is.
+- File › New Folder starts a rename here (production's only creates the
+  folder), and the sidebar's row keyboard stays.
+
 ### Waiting on the owner
 
-- Whether to open, create and switch real libraries, and how (Library
-  Manager).
-- Site logins: a web view or the system browser.
+- Before a library the user keeps is first opened with this app: whether
+  Picto (the Electron app) adopts the core's `.picto-library.lock` (its
+  own commit, "core/src/state.rs: hold an exclusive lock…"); until it
+  does, only the process probe keeps the two apart, and it cannot see a
+  Picto started from an unusual name. Whether the list of libraries should
+  start from production's `config.json` (this app keeps its own and never
+  reads that file). Whether Delete Permanently and the other edits kept to
+  copies should be allowed on a library the user keeps.
 - Network features: update check and install, cloud sync, AI model download.
-- Two changes to the core made for this app: "Add open_library_reporting,
-  which hands over the library before recovery runs" (the app depends on it)
-  and "Make the open's media recovery pass list thumbnails once instead of
-  looking for each": keep or drop.
-- File › New Folder starts a rename here; production's does not.
-- The "Subscriptions finished" system notification follows Settings' pop-up
-  switch and the Information tone here; production always sends it.
-- The sidebar's row keyboard (Down or Tab from the tree filter enters the
-  rows) has no production counterpart (there Down does nothing and Tab goes
-  to the grid): keep it or not.
-- A verdict on the context menu's pop-in and the pop-up menus' blur.
 
 ### Kept different on purpose
+
+- A switch closes detail, Settings and log windows; production leaves them
+  open, where their commands would reach the library opened next.
+- New Library makes a library only in a new folder (production opens an
+  existing one of the same name), and Open of a `.library` folder without
+  a database is refused (production creates a library there). A `.library`
+  the system hands over is refused, as before (production switches to it).
+- The list of libraries, the last library and the consents live in this
+  app's `state.json`, not production's `config.json`. Cover › Choose… in
+  the Library Manager opens the cover dialog in the main window.
+- An incompatible or older library is refused; production migrates an
+  older one on open.
 
 - The interface zoom reaches every window at once: the main window, detail
   windows, Settings and the pop-up menus. Production zooms the main window

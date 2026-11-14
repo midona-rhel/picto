@@ -55,6 +55,12 @@ pub fn file(prompt: &str, cx: &App) -> Answer {
     choose(true, false, prompt, cx)
 }
 
+/// `properties: ['openFile', 'openDirectory']`: one file or folder, as
+/// Open Library… asks (a `.library` is a package, a file, on macOS).
+pub fn file_or_folder(prompt: &str, cx: &App) -> Answer {
+    choose(true, true, prompt, cx)
+}
+
 fn choose(files: bool, directories: bool, prompt: &str, cx: &App) -> Answer {
     if let Some(path) = queued() {
         return answered(path);

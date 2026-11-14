@@ -138,6 +138,11 @@ pub struct Shell {
 }
 
 impl Shell {
+    /// The library's session.
+    pub fn session(&self) -> &Entity<Session> {
+        &self.session
+    }
+
     pub fn new(
         root: PathBuf,
         application: std::sync::Arc<crate::application::Application>,

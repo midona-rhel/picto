@@ -572,6 +572,16 @@ impl Session {
         }
     }
 
+    /// Stops using the library before it is closed: its thread ends once
+    /// the requests in hand are answered, and the application refuses
+    /// commands, so nothing of this session reaches the library opened
+    /// next (`libraries::host`).
+    pub fn shut(&mut self) {
+        let (sender, _) = std::sync::mpsc::channel();
+        self.sender = sender;
+        self.application.retire();
+    }
+
     /// Whether the open library is a marked disposable copy, which edits
     /// that cannot be undone require.
     pub fn disposable(&self) -> bool {
