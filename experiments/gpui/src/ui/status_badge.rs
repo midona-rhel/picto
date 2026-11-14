@@ -28,6 +28,7 @@ pub struct StatusBadge {
     tone: Tone,
     label: SharedString,
     tip: Option<Tip>,
+    large: bool,
 }
 
 pub fn status_badge(
@@ -40,6 +41,7 @@ pub fn status_badge(
         tone,
         label: label.into(),
         tip: None,
+        large: false,
     }
 }
 
@@ -47,6 +49,14 @@ impl StatusBadge {
     /// What the badge's `title` explains, shown as a tooltip.
     pub fn tip(mut self, tip: Option<Tip>) -> Self {
         self.tip = tip;
+        self
+    }
+
+    /// The Accounts dialog's account state (`AuthWorkspace.module.css`
+    /// `.detailStatus`): a control's height, the UI font at the small size
+    /// spaced 0.035em, at most 112px wide.
+    pub fn large(mut self) -> Self {
+        self.large = true;
         self
     }
 }
@@ -71,29 +81,49 @@ impl RenderOnce for StatusBadge {
         } else {
             1.
         };
+        let text = theme::blend(theme.text(), color, 0.45);
         let badge = div()
             .id(self.id.clone())
             .relative()
             .flex_none()
-            .h(px(18.))
-            .px(px(5.))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(theme::RADIUS_SM))
             .border_1()
             .border_color(at(25.))
             .bg(at(10.))
-            .opacity(opacity)
-            // `letter-spacing: 0.04em`
-            .child(super::tracked(
-                self.label.to_uppercase(),
-                font(theme::FONT_MONO),
-                theme::TEXT_XS,
-                theme::TEXT_XS,
-                theme::blend(theme.text(), color, 0.45),
-                theme::TEXT_XS * 0.04,
-            ));
+            .opacity(opacity);
+        let badge = if self.large {
+            badge
+                .max_w(px(112.))
+                .h(px(theme::CONTROL_SM))
+                .px(px(8.))
+                .overflow_hidden()
+                .rounded(px(theme::RADIUS_MD))
+                // `letter-spacing: 0.035em`
+                .child(super::tracked(
+                    self.label.to_uppercase(),
+                    font(theme::FONT_UI),
+                    theme::TEXT_SM,
+                    theme::TEXT_SM,
+                    text,
+                    theme::TEXT_SM * 0.035,
+                ))
+        } else {
+            badge
+                .h(px(18.))
+                .px(px(5.))
+                .rounded(px(theme::RADIUS_SM))
+                // `letter-spacing: 0.04em`
+                .child(super::tracked(
+                    self.label.to_uppercase(),
+                    font(theme::FONT_MONO),
+                    theme::TEXT_XS,
+                    theme::TEXT_XS,
+                    text,
+                    theme::TEXT_XS * 0.04,
+                ))
+        };
         match self.tip {
             Some(tip) => tooltip::attach(
                 badge,

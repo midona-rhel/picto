@@ -126,3 +126,4 @@ queries
 Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.
 Sign in with your E-Hentai account. Picto verifies ExHentai access before saving the browser session.
 Waiting for the site…
+Login saved for this session; it is not kept after the app quits.
