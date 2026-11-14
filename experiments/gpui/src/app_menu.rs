@@ -948,8 +948,7 @@ fn gpui_menus(context: &MenuContext, demos: bool) -> Vec<Menu> {
 /// the Mac too with `PICTO_GPUI_APP_MENU=window`, as production's
 /// development build shows it there to check the Windows and Linux menu.
 pub fn in_window() -> bool {
-    !cfg!(target_os = "macos")
-        || std::env::var("PICTO_GPUI_APP_MENU").is_ok_and(|value| value == "window")
+    !cfg!(target_os = "macos") || crate::seams::app_menu_in_window()
 }
 
 /// The in-window menu's width (`width={220}`).

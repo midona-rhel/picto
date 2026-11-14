@@ -6,15 +6,16 @@
 //! The off-screen tool cannot drive a system dialog, so a test can answer
 //! the dialogs itself: [`answer_next`] queues answers, and each dialog asked
 //! for while one is queued takes it instead of opening. Nothing queues an
-//! answer outside the off-screen tool's `answer` line (`src/offscreen.rs`).
+//! answer outside the off-screen tool's `answer` line (`src/offscreen.rs`),
+//! and only test builds hold the queue.
 use futures::channel::oneshot;
 use gpui::{App, PathPromptOptions};
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 /// Answers waiting for the next dialogs, oldest first. `None` cancels one.
-static ANSWERS: Mutex<VecDeque<Option<PathBuf>>> = Mutex::new(VecDeque::new());
+#[cfg(test)]
+static ANSWERS: std::sync::Mutex<std::collections::VecDeque<Option<PathBuf>>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
 
 /// Has the next dialog answer `path` (or be cancelled, for `None`) without
 /// opening. For the off-screen tool only.
@@ -25,8 +26,14 @@ pub fn answer_next(path: Option<PathBuf>) {
     }
 }
 
+#[cfg(test)]
 fn queued() -> Option<Option<PathBuf>> {
     ANSWERS.lock().ok()?.pop_front()
+}
+
+#[cfg(not(test))]
+fn queued() -> Option<Option<PathBuf>> {
+    None
 }
 
 /// What a dialog hands back: the path, or nothing.

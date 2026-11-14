@@ -1634,7 +1634,20 @@ fields 0.9%, inspector chips 4.3%, and the window's edges none. The grid's
 share is mostly originals the Electron grid loads for large tiles; part of
 the rest is state that differed and JPEG noise in the captures.
 
-`PICTO_GPUI_POINTER=<file or FIFO>` replays input written to that file
+Test seams are debug-build only. The variables below that drive or observe
+the app for a check (`PICTO_GPUI_POINTER`, `PICTO_GPUI_BACKGROUND`,
+`PICTO_GPUI_WINDOW`, `PICTO_GPUI_MENU`, `PICTO_GPUI_APP_MENU`,
+`PICTO_GPUI_STATE`, `PICTO_GPUI_INSPECTOR`, `PICTO_GPUI_HOLD_RUNS`,
+`PICTO_GPUI_SILENT`) are read in `src/seams.rs` under
+`cfg(debug_assertions)`, the one switch: a release build
+(`cargo build --release`) does not hold their names and behaves as though
+none were set. The off-screen tool's own variables, its `answer` line
+(`prompt.rs`) and its record of desktop requests (`desktop.rs`) exist in test
+builds only. Every build reads `PICTO_GPUI_FPS`, `PICTO_GPUI_STATS` and
+`PICTO_FFMPEG_DIR`. `run.sh`, `million.sh`, `reference.sh` and CI build
+debug, so they keep every seam.
+
+`PICTO_GPUI_POINTER=<FIFO>` replays input written to that file
 (`move X Y`, `drag X Y` with the button held, `down X Y [clicks]`,
 `up X Y [clicks]`, `rdown X Y`, `rup X Y`, `scroll X Y DISTANCE`, in window
 points; `key <keystroke>` and `type <text>`; `dragfiles X Y PATH...`, files
@@ -1692,7 +1705,8 @@ screen it "fixes itself when the mouse moves"). `PICTO_GPUI_LAZY=1`, or a
 `lazy` line in the script (`eager` goes back), draws only when a real
 window would: after something invalidated it outside a draw, or asked for
 the next animation frame (`Window::is_dirty`, a test-support addition to
-the vendored GPUI). Run a script both ways and treat any difference as a
+the vendored GPUI). `PICTO_GPUI_LAZY_DEBUG=1` prints a line for each frame
+drawn lazily. Run a script both ways and treat any difference as a
 fault. Video does not play off-screen (AVFoundation needs the main run
 loop), and the tool cannot resize a window.
 

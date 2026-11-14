@@ -1,13 +1,12 @@
 //! Opt-in: keep drawing while the window is covered. GPUI stops a window's
 //! frames once AppKit reports it fully covered, so a capture of it shows
-//! whatever it last drew. With `PICTO_GPUI_BACKGROUND` set the window is told
-//! it is always visible, and can be checked behind other applications
-//! without being brought forward. Nothing changes when the variable is unset.
+//! whatever it last drew. With `PICTO_GPUI_BACKGROUND` set, GPUI's window
+//! class answers that its windows are always visible, so the app can be
+//! checked behind other applications without being brought forward. The
+//! answer is replaced for the class, so it holds for every window the app
+//! opens afterwards too, until the app quits. Nothing changes when the
+//! variable is unset, which a release build never reads (see `seams.rs`).
 use gpui::Window;
-
-pub fn enabled() -> bool {
-    std::env::var_os("PICTO_GPUI_BACKGROUND").is_some()
-}
 
 #[cfg(target_os = "macos")]
 pub fn keep_painting(window: &Window) {
@@ -17,7 +16,7 @@ pub fn keep_painting(window: &Window) {
     extern "C" fn visible(_: *mut c_void, _: *const c_void) -> usize {
         1 << 1
     }
-    if !enabled() {
+    if !crate::seams::background() {
         return;
     }
     appkit::with_ns_window(window, |ns_window| {

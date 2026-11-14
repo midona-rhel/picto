@@ -18,9 +18,12 @@ mod motion;
 // Pictures of the app drawn off-screen, for checks without a screen.
 #[cfg(test)]
 mod offscreen;
+// Input playback, a test seam a release build does not hold (`seams.rs`).
+#[cfg(any(test, debug_assertions))]
 mod pointer;
 mod prompt;
 mod screens;
+mod seams;
 mod session;
 mod settings;
 mod shell;
@@ -117,10 +120,7 @@ fn prepare(cx: &mut App) {
 /// Electron window's; otherwise where it was last, on a display that is still
 /// there (`getSavedMainWindowState`), else centred at the default size.
 fn main_window_bounds(cx: &App) -> WindowBounds {
-    let exact = std::env::var("PICTO_GPUI_WINDOW").ok().and_then(|value| {
-        let (width, height) = value.split_once('x')?;
-        Some((width.parse().ok()?, height.parse().ok()?))
-    });
+    let exact = seams::exact_window();
     let centred = |width: f32, height: f32| {
         let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         // A centred origin can land on a half point, which makes the
@@ -165,7 +165,7 @@ fn main_window_bounds(cx: &App) -> WindowBounds {
 /// window in full screen keeps the bounds it will return to, as production's
 /// `getNormalBounds` does, and opens at them next time.
 fn remember_window(window: &Window, cx: &mut App) {
-    if std::env::var_os("PICTO_GPUI_WINDOW").is_some() {
+    if seams::exact_window().is_some() {
         return;
     }
     let (bounds, maximized) = match window.window_bounds() {
@@ -257,7 +257,7 @@ fn main() {
         // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
         // keyboard from whatever the user is working in, and keeps it
         // drawing while it is covered.
-        let background = covered::enabled();
+        let background = seams::background();
         let window = cx
             .open_window(
                 WindowOptions {
@@ -286,6 +286,7 @@ fn main() {
                 },
             )
             .unwrap();
+        #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
         if !background {
             cx.activate(true);

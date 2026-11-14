@@ -403,8 +403,8 @@ fn migrate(object: Map<String, Value>) -> Map<String, Value> {
 
 /// This app's own folder for what it keeps per machine.
 pub fn location() -> Option<PathBuf> {
-    if let Some(folder) = std::env::var_os("PICTO_GPUI_STATE").filter(|f| !f.is_empty()) {
-        return Some(PathBuf::from(folder));
+    if let Some(folder) = crate::seams::state_folder() {
+        return Some(folder);
     }
     if cfg!(test) {
         return None;

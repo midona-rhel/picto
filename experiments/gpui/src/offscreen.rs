@@ -131,13 +131,7 @@ fn plays_a_script() {
     let script = std::fs::read_to_string(variable("PICTO_GPUI_SCRIPT")).unwrap();
     let out = variable("PICTO_GPUI_OUT");
     std::fs::create_dir_all(&out).unwrap();
-    let (width, height) = std::env::var("PICTO_GPUI_WINDOW")
-        .ok()
-        .and_then(|value| {
-            let (width, height) = value.split_once('x')?;
-            Some((width.parse().ok()?, height.parse().ok()?))
-        })
-        .unwrap_or((1213., 865.));
+    let (width, height) = crate::seams::exact_window().unwrap_or((1213., 865.));
 
     let (events, delivered) = std::sync::mpsc::channel();
     let application = crate::application::Application::new(root.clone(), events);

@@ -63,7 +63,7 @@ pub enum Presentation {
 /// override-redirect window that takes no keyboard focus, and a Windows
 /// pop-up's keyboard and activation have never been checked on a screen.
 pub fn presentation() -> Presentation {
-    let forced_in_window = std::env::var("PICTO_GPUI_MENU").is_ok_and(|value| value == "window");
+    let forced_in_window = crate::seams::menus_in_window();
     if cfg!(target_os = "macos") && !forced_in_window {
         Presentation::PopUpWindows
     } else {

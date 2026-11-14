@@ -240,7 +240,7 @@ impl Flash {
 
 impl Flash {
     pub fn open(path: PathBuf) -> Self {
-        let silent = std::env::var_os("PICTO_GPUI_SILENT").is_some();
+        let silent = crate::seams::silent();
         let (input, events) = mpsc::channel();
         let (control, controls) = mpsc::channel::<Control>();
         let frame = Arc::new(Mutex::new(None));

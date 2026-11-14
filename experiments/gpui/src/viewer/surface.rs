@@ -886,7 +886,7 @@ impl MediaSurface {
                 }
                 // `PICTO_GPUI_SILENT=1`: nothing plays aloud, for checks run
                 // while nobody is at the machine.
-                options.muted |= std::env::var_os("PICTO_GPUI_SILENT").is_some();
+                options.muted |= crate::seams::silent();
                 let mime = mime.to_owned();
                 let player = cx.new(|cx| {
                     super::video::VideoPlayer::new(kind, path, &mime, options, Some(thumbnail), cx)

@@ -385,9 +385,7 @@ impl Shell {
             // `PICTO_GPUI_INSPECTOR=272` opens at that width whatever was
             // kept, to compare against an Electron window whose inspector
             // was resized.
-            inspector_width: std::env::var("PICTO_GPUI_INSPECTOR")
-                .ok()
-                .and_then(|width| width.parse().ok())
+            inspector_width: crate::seams::inspector_width()
                 .map_or(kept.inspector_width, crate::state::inspector_width),
             resizing: None,
             rails,
