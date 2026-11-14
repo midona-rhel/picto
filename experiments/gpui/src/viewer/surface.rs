@@ -188,7 +188,7 @@ impl MediaSurface {
                     .into_iter()
                     .flatten(),
             ) {
-                cx.drop_image(image, None);
+                crate::atlas::release(image, cx);
             }
         })
         .detach();
@@ -231,7 +231,7 @@ impl MediaSurface {
 
     /// Takes the retired pictures nothing draws any more out of the sprite
     /// atlas of every window.
-    fn release_retired(&mut self, window: &mut Window, cx: &mut App) {
+    fn release_retired(&mut self, cx: &mut App) {
         let held = match &self.held {
             Some(Held::Image { image, .. }) => Some(image),
             _ => None,
@@ -245,7 +245,7 @@ impl MediaSurface {
         });
         self.retired = kept;
         for image in released {
-            cx.drop_image(image, Some(window));
+            crate::atlas::release(image, cx);
         }
     }
 
@@ -1481,7 +1481,7 @@ impl Render for MediaSurface {
         }
         surface = surface.children(navigator);
         self.release_hold(cx);
-        self.release_retired(window, cx);
+        self.release_retired(cx);
         if let Some(held) = &self.held {
             let layer = div().absolute().inset_0();
             surface = surface.child(match held {

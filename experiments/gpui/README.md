@@ -80,19 +80,15 @@ On macOS, `run.sh` copies a library, builds the app and opens it:
 experiments/gpui/run.sh /path/to/Main.library
 ```
 
-It copies the database with SQLite's online backup from a read-only
-connection (`sqlite3 -readonly … .backup`, which includes committed WAL data
-and never touches the live files), then clones everything else in the library
-folder with APFS `clonefile` (`cp -Rc`), which takes no space until either
-side changes a file. It refuses, copying nothing, when the library and `/tmp`
-are on different volumes or the volume is not APFS. The copy goes to
-`/tmp/picto-gpui-library.XXXXXX/<Name>.library`. It then builds the debug
-binary, wraps it as `experiments/gpui/target/Picto GPUI.app` (bundle id
+It refuses, copying nothing, when the library and the system's temporary
+folder (`$TMPDIR`) are on different volumes or the volume is not APFS, then
+builds the debug binary and makes the copy with its `--make-copy` (below),
+which on APFS clones every file but the database with `clonefile`, taking no
+space until either side changes a file. It then wraps the binary as
+`experiments/gpui/target/Picto GPUI.app` (bundle id
 `dev.picto.gpui-experiment`; the bundle is needed for system notifications),
 writes the copy's path to `target/last-snapshot` and opens the bundle on the
-copy. It needs the `sqlite3` command. It does not look for symbolic links;
-the app refuses such a copy when it opens it. `PICTO_GPUI_COPY_ONLY=1` makes
-the copy, prints its path and stops.
+copy. `PICTO_GPUI_COPY_ONLY=1` makes the copy, prints its path and stops.
 
 On every platform the app makes the copy itself:
 
@@ -361,9 +357,8 @@ grid: Tags (`tags/`), Subscriptions (`subscriptions/`), Duplicates
 (`duplicates/`). A screen can hand the titlebar its own controls. The tag
 browser model the Tags screen, the tag picker and the Add Tags dialog share
 is `src/tags.rs`; the folder tree the folder picker and the Folders dialog
-share is `inspector/folder_picker.rs`. The shared cover dialog
-(`MediaCoverDialog`) lives in `screens/subscriptions/cover_dialog.rs` and is
-also used for the library cover.
+share is `inspector/folder_picker.rs`. The cover dialog (`MediaCoverDialog`)
+a subscription's cover and the library's share is `ui/cover_dialog.rs`.
 
 **Inspector** (`src/inspector/`). The right rail: the destination when
 nothing is selected (`scope.rs`), one item (`mod.rs`), several
@@ -827,7 +822,6 @@ re-checked by reading the code; the rest were checked against it.
   dragged.
 - "Ungroup N Collections..." names no count when the whole destination is
   selected and not all loaded.
-- Selecting the new group after Group..., the organizer or a merge.
 - Reduced motion: the system setting is not read.
 - File choosers take every file type (GPUI's prompt has no type filter).
 
@@ -857,6 +851,9 @@ re-checked by reading the code; the rest were checked against it.
 - Word and PowerPoint files are not viewed: they keep their embedded
   thumbnail and open in the default application.
 - Organize › Tags opens the Tags screen; production's row does nothing.
+- On "Find Items with This Media" the inspector shows the destination's
+  covers, item count and size; production shows its empty, unavailable
+  layout there.
 - Copy in the application menu, outside a text field, copies the selection's
   files as ⌘C does; production's row, chosen with the pointer, copies nothing.
 - Failures production leaves silent are reported: a failed Copy, Regenerate
@@ -885,6 +882,11 @@ re-checked by reading the code; the rest were checked against it.
   marker and then fails; here there is no marker.
 - With one subfolder tile selected the inspector shows that folder;
   production keeps the parent's scope (or shows no covers or size).
+- A folder's or smart folder's inspector shows Export here. Production's
+  inspector offers it too (`exportScope` in `Inspector.tsx`), but the
+  sidebar nodes it reads carry no `folder_id` or `smart_folder_id`
+  (`sidebarController.ts`), so it never shows, and Auto tags always reads
+  No there.
 - A cover saved as a rendered crop shows here; production's media protocol
   falls back to the download glyph for it.
 - One dropped path that is not a directory is never sent to the folder
@@ -905,18 +907,13 @@ Text and keyboard
   next key (GPUI hands an action no repeat flag)†.
 
 Navigation and results
-- A filter change or a search is not a step of Back and Forward, and the
-  grid returns to its top.
-- A collection reorder or sort that fails is written only to standard
-  error; a detail window whose item fails to load stays blank.
-- The Tags screen shows changes made elsewhere only when it is opened again,
-  and Undo does not reach tag edits†.
+- A detail window on one item whose details cannot be read keeps the
+  thumbnail and never opens the file; production opens the file by its hash
+  without reading details.
 - Settings reads the library's statistics and cloud state once when it
   opens; the keyboard preset, audio visualization and shortcut edits apply
   only on Save, without production's live preview†; an undo that reverts a
-  settings write does not reload the model†. "Reset all views" deletes the
-  `view_pref` rows with its own SQL rather than through the core's
-  `settings.view.reset`.
+  settings write does not reload the model†.
 
 Drawing (GPUI cannot scale or rotate an element's contents, and has no
 radial gradients, masks or blend modes)

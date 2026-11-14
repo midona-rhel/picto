@@ -390,6 +390,10 @@ impl Viewer {
                     ..Default::default()
                 });
             }),
+            cx.subscribe(&editor, |this, _, event: &group_editor::Reordered, cx| {
+                this.error = event.0.clone();
+                cx.notify();
+            }),
             cx.subscribe(
                 &editor,
                 |_, _, event: &group_editor::QuickLookRequested, cx| {

@@ -124,6 +124,23 @@ pub fn inspector_order(namespace: &str) -> u8 {
     }
 }
 
+/// The order the library hands tags back in when asked for them by id
+/// (`tags.get_many`, which production's inspector and tag picker list an
+/// item's tags in): by group name, then name, ignoring ASCII case, then id.
+pub fn sort_as_library(tags: &mut [TagRecord]) {
+    tags.sort_by(|left, right| {
+        left.namespace
+            .to_ascii_lowercase()
+            .cmp(&right.namespace.to_ascii_lowercase())
+            .then_with(|| {
+                left.subname
+                    .to_ascii_lowercase()
+                    .cmp(&right.subname.to_ascii_lowercase())
+            })
+            .then(left.tag_id.0.cmp(&right.tag_id.0))
+    });
+}
+
 // ── Browsing ────────────────────────────────────────────────────
 
 /// What a tag browser lists (`SidebarMode` with the group browsed): every
@@ -860,6 +877,29 @@ mod tests {
     #[test]
     fn the_inspector_lists_general_tags_after_every_named_group() {
         assert!(inspector_order("creator") < inspector_order("series"));
+    }
+
+    #[test]
+    fn tags_by_id_come_by_group_then_name_ignoring_case() {
+        let tag = |id: u32, namespace: &str, subname: &str| TagRecord {
+            tag_id: picto_library::TagId(id),
+            namespace_id: picto_library::TagNamespaceId(0),
+            namespace: namespace.into(),
+            subname: subname.into(),
+            active_count: 0,
+            assignment_count: 0,
+        };
+        let mut tags = vec![
+            tag(1, "species", "humanoid"),
+            tag(2, "general", "vulva"),
+            tag(3, "rating", "explicit"),
+            tag(4, "general", "Anus"),
+            tag(5, "general", "big_butt"),
+            tag(6, "general", "anus"),
+        ];
+        super::sort_as_library(&mut tags);
+        let order = tags.iter().map(|tag| tag.tag_id.0).collect::<Vec<_>>();
+        assert_eq!(order, [4, 6, 5, 2, 3, 1]);
         assert!(inspector_order("rating") < inspector_order("somethingelse"));
         assert!(inspector_order("somethingelse") < inspector_order("general"));
         assert_eq!(inspector_order(""), inspector_order("General"));

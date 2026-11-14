@@ -345,8 +345,8 @@ impl Inspector {
         self.selection.sizes.clear();
         self.selection.turning.clear();
         for (_, (_, _, turned)) in self.selection.turned.drain() {
-            cx.drop_image(turned.card, None);
-            cx.drop_image(turned.mask, None);
+            crate::atlas::release(turned.card, cx);
+            crate::atlas::release(turned.mask, cx);
         }
         self.thumbnails.update(cx, |thumbnails, _| {
             for holder in STACK_PINS {
@@ -427,8 +427,8 @@ impl Inspector {
             .collect::<Vec<_>>();
         for hash in gone {
             if let Some((_, _, turned)) = self.selection.turned.remove(&hash) {
-                cx.drop_image(turned.card, Some(window));
-                cx.drop_image(turned.mask, Some(window));
+                crate::atlas::release(turned.card, cx);
+                crate::atlas::release(turned.mask, cx);
             }
         }
         for ((card, thumbnail), size) in cards.into_iter().zip(thumbnails).zip(sizes) {
@@ -569,8 +569,8 @@ impl Inspector {
                         // The stack was let go while this was drawn.
                         if !this.selection.turning.remove(&hash) {
                             if let Some(drawn) = drawn {
-                                cx.drop_image(drawn.card, None);
-                                cx.drop_image(drawn.mask, None);
+                                crate::atlas::release(drawn.card, cx);
+                                crate::atlas::release(drawn.mask, cx);
                             }
                             return;
                         }
@@ -578,8 +578,8 @@ impl Inspector {
                             && let Some((_, _, old)) =
                                 this.selection.turned.insert(hash, (shape, rail, drawn))
                         {
-                            cx.drop_image(old.card, None);
-                            cx.drop_image(old.mask, None);
+                            crate::atlas::release(old.card, cx);
+                            crate::atlas::release(old.mask, cx);
                         }
                         cx.notify();
                     });
@@ -686,11 +686,14 @@ impl Inspector {
         let (entries, tags) = {
             let session = self.session.read(cx);
             let tags = summary.as_ref().map_or_else(Vec::new, |summary| {
-                summary
+                let mut tags = summary
                     .shared_tags
                     .iter()
                     .filter_map(|id| session.tags.get(&id.0).cloned())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                // As production lists them, unsorted after `tags.get_many`.
+                crate::tags::sort_as_library(&mut tags);
+                tags
             });
             (session.nav.clone(), tags)
         };

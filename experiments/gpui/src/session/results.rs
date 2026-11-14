@@ -5,7 +5,7 @@ use super::{
     VIEW_SAVE_DELAY, Visit,
 };
 use crate::backend::{self, Arrived, Fetch, Reply, Request};
-use crate::grid::selection::End;
+use crate::grid::selection::{End, Selection};
 use crate::grid::{filters::Filters, prefs::ViewPrefs, window};
 use gpui::*;
 use picto_library::RootId;
@@ -88,6 +88,7 @@ impl Session {
         let mut tracked = self.selection.tracked();
         tracked.extend(self.selected_item().map(|item| item.root_id));
         tracked.extend(self.anchor.map(|anchor| anchor.id));
+        tracked.extend(self.pending_select);
         tracked.sort_unstable();
         tracked.dedup();
         // The same window, as many items as it holds (`reconcileSnapshot`).
@@ -118,6 +119,7 @@ impl Session {
         self.window_active = None;
         self.window_queued = None;
         self.pending_focus = None;
+        self.pending_select = None;
         let _ = self.sender.send(Request::Query(
             self.generation,
             entry.scope.clone(),
@@ -197,14 +199,44 @@ impl Session {
         self.query(cx);
     }
 
-    /// Replaces the filter bar's filters and narrows the grid by them.
+    /// Replaces the filter bar's filters and narrows the grid by them, as
+    /// a step of Back and Forward (`navigateWithGridFilters`): Back shows
+    /// the grid with the filters it had, where it was scrolled. The
+    /// filtered grid starts at its top.
     pub fn set_filters(&mut self, filters: Filters, cx: &mut Context<Self>) {
         if filters == self.filters {
             return;
         }
+        self.close_viewer(cx);
+        self.save_grid();
+        let step = self.filter_step(&filters);
+        self.record(Visit {
+            scope: self.scope,
+            viewing: false,
+            place: None,
+            filters: step,
+        });
         let filter = Self::filter_of(&filters);
         self.filters = filters;
         self.set_filter(filter, cx);
+        cx.emit(Change::Navigation);
+    }
+
+    /// The index of `filters` in the steps' filters, added if new.
+    pub(super) fn filter_step(&mut self, filters: &Filters) -> usize {
+        match self.filter_steps.iter().position(|step| step == filters) {
+            Some(step) => step,
+            None => {
+                self.filter_steps.push(filters.clone());
+                self.filter_steps.len() - 1
+            }
+        }
+    }
+
+    /// The step index of the filters the grid has now.
+    pub(super) fn filters_step(&mut self) -> usize {
+        let filters = self.filters.clone();
+        self.filter_step(&filters)
     }
 
     pub(super) fn filter_of(filters: &Filters) -> Option<FilterExpr> {
@@ -241,10 +273,12 @@ impl Session {
             self.set_filters(filters, cx);
             return;
         }
+        let step = self.filter_step(&filters);
         self.record(Visit {
             scope: index,
             viewing: false,
             place: None,
+            filters: step,
         });
         self.open(index, None, Some(filters), cx);
     }
@@ -592,6 +626,17 @@ impl Session {
                     .and_then(|item| self.position_of(item.root_id));
                 self.focus_on(last, cx);
             }
+        }
+        if let Some(id) = self.pending_select.take()
+            && let Some(Some(ordinal)) = places.get(&id)
+        {
+            let end = End {
+                id,
+                ordinal: *ordinal,
+            };
+            self.selection = Selection::only(end);
+            self.anchor = Some(end);
+            self.focus_on(Some(*ordinal), cx);
         }
         cx.emit(Change::Results);
     }

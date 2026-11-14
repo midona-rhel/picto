@@ -193,6 +193,9 @@ pub struct DetailWindow {
     opened: Option<usize>,
     /// The shown entry's details, once they have arrived.
     details: Option<RootDetails>,
+    /// Why a collection's details could not be read (`GroupDetailWindow`'s
+    /// error, shown in the window's middle in place of the members).
+    error: Option<SharedString>,
     loading: Option<Task<()>>,
     surface: Entity<MediaSurface>,
     focus: FocusHandle,
@@ -254,6 +257,7 @@ impl DetailWindow {
             reader,
             opened: None,
             details: None,
+            error: None,
             loading: None,
             surface,
             focus: focus.clone(),
@@ -284,6 +288,7 @@ impl DetailWindow {
         // Until the new entry's details arrive, the menu and the copy keys
         // have no file to act on rather than the previous entry's.
         self.details = None;
+        self.error = None;
         window.set_window_title(&entry.title());
         if self.recorded != Some(entry.root) {
             self.recorded = Some(entry.root);
@@ -303,14 +308,33 @@ impl DetailWindow {
             .read(cx)
             .run(move |library| library.details(root));
         self.loading = Some(cx.spawn(async move |this, cx| {
-            if let Ok(Ok(details)) = read.await {
-                let _ = this.update(cx, |this, cx| {
-                    if this.entry().is_some_and(|entry| entry.root == root) {
+            let Ok(read) = read.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if !this.entry().is_some_and(|entry| entry.root == root) {
+                    return;
+                }
+                match read {
+                    Ok(details) if this.group && details.root.kind != RootKind::Collection => {
+                        this.error = Some("The selected item is not a group.".into());
+                        cx.notify();
+                    }
+                    Ok(details) => {
                         this.details = Some(details);
                         this.present(cx);
                     }
-                });
-            }
+                    // TODO: a single item whose details cannot be read keeps
+                    // its thumbnail and never opens its file; production
+                    // opens the file by its hash without reading details.
+                    Err(error) => {
+                        if this.group {
+                            this.error = Some(error.to_string().into());
+                            cx.notify();
+                        }
+                    }
+                }
+            });
         }));
     }
 
@@ -557,7 +581,7 @@ impl DetailWindow {
                 let Some(entry) = self.entry() else {
                     return;
                 };
-                let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                let candidate = crate::ui::cover_dialog::Candidate {
                     media_item: i64::from(entry.root.0),
                     size: (entry.width.unwrap_or(1), entry.height.unwrap_or(1)),
                     thumbnail: crate::grid::thumbnails::present(
@@ -730,11 +754,23 @@ impl Render for DetailWindow {
                 }
             }))
             // TODO: the per-image zoom memory (`zoomCache`).
-            .child(if self.group && self.opened.is_none() {
-                self.reader.clone().into_any_element()
-            } else {
-                self.surface.clone().into_any_element()
-            })
+            .child(
+                if let Some(error) = self.error.clone().filter(|_| self.group) {
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text(theme::TEXT_MD)
+                        .text_color(rgb(theme::DANGER))
+                        .child(error)
+                        .into_any_element()
+                } else if self.group && self.opened.is_none() {
+                    self.reader.clone().into_any_element()
+                } else {
+                    self.surface.clone().into_any_element()
+                },
+            )
             .child(self.boundary.notice(End::First, cx))
             .child(self.boundary.notice(End::Last, cx));
         // Hidden, the toolbar takes no pointer (`pointer-events: none`).

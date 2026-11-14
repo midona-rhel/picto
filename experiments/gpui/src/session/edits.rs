@@ -13,10 +13,12 @@ impl Session {
     pub fn open_viewer(&mut self, cx: &mut Context<Self>) {
         if !self.viewer && self.focus.is_some() {
             self.viewer = true;
+            let filters = self.filters_step();
             self.record(Visit {
                 scope: self.scope,
                 viewing: true,
                 place: None,
+                filters,
             });
             cx.emit(Change::Viewer);
             cx.emit(Change::Navigation);
@@ -34,6 +36,7 @@ impl Session {
             scope: self.scope,
             viewing: false,
             place: None,
+            filters: self.filters_step(),
         };
         if self.history_index > 0 && self.history[self.history_index - 1] == grid {
             self.history_index -= 1;

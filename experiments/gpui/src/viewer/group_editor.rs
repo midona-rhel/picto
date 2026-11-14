@@ -52,11 +52,16 @@ pub struct QuickLookRequested(pub usize);
 /// The selected members are to leave the collection.
 pub struct RemoveRequested(pub Vec<usize>);
 
+/// A reorder by dragging has been answered: why it failed, or `None` when
+/// it went through (`saveOrder` sets and clears the view's inline error).
+pub struct Reordered(pub Option<SharedString>);
+
 impl EventEmitter<MemberMenu> for GroupEditor {}
 impl EventEmitter<QuickLookRequested> for GroupEditor {}
 impl EventEmitter<RemoveRequested> for GroupEditor {}
 impl EventEmitter<MemberOpened> for GroupEditor {}
 impl EventEmitter<CollectionMenu> for GroupEditor {}
+impl EventEmitter<Reordered> for GroupEditor {}
 
 /// `groupSelectionForClick`: Shift selects from the anchor to the member
 /// (the anchor stays), Cmd or Ctrl toggles it, a plain click selects it
@@ -606,7 +611,21 @@ impl GroupEditor {
         if let (Some((target, side)), Some(collection)) = (dragging.target, self.collection) {
             let order = drag::plan_reorder(&ids, &dragged, target, side);
             if !order.is_empty() {
-                drop(super::group::reorder(&self.session, collection, order, cx));
+                let answer = super::group::reorder(&self.session, collection, order, cx);
+                cx.spawn(async move |this, cx| {
+                    let Ok(result) = answer.await else {
+                        return;
+                    };
+                    let _ = this.update(cx, |this, cx| {
+                        // Only while the editor still shows that collection.
+                        if this.collection == Some(collection) {
+                            cx.emit(Reordered(
+                                result.err().map(|error| error.to_string().into()),
+                            ));
+                        }
+                    });
+                })
+                .detach();
             }
         }
         self.set_selection(dragged.into_iter().collect(), cx);

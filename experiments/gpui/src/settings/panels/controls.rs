@@ -20,8 +20,8 @@ impl SettingsWindow {
         let (app, grid) = (&state.draft.app, &state.draft.grid);
         let resetting = state.reset_views;
         const WIDTH: f32 = 220.;
-        // TODO: the grid's wheel follows its action ("Adjust thumbnail
-        // size"); the setting is not read yet.
+        // "Mouse wheel" is read by the grid's wheel handler on each turn:
+        // "Adjust thumbnail size" zooms the tiles (`grid::nav::wheel_zoom`).
         let mouse = {
             let mut content = card(theme).child(title(theme, "Mouse")).child(row(
                 theme,

@@ -62,7 +62,7 @@ impl Session {
         self.history_index = history_index;
         self.saved = std::mem::take(&mut self.saved)
             .into_iter()
-            .filter_map(|(index, grid)| Some((moved(index)?, grid)))
+            .filter_map(|((index, filters), grid)| Some(((moved(index)?, filters), grid)))
             .collect();
         self.prefs_scope = self.prefs_scope.and_then(moved);
         self.displayed = moved(self.displayed).unwrap_or_else(|| survivor(self.displayed));
@@ -75,16 +75,18 @@ impl Session {
                 } else {
                     self.history.truncate(self.history_index + 1);
                 }
+                let filters = self.filters_step();
                 self.history.push(Visit {
                     scope: fallback,
                     viewing: false,
                     place: None,
+                    filters,
                 });
                 self.history_index = self.history.len() - 1;
                 self.open(fallback, None, None, cx);
                 // What `open` kept of the grid on screen was the deleted
                 // destination's, not the fallback's.
-                self.saved.remove(&fallback);
+                self.saved.retain(|(scope, _), _| *scope != fallback);
             }
         }
         cx.emit(Change::Navigation);
@@ -135,15 +137,21 @@ impl Session {
             self.close_viewer(cx);
             return;
         }
+        // A destination chosen afresh opens at its top, without filters
+        // unless they are locked.
+        let filters = if self.filters_locked {
+            self.filters.clone()
+        } else {
+            Filters::default()
+        };
+        let step = self.filter_step(&filters);
         self.record(Visit {
             scope: index,
             viewing: false,
             place: None,
+            filters: step,
         });
-        // A destination chosen afresh opens at its top, without filters
-        // unless they are locked.
-        let filters = (!self.filters_locked).then(Filters::default);
-        self.open(index, None, filters, cx);
+        self.open(index, None, Some(filters), cx);
     }
 
     /// Adds a place after the current one, dropping any Forward steps.
@@ -167,9 +175,37 @@ impl Session {
             return;
         };
         self.history_index = target;
+        let step_filters = self.filter_steps[visit.filters].clone();
         if visit.scope == self.scope {
-            // The same destination: only the viewer opens or closes, and the
-            // grid stays where it was.
+            if step_filters != self.filters && !self.filters_locked {
+                // A step of the filters: the grid comes back with the
+                // filters it had, where it was when nothing has changed what
+                // it would show.
+                self.save_grid();
+                let saved = self
+                    .saved
+                    .remove(&(visit.scope, visit.filters))
+                    .filter(|saved| saved.search_text.is_empty());
+                self.filter = Self::filter_of(&step_filters);
+                self.filters = step_filters;
+                if self.viewer {
+                    self.viewer = false;
+                    cx.emit(Change::Viewer);
+                }
+                match saved {
+                    // Where it was scrolled, with nothing selected, as
+                    // production's filter intent leaves it.
+                    Some(saved) => {
+                        self.restore_grid(saved, cx);
+                        self.clear_selection(cx);
+                    }
+                    None => self.query(cx),
+                }
+                cx.emit(Change::Navigation);
+                return;
+            }
+            // The same grid: only the viewer opens or closes, and the grid
+            // stays where it was.
             let viewing = visit.viewing && self.focus.is_some();
             if self.viewer != viewing {
                 self.viewer = viewing;
@@ -184,20 +220,18 @@ impl Session {
         let filters = if self.filters_locked {
             self.filters.clone()
         } else {
-            self.saved
-                .get(&visit.scope)
-                .map(|saved| saved.filters.clone())
-                .unwrap_or_default()
+            step_filters
         };
+        let step = self.filter_step(&filters);
         let saved = self
             .saved
-            .remove(&visit.scope)
+            .remove(&(visit.scope, step))
             .filter(|saved| saved.search_text.is_empty() && saved.filters == filters);
         self.open(visit.scope, saved, Some(filters), cx);
     }
 
     /// What the current grid holds, to return to.
-    fn save_grid(&mut self) {
+    pub(super) fn save_grid(&mut self) {
         if self
             .nav
             .get(self.displayed)
@@ -206,8 +240,9 @@ impl Session {
         {
             return;
         }
+        let filters = self.filters_step();
         self.saved.insert(
-            self.displayed,
+            (self.displayed, filters),
             SavedGrid {
                 items: self.items.clone(),
                 start: self.start,
@@ -444,6 +479,7 @@ mod tests {
             scope,
             viewing: false,
             place: None,
+            filters: 0,
         };
         // Destinations 0..4; 2 was deleted and 3 moved up to 2.
         let moved = |index: usize| match index {

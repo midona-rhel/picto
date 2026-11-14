@@ -237,7 +237,8 @@ impl Sidebar {
     ) {
         // The grid's "New Folder" reports any failure; "New Folder with
         // Selection" only a folder nested too deep.
-        let report = if members.is_some() {
+        let adds = members.is_some();
+        let report = if adds {
             Report::folder_depth()
         } else {
             Report::failure("Could not create folder")
@@ -255,8 +256,18 @@ impl Sidebar {
             },
             window,
             cx,
-            |this, result, window, cx| {
+            move |this, result, window, cx| {
                 if let Ok(id) = result {
+                    // Adding the selection to the new folder makes it the
+                    // last folder used and lets the selection go
+                    // (`updateTargetFolderMembership`,
+                    // `settleSelectionAfterMutation`).
+                    if adds {
+                        this.session.update(cx, |session, cx| {
+                            session.record_folder_use(id);
+                            session.clear_selection(cx);
+                        });
+                    }
                     this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
                 }
             },

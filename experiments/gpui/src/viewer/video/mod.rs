@@ -626,7 +626,7 @@ impl VideoPlayer {
     }
 
     /// Takes in what the media is doing, and the next picture.
-    fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn poll(&mut self, cx: &mut Context<Self>) {
         let Some(backend) = &mut self.backend else {
             return;
         };
@@ -673,7 +673,7 @@ impl VideoPlayer {
         if let Some(frame) = backend.take_frame() {
             let first = self.frame.is_none();
             if let Some(Frame::Image(old)) = self.frame.replace(frame) {
-                cx.drop_image(old, Some(window));
+                crate::atlas::release(old, cx);
             }
             if first {
                 cx.emit(FirstPicture);
@@ -1179,7 +1179,7 @@ fn tint(image: &mut image::RgbaImage, alpha: f32) {
 
 impl Render for VideoPlayer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.poll(window, cx);
+        self.poll(cx);
         let now = Instant::now();
         if self.playback.playing
             || now < self.settle_until

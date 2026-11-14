@@ -7,11 +7,9 @@
 //! `.picto-library-cover.json`; the sidebar and the library list then show
 //! the new cover.
 use crate::grid::thumbnails::{self, Thumbnails};
-use crate::screens::subscriptions::cover_dialog::{
-    Candidate, Cover, CoverHost, Target, add_page, cover_layer,
-};
 use crate::session::{Change, Session};
 use crate::ui;
+use crate::ui::cover_dialog::{Candidate, Cover, CoverHost, Target, add_page, cover_layer};
 use gpui::*;
 use picto_library::RootKind;
 use picto_library::query::{ItemScope, PageRequest, RootQuery, RootSummary};

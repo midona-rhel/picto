@@ -426,7 +426,7 @@ impl DuplicatesScreen {
             side.full_pending = false;
         }
         for image in released {
-            cx.drop_image(image, None);
+            crate::atlas::release(image, cx);
         }
     }
 
@@ -761,7 +761,7 @@ impl DuplicatesScreen {
                 .flat_map(|side| side.thumbnail.into_iter().chain(side.full)),
         );
         for image in images {
-            cx.drop_image(image, None);
+            crate::atlas::release(image, cx);
         }
     }
 
@@ -817,7 +817,7 @@ impl DuplicatesScreen {
             let _ = this.update(cx, |this, cx| {
                 if let Some(shown) = this.shown.as_mut().filter(|shown| shown.key == key) {
                     if let Some(old) = std::mem::replace(&mut shown.difference, image) {
-                        cx.drop_image(old, None);
+                        crate::atlas::release(old, cx);
                     }
                     if this.difference_hovered {
                         cx.notify();

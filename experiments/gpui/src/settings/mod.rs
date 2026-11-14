@@ -268,18 +268,6 @@ impl SettingsModel {
                 false,
                 move |stored| Ok(Some(model::patched(stored, &patch).to_string())),
             )?;
-            if reset {
-                library.auxiliary_write(
-                    picto_library::database::WorkPriority::ForegroundMutation,
-                    ["settings".to_string()],
-                    [],
-                    |transaction, _| {
-                        transaction
-                            .execute("DELETE FROM view_pref WHERE scope <> 'grid:defaults'", [])?;
-                        Ok(())
-                    },
-                )?;
-            }
             Ok::<(), picto_library::LibraryError>(())
         });
         // "Saving…" shows only for a save that takes longer than this.
@@ -296,18 +284,33 @@ impl SettingsModel {
         })
         .detach();
         cx.spawn(async move |this, cx| {
-            let result = written.await;
+            let mut result = match written.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("Unable to save settings.".to_string()),
+            };
+            if reset && result.is_ok() {
+                let answer = this.update(cx, |this, cx| {
+                    this.session
+                        .read(cx)
+                        .dispatch("settings.view.reset", serde_json::json!({}))
+                });
+                result = match answer {
+                    Ok(answer) => match answer.await {
+                        Ok(Ok(_)) => Ok(()),
+                        Ok(Err(error)) => Err(error),
+                        Err(_) => Err("Unable to save settings.".to_string()),
+                    },
+                    Err(_) => return false,
+                };
+            }
             this.update(cx, |this, cx| {
                 this.in_flight = false;
                 this.saving = false;
                 let saved = match result {
-                    Ok(Ok(())) => true,
-                    Ok(Err(error)) => {
-                        this.error = Some(error.to_string());
-                        false
-                    }
-                    Err(_) => {
-                        this.error = Some("Unable to save settings.".into());
+                    Ok(()) => true,
+                    Err(error) => {
+                        this.error = Some(error);
                         false
                     }
                 };

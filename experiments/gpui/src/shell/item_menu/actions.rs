@@ -210,17 +210,19 @@ impl Shell {
             }
             Action::CopySelection => self.copy_files(ids, cx),
             // ── Lifecycle ──
-            Action::Accept | Action::Restore => self.set_lifecycle(&target, Lifecycle::Active, cx),
+            Action::Accept | Action::Restore => {
+                self.set_lifecycle(&target, Lifecycle::Active, window, cx)
+            }
             // A member leaves its collection into the Trash
             // (`detachMembers(selected, 'trash')`).
             Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
             Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
-            Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, cx),
+            Action::MoveToTrash => self.set_lifecycle(&target, Lifecycle::Trash, window, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
                     self.request_permanent_delete(target, true, window, cx);
                 } else {
-                    self.set_lifecycle(&target, Lifecycle::Trash, cx);
+                    self.set_lifecycle(&target, Lifecycle::Trash, window, cx);
                 }
             }
             Action::DeletePermanently => {
@@ -252,7 +254,13 @@ impl Shell {
                         Reread::SELECTION,
                         move |library| library.add_to_folder(&selection, folder),
                         cx,
-                        |_, _, _| {},
+                        // `settleSelectionAfterMutation`.
+                        |this, added, cx| {
+                            if added.is_ok() {
+                                this.session
+                                    .update(cx, |session, cx| session.clear_selection(cx));
+                            }
+                        },
                     );
                 }
             }
@@ -299,12 +307,19 @@ impl Shell {
                 if target.quick_look {
                     let details = self.session.read(cx).selected_details().cloned();
                     if let Some(details) = details {
-                        drop(crate::viewer::group::sort(
-                            &self.session,
-                            &details,
-                            field,
-                            cx,
-                        ));
+                        let root = details.root.root_id;
+                        let answer = crate::viewer::group::sort(&self.session, &details, field, cx);
+                        let quick_look = self.quick_look.downgrade();
+                        cx.spawn(async move |_, cx| {
+                            if let Ok(result) = answer.await {
+                                let _ = quick_look.update(cx, |quick_look, cx| {
+                                    let failure =
+                                        result.err().map(|error| error.to_string().into());
+                                    quick_look.collection_edited(root, failure, cx);
+                                });
+                            }
+                        })
+                        .detach();
                     }
                 } else {
                     self.viewer
@@ -402,7 +417,7 @@ impl Shell {
             Action::SetLibraryCover => {
                 // The shown file, framed at once (`initialCandidate`).
                 if let (Some(item), Some(file)) = (target.items.first(), file) {
-                    let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                    let candidate = crate::ui::cover_dialog::Candidate {
                         media_item: i64::from(item.root_id.0),
                         size: (item.width.unwrap_or(1), item.height.unwrap_or(1)),
                         thumbnail: crate::grid::thumbnails::present(
@@ -562,7 +577,7 @@ impl Shell {
     /// it is given.
     pub(crate) fn open_library_cover(
         &mut self,
-        candidate: Option<crate::screens::subscriptions::cover_dialog::Candidate>,
+        candidate: Option<crate::ui::cover_dialog::Candidate>,
         cx: &mut Context<Self>,
     ) {
         self.library_cover
@@ -604,15 +619,67 @@ impl Shell {
     /// the Inbox (production's `setTargetLifecycle(target, …)`: the viewer's
     /// rows move the item it shows, not the grid's selection), closing the
     /// media view, and reads the grid again in place.
-    fn set_lifecycle(&mut self, target: &Target, lifecycle: Lifecycle, cx: &mut Context<Self>) {
+    /// Moves the items to the Trash, back out of it, or out of the Inbox.
+    /// From the media view or Quick Look, which show one item, the view
+    /// stays open (`useViewerEntityContextMenu` only sets the lifecycle) on
+    /// the item that takes its place: the next one, or the one before at
+    /// the end; with no other item it closes. Should the edit fail, the
+    /// view goes back to the item.
+    fn set_lifecycle(
+        &mut self,
+        target: &Target,
+        lifecycle: Lifecycle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if target.items.is_empty() {
             return;
         }
-        self.session.update(cx, |session, cx| {
-            let selection = target.selection(session);
-            session.close_viewer(cx);
-            let _ = session.set_lifecycle(selection, lifecycle, cx);
+        let quick_look = self.quick_look.read(cx).is_open();
+        let (selection, shown) = {
+            let session = self.session.read(cx);
+            let viewing = session.viewer || quick_look;
+            let shown = session
+                .focus_ordinal()
+                .zip(session.selected_item().map(|item| item.root_id))
+                .filter(|(_, id)| viewing && target.ids() == [*id]);
+            (target.selection(session), shown)
+        };
+        let Some((ordinal, id)) = shown else {
+            self.session.update(cx, |session, cx| {
+                session.close_viewer(cx);
+                let _ = session.set_lifecycle(selection, lifecycle, cx);
+            });
+            return;
+        };
+        let next = {
+            let session = self.session.read(cx);
+            [ordinal + 1, ordinal.wrapping_sub(1)]
+                .into_iter()
+                .find(|neighbour| session.item_at(*neighbour).is_some())
+        };
+        let answer = self.session.update(cx, |session, cx| {
+            match next {
+                Some(next) => session.select(next, cx),
+                None => session.close_viewer(cx),
+            }
+            session.set_lifecycle(selection, lifecycle, cx)
         });
+        if next.is_none() && quick_look {
+            self.quick_look
+                .update(cx, |quick_look, cx| quick_look.close(window, cx));
+        }
+        let session = self.session.downgrade();
+        cx.spawn(async move |_, cx| {
+            if let Ok(Err(_)) = answer.await {
+                let _ = session.update(cx, |session, cx| {
+                    if let Some(back) = session.position_of(id) {
+                        session.select(back, cx);
+                    }
+                });
+            }
+        })
+        .detach();
     }
 
     fn sort_folder(&mut self, folder: FolderId, field: ContentSortField, cx: &mut Context<Self>) {
@@ -672,23 +739,27 @@ impl Shell {
             &self.session,
             Report::failure("Could not create group").and_announce("collections.organize"),
             Reread::NOTHING,
-            move |library: &Library| -> picto_library::Result<Option<super::organizer::Request>> {
+            // The merged group, or what the organizer is to ask.
+            move |library: &Library| -> picto_library::Result<
+                Result<picto_library::RootId, super::organizer::Request>,
+            > {
                 let summary = library.selection_summary(&selection)?;
                 let notes = library.collection_note_draft(&selection)?;
                 if let ([group], 0) = (summary.collection_candidates.as_slice(), notes.source_count)
                 {
-                    library.organize_into_collection(&picto_library::GroupRequest {
-                        target: selection,
-                        cover_root_id: cover,
-                        winning_collection_id: Some(group.collection_id),
-                        name: None,
-                        notes: None,
-                        modified_at_ms: crate::now_ms(),
-                    })?;
-                    Ok(None)
+                    let (merged, _) =
+                        library.organize_into_collection(&picto_library::GroupRequest {
+                            target: selection,
+                            cover_root_id: cover,
+                            winning_collection_id: Some(group.collection_id),
+                            name: None,
+                            notes: None,
+                            modified_at_ms: crate::now_ms(),
+                        })?;
+                    Ok(Ok(merged))
                 } else {
                     // Anything else is the organizer's to decide.
-                    Ok(Some(super::organizer::Request {
+                    Ok(Err(super::organizer::Request {
                         target: selection,
                         cover,
                         groups: summary.collection_candidates,
@@ -699,16 +770,15 @@ impl Shell {
             },
             cx,
             |this, decide, cx| match decide {
-                Ok(None) => {
-                    // `clearSelection`, then the merged group's results.
-                    // TODO: select the merged group once the results hold
-                    // it, as production does.
+                Ok(Ok(merged)) => {
+                    // `clearSelection`, then the merged group alone
+                    // (`replace_items`) once the results hold it.
                     this.session.update(cx, |session, cx| {
                         session.clear_selection(cx);
-                        session.reread(Reread::RESULTS, cx)
+                        session.select_when_listed(merged, cx)
                     });
                 }
-                Ok(Some(request)) => this.open_organizer(request, cx),
+                Ok(Err(request)) => this.open_organizer(request, cx),
                 Err(_) => {}
             },
         );
@@ -743,16 +813,20 @@ impl Shell {
             return;
         }
         let closes = details.media.len() - ids.len() <= 1;
-        let answer =
-            crate::viewer::group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let root = details.root.root_id;
+        let answer = crate::viewer::group::detach(&self.session, root, ids, trash, cx);
         let quick_look = self.quick_look.downgrade();
         cx.spawn_in(window, async move |_, cx| {
-            if let Ok(Ok(())) = answer.await
-                && closes
-            {
-                let _ =
-                    quick_look.update_in(cx, |quick_look, window, cx| quick_look.close(window, cx));
-            }
+            let Ok(result) = answer.await else {
+                return;
+            };
+            let _ = quick_look.update_in(cx, |quick_look, window, cx| match result {
+                Ok(()) if closes => quick_look.close(window, cx),
+                result => {
+                    let failure = result.err().map(|error| error.to_string().into());
+                    quick_look.collection_edited(root, failure, cx);
+                }
+            });
         })
         .detach();
     }

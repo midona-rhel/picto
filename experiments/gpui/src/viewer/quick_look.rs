@@ -12,7 +12,7 @@ use super::{
 };
 use crate::session::{Change, Session};
 use crate::{theme, ui};
-use gpui::*;
+use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::{RootId, RootKind};
 
 /// Quick Look opened or closed, so the shell shows or drops it.
@@ -45,6 +45,9 @@ pub struct QuickLook {
     /// double-click (`viewerIndex`): Escape goes back to the collection,
     /// the arrows step through its members.
     opened: Option<usize>,
+    /// Why the last edit of a collection shown here failed, and which
+    /// collection (`GroupSurface`'s inline error).
+    error: Option<(RootId, SharedString)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -114,6 +117,7 @@ impl QuickLook {
             recorded: None,
             member: None,
             opened: None,
+            error: None,
             _subscriptions: subscriptions,
         }
     }
@@ -125,6 +129,19 @@ impl QuickLook {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// An edit of the collection `root` (a sort, members taken out) has
+    /// been answered: its failure shows over the members, as the media
+    /// view's does, and one that went through takes the last away.
+    pub fn collection_edited(
+        &mut self,
+        root: RootId,
+        failure: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.error = failure.map(|failure| (root, failure));
+        cx.notify();
     }
 
     /// Opens on the selected item, which must be the only one selected.
@@ -179,6 +196,7 @@ impl QuickLook {
         self.member = None;
         self.opened = None;
         self.recorded = None;
+        self.error = None;
         self.surface.update(cx, |surface, _| surface.rest());
         self.group.update(cx, |group, cx| group.clear(cx));
         if let Some(focus) = self.return_focus.take() {
@@ -295,7 +313,7 @@ impl Render for QuickLook {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (index, total, collection) = match self.member {
-            Some(member) => (member, self.member_count(cx), false),
+            Some(member) => (member, self.member_count(cx), None),
             None => {
                 let session = self.session.read(cx);
                 (
@@ -303,10 +321,18 @@ impl Render for QuickLook {
                     session.total as usize,
                     session
                         .selected_item()
-                        .is_some_and(|item| item.kind == RootKind::Collection),
+                        .filter(|item| item.kind == RootKind::Collection)
+                        .map(|item| item.root_id),
                 )
             }
         };
+        // The failure shows only over the collection it was about.
+        let error = self
+            .error
+            .as_ref()
+            .filter(|(root, _)| collection == Some(*root))
+            .map(|(_, error)| error.clone());
+        let collection = collection.is_some();
         let frame = div()
             .absolute()
             .top(px(AREA_VERTICAL))
@@ -368,7 +394,21 @@ impl Render for QuickLook {
                 }),
             )
             .child(frame.child(if collection && self.opened.is_none() {
-                self.group.clone().into_any_element()
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .when_some(error, |column, error| {
+                        column.child(group::inline_error(error, cx))
+                    })
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .child(self.group.clone()),
+                    )
+                    .into_any_element()
             } else {
                 self.surface.clone().into_any_element()
             }))

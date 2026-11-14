@@ -218,6 +218,14 @@ impl Session {
         backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
+    /// Selects `id` alone once the destination, read again now, says where
+    /// it is: an item an edit has just made, which the loaded results do
+    /// not hold yet.
+    pub fn select_when_listed(&mut self, id: RootId, cx: &mut Context<Self>) {
+        self.pending_select = Some(id);
+        self.refresh_results(cx);
+    }
+
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() || self.focus.is_some() || !self.folder_selection.is_empty() {
             self.selection = Selection::default();

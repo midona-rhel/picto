@@ -2,7 +2,7 @@
 //! library's subscriptions, and one subscription's workspace when a card is
 //! opened. Opening a subscription is a place of the screen, so Back returns
 //! to the grid and the scope title names it.
-pub mod cover_dialog;
+mod cover;
 mod data;
 mod detail;
 mod dialogs;
@@ -160,24 +160,6 @@ fn schedule_menu(current: Option<&str>) -> menu::Entry {
     )
     .icon("menu-clock")
     .into()
-}
-
-/// How a notification reads (`showErrorNotification`,
-/// `showSuccessNotification`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Tone {
-    Error,
-    Success,
-}
-
-/// Shows a notification as production's toasts do, through the window's
-/// notification host.
-pub fn show_notification(tone: Tone, title: &str, message: &str, cx: &mut App) {
-    let (title, message) = (title.to_owned(), message.to_owned());
-    match tone {
-        Tone::Error => crate::ui::notify::error(title, message, cx),
-        Tone::Success => crate::ui::notify::success(title, message, cx),
-    }
 }
 
 /// The tabs of a subscription's data plane.
@@ -436,7 +418,7 @@ impl SubscriptionsScreen {
             let _ = this.update(cx, |this, cx| {
                 this.busy -= 1;
                 if let Err(error) = &outcome {
-                    show_notification(Tone::Error, "Subscription action failed", error, cx);
+                    crate::ui::notify::error("Subscription action failed", error.clone(), cx);
                 }
                 then(this, outcome, cx);
                 this.session
@@ -482,9 +464,7 @@ impl SubscriptionsScreen {
                             .retain(|id| list.iter().any(|entry| entry.id == *id));
                         this.list = Some(list);
                     }
-                    Err(error) => {
-                        show_notification(Tone::Error, "Subscriptions unavailable", &error, cx)
-                    }
+                    Err(error) => crate::ui::notify::error("Subscriptions unavailable", error, cx),
                 }
                 this.settled(cx);
                 cx.notify();
@@ -651,23 +631,20 @@ impl SubscriptionsScreen {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 match latest.status.as_str() {
-                    "succeeded" if exists => show_notification(
-                        Tone::Success,
+                    "succeeded" if exists => crate::ui::notify::success(
                         "Gallery already exists",
-                        &format!("{title} is already in the library."),
+                        format!("{title} is already in the library."),
                         cx,
                     ),
-                    "succeeded" => show_notification(
-                        Tone::Success,
+                    "succeeded" => crate::ui::notify::success(
                         "Gallery downloaded",
-                        &format!("{title} has been downloaded."),
+                        format!("{title} has been downloaded."),
                         cx,
                     ),
                     "cancelled" => {}
-                    status => show_notification(
-                        Tone::Error,
+                    status => crate::ui::notify::error(
                         "Gallery import failed",
-                        &latest.error_message.clone().unwrap_or_else(|| {
+                        latest.error_message.clone().unwrap_or_else(|| {
                             format!(
                                 "Gallery worker failed ({}).",
                                 latest.failure_kind.as_deref().unwrap_or(status)
@@ -714,7 +691,7 @@ impl SubscriptionsScreen {
                 for (id, result) in settled {
                     this.acting.remove(&id);
                     if let Ok(Err(error)) = result {
-                        show_notification(Tone::Error, "Subscription action failed", &error, cx);
+                        crate::ui::notify::error("Subscription action failed", error, cx);
                     }
                 }
                 this.session
@@ -773,12 +750,7 @@ impl SubscriptionsScreen {
                 Ok(Err(error)) => {
                     let _ = this.update(cx, |this, cx| {
                         if this.detail_generation == generation {
-                            show_notification(
-                                Tone::Error,
-                                "Subscription details unavailable",
-                                &error,
-                                cx,
-                            );
+                            crate::ui::notify::error("Subscription details unavailable", error, cx);
                         }
                     });
                     return;

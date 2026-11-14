@@ -6,6 +6,7 @@ mod menus;
 pub mod model;
 mod view;
 
+use crate::application;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::motion;
@@ -21,7 +22,10 @@ use gpui::*;
 use model::Rows;
 use picto_library::query::ItemScope;
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// The least time between two reloads a change elsewhere asks for.
+const INVALIDATION_SPACING: Duration = Duration::from_millis(500);
 
 /// Tags fetched at a time.
 const PAGE_SIZE: usize = 500;
@@ -124,6 +128,10 @@ pub struct TagsScreen {
     refocus: bool,
     /// Whether the session shows this screen, so returning to it reloads.
     showing: bool,
+    /// A reload asked for by a change to the library's tags, made here or
+    /// anywhere else, and when the last one ran (`scheduleInvalidationRefresh`).
+    invalidation: Option<Task<()>>,
+    invalidated_at: Option<Instant>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -168,6 +176,13 @@ impl TagsScreen {
                 }
                 this.showing = showing;
             }),
+            cx.subscribe(&session, |this, _, event: &application::Event, cx| {
+                if let application::Event::Changed(changed) = event
+                    && application::touches(changed, "tags")
+                {
+                    this.invalidated(cx);
+                }
+            }),
         ];
         let focus = cx.focus_handle();
         let mut screen = Self {
@@ -201,6 +216,8 @@ impl TagsScreen {
             layers: Vec::new(),
             refocus: false,
             showing: false,
+            invalidation: None,
+            invalidated_at: None,
             _subscriptions: subscriptions,
         };
         screen.load_summary(cx);
@@ -343,6 +360,28 @@ impl TagsScreen {
     fn refresh(&mut self, cx: &mut Context<Self>) {
         self.load(cx);
         self.load_summary(cx);
+    }
+
+    /// The library's tags changed (`libraryInvalidation.register('tags')`):
+    /// the screen reads them again while it shows, at most once each
+    /// `INVALIDATION_SPACING`. Hidden, it reads them when it opens again.
+    fn invalidated(&mut self, cx: &mut Context<Self>) {
+        if !self.showing || self.invalidation.is_some() {
+            return;
+        }
+        let delay = self.invalidated_at.map_or(Duration::ZERO, |at| {
+            INVALIDATION_SPACING.saturating_sub(at.elapsed())
+        });
+        self.invalidation = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                this.invalidation = None;
+                this.invalidated_at = Some(Instant::now());
+                if this.showing {
+                    this.refresh(cx);
+                }
+            });
+        }));
     }
 
     /// How many tags the list will hold once loaded, for its placeholders.
