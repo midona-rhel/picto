@@ -38,7 +38,10 @@ static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 static GRID_LAYOUT_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 static GRID_TILES_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 /// The longest the main thread was busy before a short timer it had set
-/// could run: how long input and frames waited behind other work.
+/// could run: how long input and frames waited behind its own work. A timer
+/// can also run late because the system let it sleep longer (a window in
+/// the background is put to rest); only the time the thread spent running
+/// in between is counted.
 static STALL_MAX_MICROS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_READS: AtomicU64 = AtomicU64::new(0);
 static THUMBNAIL_EVICTIONS: AtomicU64 = AtomicU64::new(0);
@@ -255,14 +258,14 @@ pub fn start_reporting(cx: &mut App) {
         return;
     }
     // A timer of a few milliseconds that runs late ran behind work on the
-    // main thread.
+    // main thread, as long as the thread was running meanwhile.
     cx.spawn(async move |cx| {
         const TICK: Duration = Duration::from_millis(4);
         loop {
-            let asked = Instant::now();
+            let asked = Started::now();
             cx.background_executor().timer(TICK).await;
-            let late = asked.elapsed().saturating_sub(TICK).as_micros() as u64;
-            STALL_MAX_MICROS.fetch_max(late, Relaxed);
+            let late = asked.wall.elapsed().saturating_sub(TICK).as_micros() as u64;
+            STALL_MAX_MICROS.fetch_max(late.min(asked.cpu_micros()), Relaxed);
         }
     })
     .detach();
