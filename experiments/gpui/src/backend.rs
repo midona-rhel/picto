@@ -77,6 +77,17 @@ pub enum Request {
     /// Another window of results already shown, read with the query they
     /// were read with: its generation, the query, the window, and why.
     Window(u64, Box<RootQuery>, WindowRequest, Fetch),
+    /// The application finished opening (its recovery passes ran and its
+    /// workers started), or failed to.
+    Opened(Result<(), String>),
+}
+
+/// How the open of the library is going, as the library thread waits for it.
+enum Opening {
+    /// The database is open and can be read.
+    Readable(Arc<Library>),
+    /// The open failed before that.
+    Failed(String),
 }
 
 /// Why a window of results is read.
@@ -256,25 +267,78 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     append_tree(&smart, None, None, &mut nav);
     Ok((nav, tags))
 }
+/// Runs a screen's read or edit, timed for the stats.
+fn run(job: Job, library: &Library) {
+    let started = std::time::Instant::now();
+    job(library);
+    crate::stats::job_ran(started.elapsed());
+}
+
+/// The first ordinal a window asks for.
+fn first(window: &WindowRequest) -> usize {
+    match window.position {
+        picto_library::query::WindowPosition::Ordinal(start) => start,
+        picto_library::query::WindowPosition::Fraction(_) => 0,
+    }
+}
+
 /// Starts the library's thread, which opens the application on the copy and
 /// then answers requests with the application's own `Library`.
+///
+/// The destinations and their results are read as soon as the database is
+/// open, while the application still runs its recovery passes; the screens'
+/// own reads and edits (`Request::Job`) wait for the whole open, as the
+/// application's commands do.
 pub fn start(
     application: Arc<crate::application::Application>,
-) -> (Sender<Request>, Receiver<Reply>) {
+) -> (Sender<Request>, Receiver<Reply>, Wake) {
     let (tx, requests) = mpsc::channel();
-    let (replies, rx) = mpsc::channel();
+    let (sender, rx) = mpsc::channel();
+    let (wake, woken) = futures::channel::mpsc::unbounded();
+    let replies = Replies { sender, wake };
+    let finished = tx.clone();
     std::thread::spawn(move || {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
-            let library = application.open()?;
+            let (readable, opening) = mpsc::channel();
+            let failed = readable.clone();
+            std::thread::Builder::new()
+                .name("picto-open".into())
+                .spawn(move || {
+                    let opened = application.open(move |library| {
+                        crate::stats::opening("readable");
+                        let _ = readable.send(Opening::Readable(library));
+                    });
+                    crate::stats::opening("finished");
+                    if let Err(error) = &opened {
+                        let _ = failed.send(Opening::Failed(error.clone()));
+                    }
+                    let _ = finished.send(Request::Opened(opened.map(|_| ())));
+                })?;
+            let library = match opening.recv()? {
+                Opening::Readable(library) => library,
+                Opening::Failed(error) => return Err(error.as_str().into()),
+            };
             let library: &Library = &library;
             let (nav, tags) = navigation(library)?;
+            crate::stats::opening("navigation-read");
             replies.send(Reply::Ready(nav, tags))?;
             // One seed per session keeps a random sort stable while paging.
             let seed = crate::now_ms().to_string();
+            let mut held: Option<Vec<Job>> = Some(Vec::new());
             for request in requests {
                 let result = match request {
+                    Request::Opened(Ok(())) => {
+                        for job in held.take().into_iter().flatten() {
+                            run(job, library);
+                        }
+                        continue;
+                    }
+                    Request::Opened(Err(error)) => return Err(error.as_str().into()),
                     Request::Job(job) => {
-                        job(library);
+                        match &mut held {
+                            Some(held) => held.push(job),
+                            None => run(job, library),
+                        }
                         continue;
                     }
                     Request::Query(generation, scope, filter, shuffle, window) => {
@@ -333,7 +397,14 @@ pub fn start(
                                         sort: prefs.sort.clone(),
                                     },
                                 };
-                                library.query_window(&query, &window).map(|window| {
+                                let started = std::time::Instant::now();
+                                let read = library.query_window(&query, &window);
+                                crate::stats::window_read(
+                                    "open",
+                                    first(&window),
+                                    started.elapsed(),
+                                );
+                                read.map(|window| {
                                     Reply::Arrived(Box::new(Arrived {
                                         generation,
                                         fetch: Fetch::Open,
@@ -347,6 +418,7 @@ pub fn start(
                             .map_err(|error| (generation, Fetch::Open, error))
                     }
                     Request::Window(generation, query, window, fetch) => {
+                        let started = std::time::Instant::now();
                         let read = library.query_window(&query, &window).and_then(|window| {
                             // A refresh learns where the selection's items
                             // are now in the same visit, from the order the
@@ -359,6 +431,15 @@ pub fn start(
                             };
                             Ok((window, places))
                         });
+                        crate::stats::window_read(
+                            match fetch {
+                                Fetch::Open => "open",
+                                Fetch::Move(_) => "move",
+                                Fetch::Refresh(_) => "refresh",
+                            },
+                            first(&window),
+                            started.elapsed(),
+                        );
                         match read {
                             Ok((window, places)) => Ok(Reply::Arrived(Box::new(Arrived {
                                 generation,
@@ -382,7 +463,25 @@ pub fn start(
             let _ = replies.send(Reply::Error(error.to_string()));
         }
     });
-    (tx, rx)
+    (tx, rx, woken)
+}
+
+/// Told each time the library's thread has sent a reply, so the session
+/// takes it in at once rather than at its next look.
+pub type Wake = futures::channel::mpsc::UnboundedReceiver<()>;
+
+/// Where the library's thread sends its replies, waking the session.
+struct Replies {
+    sender: Sender<Reply>,
+    wake: futures::channel::mpsc::UnboundedSender<()>,
+}
+
+impl Replies {
+    fn send(&self, reply: Reply) -> Result<(), mpsc::SendError<Reply>> {
+        self.sender.send(reply)?;
+        let _ = self.wake.unbounded_send(());
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -442,6 +541,147 @@ mod acceptance {
         assert_eq!(text_filter("日本"), FilterExpr::default());
         assert_ne!(text_filter("日本語"), FilterExpr::default());
     }
+    /// Every read the grid makes, timed on a real copy (any size), and a
+    /// guard that a window deep in a destination costs about what its first
+    /// window costs: the grid holds one window at a time, so a read that
+    /// grows with where it is in a million items would show as a stall on
+    /// every jump and fling. Also times what the screens read at that size:
+    /// each sort, each smart folder, searches, the summary of everything
+    /// selected and the sidebar's counts. Prints one line each.
+    ///
+    /// ```sh
+    /// PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline \
+    ///     window_reads_stay_flat_across_the_library -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy"]
+    fn window_reads_stay_flat_across_the_library() {
+        use picto_library::predicate::{ItemSort, SortDirection, SortField, ViewQuerySpec};
+        use std::time::{Duration, Instant};
+        let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
+        let root = crate::application::guard(std::path::Path::new(&root)).unwrap();
+        let opening = Instant::now();
+        let library = Library::open(root.join("library.sqlite")).unwrap();
+        eprintln!("open the library: {:?}", opening.elapsed());
+        let timed = |what: &str, query: &RootQuery, start: usize| {
+            // The first read, and the best of three for the guard, so
+            // another process's burst is not counted.
+            let mut times = Vec::new();
+            let mut total = 0;
+            for _ in 0..3 {
+                let started = Instant::now();
+                let window = library
+                    .query_window(
+                        query,
+                        &WindowRequest::at(start, crate::grid::window::WINDOW),
+                    )
+                    .unwrap();
+                times.push(started.elapsed());
+                total = window.page.total as usize;
+            }
+            let best = times.iter().copied().min().unwrap();
+            eprintln!(
+                "{what} at {start}: first {:.1} ms, best {:.1} ms ({total} items)",
+                times[0].as_secs_f64() * 1e3,
+                best.as_secs_f64() * 1e3
+            );
+            (best, total)
+        };
+        let query = |scope: ItemScope, filter: FilterExpr, field, direction| RootQuery {
+            scope,
+            view: ViewQuerySpec {
+                filter,
+                sort: ItemSort {
+                    field,
+                    direction,
+                    random_seed: Some("1".into()),
+                },
+            },
+        };
+        let fields = [
+            SortField::ImportedAt,
+            SortField::CapturedAt,
+            SortField::Name,
+            SortField::Rating,
+            SortField::TotalSize,
+            SortField::Random,
+        ];
+        let mut flat = Vec::new();
+        for field in fields {
+            for direction in [SortDirection::Descending, SortDirection::Ascending] {
+                let all = query(ItemScope::All, FilterExpr::default(), field, direction);
+                let label = format!("All by {field:?} {direction:?}");
+                let (first, total) = timed(&label, &all, 0);
+                let deepest = [total / 2, total.saturating_sub(crate::grid::window::WINDOW)]
+                    .into_iter()
+                    .map(|start| timed(&label, &all, start).0)
+                    .max()
+                    .unwrap();
+                flat.push((label, first, deepest));
+            }
+        }
+        let default_sort = |scope| {
+            query(
+                scope,
+                FilterExpr::default(),
+                SortField::ImportedAt,
+                SortDirection::Descending,
+            )
+        };
+        for folder in library.smart_folders().unwrap() {
+            let scope = ItemScope::SmartFolder {
+                smart_folder_id: folder.smart_folder_id,
+            };
+            let (_, total) = timed(
+                &format!("smart folder {}", folder.name),
+                &default_sort(scope.clone()),
+                0,
+            );
+            timed(
+                &format!("smart folder {}", folder.name),
+                &default_sort(scope),
+                total / 2,
+            );
+        }
+        for scope in [
+            ItemScope::Inbox,
+            ItemScope::Trash,
+            ItemScope::RecentlyViewed,
+        ] {
+            timed(&format!("{scope:?}"), &default_sort(scope.clone()), 0);
+        }
+        for text in ["lan", "land", "landscape", "needle", "zzzz-nothing"] {
+            let search = query(
+                ItemScope::All,
+                text_filter(text),
+                SortField::ImportedAt,
+                SortDirection::Descending,
+            );
+            timed(&format!("search {text:?}"), &search, 0);
+        }
+        let started = Instant::now();
+        let summary = library
+            .selection_summary(&picto_library::selection::SelectionTarget::Query {
+                query: default_sort(ItemScope::All),
+                excluded_root_ids: Vec::new(),
+            })
+            .unwrap();
+        eprintln!(
+            "summary of everything selected: {:?} ({} items)",
+            started.elapsed(),
+            summary.selected_count
+        );
+        let started = Instant::now();
+        navigation(&library).unwrap();
+        eprintln!("sidebar destinations and counts: {:?}", started.elapsed());
+        for (label, first, deepest) in flat {
+            assert!(
+                deepest <= first * 4 + Duration::from_millis(20),
+                "{label}: a deep window took {deepest:?}, the first {first:?}"
+            );
+        }
+    }
+
     #[test]
     #[ignore = "Requires PICTO_GPUI_TEST_LIBRARY naming a disposable copy made by run.sh"]
     fn real_snapshot_query_details_rating_undo_redo() {

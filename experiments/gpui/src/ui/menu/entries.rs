@@ -53,6 +53,9 @@ pub struct Item {
     /// Other words the search row matches.
     pub(super) keywords: Vec<SharedString>,
     pub(super) icon: Option<&'static str>,
+    /// A picture in the icon slot instead of a glyph (an application's
+    /// icon in "Open With Other").
+    pub(super) image: Option<std::sync::Arc<Image>>,
     pub(super) shortcut: Option<SharedString>,
     pub(super) danger: bool,
     pub(super) disabled: bool,
@@ -72,6 +75,7 @@ pub fn item(action: &'static str, label: impl Into<SharedString>) -> Item {
         label: label.into(),
         keywords: Vec::new(),
         icon: None,
+        image: None,
         shortcut: None,
         danger: false,
         disabled: false,
@@ -92,6 +96,11 @@ impl Item {
     }
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
+        self
+    }
+    /// A picture drawn 16px square in the icon slot.
+    pub fn image(mut self, image: std::sync::Arc<Image>) -> Self {
+        self.image = Some(image);
         self
     }
     /// The shortcut as the platform writes it, e.g. `⌘⌫`.

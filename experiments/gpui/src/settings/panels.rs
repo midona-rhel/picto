@@ -521,8 +521,8 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // TODO: watched-folder imports. The multiple-file prompt follows
-        // these settings (`imports`).
+        // The multiple-file prompt follows these settings (`imports`), and
+        // the application's watched-folder worker reads Auto-Import.
         vec![
             block()
                 .child(

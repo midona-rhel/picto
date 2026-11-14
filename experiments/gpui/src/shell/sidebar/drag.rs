@@ -105,6 +105,47 @@ pub fn grid_drop(node: &str) -> Option<GridDrop> {
     }
 }
 
+/// `dragController.executeDrop`'s library work for items dropped on a
+/// target: a folder adds them, and makes them active when they came from
+/// the Inbox or the Trash; All, Inbox and Trash set their lifecycle.
+fn drop_work(
+    session: &Entity<crate::session::Session>,
+    items: &ItemDrag,
+    target: GridDrop,
+    cx: &App,
+) -> impl FnOnce(&picto_library::Library) -> picto_library::Result<()> + Send + 'static {
+    let selection = session.read(cx).target_for(items.roots.clone());
+    let activate = matches!(items.source, ItemScope::Inbox | ItemScope::Trash);
+    move |library| {
+        match target {
+            GridDrop::Folder(folder) => {
+                library.add_to_folder(&selection, folder)?;
+                if activate {
+                    library.set_lifecycle(&selection, Lifecycle::Active)?;
+                }
+            }
+            GridDrop::Lifecycle(lifecycle) => {
+                library.set_lifecycle(&selection, lifecycle)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Items dropped on a folder anywhere but the sidebar (a subfolder tile in
+/// the grid), as a drop on the folder's row does.
+pub fn drop_into_folder(
+    session: &Entity<crate::session::Session>,
+    items: ItemDrag,
+    folder: FolderId,
+    cx: &mut App,
+) {
+    let work = drop_work(session, &items, GridDrop::Folder(folder), cx);
+    session.update(cx, |session, cx| {
+        let _ = session.edit(work, Reread::RESULTS, cx);
+    });
+}
+
 impl Sidebar {
     /// Follows the grid's drag: the row under the pointer that takes items
     /// shows the drop look, and takes them when they are dropped.
@@ -132,6 +173,11 @@ impl Sidebar {
                     cx.notify();
                 }
             }
+            DragEvent::Cancelled => {
+                self.grid_dragging = false;
+                self.grid_drop = None;
+                cx.notify();
+            }
             DragEvent::Dropped(items) => {
                 self.grid_dragging = false;
                 let target = self
@@ -157,28 +203,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selection = self.session.read(cx).target_for(items.roots.clone());
-        let activate = matches!(items.source, ItemScope::Inbox | ItemScope::Trash);
-        self.edit_reading(
-            move |library| {
-                match target {
-                    GridDrop::Folder(folder) => {
-                        library.add_to_folder(&selection, folder)?;
-                        if activate {
-                            library.set_lifecycle(&selection, Lifecycle::Active)?;
-                        }
-                    }
-                    GridDrop::Lifecycle(lifecycle) => {
-                        library.set_lifecycle(&selection, lifecycle)?;
-                    }
-                }
-                Ok(())
-            },
-            Reread::RESULTS,
-            |_, (), _, _| {},
-            window,
-            cx,
-        );
+        let work = drop_work(&self.session, &items, target, cx);
+        self.edit_reading(work, Reread::RESULTS, |_, (), _, _| {}, window, cx);
     }
 
     /// A left press on a folder or smart-folder row, which becomes a drag

@@ -20,11 +20,12 @@ use super::document::geometry::PageSize;
 use super::document::kind::{RendererKind, renderer_kind};
 use super::document::{paged, pages};
 use super::surface::{self, MediaSurface};
-use crate::session::Session;
+use crate::session::{Report, Reread, Session};
+use crate::theme::Text as _;
 use crate::{motion, theme, ui};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use picto_library::{RootDetails, RootId};
+use picto_library::{ContentSortField, Lifecycle, MediaId, RootDetails, RootId};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,6 +49,125 @@ pub struct MemberMenu {
 }
 
 impl EventEmitter<MemberMenu> for GroupReader {}
+
+/// A member was double-clicked: it opens by itself in the media view
+/// (`setViewerIndex`).
+pub struct MemberOpened(pub usize);
+
+/// The space between the members was right-clicked at this window position:
+/// the collection's own menu (`openEmptyMenu`).
+pub struct CollectionMenu(pub Point<Pixels>);
+
+impl EventEmitter<MemberOpened> for GroupReader {}
+impl EventEmitter<CollectionMenu> for GroupReader {}
+
+/// How the media view shows a collection (`GroupSurface`'s `mode`): its
+/// members one under the other to read, or as a grid to arrange.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Reader,
+    Editor,
+}
+
+/// `sortCollectionContents`: the members' order by name (natural, case
+/// ignored) or by size (largest first), ties by id.
+pub fn sorted_members(members: &[(MediaId, &str, u64)], field: ContentSortField) -> Vec<MediaId> {
+    let mut sorted = members.to_vec();
+    sorted.sort_by(|left, right| {
+        let first = match field {
+            ContentSortField::Size => right.2.cmp(&left.2),
+            _ => crate::text::natural_order(left.1, right.1),
+        };
+        first.then(left.0.cmp(&right.0))
+    });
+    sorted.into_iter().map(|(id, _, _)| id).collect()
+}
+
+/// `detachMembers`: takes `members` out of `collection`, into the Trash when
+/// `trash`, as one undoable change. The answer says whether it went through.
+pub fn detach(
+    session: &Entity<Session>,
+    collection: RootId,
+    members: Vec<MediaId>,
+    trash: bool,
+    cx: &mut App,
+) -> futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>> {
+    let lifecycle = trash.then_some(Lifecycle::Trash);
+    session.update(cx, |session, cx| {
+        session.edit_reporting(
+            Report::announce("collections.detach"),
+            move |library| {
+                library
+                    .detach_collection_members(collection, members, lifecycle, crate::now_ms())
+                    .map(|_| ())
+            },
+            Reread::RESULTS,
+            cx,
+        )
+    })
+}
+
+/// `saveOrder`: the members of `collection` in this order, as one undoable
+/// change.
+pub fn reorder(
+    session: &Entity<Session>,
+    collection: RootId,
+    order: Vec<MediaId>,
+    cx: &mut App,
+) -> futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>> {
+    session.update(cx, |session, cx| {
+        session.edit_reporting(
+            Report::announce("collections.reorder"),
+            move |library| {
+                library
+                    .reorder_collection(collection, order, crate::now_ms())
+                    .map(|_| ())
+            },
+            Reread::SELECTION,
+            cx,
+        )
+    })
+}
+
+/// The members of `details` sorted by `field`, saved as the collection's
+/// order.
+pub fn sort(
+    session: &Entity<Session>,
+    details: &RootDetails,
+    field: ContentSortField,
+    cx: &mut App,
+) -> futures::channel::oneshot::Receiver<Result<(), picto_library::LibraryError>> {
+    let members: Vec<(MediaId, &str, u64)> = details
+        .media
+        .iter()
+        .map(|media| {
+            (
+                media.media_id,
+                media.media_name.as_str(),
+                media.facts.size_bytes,
+            )
+        })
+        .collect();
+    let order = sorted_members(&members, field);
+    reorder(session, details.root.root_id, order, cx)
+}
+
+/// `.inlineError`: why an edit of the collection failed, in a band over its
+/// members.
+pub fn inline_error(message: SharedString, cx: &App) -> Div {
+    let theme = theme::theme(cx);
+    div()
+        .flex_none()
+        .px(px(18.))
+        .py(px(8.))
+        .border_b_1()
+        .border_color(theme.border_secondary())
+        .bg(rgba(theme::GROUP_ERROR_BACKGROUND))
+        .text(theme::TEXT_SM)
+        .text_color(rgb(theme::GROUP_ERROR_TEXT))
+        .child(message)
+}
 
 /// What a member's frame is shaped by.
 #[derive(Clone, Debug, PartialEq)]
@@ -481,8 +601,12 @@ impl GroupReader {
                 });
             }),
         )
-        // TODO: a double-click opens the member alone in the media view,
-        // "Back to group" returning here (`setViewerIndex`).
+        // A double-click opens the member by itself (`setViewerIndex`).
+        .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
+            if event.click_count() == 2 {
+                cx.emit(MemberOpened(index));
+            }
+        }))
         .child(content)
         .into_any_element()
     }
@@ -513,6 +637,7 @@ impl Render for GroupReader {
         // shape the frames by: nothing is drawn, rather than every member
         // squashed into the minimum height.
         let measured = self.viewport.width > px(0.);
+        let empty = self.root.is_some() && self.members.is_empty();
         let places = if measured { self.places() } else { Vec::new() };
         let frames: Vec<AnyElement> = places
             .iter()
@@ -550,9 +675,15 @@ impl Render for GroupReader {
                     .overflow_y_scroll()
                     .size_full()
                     .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
-                    // TODO: a right-click between members opens the
-                    // collection's menu: Sort Contents (name, size) and
-                    // Ungroup... (`openEmptyMenu`).
+                    // A right-click that no member took is between them:
+                    // the collection's own menu.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|_, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(CollectionMenu(event.position));
+                        }),
+                    )
                     .child(
                         div()
                             .flex()
@@ -562,7 +693,19 @@ impl Render for GroupReader {
                             .pb(px(SPACE))
                             .pl(px(SPACE))
                             .pr(px(SPACE + ui::scrollbar::GUTTER))
-                            .children(frames),
+                            .children(frames)
+                            // `.empty`: a collection with no members says so.
+                            .when(empty, |column| {
+                                column.child(
+                                    div()
+                                        .w_full()
+                                        .flex()
+                                        .justify_center()
+                                        .text(theme::TEXT_LG)
+                                        .text_color(theme::theme(cx).text_secondary())
+                                        .child("This group is empty."),
+                                )
+                            }),
                     ),
             )
             .child(ui::scrollbar(
@@ -576,7 +719,8 @@ impl Render for GroupReader {
 
 #[cfg(test)]
 mod tests {
-    use super::{Shape, in_view, layout, retain_warm};
+    use super::{Shape, in_view, layout, retain_warm, sorted_members};
+    use picto_library::{ContentSortField, MediaId};
 
     #[test]
     fn frames_take_the_member_shape_at_the_column_width() {
@@ -626,5 +770,24 @@ mod tests {
         assert_eq!(retain_warm(&[1, 2, 3], 2, 3), vec![1, 3, 2]);
         assert_eq!(retain_warm(&[1, 2, 3], 4, 3), vec![2, 3, 4]);
         assert_eq!(retain_warm(&[], 0, 100), vec![0]);
+    }
+
+    #[test]
+    fn contents_sort_by_natural_name_or_largest_first() {
+        let members = [
+            (MediaId(4), "Chapter 10", 300),
+            (MediaId(2), "chapter 2", 100),
+            (MediaId(3), "Chapter 2", 300),
+            (MediaId(1), "Epilogue", 50),
+        ];
+        // Numbers in names compare as numbers; case is ignored, ties by id.
+        assert_eq!(
+            sorted_members(&members, ContentSortField::Name),
+            [MediaId(2), MediaId(3), MediaId(4), MediaId(1)]
+        );
+        assert_eq!(
+            sorted_members(&members, ContentSortField::Size),
+            [MediaId(3), MediaId(4), MediaId(2), MediaId(1)]
+        );
     }
 }

@@ -21,6 +21,9 @@ pub enum Look {
     /// `.input` at the small control height, as a smart-folder rule's
     /// value field is (`.rule input`).
     ModalSmall,
+    /// `FolderRenameInput`: a grid subfolder tile's name in a `GlassInput`
+    /// 24px tall with 6px sides.
+    TileRename,
     /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
     /// the text with no frame of their own.
     ModalSearch,
@@ -120,6 +123,12 @@ impl Look {
             },
             Look::ModalSmall => Frame {
                 height: theme::CONTROL_SM,
+                ..Look::Modal.frame(theme)
+            },
+            Look::TileRename => Frame {
+                height: 24.,
+                left: 6.,
+                right: 6.,
                 ..Look::Modal.frame(theme)
             },
             Look::TextArea => Frame {
@@ -309,6 +318,8 @@ pub struct Field {
     /// Glyph, size, distance from the left edge, colour.
     icon: Option<(&'static str, f32, f32, Rgba)>,
     clearable: bool,
+    /// A text area this many lines tall (`rows`), rather than three.
+    rows: Option<usize>,
 }
 
 pub fn field(id: impl Into<ElementId>, input: &Entity<TextInput>, look: Look) -> Field {
@@ -318,6 +329,7 @@ pub fn field(id: impl Into<ElementId>, input: &Entity<TextInput>, look: Look) ->
         look,
         icon: None,
         clearable: false,
+        rows: None,
     }
 }
 
@@ -332,12 +344,22 @@ impl Field {
         self.clearable = true;
         self
     }
+
+    /// A text area `rows` lines tall (`<textarea rows>`), inside its
+    /// padding and border.
+    pub fn rows(mut self, rows: usize) -> Self {
+        self.rows = Some(rows);
+        self
+    }
 }
 
 impl RenderOnce for Field {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let frame = self.look.frame(theme);
+        let mut frame = self.look.frame(theme);
+        if let Some(rows) = self.rows.filter(|_| self.look == Look::TextArea) {
+            frame.height = rows as f32 * super::text_input::AREA_LINE + 2. * AREA_PADDING + 2.;
+        }
         let handle = self.input.read(cx).focus_handle(cx);
         let focused = handle.is_focused(window);
         let fade = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::at(focused));
@@ -416,7 +438,7 @@ impl RenderOnce for Field {
             .child(measure);
         if matches!(
             self.look,
-            Look::Modal | Look::ModalSmall | Look::TextArea | Look::FormRow
+            Look::Modal | Look::ModalSmall | Look::TileRename | Look::TextArea | Look::FormRow
         ) {
             // `GlassInput`'s and the form rows' `color: var(--color-text-primary)`,
             // whatever colour the dialog's body gives its text.

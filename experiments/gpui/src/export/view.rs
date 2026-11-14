@@ -5,6 +5,9 @@ use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource, format
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
+use crate::ui::modal::{
+    form_field as field, form_label as label, form_row as row, form_stack as stack,
+};
 use crate::{theme, ui};
 use gpui::*;
 
@@ -27,32 +30,6 @@ fn on_click(
     move |_, window, cx| handler(window, cx)
 }
 
-/// `.fieldLabel`: 13px on 20px, the primary text colour, regular weight.
-fn label(theme: &theme::Theme, text: impl Into<SharedString>) -> Div {
-    div()
-        .text(theme::TEXT_MD)
-        .line_height(px(theme::LINE_HEIGHT_MD))
-        .font_weight(FontWeight::NORMAL)
-        .text_color(theme.text())
-        .child(text.into())
-}
-
-/// `.field`: a label over its control, 6px apart.
-fn field(theme: &theme::Theme, text: impl Into<SharedString>, control: impl IntoElement) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(label(theme, text))
-        .child(control)
-}
-
-/// `.fieldRow` and `.rowSpread`: a row 8px apart, spread to the ends for
-/// the latter.
-fn row() -> Div {
-    div().flex().items_center().gap(px(8.))
-}
-
 /// `.separator`: a 1px rule with 12px above and below.
 fn separator(theme: &theme::Theme) -> Div {
     div()
@@ -60,11 +37,6 @@ fn separator(theme: &theme::Theme) -> Div {
         .my(px(12.))
         .flex_none()
         .bg(theme.border_secondary())
-}
-
-/// `.stack`: a column 16px apart.
-fn stack() -> Div {
-    div().flex().flex_col().gap(px(16.))
 }
 
 /// "Export 3 Files", with the count as production writes it, ungrouped.

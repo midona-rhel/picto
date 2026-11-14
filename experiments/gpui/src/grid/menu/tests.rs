@@ -2,7 +2,8 @@
 //! selections the grid, the viewer and the preview open the menu on.
 use super::{
     Action, Description, Engine, Handlers, ItemRow, Kind, OpenWith, Panel, Playback, Row,
-    ScopeKind, Status, Surface, empty_menu, preview_menu, tile_menu, viewer_menu,
+    ScopeKind, Status, Surface, collection_menu, empty_menu, member_handlers, preview_menu,
+    tile_menu, viewer_menu, with_remove_from_group,
 };
 
 /// The row that shows the file in the system's file manager.
@@ -374,6 +375,47 @@ fn open_with_other_while_applications_are_looked_up() {
     let pending = children(&rows, "Open With Other");
     assert_eq!(labels(pending), ["Loading applications..."]);
     assert!(find(pending, "Loading applications...").unwrap().disabled);
+}
+
+fn application(name: &str, default: bool) -> crate::desktop::Application {
+    crate::desktop::Application {
+        name: name.into(),
+        path: format!("/Applications/{name}.app").into(),
+        icon: None,
+        default,
+    }
+}
+
+#[test]
+fn open_with_other_lists_the_applications_with_the_default_marked() {
+    let mut d = single("hash");
+    d.open_with = OpenWith::Applications(vec![
+        application("Preview", true),
+        application("Safari", false),
+    ]);
+    d.handlers.open_with_application = true;
+    let rows = tile(&d);
+    let listed = children(&rows, "Open With Other");
+    assert_eq!(labels(listed), ["Preview (Default)", "Safari"]);
+    let safari = find(listed, "Safari").unwrap();
+    assert_eq!(safari.action, Action::OpenWithApplication);
+    assert_eq!(safari.value.as_deref(), Some("/Applications/Safari.app"));
+    // Without an icon of its own, a row shows the apps glyph.
+    assert_eq!(safari.icon, Some("menu-apps"));
+}
+
+#[test]
+fn open_with_other_is_left_out_when_nothing_opens_the_file() {
+    let mut d = single("hash");
+    d.open_with = OpenWith::Applications(Vec::new());
+    d.handlers.open_with_application = true;
+    assert!(!labels(&tile(&d)).contains(&"Open With Other".to_owned()));
+    // The looked-up row that replaces the pending one is then none.
+    assert!(super::open_with_rows(Vec::new()).is_empty());
+    assert_eq!(
+        super::open_with_rows(vec![application("Preview", true)]).len(),
+        1
+    );
 }
 
 #[test]
@@ -850,4 +892,114 @@ fn keys_are_unique_across_the_actions_a_menu_offers() {
     keys.sort();
     keys.dedup();
     assert_eq!(keys.len(), total);
+}
+
+/// A collection member's menu, as `openMemberMenu` describes one member.
+fn member(editor: bool, count: usize, mime: &str) -> Description {
+    Description {
+        surface: if editor {
+            Surface::Grid
+        } else {
+            Surface::Viewer
+        },
+        selection_count: count,
+        ai_tag_enabled: Some(mime.starts_with("image/")),
+        single: count == 1,
+        single_hash: (count == 1).then(|| "member".into()),
+        single_item_id: (count == 1).then_some(7),
+        single_kind: (count == 1).then_some(Kind::Media),
+        single_name: (count == 1).then(|| "Chapter".into()),
+        single_mime: (count == 1).then(|| mime.into()),
+        handlers: member_handlers(count == 1, editor),
+        sort_fields: Some(super::COLLECTION_SORT.to_vec()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_member_in_the_editor_has_production_rows_in_order() {
+    let rows = with_remove_from_group(tile(&member(true, 1, "application/pdf")), 1);
+    assert_eq!(
+        labels(&rows),
+        [
+            "Open with Default App",
+            REVEAL,
+            "Open in New Window",
+            "-",
+            "Sort by >",
+            "-",
+            "[view panel]",
+            "-",
+            "Display >",
+            "Grayscale",
+            "-",
+            "Add to Folder",
+            "-",
+            "Copy",
+            "Copy File Path",
+            "Copy Name",
+            "Copy as Link",
+            "-",
+            "Add Tags",
+            "Auto Tag",
+            "Copy Tags",
+            "Paste Tags",
+            "-",
+            "Set Rating >",
+            "Export >",
+            "-",
+            "More >",
+            "-",
+            "Remove from Group",
+            "Move to Trash",
+        ]
+    );
+    // A collection's contents sort by name or size only.
+    assert_eq!(labels(children(&rows, "Sort by")), ["Name", "Size"]);
+    assert_eq!(
+        labels(children(&rows, "More")),
+        [
+            "Set as Library Cover",
+            "Find Items with This Media",
+            "Regenerate Thumbnail"
+        ]
+    );
+    // Without its handler, Grayscale is drawn disabled.
+    assert!(find(&rows, "Grayscale").unwrap().disabled);
+}
+
+#[test]
+fn a_member_in_the_reader_has_no_view_rows() {
+    let rows = with_remove_from_group(tile(&member(false, 1, "image/png")), 1);
+    let labels = labels(&rows);
+    assert!(!labels.iter().any(|label| label == "Sort by >"));
+    assert!(!labels.iter().any(|label| label == "[view panel]"));
+    assert_eq!(
+        &labels[labels.len() - 3..],
+        ["-", "Remove from Group", "Move to Trash"]
+    );
+    assert_eq!(
+        find(&rows, "Remove from Group").unwrap().action,
+        Action::RemoveFromGroup
+    );
+}
+
+#[test]
+fn several_members_are_removed_by_count() {
+    let rows = with_remove_from_group(tile(&member(true, 3, "image/png")), 3);
+    assert!(find(&rows, "Remove 3 from Group").is_some());
+    assert!(find(&rows, "Move 3 to Trash").is_some());
+    // With no Trash row, it goes last.
+    assert_eq!(
+        labels(&with_remove_from_group(Vec::new(), 1)),
+        ["Remove from Group"]
+    );
+}
+
+#[test]
+fn the_space_between_members_sorts_or_ungroups() {
+    let rows = collection_menu();
+    assert_eq!(labels(&rows), ["Sort by >", "-", "Ungroup..."]);
+    assert_eq!(labels(children(&rows, "Sort by")), ["Name", "Size"]);
+    assert_eq!(find(&rows, "Ungroup...").unwrap().action, Action::Ungroup);
 }

@@ -192,6 +192,10 @@ pub struct DetailWindow {
     /// reader, and the toolbar has only the pin and close buttons.
     group: bool,
     reader: Entity<GroupReader>,
+    /// A member of the collection opened by itself with a double-click
+    /// (`viewerIndex`): Escape goes back to the collection, the arrows
+    /// step through its members.
+    opened: Option<usize>,
     /// The shown entry's details, once they have arrived.
     details: Option<RootDetails>,
     loading: Option<Task<()>>,
@@ -248,12 +252,24 @@ impl DetailWindow {
         ];
         let group = entries.get(index).is_some_and(|entry| entry.collection);
         let reader = cx.new(|_| GroupReader::new(session.clone()));
+        let opened = cx.subscribe(
+            &reader,
+            |this, _, event: &super::group::MemberOpened, cx| {
+                this.opened = Some(event.0);
+                this.boundary.clear();
+                this.surface.update(cx, |surface, _| surface.refit());
+                this.present(cx);
+            },
+        );
+        let mut subscriptions = subscriptions;
+        subscriptions.push(opened);
         let mut this = Self {
             session,
             entries,
             index,
             group,
             reader,
+            opened: None,
             details: None,
             loading: None,
             surface,
@@ -313,7 +329,7 @@ impl DetailWindow {
     }
 
     fn present(&mut self, cx: &mut Context<Self>) {
-        if self.group {
+        if self.group && self.opened.is_none() {
             if let Some(details) = &self.details {
                 self.reader
                     .update(cx, |reader, cx| reader.show(details, cx));
@@ -321,10 +337,11 @@ impl DetailWindow {
             cx.notify();
             return;
         }
+        let member = self.opened.unwrap_or_else(|| self.entry_member());
         let media = self
             .details
             .as_ref()
-            .and_then(|details| Media::of(self.session.read(cx), details, 0));
+            .and_then(|details| Media::of(self.session.read(cx), details, member));
         if let Some(media) = media {
             self.surface
                 .update(cx, |surface, cx| media.open(surface, cx));
@@ -332,8 +349,25 @@ impl DetailWindow {
         cx.notify();
     }
 
-    /// `navigate`: the previous or next entry, or the end's notice.
+    /// `navigate`: the previous or next entry, or the end's notice; with a
+    /// member opened by itself, the previous or next member.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(opened) = self.opened {
+            let count = self
+                .details
+                .as_ref()
+                .map_or(0, |details| details.media.len());
+            let target = opened as isize + delta;
+            if target < 0 || target as usize >= count {
+                let end = if target < 0 { End::First } else { End::Last };
+                self.boundary.show(end, cx, |this| &mut this.boundary);
+                return;
+            }
+            self.boundary.clear();
+            self.opened = Some(target as usize);
+            self.present(cx);
+            return;
+        }
         let target = self.index as isize + delta;
         if target < 0 || target as usize >= self.entries.len() {
             let end = if target < 0 { End::First } else { End::Last };
@@ -396,10 +430,40 @@ impl DetailWindow {
         }
     }
 
+    /// `edit.copy` and the menu's Copy (`copyFileForHash`): the shown file
+    /// itself on the clipboard.
+    fn copy_file(&mut self, cx: &mut Context<Self>) {
+        if let Some((path, ..)) = self.shown_file()
+            && let Err(error) = crate::desktop::copy_files(&[path.into()], cx)
+        {
+            crate::ui::notify::error("Could not copy file", error, cx);
+        }
+    }
+
+    /// The file of its item the entry names: a collection member opened in
+    /// a window of its own is its collection's file of that hash; any
+    /// other item shows its first.
+    fn entry_member(&self) -> usize {
+        let hash = self.entry().map(|entry| entry.hash.as_str());
+        self.details
+            .as_ref()
+            .and_then(|details| {
+                details
+                    .media
+                    .iter()
+                    .position(|media| Some(media.facts.content_hash.as_str()) == hash)
+            })
+            .unwrap_or(0)
+    }
+
     /// The shown file: its path, content hash, type and name.
     fn shown_file(&self) -> Option<(String, String, String, String)> {
         let entry = self.entry()?;
-        let media = self.details.as_ref()?.media.first()?;
+        let media = self
+            .details
+            .as_ref()?
+            .media
+            .get(self.opened.unwrap_or_else(|| self.entry_member()))?;
         Some((
             media.file_path.clone(),
             media.facts.content_hash.clone(),
@@ -440,7 +504,7 @@ impl DetailWindow {
         };
         let playback = rows::Playback {
             flash: self.surface.read(cx).flash_playback(),
-            capture: self.surface.read(cx).flash(),
+            capture: self.surface.read(cx).can_capture(cx),
         };
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
@@ -472,14 +536,15 @@ impl DetailWindow {
             return;
         };
         match action {
-            Action::OpenDefault => cx.open_with_system(std::path::Path::new(&path)),
-            Action::Reveal => cx.reveal_path(std::path::Path::new(&path)),
+            Action::OpenDefault => crate::desktop::open_default(std::path::Path::new(&path), cx),
+            Action::Reveal => crate::desktop::reveal(std::path::Path::new(&path), cx),
             Action::OpenInNewWindow => {
                 // One window per file: this one, brought forward.
                 if let Some(entry) = self.entry().cloned() {
                     open(self.session.clone(), vec![entry], 0, cx);
                 }
             }
+            Action::CopyFile => self.copy_file(cx),
             Action::CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(path)),
             Action::CopyName => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             Action::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(
@@ -495,10 +560,37 @@ impl DetailWindow {
                 self.surface
                     .update(cx, |surface, cx| surface.control_flash(control, cx));
             }
+            Action::RegenerateThumbnails => {
+                crate::grid::thumbnails::regenerate(&self.session, vec![(hash, mime)], cx);
+            }
+            Action::SetAsThumbnail => {
+                super::capture::set_as_thumbnail(&self.surface, &self.session, hash, cx);
+            }
+            Action::SetLibraryCover => {
+                // Production's detail window has no dialog layer, so its row
+                // does nothing there; here the main window's dialog opens
+                // on the file, framed at once.
+                let Some(entry) = self.entry() else {
+                    return;
+                };
+                let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                    media_item: i64::from(entry.root.0),
+                    size: (entry.width.unwrap_or(1), entry.height.unwrap_or(1)),
+                    thumbnail: crate::grid::thumbnails::present(
+                        &self.session.read(cx).thumbnail(&hash),
+                    ),
+                    hash,
+                };
+                if let Some(main) = crate::app_menu::main_window(cx) {
+                    let _ = main.update(cx, move |shell, window, cx| {
+                        shell.open_library_cover(Some(candidate), cx);
+                        window.activate_window();
+                    });
+                }
+            }
             _ => {
-                // TODO: Copy (the file itself), Search by Image, Regenerate
-                // Thumbnails, Set as Library Cover and Set as Thumbnail, as
-                // the main window's viewer menu will once they exist there.
+                // TODO: Search by Image, which uploads the file to the
+                // engine from a hidden browser window (`runReverseImageSearch`).
             }
         }
     }
@@ -652,15 +744,24 @@ impl Render for DetailWindow {
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     // TODO: a collection's members have the tile menu on the
-                    // collection (`openMemberMenu`).
-                    if !this.group {
+                    // collection (`openMemberMenu`), and the space between
+                    // them the collection's (`openEmptyMenu`).
+                    if !this.group || this.opened.is_some() {
                         this.open_menu(event.position, window, cx);
                     }
                 }),
             )
-            // TODO: Copy (the file to the clipboard) and the per-image zoom
-            // memory (`zoomCache`).
-            .child(if self.group {
+            // Escape closes a member opened by itself before the window.
+            .on_action(cx.listener(|this, _: &CloseWindow, _, cx| {
+                if this.opened.take().is_some() {
+                    this.boundary.clear();
+                    this.present(cx);
+                } else {
+                    cx.propagate();
+                }
+            }))
+            // TODO: the per-image zoom memory (`zoomCache`).
+            .child(if self.group && self.opened.is_none() {
                 self.reader.clone().into_any_element()
             } else {
                 self.surface.clone().into_any_element()
@@ -696,6 +797,7 @@ impl Render for DetailWindow {
             cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| this.toggle_on_top(window, cx)),
         )
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
+        .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
         .child(pane)
         .children(self.menu.layer(window, cx))
     }

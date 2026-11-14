@@ -297,6 +297,25 @@ impl VideoPlayer {
     }
 
     /// Whether a video's first picture is on screen.
+    /// The picture shown now, for a video (`captureVideoFrame`); `None`
+    /// for audio, which has none.
+    pub fn capture_frame(&self) -> Option<Result<super::capture::Picture, String>> {
+        if self.kind != Kind::Video {
+            return None;
+        }
+        Some(match &self.frame {
+            #[cfg(target_os = "macos")]
+            Some(Frame::Surface(buffer)) => super::capture::from_pixel_buffer(buffer),
+            Some(Frame::Image(image)) => super::capture::Picture::from_image(image),
+            None => Err("The video frame is not ready yet.".into()),
+        })
+    }
+
+    /// Whether this plays a video, whose frame can be captured.
+    pub fn is_video(&self) -> bool {
+        self.kind == Kind::Video
+    }
+
     pub fn has_picture(&self) -> bool {
         self.frame.is_some()
     }

@@ -61,7 +61,10 @@ actions!(
         ExportOriginals,
         ExportAs,
         ExportPictoPack,
-        ImportPictoPack
+        ImportPictoPack,
+        CopyFiles,
+        RegenerateThumbnails,
+        ToggleGrayscale
     ]
 );
 
@@ -77,6 +80,9 @@ pub enum Scope {
     Grid,
     /// The media viewer while it has the keyboard (`MediaView`'s).
     Viewer,
+    /// A collection's editor in the media viewer (`GroupSurface`'s editor
+    /// scope), which wins over the viewer's keys around it.
+    GroupEditor,
     /// The duplicate review (`DuplicatesScreen`'s).
     Duplicates,
     /// The Subscriptions screen (`SubscriptionsGrid`'s shortcut scope).
@@ -104,6 +110,7 @@ impl Scope {
             Scope::Grid => "Grid",
             // Flash keeps its keys for the movie.
             Scope::Viewer => "Viewer && !Flash",
+            Scope::GroupEditor => viewer::group_editor::CONTEXT,
             Scope::Duplicates => "Duplicates",
             Scope::Subscriptions => "Subscriptions",
             Scope::DetailWindow => "DetailWindow && !Flash",
@@ -176,6 +183,8 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.import" => vec![to!(App, ImportFiles)],
         // Application menu accelerators too.
         "file.export" => vec![to!(App, ExportOriginals)],
+        // The Edit menu's row, enabled by the menu's rule.
+        "file.regenerateThumbnail" => vec![to!(App, RegenerateThumbnails)],
         "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
@@ -188,12 +197,25 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(App, shell::Redo),
             to!(TextField, crate::ui::text_input::Redo),
         ],
-        "edit.selectAll" => vec![to!(Grid, shell::SelectAll)],
+        "edit.selectAll" => vec![
+            to!(Grid, shell::SelectAll),
+            to!(GroupEditor, shell::SelectAll),
+        ],
+        // The collection editor's selected members leave it.
+        "group.removeMembers" => vec![to!(GroupEditor, viewer::group_editor::RemoveMembers)],
         // Escape: the viewer's own binding closes it while it has the
         // keyboard; this one closes it otherwise, or clears the selection.
         "edit.deselectAll" => vec![to!(App, shell::ClosePreview)],
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
+        // The files themselves: the grid's selection, the item the viewer
+        // or Quick Look shows, a detail window's file.
+        "edit.copy" => vec![
+            to!(Grid, CopyFiles),
+            to!(Viewer, CopyFiles),
+            to!(DetailWindow, CopyFiles),
+            to!(GroupEditor, CopyFiles),
+        ],
         "edit.pasteImport" => vec![to!(Grid, PasteImport)],
         // Inbox. The viewer's review the item it shows.
         "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
@@ -207,8 +229,18 @@ pub fn targets(id: &str) -> Vec<Target> {
         "rate.5" => vec![to!(Grid, Rate5), to!(Viewer, Rate5)],
         // View. Enter and Space open the viewer from the grid and close it
         // from inside, as `MediaView` treats both as its close keys.
-        "view.detailView" => vec![to!(Grid, shell::Preview), to!(Viewer, viewer::Close)],
-        "view.quicklook" => vec![to!(Grid, QuickLook), to!(Viewer, viewer::Close)],
+        "view.detailView" => vec![
+            to!(Grid, shell::Preview),
+            to!(Viewer, viewer::Close),
+            // Enter does nothing in a collection's editor.
+            to!(GroupEditor, NoAction),
+        ],
+        "view.quicklook" => vec![
+            to!(Grid, QuickLook),
+            to!(Viewer, viewer::Close),
+            // Space peeks at the editor's one selected member.
+            to!(GroupEditor, viewer::group_editor::QuickLookMember),
+        ],
         "view.closeDetail" => vec![
             to!(Viewer, viewer::Close),
             to!(DetailWindow, viewer::detail::CloseWindow),
@@ -253,6 +285,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "view.toggleSidebar" => vec![to!(App, shell::ToggleSidebar)],
         "view.toggleInspector" => vec![to!(App, shell::ToggleInspector)],
         "view.toggleBothPanels" => vec![to!(App, shell::TogglePanels)],
+        "view.grayscale" => vec![to!(Grid, ToggleGrayscale)],
         // Duplicates.
         "dup.keepBoth" => vec![to!(Duplicates, duplicates::KeepBoth)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
@@ -289,16 +322,9 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",
     ),
-    ("file.regenerateThumbnail", "no thumbnail generator linked"),
     ("organize.autoTag", "no AI tagger"),
-    (
-        "edit.copy",
-        "GPUI's macOS clipboard cannot hold files, which this copies",
-    ),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
-    ("group.removeMembers", "no group surface"),
-    ("view.grayscale", "the grid has no grayscale mode"),
     ("view.slideshow", "deferred in production"),
     ("view.navigator", "deferred in production"),
     ("view.layoutGrid", "deferred in production"),

@@ -42,17 +42,18 @@ pub enum Kind {
 }
 
 /// How "Open With Other" can be offered (`openWithOptions`/`openWithPending`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum OpenWith {
     #[default]
     None,
     /// The applications are being looked up: a submenu with one disabled row.
-    /// Production's state on macOS until it has listed them. Nothing looks
-    /// them up yet (see the TODO where the item menu is described), so only
-    /// the tests show it.
-    #[allow(dead_code)]
+    /// Production's state on macOS until it has listed them.
     Pending,
-    /// The system's own chooser: one row.
+    /// The applications that open the file (macOS): a submenu of them, or
+    /// nothing when there are none.
+    Applications(Vec<crate::desktop::Application>),
+    /// The system's own chooser (Windows): one row.
+    #[allow(dead_code)]
     Chooser,
 }
 
@@ -100,6 +101,7 @@ pub enum Panel {
 pub struct Handlers {
     pub open: bool,
     pub open_default: bool,
+    pub open_with_application: bool,
     pub open_with_chooser: bool,
     pub reveal: bool,
     pub open_new_window: bool,
@@ -177,6 +179,9 @@ pub struct Description {
     /// Another import is running, so none can start.
     pub import_blocked: bool,
     pub handlers: Handlers,
+    /// `sortFields`: the fields "Sort by" offers, when not all of them (a
+    /// collection's contents sort by name or size only).
+    pub sort_fields: Option<Vec<ContentSortField>>,
 }
 
 /// What a row does when chosen.
@@ -185,6 +190,8 @@ pub enum Action {
     OpenFolder,
     OpenDefault,
     OpenWithOther,
+    /// One of "Open With Other"'s applications, named by its row's value.
+    OpenWithApplication,
     LoadingApplications,
     Reveal,
     OpenInNewWindow,
@@ -234,6 +241,8 @@ pub enum Action {
     FlashStop,
     FlashMute,
     SetAsThumbnail,
+    /// A collection's members leave it (`detachMembers`).
+    RemoveFromGroup,
 }
 
 impl Action {
@@ -245,6 +254,7 @@ impl Action {
             OpenFolder => "open-folder",
             OpenDefault => "open-default",
             OpenWithOther => "open-with-other",
+            OpenWithApplication => "open-with-application",
             LoadingApplications => "loading-applications",
             Reveal => "reveal",
             OpenInNewWindow => "open-new-window",
@@ -308,6 +318,7 @@ impl Action {
             FlashStop => "flash-stop",
             FlashMute => "flash-mute",
             SetAsThumbnail => "set-as-thumbnail",
+            RemoveFromGroup => "remove-from-group",
         }
     }
 }
@@ -335,6 +346,10 @@ pub struct ItemRow {
     pub disabled: bool,
     pub checked: Option<bool>,
     pub keep_open: bool,
+    /// Tells rows that share an action apart (an application's path).
+    pub value: Option<String>,
+    /// A picture in place of the glyph (an application's icon).
+    pub image: Option<std::sync::Arc<gpui::Image>>,
 }
 
 /// `item(label, { action })`: without its handler a row is disabled.
@@ -348,6 +363,8 @@ fn item(action: Action, label: impl Into<String>, handled: bool) -> ItemRow {
         disabled: !handled,
         checked: None,
         keep_open: false,
+        value: None,
+        image: None,
     }
 }
 
@@ -413,7 +430,7 @@ impl Builder<'_> {
                     .into(),
             );
         }
-        match d.open_with {
+        match &d.open_with {
             OpenWith::Pending => rows.push(submenu(
                 "Open With Other",
                 Some("menu-apps"),
@@ -426,6 +443,15 @@ impl Builder<'_> {
                     .into(),
                 ],
             )),
+            OpenWith::Applications(applications)
+                if !applications.is_empty() && h.open_with_application =>
+            {
+                rows.push(submenu(
+                    "Open With Other",
+                    Some("menu-apps"),
+                    applications.iter().map(application_row).collect(),
+                ))
+            }
             OpenWith::Chooser if h.open_with_chooser => rows.push(
                 item(Action::OpenWithOther, "Open With Other...", true)
                     .icon("menu-apps")
@@ -492,18 +518,6 @@ impl Builder<'_> {
                     .into(),
             );
         }
-    }
-
-    /// `contentSortSubmenu`.
-    fn content_sort(&self) -> Row {
-        submenu(
-            "Sort by",
-            Some("menu-sort"),
-            CONTENT_SORT
-                .iter()
-                .map(|(field, label)| item(Action::SortContents(*field), *label, true).into())
-                .collect(),
-        )
     }
 
     /// `buildContextMenuViewEntries`: the layout and sort panel inline,
@@ -616,7 +630,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
 
     if !viewer {
         if h.sort_contents {
-            rows.push(b.content_sort());
+            rows.push(content_sort(d.sort_fields.as_deref()));
             rows.push(Row::Separator);
         }
         b.view_entries(&mut rows);
@@ -978,12 +992,99 @@ pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec
         rows.push(Row::Separator);
     }
     if h.sort_contents {
-        rows.push(b.content_sort());
+        rows.push(content_sort(None));
         rows.push(Row::Separator);
     }
     b.view_entries(&mut rows);
     rows.push(Row::Separator);
     rows
+}
+
+/// `contentSortSubmenu`: "Sort by" with each field, or only `fields`, in
+/// production's order.
+fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
+    submenu(
+        "Sort by",
+        Some("menu-sort"),
+        CONTENT_SORT
+            .iter()
+            .filter(|(field, _)| fields.is_none_or(|fields| fields.contains(field)))
+            .map(|(field, label)| item(Action::SortContents(*field), *label, true).into())
+            .collect(),
+    )
+}
+
+/// The fields a collection's contents sort by (`sortCollectionContents`).
+pub const COLLECTION_SORT: [ContentSortField; 2] = [ContentSortField::Name, ContentSortField::Size];
+
+/// `openMemberMenu`: a collection member's menu is the tile menu with
+/// "Remove from Group" (or "Remove N from Group") after a separator, just
+/// above the Trash row, or at the end when there is none.
+pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
+    let label = if count > 1 {
+        format!("Remove {count} from Group")
+    } else {
+        "Remove from Group".to_owned()
+    };
+    let remove: Row = item(Action::RemoveFromGroup, label, true)
+        .icon("menu-group-remove")
+        .into();
+    let trash = rows.iter().position(|row| {
+        matches!(row, Row::Item(item) if item.label.starts_with("Move") && item.label.ends_with("to Trash"))
+    });
+    match trash {
+        Some(at) => {
+            rows.splice(at..at, [Row::Separator, remove]);
+        }
+        None => rows.extend([Row::Separator, remove]),
+    }
+    rows
+}
+
+/// The handlers `openMemberMenu` gives a collection's members: one member
+/// or the editor's selection of them. Sorting the contents is the editor's
+/// (`selectionEnabled`); the edits that act on items act on the collection.
+pub fn member_handlers(single: bool, editor: bool) -> Handlers {
+    Handlers {
+        open_default: true,
+        reveal: true,
+        open_new_window: single,
+        copy_file: true,
+        copy_selection: true,
+        copy_selection_paths: true,
+        copy_selection_names: true,
+        copy_selection_links: true,
+        copy_path: true,
+        copy_name: true,
+        copy_link: true,
+        add_to_folder: true,
+        tag_select: true,
+        ai_tagger: true,
+        copy_tags: true,
+        paste_tags: true,
+        set_rating: true,
+        export: true,
+        export_originals: true,
+        search_by_image: true,
+        find_media_matches: true,
+        regenerate: true,
+        library_cover: single,
+        move_to_trash: true,
+        sort_contents: editor,
+        ..Default::default()
+    }
+}
+
+/// `openEmptyMenu`: the space between a collection's members, or around its
+/// tiles in the editor: sort its contents, then ungroup it.
+pub fn collection_menu() -> Vec<Row> {
+    vec![
+        content_sort(Some(&COLLECTION_SORT)),
+        Row::Separator,
+        item(Action::Ungroup, "Ungroup...", true)
+            .icon("menu-group-remove")
+            .into(),
+    ]
 }
 
 /// What the viewer shows that has its own commands: the Flash movie's
@@ -1050,6 +1151,14 @@ pub fn viewer_menu(
     rows
 }
 
+/// `buildEntityOpenContextEntries` alone: the rows that open the file, as
+/// the Duplicates screen's cards offer them.
+pub fn open_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    Builder { hint }.open_entries(d, &mut rows);
+    rows
+}
+
 /// The inspector preview's menu (`InspectorPreview`): opening the file, then
 /// "Set as Library Cover".
 pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
@@ -1057,6 +1166,40 @@ pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> V
     let mut rows = Vec::new();
     b.open_entries(d, &mut rows);
     rows.push(library_cover_row());
+    rows
+}
+
+/// One application of "Open With Other": its icon, or the apps glyph
+/// without one, and "(Default)" after the default's name.
+fn application_row(application: &crate::desktop::Application) -> Row {
+    let label = if application.default {
+        format!("{} (Default)", application.name)
+    } else {
+        application.name.clone()
+    };
+    let mut row = item(Action::OpenWithApplication, label, true);
+    row.value = Some(application.path.to_string_lossy().into_owned());
+    match &application.icon {
+        Some(icon) => row.image = Some(icon.clone()),
+        None => row.icon = Some("menu-apps"),
+    }
+    row.into()
+}
+
+/// The "Open With Other" row as the applications looked up make it, to
+/// replace the pending one in the open menu: none when nothing opens the
+/// file.
+pub fn open_with_rows(applications: Vec<crate::desktop::Application>) -> Vec<Row> {
+    let d = Description {
+        open_with: OpenWith::Applications(applications),
+        handlers: Handlers {
+            open_with_application: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut rows = Vec::new();
+    Builder { hint: &|_| None }.open_entries(&d, &mut rows);
     rows
 }
 
@@ -1160,6 +1303,12 @@ fn item_entry(row: ItemRow) -> menu::Item {
     }
     if let Some(checked) = row.checked {
         entry = entry.checked(checked);
+    }
+    if let Some(value) = row.value {
+        entry = entry.value(value);
+    }
+    if let Some(image) = row.image {
+        entry = entry.image(image);
     }
     entry
 }

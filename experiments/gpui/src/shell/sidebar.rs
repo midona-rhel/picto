@@ -29,6 +29,7 @@ mod smart_folder;
 mod tree;
 mod view;
 
+pub use drag::drop_into_folder;
 use edits::smart_input;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -180,6 +181,10 @@ enum Target {
     /// Several selected folders or smart folders.
     Bulk(Vec<String>),
     Section,
+    /// A subfolder tile in the grid.
+    Tile(String),
+    /// Several subfolder tiles selected in the grid.
+    Tiles(Vec<String>),
 }
 
 /// A row being renamed in place.
@@ -254,6 +259,9 @@ pub struct Sidebar {
     /// The row whose context menu is open.
     context: Option<String>,
     renaming: Option<Renaming>,
+    /// The grid whose subfolder tile's menu is open: it renames the tile in
+    /// place.
+    tile_grid: Option<WeakEntity<crate::grid::GridView>>,
     /// The row the keyboard is on while the rows have it.
     keyboard_row: Option<String>,
     /// The rows' keyboard focus.
@@ -353,6 +361,7 @@ impl Sidebar {
             rendered: Default::default(),
             context: None,
             renaming: None,
+            tile_grid: None,
             keyboard_row: None,
             rows_focus: cx.focus_handle(),
             shown_rows: Vec::new(),

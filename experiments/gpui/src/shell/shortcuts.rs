@@ -264,6 +264,24 @@ impl Shell {
         .detach();
     }
 
+    /// `edit.copy`: the files themselves on the clipboard. Over the grid,
+    /// the items chosen one by one (`copyTarget`; a Select All or a range
+    /// is not copied, as in production); in the viewer and Quick Look, the
+    /// file shown.
+    fn copy_files_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing(cx) {
+            self.act_on_selection(crate::grid::menu::Action::CopyFile, window, cx);
+            return;
+        }
+        let session = self.session.read(cx);
+        if session.selection.is_empty() || session.selection.query_wide() {
+            cx.propagate();
+            return;
+        }
+        let ids = self.selected_ids(cx);
+        self.copy_files(ids, window, cx);
+    }
+
     /// `edit.rename`: the inspector's name field for one item.
     fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.read(cx).selection_count() {
@@ -274,8 +292,10 @@ impl Shell {
                 self.inspector
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
             }
-            // TODO: several items open the batch rename dialog, which does
-            // not exist yet.
+            // Several items chosen one by one, all loaded: the batch rename
+            // dialog (the Edit menu's Batch Rename… row, whose keys these
+            // are).
+            count if count > 1 && self.menu_context(cx).names => self.rename_selected(cx),
             _ => cx.propagate(),
         }
     }
@@ -355,6 +375,14 @@ impl Shell {
         .on_action(
             cx.listener(|this, _: &CopyFilePath, window, cx| this.copy_file_paths(window, cx)),
         )
+        .on_action(cx.listener(|this, _: &CopyFiles, window, cx| this.copy_files_key(window, cx)))
+        .on_action(
+            cx.listener(|this, _: &RegenerateThumbnails, _, cx| this.regenerate_selected(cx)),
+        )
+        .on_action(cx.listener(|this, _: &ToggleGrayscale, _, cx| {
+            this.session
+                .update(cx, |session, cx| session.toggle_grayscale(cx))
+        }))
         .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
         .on_action(cx.listener(|this, _: &Rate0, _, cx| this.rate(0, cx)))
         .on_action(cx.listener(|this, _: &Rate1, _, cx| this.rate(1, cx)))

@@ -17,13 +17,22 @@
 //! `notify <tone> <title> | <message>`, which shows a notification
 //! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button), or
 //! `action <name>` (`action app_menu::Accept`, `action app_menu::SetRating
-//! 3`), which chooses an application menu row, or `focused`, which prints
-//! the control with the keyboard and whether it shows its focus ring.
+//! 3`), which chooses an application menu row, or `invoke <command>
+//! <json>`, which sends an application command (`folders.create`, …) and
+//! prints its answer, so a script can set a copy up as it sets up the
+//! reference's, or `focused`, which prints the control with the keyboard
+//! and whether Tab put it there (its focus ring shows).
 //! `PICTO_GPUI_LAZY=1` starts a script lazy. `PICTO_GPUI_WINDOW=1213x865`
 //! sets the main window's size. `PICTO_GPUI_STATE=<folder>` keeps what the
 //! script arranges (rail widths, folds, filters, shortcuts…) in that folder
 //! and starts from what it holds; without it every run starts from the
 //! defaults and keeps nothing.
+//!
+//! Nothing here reaches the desktop: opening a file in another
+//! application, showing it in Finder and putting files on the clipboard are
+//! written down instead (`crate::desktop`). A `desktop` line appends what
+//! was asked since the last one, and the clipboard's text, to
+//! `desktop.log` in the output folder.
 //!
 //! A system file, folder or save dialog cannot be driven here, so
 //! `answer <path>` answers the next one the app asks for with that path
@@ -171,6 +180,37 @@ fn plays_a_script() {
                 .unwrap_or_else(|| panic!("no action {name}"));
             cx.update_window(window, |_, window, cx| window.dispatch_action(action, cx))
                 .unwrap();
+            settle(&mut cx, window, pace, lazy);
+        } else if line == "desktop" {
+            let mut log = crate::desktop::requests();
+            let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            log.push(format!("clipboard {}", text.unwrap_or_default()));
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(out.join("desktop.log"))
+                .unwrap();
+            std::io::Write::write_all(&mut file, format!("{}\n", log.join("\n")).as_bytes())
+                .unwrap();
+        } else if let Some(rest) = line.strip_prefix("invoke ") {
+            // An application command, as the renderer's `invoke` sends it;
+            // its answer is printed, and the script goes on once it came.
+            let (command, args) = rest.trim().split_once(' ').unwrap_or((rest.trim(), "{}"));
+            let args: serde_json::Value =
+                serde_json::from_str(args).unwrap_or_else(|error| panic!("{line}: {error}"));
+            let mut answer = closing.dispatch(command.to_owned(), args);
+            let started = std::time::Instant::now();
+            let result = loop {
+                settle(&mut cx, window, Duration::from_millis(50), lazy);
+                if let Ok(Some(result)) = answer.try_recv() {
+                    break result;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "{command} did not answer"
+                );
+            };
+            println!("{command} -> {result:?}");
             settle(&mut cx, window, pace, lazy);
         } else if line == "answer" {
             crate::prompt::answer_next(None);

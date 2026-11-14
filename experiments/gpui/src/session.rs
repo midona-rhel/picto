@@ -108,7 +108,8 @@ impl SubscriptionActivity {
 /// `subscriptionsSettle.ts`: progress is read again this often while a run
 /// is going.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
-/// How often the session takes in what the library's thread has sent.
+/// How often the session looks for the application's events (replies from
+/// the library's thread wake it at once).
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 /// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
 /// this long.
@@ -165,6 +166,19 @@ struct Focused {
 /// The height per item the grid measured for a layout geometry (width,
 /// zoom, spacing, mode, text rows), which the scrollable height of a
 /// destination is estimated from.
+/// A file's thumbnail in a library's `blobs` folder, under its content
+/// hash, for work that runs away from the session.
+pub fn thumbnail_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
+    if hash.len() < 4 {
+        return PathBuf::new();
+    }
+    blobs
+        .join("t")
+        .join(&hash[..2])
+        .join(&hash[2..4])
+        .join(format!("{hash}.jpg"))
+}
+
 pub type Density = ((u32, u32, u32, crate::grid::layout::ViewMode, u32), f32);
 
 pub struct Session {
@@ -251,6 +265,12 @@ pub struct Session {
     /// the order. Edits address query-wide selections through the query
     /// (`target_for`), as production's do.
     pub selection: Selection,
+    /// The subfolder tiles selected in the grid (`folderNodeIds`), by node
+    /// id (`folder:5`). Selecting items clears them, and the other way round.
+    pub folder_selection: Vec<String>,
+    /// Items to select once the destination's results are read afresh: the
+    /// items a reorder drag put back, as production keeps them selected.
+    pub reselect: Option<Vec<RootId>>,
     /// The query the shown results were read with.
     ran: Option<RootQuery>,
     /// The selected item the inspector and viewer show: the one last chosen.
@@ -278,6 +298,8 @@ pub struct Session {
     /// The disposable copy the application opened.
     root: PathBuf,
     pub library_cover: Option<PathBuf>,
+    /// The grid draws its thumbnails without colour.
+    pub grayscale: bool,
     /// A disposable folder that holds the demo media and is the scratch
     /// space the library cover's crops are written to.
     pub scratch: tempfile::TempDir,
@@ -335,10 +357,24 @@ impl Session {
                 .unwrap_or_default();
             (folders, kept.recent_tags.clone())
         };
-        let (sender, receiver) = backend::start(application.clone());
+        let (sender, receiver, woken) = backend::start(application.clone());
         cx.spawn(async move |session, cx| {
+            use futures::{StreamExt as _, future::Either};
+            let mut woken = Some(woken);
             loop {
-                cx.background_executor().timer(RECEIVE_INTERVAL).await;
+                // A reply is taken in as soon as it is sent; the application's
+                // events at the next look.
+                let tick = std::pin::pin!(cx.background_executor().timer(RECEIVE_INTERVAL));
+                match &mut woken {
+                    Some(wake) => {
+                        let first = futures::future::select(tick, wake.next());
+                        // The library's thread has stopped: looks alone.
+                        if let Either::Right((None, _)) = first.await {
+                            woken = None;
+                        }
+                    }
+                    None => tick.await,
+                }
                 if session
                     .update(cx, |this: &mut Self, cx| this.receive(cx))
                     .is_err()
@@ -400,6 +436,8 @@ impl Session {
             prefs_scope: None,
             tile: 200.,
             selection: Selection::default(),
+            folder_selection: Vec::new(),
+            reselect: None,
             focus: None,
             anchor: None,
             details: None,
@@ -415,6 +453,7 @@ impl Session {
             blobs,
             root,
             library_cover,
+            grayscale: false,
             scratch,
             place_label: None,
             refreshing: false,
@@ -486,14 +525,7 @@ impl Session {
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
-        if hash.len() < 4 {
-            return PathBuf::new();
-        }
-        self.blobs
-            .join("t")
-            .join(&hash[..2])
-            .join(&hash[2..4])
-            .join(format!("{hash}.jpg"))
+        thumbnail_in(&self.blobs, hash)
     }
 
     pub fn selected_item(&self) -> Option<&RootSummary> {
@@ -604,6 +636,20 @@ impl Session {
     }
 
     // ── The application's events ────────────────────────────────
+
+    /// Grayscale on or off for the grid's thumbnails (`gridGrayscaleAtom`,
+    /// kept for the session only).
+    pub fn toggle_grayscale(&mut self, cx: &mut Context<Self>) {
+        self.grayscale = !self.grayscale;
+        cx.emit(Change::Results);
+    }
+
+    /// Tells the views that the thumbnail of `hash` was written again by
+    /// this app (regenerated, or a captured frame), as the application's
+    /// `picto:thumbnail-changed` does for what it writes.
+    pub fn thumbnail_written(&mut self, hash: String, cx: &mut Context<Self>) {
+        cx.emit(Event::Thumbnail(hash));
+    }
 
     /// Takes what the application reported since the last look, merged into
     /// one invalidation, does what the Electron runtime stores do with it,
@@ -879,6 +925,20 @@ impl Session {
         tags: Vec<TagRecord>,
         cx: &mut Context<Self>,
     ) {
+        // A media-matches destination has no row of its own: it stays while
+        // it is open or in the history.
+        let mut nav = nav;
+        nav.extend(
+            self.nav
+                .iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.scope,
+                        picto_library::query::ItemScope::MediaMatches { .. }
+                    )
+                })
+                .cloned(),
+        );
         let old = std::mem::replace(&mut self.nav, nav);
         let positions = self
             .nav
@@ -1300,6 +1360,18 @@ impl Session {
         self.restore_scroll = None;
         self.restore_window_top = None;
         self.forget_selection();
+        if let Some(ids) = self.reselect.take() {
+            let ordinals = self
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| ids.contains(&item.root_id))
+                .map(|(index, _)| self.start + index)
+                .collect::<std::collections::BTreeSet<_>>();
+            if !ordinals.is_empty() {
+                self.set_selection(ordinals, false, cx);
+            }
+        }
         crate::stats::results_opened(self.total);
         self.displayed = self.scope;
         if matches!(self.transition, Transition::Waiting) {
@@ -1425,6 +1497,37 @@ impl Session {
     /// Opens a sidebar destination and records it for Back and Forward.
     /// Choosing the destination already showing does nothing, unless the
     /// viewer is over it, which this closes.
+    /// `navigateToNode('media-matches:<id>')`: every item that uses the
+    /// media of `item` (Find Items with This Media), a destination with no
+    /// sidebar row, titled "Items with This Media".
+    pub fn open_media_matches(&mut self, item: RootId, cx: &mut Context<Self>) {
+        let scope = picto_library::query::ItemScope::MediaMatches { item_id: item.0 };
+        let index = match self
+            .nav
+            .iter()
+            .position(|entry| entry.screen.is_none() && entry.scope == scope)
+        {
+            Some(index) => index,
+            None => {
+                self.nav.push(Navigation {
+                    label: "Items with This Media".into(),
+                    count: None,
+                    scope,
+                    screen: None,
+                    random: false,
+                    icon: None,
+                    tint: None,
+                    group: false,
+                    watched: false,
+                    depth: 0,
+                    parent: None,
+                });
+                self.nav.len() - 1
+            }
+        };
+        self.navigate(index, cx);
+    }
+
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
             // Choosing a screen from inside one of its places goes to its top.
@@ -1709,6 +1812,7 @@ impl Session {
 
     fn forget_selection(&mut self) {
         self.selection = Selection::default();
+        self.folder_selection.clear();
         self.focus = None;
         self.anchor = None;
         self.member = 0;
@@ -1720,6 +1824,7 @@ impl Session {
     /// choosing the item already shown asks for nothing.
     fn focus_on(&mut self, ordinal: Option<usize>, cx: &mut Context<Self>) {
         self.demo = None;
+        self.folder_selection.clear();
         let showing = self.selected_details().map(|details| details.root.root_id);
         self.focus = ordinal.and_then(|ordinal| {
             Some(Focused {
@@ -1874,13 +1979,53 @@ impl Session {
         self.focus_on(focus, cx);
     }
 
+    /// Selects these subfolder tiles alone (`replace_folders`), or adds or
+    /// removes one when `toggle` (`toggle_folder`, a command-click, which
+    /// starts afresh from a selection of items). Items are deselected.
+    pub fn select_folders(&mut self, nodes: Vec<String>, toggle: bool, cx: &mut Context<Self>) {
+        let mut chosen = if toggle && self.selection.is_empty() {
+            std::mem::take(&mut self.folder_selection)
+        } else {
+            Vec::new()
+        };
+        if toggle {
+            for node in nodes {
+                match chosen.iter().position(|id| *id == node) {
+                    Some(at) => {
+                        chosen.remove(at);
+                    }
+                    None => chosen.push(node),
+                }
+            }
+        } else {
+            chosen = nodes;
+        }
+        self.selection = Selection::default();
+        self.anchor = None;
+        self.focus = None;
+        self.member = 0;
+        self.details = None;
+        self.demo = None;
+        self.folder_selection = chosen;
+        cx.emit(Change::Selection);
+    }
+
+    /// The one subfolder tile selected with no items, which the inspector
+    /// describes (`selectedSubfolderNodeIdAtom`).
+    pub fn selected_folder(&self) -> Option<&str> {
+        match self.folder_selection.as_slice() {
+            [node] if self.selection.is_empty() => Some(node),
+            _ => None,
+        }
+    }
+
     /// Whether the search field narrows the results (three characters or more).
     pub fn searching(&self) -> bool {
         backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() || self.focus.is_some() {
+        if !self.selection.is_empty() || self.focus.is_some() || !self.folder_selection.is_empty() {
             self.selection = Selection::default();
             self.anchor = None;
             self.focus_on(None, cx);

@@ -54,13 +54,18 @@ The generated macOS bundle is `experiments/gpui/target/Picto GPUI.app`.
 The app runs Picto's application layer, `picto_core` (the `core/` crate),
 in-process, as the Electron app runs it through its napi addon:
 `application.rs` sets the application data root, registers the event
-callback, and opens the copy with `picto_core::state::open_library` on a
-Tokio runtime of its own. That starts the same workers as production:
-publication, imports and ingest, derivatives (thumbnails, perceptual hashes
-and the automatic duplicate scan), full-text indexing, checkpoints, AI
-tagging, and the subscription scheduler and runners. `Session::run` keeps
-working: the library thread borrows the application's own `Library`
-(`LibraryApplication::library()`), so the database is opened once.
+callback, and opens the copy with `picto_core::state::open_library_reporting`
+(`open_library`, which also hands over the `Library` as soon as the database
+is open) on a Tokio runtime of its own. That starts the same workers as
+production: publication, imports and ingest, derivatives (thumbnails,
+perceptual hashes and the automatic duplicate scan), full-text indexing,
+checkpoints, AI tagging, and the subscription scheduler and runners.
+`Session::run` keeps working: the library thread borrows the application's
+own `Library` (`LibraryApplication::library()`), so the database is opened
+once. The sidebar and the grid read with it as soon as it is handed over,
+while the application still runs its recovery passes (on a million items
+they take 10–30 s); the screens' own reads and edits (`Session::run`) wait
+for the whole open, as commands do.
 
 - Commands: `Session::dispatch("command.name", json!({...}))` sends a command
   as the renderer's `invoke(command, args)` does
@@ -273,8 +278,32 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   picker above it, over the dialog; each change is saved at once through
   `set_folder_auto_tags`. Auto-Import Folder
   (`FolderWatchModal`): the directory from the system's folder chooser,
-  Enable Watch, Watch Subfolders, Import Status, Remove Watch, stored with
-  `set_folder_watch` or `clear_folder_watch`.
+  Enable Watch, Watch Subfolders, Import Status, Remove Watch, the folder's
+  structure checked as it is chosen (`imports.folder.analyze`: "Checking
+  the folder structure...", the depth warning, or the warning that it could
+  not be inspected, which hold Save), sent as `folders.watch.set` or
+  `folders.watch.clear`; the application's watcher imports what arrives
+  there every 30 s while Settings' Auto-Import is on. A copy cut loose at
+  launch has no watch until one is set in it.
+- Items dragged from the grid onto a subfolder tile go into that folder.
+  In a folder that shows only its own items, a drag among them puts them in
+  an order of their own (`computeReorderTarget`, the blue marker, then
+  `folders.items.reorder` and the folder's manual order, the items kept
+  selected); a folder showing its subfolders' items has no reorder marker
+  (production shows one and then fails). Items dragged out of the window go
+  to the system as their files (`media.resolve_target_paths`), and are not
+  imported again if they come back over it within 3 s.
+- The subfolder tiles (`SubfolderGrid.tsx`) above a folder's items: "Folders
+  (n)" with its disclosure, a card per child (or per descendant when the
+  folder shows its subfolders' items) with its cover, glyph, name on up to
+  two lines and count, then "Content (n)"; click selects (Cmd toggles), a
+  rubber band over them selects them, double-click opens the folder, the
+  right-click menu is `buildFolderContextMenu` (or the bulk one), and
+  Rename, New Subfolder and Duplicate from it rename the tile in place. One
+  tile selected shows that folder in the inspector: its own count, size and
+  first items, name, notes and details (production keeps the parent's
+  scope there unless an item was selected before, and then shows no covers
+  or size).
 - The sidebar's keyboard: from the tree filter, Down or Tab enters the
   rows; Up, Down, Tab and Shift-Tab move with the focus look, scrolling the
   row into view; Enter or Space opens it as a click does; Escape gives the
@@ -600,8 +629,29 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   collection opens, so its frame has its final height before it is in view
   (production shows one page fitted in the member's frame with a page
   footer). The viewer toolbar then has no zoom and
-  shows "Edit group". A right-click on a member opens the viewer's menu for
-  it, with the search field.
+  shows "Edit group". A right-click on a member opens its menu
+  (`openMemberMenu`, with the search field and "Remove from Group" above
+  "Move to Trash", which moves it out into the Trash); between members, the
+  collection's (Sort by Name or Size, Ungroup...). A double-click opens a
+  member by itself: "Back to group" and Escape return, the counter and the
+  arrows step through the members (in Quick Look and the detail window
+  too). "This group is empty." for a collection with no members.
+- The collection editor (`viewer/group_editor.rs`, "Edit group" or the item
+  menu's "Edit Group"): the members as 180px grid tiles drawn by the grid's
+  own `grid::tile_art`, names without extensions, with the breadcrumb (where
+  it was opened from / the collection) in the toolbar. Click, ⌘-click,
+  ⇧-click and the rubber band select members; ⌘A selects them all; Escape
+  clears the selection, then closes; Delete removes them; Space opens Quick
+  Look on the one selected member, stepping through the members; a
+  double-click opens a member by itself. Dragging tiles reorders them, with
+  the drop line and the drag ghost. The members' menu acts on the
+  selection (Sort by Name or Size and the view rows included); the space
+  around the tiles has the collection's menu. Edits go through the library
+  with production's history and notifications; with one member or none
+  left the collection closes; a failure shows in the `.inlineError` band.
+- The group organizer (`GroupOrganizerModal`): "Group..." / "Merge into One
+  Group..." that needs a decision asks which collection to keep, or the new
+  group's name, with the collection notes and their byte count.
 - Enter or a double-click opens the media view on the one selected item;
   Enter, Space or Escape close it. Originals decode off the drawing thread;
   stale loads are fenced.
@@ -862,13 +912,31 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   Restore, Delete Permanently (after `ConfirmModal`'s question, only on a
   marked disposable copy), Add to Folder's last folder, New Folder (with
   Selection) renamed in the sidebar, Remove from Folder, Sort by, Set as
-  Folder Cover, Group (when it needs no organizer), Ungroup (after its
+  Folder Cover, Group (with the group organizer when it needs one), Edit
+  Group, Ungroup (after its
   question), Rename (in the inspector's name field), Copy Tags and Paste
   Tags (an in-app tag clipboard, and the JSON on the clipboard), Set Rating
   for any selection, and the view options as production embeds them: the
   titlebar view menu's layout and sort panel inline and its display panel
   inside "Display" (the same `shell::view_menu` panels), saved to the
   destination's view as production saves them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
+  Also: Copy (the files on the macOS pasteboard, from the menus, ⌘C over
+  the grid, the viewer, Quick Look, a detail window and the collection
+  editor, and the Edit menu), Open With Other (the applications Launch
+  Services lists for the type, with their icons, the default first, looked
+  up once per extension), Batch Rename (`BatchRenameModal`, also the Edit
+  menu's row and its keys), Regenerate Thumbnail(s) (as the Electron main
+  process regenerates, also ⇧⌘T and the Edit menu), Grayscale (a checked
+  row that keeps the menu open, and ⌘⌥G), Find Items with This Media (the
+  media-matches destination, with no sidebar row), Set as Library Cover
+  (the shared cover dialog, `MediaCoverDialog`, framing the item at once;
+  saving writes `.picto-library-cover.*` beside the copy's database, not
+  production's global config), Set as Thumbnail (a video's or Flash
+  movie's current frame), and the Duplicates cards' menu (Open with
+  Default App, Open in New Window). Opening, revealing, Open With and file
+  copies go through `desktop.rs`, which in the off-screen tool writes them
+  to `desktop.log` (a `desktop` script line) instead of reaching the
+  desktop.
 - Importing (`filesController.ts`, `GridScreen.tsx`'s drop handler), into
   the grid's destination (the Inbox's lifecycle when the Inbox is open, else
   the library's, and the open folder): files and folders dragged from Finder
@@ -1100,8 +1168,8 @@ element (`shell/rails.rs`).
   in the inspector's fields move the caret where production's only scroll.
 - A whole destination selected names no collection count in the item
   menu's Ungroup row ("Ungroup Collections..."); production looks the count
-  up. Open With Other offers the system chooser instead of listing the
-  applications (macOS lists them in production).
+  up. Open With Other lists the applications on macOS only; Windows'
+  chooser row has a `TODO`, and Linux offers none, as production.
 - Tab in the Folders dialog leaves the keyboard in the search field;
   production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a review key held down is told
@@ -1119,8 +1187,7 @@ element (`shell/rails.rs`).
   screen is opened again, not live.
 - Duplicates: the progress bar's position over a shown pair is a
   2px row above the cards (the Electron `.scanProgress` class has no rule).
-  The Smart merge ring follows the pointer only, not keyboard focus. No context menu on the
-  candidates (Open with Default App, Open in New Window). The difference
+  The Smart merge ring follows the pointer only, not keyboard focus. The difference
   picture is computed from the decoded images (GPUI has no blend modes), at
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
@@ -1191,18 +1258,20 @@ element (`shell/rails.rs`).
   ready, and while it enters it grows and fades but keeps its resting turn
   instead of turning from 10 to 5 degrees. The folder card's radial light is
   a vertical gradient. Auto Tag is drawn (dimmed when nothing in it is an
-  image) but the AI tagger it opens is a `TODO`. The subfolder scope, the
+  image) but the AI tagger it opens is a `TODO`. The
   summary spinners and the 250 ms switch to the loading skeleton are not
   ported, and a selection's covers follow the order items were chosen in this
   session, not the Electron query order, for shift ranges.
-- Not in the grid yet: dragging items out of the window or to reorder them, inline rename, and the subfolder tiles a
-  folder shows above its items (an empty folder with subfolders shows the
-  empty state). The audio tile's
+- The subfolder tiles' cover is a vertical gradient rather than a radial
+  one, a cover that cannot be read shows the folder glyph rather than the
+  broken-file art, and the rename field's text is not centred. Items
+  dragged out of the window show the system's file-type icons rather than
+  production's composite ghost, and are only handed to the system on macOS
+  and Wayland (`Window::start_platform_drag`); elsewhere the drag ends at
+  the window's edge. Escape does not cancel an item drag. The audio tile's
   radial gradient is approximated by a linear one and its `brightness(1.5)`
   is not applied; the hover preview does not apply EXIF orientation.
-- Not in the sidebar yet: watching a directory (the
-  watch is stored, the watcher is a `TODO`, and the dialog does not check the
-  folder's structure). The activity
+- The activity
   button's tooltip opens below it, not to its right as `position="right"`
   puts it. Tab from the grid
   toggles the panels as in production, so the rows are entered from the
@@ -1216,8 +1285,7 @@ element (`shell/rails.rs`).
   the resize grip, the file types are the
   six built-in choices rather than the accepted formats. The icon picker shows the sidebar's
   glyphs (filled, 1.2 stroke) rather than the 1.5-stroke outlines, and its
-  tiles light at once rather than over 50 ms. Dragging items out of the
-  window and reordering a folder's items by dragging are not built. The sidebar's
+  tiles light at once rather than over 50 ms. The sidebar's
   preferences (which system rows and sections show, counts, guides, the
   double-click action, Quick Access) come from the settings model and are
   written through it.
@@ -1261,20 +1329,20 @@ element (`shell/rails.rs`).
   MP3 with the visualizer, each with its controls. Not checked: timings,
   hover states, the volume and rate popups; what was checked headlessly is
   listed under Checks.
-- Collection reader: no collection editor ("Edit group" does nothing yet,
-  so the breadcrumb never shows), no double-click opening a member alone,
-  no menu between members (Sort Contents, Ungroup...), and a member's menu
-  lacks "Remove from Group" and acts on the collection for its Trash row
-  only by a TODO. In the detail window members have no menu.
+- Collections: in the detail window members and the space between them
+  have no menu. The editor's drag does not become a drag of files out of
+  the window. After grouping, the new group is not selected. The organizer's radio is
+  the app's round check, not the system's.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
-  corners do not clip a zoomed image. No Copy (the file itself).
+  corners do not clip a zoomed image.
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
   the item. Space paging the grid jumps where production scrolls smoothly.
-- Detail window: its menu's Copy, Search by Image and More rows do nothing
-  yet; no Copy (the file itself) shortcut, per-image zoom
-  memory, or "Loading..." placeholder; the
+- Detail window: its menu's Search by Image does nothing yet (see the
+  item menu); Set as Library Cover opens the dialog in the main window
+  (production's detail window has no dialog layer, so the row does
+  nothing there). No per-image zoom memory or "Loading..." placeholder; the
   pinned button rests at full strength rather than production's 94%. Moving
   the window by its toolbar does not keep the toolbar showing as
   `picto:window-moved` does. Its size uses the primary display's work area,
@@ -1285,18 +1353,16 @@ element (`shell/rails.rs`).
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
   the menu as a full-window layer; the menu itself chooses between its
-  pop-up windows and the in-window panel. "Open With Other" is
-  the one-row chooser on every platform: the applications cannot be listed,
-  so macOS's submenu is not shown.
+  pop-up windows and the in-window panel.
 - Item menu rows shown, enabled as production has them, that do nothing yet
-  (each with a `TODO` where it is received): Open With Other (the system's
-  application list), Copy and Copy for several items (GPUI's macOS
-  pasteboard drops file lists), Search by Image (production uploads
-  the original from a hidden browser window), Set as Library Cover (the
-  cover dialog that frames the square), Find Items with This Media (an
-  ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
-  Group (the collection editor), Group when the selection needs the group
-  organizer, Batch Rename, Auto Tag, and Set as Thumbnail. "Add Tags", "Add to Folder" and "New Smart
+  (each with a `TODO` where it is received): Search by Image (production
+  uploads the original from a hidden browser window), Auto Tag, Open
+  Folder (the grid shows no folder tiles yet) and Windows' Open With Other
+  chooser. Copy puts the files on the macOS pasteboard
+  (`NSFilenamesPboardType`, as production); on Windows and Linux it
+  reports that file copying is unavailable (`TODO` in `desktop.rs`).
+  Production shows no notification when a menu's Copy, Regenerate
+  Thumbnail or Set as Thumbnail fails; these show one. "Add Tags", "Add to Folder" and "New Smart
   Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
   `NewSmartFolder`, which open the Add Tags and Folders dialogs (the
   inspector's pickers from the viewer's menu) and the smart-folder editor.
@@ -1357,19 +1423,19 @@ element (`shell/rails.rs`).
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
-  reasons in `keymap::NOT_YET`: Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
-  which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
-  Remove from Group, Toggle Grayscale, the layout and tile-label keys,
+  reasons in `keymap::NOT_YET`: Add to Last Folder, Auto-Tag, Copy Tags
+  and Paste Tags, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
-  are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
+  are not bound either. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
   itself.
 - Application menu: rows whose feature is missing are present and disabled:
   Library Manager, New Library, Open Library and Recent Libraries (only the
   open library is listed; opening real libraries awaits a decision), Check
-  for Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
-  outside a text field copies nothing (production's ⌘C copies files). A
+  for Updates, Auto Tag and Log Window. Copy outside a text field copies
+  the selection's files, as ⌘C does (production's row, chosen with the
+  pointer, copies nothing there). A
   row is enabled by whether its action has a handler where the keyboard is, so the selection's rows are disabled while Settings or a
   detail window is in front, where production's stay enabled and do
   nothing; Set Rating's submenu title stays enabled (AppKit enables a row
@@ -1531,6 +1597,10 @@ opening (`answer` alone cancels it); put it before the line that opens the
 dialog. Only the off-screen test reads it (`prompt.rs`). The reference's
 dialogs are the system's own and cannot be answered from a script.
 
+`invoke <command> <json>` sends an application command (`folders.create`,
+`items.set_folder`, …) and prints its answer, in both tools, so one script
+sets a copy up as it sets up the reference's.
+
 It redraws the whole window every tick, which hides a view that changes its
 state while a frame is drawn and waits for a frame nothing asks for (on
 screen it "fixes itself when the mouse moves"). `PICTO_GPUI_LAZY=1`, or a
@@ -1579,8 +1649,34 @@ on it with the meter on, for checking scrolling, resizing and loading at
 scale. It reads no existing library.
 
 `PICTO_GPUI_STATS=1` prints, for each second in which something happened, how
-often each view repainted, how long the grid took to build a frame, the gap
-between grid frames, and how many thumbnail files were read.
+often each view repainted, how long the grid took to build a frame (on the
+clock, and in the main thread's own time, with its layout and tile parts),
+the gap between grid frames, the longest the main thread kept a 4 ms timer
+waiting (a stall), how many thumbnail files were read, let go, let go
+without ever being painted, or dropped unfinished. It also prints at once
+each stage of opening (database readable, application finished), each
+window of results read on the library thread and when it arrived, and each
+screen read or edit on the library thread that took 5 ms or more.
+
+Two guards for scale: `a_frame_does_the_same_work_whatever_the_library_size`
+(a regular test) checks that the window asked for, the tiles laid out and the
+tiles drawn are the same at 3,000, a million and fifty million items; and,
+on a real copy of any size,
+
+```sh
+PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline \
+    window_reads_stay_flat_across_the_library -- --ignored --nocapture
+PICTO_GPUI_TEST_LIBRARY=<copy> cargo test --offline time_each_stage -- --ignored --nocapture
+```
+
+time every read the grid makes (each sort, at the start, middle and end;
+smart folders; searches; the summary of everything selected) and fail if a
+window deep in the list costs much more than the first, and time each stage
+of opening. On the million-item library on 14 November 2026: every window
+read 0.3–9 ms, wherever it was; the summary of a million selected items
+0.6 ms; opening the database and its resident indexes 1.2–11 s (the
+library's own load, varying with the system's file cache); the recovery
+passes 13 s alone, 28–30 s with the app drawing beside them.
 
 ### Format matrix
 

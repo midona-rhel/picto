@@ -4,6 +4,7 @@ use super::{Sidebar, folder_id, tree};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look as ButtonLook, menu::Return, modal, modal::Size};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use picto_library::{FolderId, Lifecycle};
 
@@ -40,7 +41,20 @@ pub enum Dialog {
         enabled: bool,
         subfolders: bool,
         status: Lifecycle,
+        /// What `imports.folder.analyze` said of the folder's depth.
+        analysis: WatchAnalysis,
+        /// Counts the analyses asked for, so an old answer is ignored.
+        asked: u64,
     },
+}
+
+/// The watched folder's structure as the dialog checks it.
+pub enum WatchAnalysis {
+    /// No folder chosen yet.
+    None,
+    Checking,
+    Done(serde_json::Value),
+    Failed,
 }
 
 /// `singleFolderDeletionMessage`.
@@ -402,9 +416,12 @@ impl Sidebar {
                             Some(Lifecycle::Active) => Lifecycle::Active,
                             _ => Lifecycle::Inbox,
                         },
+                        analysis: WatchAnalysis::None,
+                        asked: 0,
                     },
                     cx,
                 );
+                this.analyze_watch(cx);
             });
         })
         .detach();
@@ -412,17 +429,9 @@ impl Sidebar {
 
     /// Browse: the system's folder chooser.
     fn browse_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Select folder to watch".into()),
-        });
+        let chosen = crate::prompt::folder("Select folder to watch", cx);
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
-                return;
-            };
-            let Some(chosen) = paths.into_iter().next() else {
+            let Ok(Some(chosen)) = chosen.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -430,22 +439,75 @@ impl Sidebar {
                     *path = Some(chosen.to_string_lossy().into_owned());
                     cx.notify();
                 }
+                this.analyze_watch(cx);
             });
         })
         .detach();
     }
 
-    /// `foldersController.setWatchConfig`: stores the watch, or clears it
-    /// when the watch is turned off.
-    // TODO: watching the directory and importing what arrives needs the
-    // application backend; only the setting is stored here.
-    fn save_watch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `analyzeFolderTree`: how the chosen folder's depth fits under the
+    /// Picto folder, asked again when the folder or "Watch Subfolders"
+    /// changes.
+    fn analyze_watch(&mut self, cx: &mut Context<Self>) {
+        let Some(Dialog::Watch {
+            folder,
+            path,
+            subfolders,
+            analysis,
+            asked,
+            ..
+        }) = self.dialog.content_mut()
+        else {
+            return;
+        };
+        *asked += 1;
+        let Some(path) = path.clone() else {
+            *analysis = WatchAnalysis::None;
+            return;
+        };
+        *analysis = WatchAnalysis::Checking;
+        let generation = *asked;
+        let answer = self.session.read(cx).dispatch(
+            "imports.folder.analyze",
+            serde_json::json!({
+                "path": path,
+                "destination_folder_id": folder.0,
+                "include_subfolders": *subfolders,
+                "include_source_root": false,
+            }),
+        );
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(Dialog::Watch {
+                    analysis, asked, ..
+                }) = this.dialog.content_mut()
+                    && *asked == generation
+                {
+                    *analysis = match result {
+                        Ok(Ok(found)) => WatchAnalysis::Done(found),
+                        _ => WatchAnalysis::Failed,
+                    };
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// `foldersController.setWatchConfig`: `folders.watch.set`, or
+    /// `folders.watch.clear` when the watch is turned off. The application
+    /// checks the folder (it must exist and lie outside the library) and its
+    /// watcher imports what arrives there.
+    fn save_watch(&mut self, cx: &mut Context<Self>) {
         let Some(Dialog::Watch {
             folder,
             path: Some(path),
             enabled,
             subfolders,
             status,
+            ..
         }) = self.dialog.content()
         else {
             return;
@@ -453,31 +515,28 @@ impl Sidebar {
         let (folder, path, enabled, subfolders, status) =
             (*folder, path.clone(), *enabled, *subfolders, *status);
         self.close_dialog(cx);
-        self.edit(
-            move |library| {
-                if enabled {
-                    library.set_folder_watch(folder, &path, subfolders, status)
-                } else {
-                    library.clear_folder_watch(folder)
-                }
-                .map(|_| ())
-            },
-            |_, (), _, _| {},
-            window,
-            cx,
-        );
+        if enabled {
+            watch_command(
+                &self.session,
+                "folders.watch.set",
+                serde_json::json!({
+                    "folder_id": folder.0,
+                    "path": path,
+                    "include_subfolders": subfolders,
+                    "lifecycle": if status == Lifecycle::Active { "active" } else { "inbox" },
+                }),
+                cx,
+            );
+        } else {
+            clear_watch(&self.session, folder, cx);
+        }
     }
 
     fn confirmed(&mut self, then: Confirmed, window: &mut Window, cx: &mut Context<Self>) {
         self.close_dialog(cx);
         match then {
             Confirmed::Delete(nodes) => self.delete(nodes, window, cx),
-            Confirmed::RemoveWatch(id) => self.edit(
-                move |library| library.clear_folder_watch(id).map(|_| ()),
-                |_, (), _, _| {},
-                window,
-                cx,
-            ),
+            Confirmed::RemoveWatch(id) => clear_watch(&self.session, id, cx),
         }
     }
 
@@ -513,8 +572,25 @@ impl Sidebar {
                 enabled,
                 subfolders,
                 status,
+                analysis,
                 ..
             } => {
+                let analyzing = matches!(analysis, WatchAnalysis::Checking);
+                let failed = matches!(analysis, WatchAnalysis::Failed);
+                let consolidation = match analysis {
+                    WatchAnalysis::Done(found) => {
+                        crate::imports::plan::consolidation_message(found)
+                    }
+                    _ => None,
+                };
+                let help = |text: String| {
+                    // `.helpText`: 12px on an 18px line.
+                    div()
+                        .text(theme::TEXT_SM)
+                        .line_height(px(18.))
+                        .text_color(theme.text_secondary())
+                        .child(text)
+                };
                 let field_label = |text: &'static str| {
                     div()
                         .text(theme::TEXT_MD)
@@ -588,9 +664,22 @@ impl Sidebar {
                                             *subfolders = !*subfolders;
                                             cx.notify();
                                         }
+                                        this.analyze_watch(cx);
                                     }).into_handler())
                                     .into_any_element(),
                             ))
+                            .when(analyzing, |stack| {
+                                stack.child(help("Checking the folder structure...".into()))
+                            })
+                            .when_some(consolidation, |stack, message| {
+                                stack.child(ui::modal::warning_box(theme, message))
+                            })
+                            .when(failed, |stack| {
+                                stack.child(ui::modal::warning_box(
+                                    theme,
+                                    "Picto could not inspect this folder. Choose it again or check that it is still available.",
+                                ))
+                            })
                             .child(
                                 div()
                                     .flex()
@@ -627,14 +716,9 @@ impl Sidebar {
                                         })
                                     }),
                             )
-                            .child(
-                                // `.helpText`: 12px on an 18px line.
-                                div()
-                                    .text(theme::TEXT_SM)
-                                    .line_height(px(18.))
-                                    .text_color(theme.text_secondary())
-                                    .child("New files added to this folder will be automatically imported into the library."),
-                            ),
+                            .child(help(
+                                "New files added to this folder will be automatically imported into the library.".into(),
+                            )),
                     )
                     .footer(
                         div()
@@ -642,19 +726,12 @@ impl Sidebar {
                             .child(
                                 ui::action_button("watch-remove", ButtonLook::Danger)
                                     .label("Remove Watch")
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                    .on_click(cx.listener(|this, _, _, cx| {
                                         if let Some(Dialog::Watch { folder, .. }) = this.dialog.content()
                                         {
                                             let folder = *folder;
                                             this.close_dialog(cx);
-                                            this.edit(
-                                                move |library| {
-                                                    library.clear_folder_watch(folder).map(|_| ())
-                                                },
-                                                |_, (), _, _| {},
-                                                window,
-                                                cx,
-                                            );
+                                            clear_watch(&this.session, folder, cx);
                                         }
                                     })),
                             ),
@@ -663,8 +740,8 @@ impl Sidebar {
                     .footer(
                         ui::action_button("watch-save", ButtonLook::Primary)
                             .label("Save")
-                            .disabled(path.is_none())
-                            .on_click(cx.listener(|this, _, window, cx| this.save_watch(window, cx))),
+                            .disabled(path.is_none() || analyzing || failed)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_watch(cx))),
                     )
             }
             Dialog::Confirm {
@@ -797,4 +874,33 @@ impl Sidebar {
             cx,
         );
     }
+}
+
+/// `folders.watch.clear`.
+fn clear_watch(session: &Entity<crate::session::Session>, folder: FolderId, cx: &mut App) {
+    watch_command(
+        session,
+        "folders.watch.clear",
+        serde_json::json!({ "folder_id": folder.0 }),
+        cx,
+    );
+}
+
+/// Sends a watch command to the application; the sidebar and inspector
+/// follow the `folders` change it announces. Production leaves a refused
+/// watch to the console (`setWatchConfig` is not awaited); a folder the
+/// application will not watch (gone, or inside the library) is said here.
+fn watch_command(
+    session: &Entity<crate::session::Session>,
+    command: &'static str,
+    args: serde_json::Value,
+    cx: &mut App,
+) {
+    let answer = session.read(cx).dispatch(command, args);
+    cx.spawn(async move |cx| {
+        if let Ok(Err(error)) = answer.await {
+            let _ = cx.update(|cx| crate::ui::notify::error("Could not watch folder", error, cx));
+        }
+    })
+    .detach();
 }

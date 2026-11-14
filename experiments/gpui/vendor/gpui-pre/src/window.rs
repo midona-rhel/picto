@@ -6137,6 +6137,16 @@ impl Window {
         }
     }
 
+    /// Hands `payload` to the platform as a native drag session continuing
+    /// the left-button drag in progress, for a view that follows the pointer
+    /// itself rather than through [`Interactivity::on_drag`] (whose drags
+    /// are handed over on their own when they leave the window). Returns
+    /// whether the platform took it; one without native drags declines.
+    pub fn start_platform_drag(&mut self, payload: &crate::ExternalDragPayload) -> bool {
+        self.platform_window.can_start_external_drag()
+            && self.platform_window.start_external_drag(payload)
+    }
+
     fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
         let PlatformInput::MouseMove(mouse_move) = event else {
             return;

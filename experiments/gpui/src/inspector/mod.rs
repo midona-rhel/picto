@@ -237,6 +237,13 @@ impl Inspector {
                 window,
                 |this, _, cx| this.save_source(cx),
             ),
+            // A thumbnail written again (regenerated, or a captured frame)
+            // is drawn again in the preview.
+            cx.subscribe(&session, |_, _, event: &crate::application::Event, cx| {
+                if matches!(event, crate::application::Event::Thumbnail(_)) {
+                    cx.notify();
+                }
+            }),
             // The pickers close when the destination changes. It is told by
             // its id, which stays when the destination list is rebuilt.
             cx.subscribe_in(
@@ -300,6 +307,10 @@ impl Inspector {
                         }
                         this.sync_item(false, cx);
                         this.selection_changed(cx);
+                        // A subfolder tile chosen or let go in the grid.
+                        if !held {
+                            this.refresh_scope(cx);
+                        }
                         cx.notify();
                     }
                     Change::Details => {
@@ -313,6 +324,9 @@ impl Inspector {
                         cx.notify();
                     }
                     Change::Navigation if !held => {
+                        // A folder changed: what a selected subfolder holds
+                        // is read again.
+                        this.forget_holdings(cx);
                         this.refresh_scope(cx);
                         cx.notify();
                     }

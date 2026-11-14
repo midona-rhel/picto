@@ -6,7 +6,7 @@ use crate::grid::menu::Action;
 use crate::session::{Report, Reread};
 use crate::shell::Shell;
 use gpui::*;
-use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootKind};
+use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -28,12 +28,47 @@ impl Shell {
             // ── Opening ──
             Action::OpenDefault => {
                 if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.open_with_system(&path), window, cx);
+                    self.with_path(
+                        file,
+                        |path, cx| crate::desktop::open_default(&path, cx),
+                        window,
+                        cx,
+                    );
                 }
             }
             Action::Reveal => {
                 if let Some(file) = file {
-                    self.with_path(file, |path, cx| cx.reveal_path(&path), window, cx);
+                    self.with_path(
+                        file,
+                        |path, cx| crate::desktop::reveal(&path, cx),
+                        window,
+                        cx,
+                    );
+                }
+            }
+            Action::OpenInNewWindow if target.member => {
+                // The member's file by itself (`openDetailWindow({ hash })`).
+                if let (Some(file), Some(item)) = (file, target.items.first()) {
+                    let size = self
+                        .session
+                        .read(cx)
+                        .selected_details()
+                        .and_then(|details| {
+                            details
+                                .media
+                                .iter()
+                                .find(|media| media.facts.content_hash == file.hash)
+                                .map(|media| (media.facts.width, media.facts.height))
+                        });
+                    let entry = crate::viewer::detail::Entry {
+                        root: item.root_id,
+                        hash: file.hash,
+                        name: file.name,
+                        width: size.and_then(|size| size.0),
+                        height: size.and_then(|size| size.1),
+                        collection: false,
+                    };
+                    crate::viewer::detail::open(self.session.clone(), vec![entry], 0, cx);
                 }
             }
             Action::OpenInNewWindow => {
@@ -47,12 +82,28 @@ impl Shell {
                     self.open_in_window(vec![ordinal], ordinal, cx);
                 }
             }
-            Action::OpenWithOther => {
-                // TODO: list the applications that open this type (macOS
-                // shows them as a submenu, Windows opens its chooser) and
-                // open the file with the one chosen.
+            Action::OpenWithApplication => {
+                let application = self.items.chosen.take().map(PathBuf::from);
+                if let (Some(file), Some(application)) = (file, application) {
+                    self.with_path(
+                        file,
+                        move |path, cx| {
+                            if let Err(error) = crate::desktop::open_with(&application, &path, cx) {
+                                crate::ui::notify::error("Could not open file", error, cx);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
-            Action::OpenFolder | Action::LoadingApplications => {
+            Action::OpenWithOther => {
+                // TODO: open Windows' own application chooser on the file
+                // (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), which
+                // is the only system that offers this row.
+            }
+            Action::LoadingApplications => {}
+            Action::OpenFolder => {
                 // TODO: open the folder tile's folder once the grid shows
                 // subfolder tiles.
             }
@@ -77,6 +128,34 @@ impl Shell {
                     write_text(media_link(&file.hash, &file.mime), cx);
                 }
             }
+            // The members a member's menu acts on: their own names and
+            // files (`onCopySelection*` over `selected`).
+            Action::CopySelectionNames
+            | Action::CopySelectionPaths
+            | Action::CopySelectionLinks
+                if target.member =>
+            {
+                let lines: Vec<String> = {
+                    let session = self.session.read(cx);
+                    let details = session.selected_details();
+                    target
+                        .members
+                        .iter()
+                        .filter_map(|index| details.and_then(|details| details.media.get(*index)))
+                        .map(|media| match action {
+                            Action::CopySelectionNames if media.media_name.is_empty() => {
+                                "Untitled".to_owned()
+                            }
+                            Action::CopySelectionNames => media.media_name.clone(),
+                            Action::CopySelectionPaths => media.file_path.clone(),
+                            _ => media_link(&media.facts.content_hash, &media.facts.mime),
+                        })
+                        .collect()
+                };
+                if !lines.is_empty() {
+                    write_text(lines.join("\n"), cx);
+                }
+            }
             Action::CopySelectionNames => {
                 let names = target
                     .items
@@ -96,28 +175,12 @@ impl Shell {
                 // collection members included, in order.
                 let links = action == Action::CopySelectionLinks;
                 self.library(
-                    Box::new(move |library| {
-                        let mut lines = Vec::new();
-                        for id in ids {
-                            for media in library.details(id)?.media {
-                                lines.push(if links {
-                                    let extension = std::path::Path::new(&media.file_path)
-                                        .extension()
-                                        .map_or("bin".into(), |extension| {
-                                            extension.to_string_lossy().into_owned()
-                                        });
-                                    format!(
-                                        "media://localhost/file/{}.{extension}",
-                                        media.facts.content_hash
-                                    )
-                                } else {
-                                    media.file_path
-                                });
-                            }
-                        }
-                        Ok(lines)
-                    }),
-                    |_, lines, _, cx| {
+                    files_of(ids),
+                    move |_, files, _, cx| {
+                        let lines = files
+                            .into_iter()
+                            .map(|(hash, path)| if links { link(&hash, &path) } else { path })
+                            .collect::<Vec<_>>();
                         if !lines.is_empty() {
                             write_text(lines.join("\n"), cx);
                         }
@@ -126,17 +189,37 @@ impl Shell {
                     cx,
                 );
             }
-            Action::CopyFile | Action::CopySelection => {
-                // TODO: put the files themselves on the clipboard. GPUI's
-                // macOS pasteboard writes text and images only; a file list
-                // (`ClipboardEntry::ExternalPaths`) is dropped.
+            Action::CopyFile => {
+                // `copyFileForHash`: the one file the row is about.
+                if let Some(file) = file {
+                    self.with_path(
+                        file,
+                        |path, cx| {
+                            if let Err(error) = crate::desktop::copy_files(&[path], cx) {
+                                crate::ui::notify::error("Could not copy file", error, cx);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
+            // A member's menu copies the members it acts on
+            // (`copyHashes(selected)`).
+            Action::CopySelection if target.member => {
+                let paths: Vec<PathBuf> =
+                    self.member_media(&target, cx, |media| PathBuf::from(&media.file_path));
+                if let Err(error) = crate::desktop::copy_files(&paths, cx) {
+                    crate::ui::notify::error("Could not copy selection", error, cx);
+                }
+            }
+            Action::CopySelection => self.copy_files(ids, window, cx),
             // ── Lifecycle ──
             Action::Accept | Action::Restore => self.set_lifecycle(Lifecycle::Active, cx),
-            Action::MoveToTrash if target.member => {
-                // TODO: move the member out of its collection into the
-                // Trash (`detachItems` with `target_lifecycle: 'trash'`).
-            }
+            // A member leaves its collection into the Trash
+            // (`detachMembers(selected, 'trash')`).
+            Action::MoveToTrash if target.member => self.detach_members(target, true, window, cx),
+            Action::RemoveFromGroup => self.detach_members(target, false, window, cx),
             Action::MoveToTrash => self.set_lifecycle(Lifecycle::Trash, cx),
             Action::Reject => {
                 if crate::settings::current(cx).reject_action == "delete" {
@@ -210,6 +293,22 @@ impl Shell {
                     );
                 }
             }
+            Action::SortContents(field) if target.group => {
+                if target.quick_look {
+                    let details = self.session.read(cx).selected_details().cloned();
+                    if let Some(details) = details {
+                        drop(crate::viewer::group::sort(
+                            &self.session,
+                            &details,
+                            field,
+                            cx,
+                        ));
+                    }
+                } else {
+                    self.viewer
+                        .update(cx, |viewer, cx| viewer.sort_collection(field, cx));
+                }
+            }
             Action::SortContents(field) => {
                 if let Some(folder) = target.folder {
                     self.sort_folder(folder, field, cx);
@@ -217,9 +316,16 @@ impl Shell {
             }
             // ── Groups ──
             Action::Group => self.group(target, window, cx),
+            Action::Ungroup if target.group => self.confirm_ungroup_shown(target, cx),
             Action::Ungroup => self.confirm_ungroup(target, cx),
             Action::EditGroup => {
-                // TODO: open the collection editor on this group.
+                // `openGridItem(item, items, 'editor')`: the collection opens
+                // in the media view, in its editor.
+                self.viewer
+                    .update(cx, |viewer, cx| viewer.edit_collection(window, cx));
+                self.session
+                    .update(cx, |session, cx| session.open_viewer(cx));
+                return;
             }
             // ── Names and tags ──
             Action::Rename => {
@@ -230,9 +336,7 @@ impl Shell {
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
             }
-            Action::BatchRename => {
-                // TODO: open the batch rename dialog for these items.
-            }
+            Action::BatchRename => self.batch_rename(target.items, cx),
             Action::AddTags => {
                 self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
@@ -293,20 +397,57 @@ impl Shell {
                 // the results page; this needs that upload.
             }
             Action::SetLibraryCover => {
-                // TODO: open the library cover dialog (`MediaCoverDialog`)
-                // with this item chosen, where the square is framed before
-                // the cover is written beside the library's database.
+                // The shown file, framed at once (`initialCandidate`).
+                if let (Some(item), Some(file)) = (target.items.first(), file) {
+                    let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                        media_item: i64::from(item.root_id.0),
+                        size: (item.width.unwrap_or(1), item.height.unwrap_or(1)),
+                        thumbnail: crate::grid::thumbnails::present(
+                            &self.session.read(cx).thumbnail(&file.hash),
+                        ),
+                        hash: file.hash,
+                    };
+                    self.open_library_cover(Some(candidate), cx);
+                }
             }
             Action::FindMediaMatches => {
-                // TODO: open the media-matches destination
-                // (`ItemScope::MediaMatches`) for this item.
+                if let Some(item) = ids.first().copied() {
+                    self.session
+                        .update(cx, |session, cx| session.open_media_matches(item, cx));
+                }
             }
             Action::RegenerateThumbnails => {
-                // TODO: regenerate the thumbnails of these files.
+                // The selection's own files, a collection's never (the row
+                // is not offered for one); the viewer's, the file shown.
+                let files = match &file {
+                    _ if target.member && target.members.len() > 1 => {
+                        self.member_media(&target, cx, |media| {
+                            (media.facts.content_hash.clone(), media.facts.mime.clone())
+                        })
+                    }
+                    Some(file) if target.member || target.items.len() == 1 => {
+                        vec![(file.hash.clone(), file.mime.clone())]
+                    }
+                    _ => target
+                        .items
+                        .iter()
+                        .filter(|item| !item.content_hash.is_empty())
+                        .map(|item| (item.content_hash.clone(), item.mime.clone()))
+                        .collect(),
+                };
+                self.regenerate_thumbnails(files, cx);
             }
             Action::Grayscale => {
-                // TODO: draw the grid's thumbnails in grayscale and check
-                // the row while it is on.
+                // The row stays open and follows the change.
+                self.session
+                    .update(cx, |session, cx| session.toggle_grayscale(cx));
+                let on = self.session.read(cx).grayscale;
+                if let Some(menu) = &self.items.open {
+                    let _ = menu.update(cx, |menu, cx| {
+                        menu.set_checked(Action::Grayscale.key(), on, cx)
+                    });
+                }
+                return;
             }
             Action::NewSmartFolder => {
                 self.dispatch(Box::new(crate::keymap::NewSmartFolder), window, cx);
@@ -327,12 +468,105 @@ impl Shell {
                 }
             }
             Action::SetAsThumbnail => {
-                // TODO: capture the shown frame and make it the thumbnail.
+                let surface = self.items.surface.as_ref().and_then(|s| s.upgrade());
+                if let (Some(surface), Some(file)) = (surface, file) {
+                    crate::viewer::capture::set_as_thumbnail(
+                        &surface,
+                        &self.session,
+                        file.hash,
+                        cx,
+                    );
+                }
             }
         }
         if self.items.surface.is_none() {
             window.focus(&self.focus, cx);
         }
+    }
+
+    /// What a member's menu reads of each member it acts on.
+    fn member_media<T>(
+        &self,
+        target: &Target,
+        cx: &App,
+        read: impl Fn(&picto_library::MediaRecord) -> T,
+    ) -> Vec<T> {
+        let details = self.session.read(cx).selected_details();
+        target
+            .members
+            .iter()
+            .filter_map(|index| details.and_then(|details| details.media.get(*index)))
+            .map(read)
+            .collect()
+    }
+
+    /// `copyTarget`: the files of these items, collection members
+    /// included, on the clipboard, or a notification saying why not.
+    pub(in crate::shell) fn copy_files(
+        &mut self,
+        ids: Vec<RootId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.library(
+            files_of(ids),
+            |_, files, _, cx| {
+                let paths: Vec<PathBuf> = files.into_iter().map(|(_, path)| path.into()).collect();
+                let copied = if paths.is_empty() {
+                    Err("The selection has no physical files to copy.".to_owned())
+                } else {
+                    crate::desktop::copy_files(&paths, cx)
+                };
+                if let Err(error) = copied {
+                    crate::ui::notify::error("Could not copy selection", error, cx);
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// `media.regenerate_thumbnails` for these files (see
+    /// [`crate::grid::thumbnails::regenerate`]).
+    pub(in crate::shell) fn regenerate_thumbnails(
+        &mut self,
+        files: Vec<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        crate::grid::thumbnails::regenerate(&self.session, files, cx);
+    }
+
+    /// `batchRenameModalAtom`: the dialog on these items, as the grid shows
+    /// them (an unnamed one as "Untitled").
+    pub(in crate::shell) fn batch_rename(
+        &mut self,
+        items: Vec<picto_library::query::RootSummary>,
+        cx: &mut Context<Self>,
+    ) {
+        let items = items
+            .into_iter()
+            .map(|item| crate::shell::batch_rename::Item {
+                id: item.root_id,
+                name: if item.name.is_empty() {
+                    "Untitled".to_owned()
+                } else {
+                    item.name
+                },
+            })
+            .collect();
+        self.batch_rename
+            .update(cx, |dialog, cx| dialog.open(items, cx));
+    }
+
+    /// `openCurrentLibraryCoverPicker`, framing `candidate` at once when
+    /// it is given.
+    pub(crate) fn open_library_cover(
+        &mut self,
+        candidate: Option<crate::screens::subscriptions::cover_dialog::Candidate>,
+        cx: &mut Context<Self>,
+    ) {
+        self.library_cover
+            .update(cx, |dialog, cx| dialog.open(candidate, cx));
     }
 
     /// Sends an action for another part of the app from the shell, which
@@ -353,14 +587,7 @@ impl Shell {
     ) {
         let File { root, hash, .. } = file;
         self.library(
-            Box::new(move |library| {
-                Ok(library
-                    .details(root)?
-                    .media
-                    .into_iter()
-                    .find(|media| media.facts.content_hash == hash)
-                    .map(|media| PathBuf::from(media.file_path)))
-            }),
+            Box::new(move |library| super::file_path(library, root, &hash)),
             |_, path, _, cx| {
                 if let Some(path) = path {
                     then(path, cx);
@@ -487,21 +714,114 @@ impl Shell {
                         notes: None,
                         modified_at_ms: crate::now_ms(),
                     })?;
-                    Ok(true)
+                    Ok(None)
                 } else {
-                    Ok(false)
+                    // Anything else is the organizer's to decide.
+                    Ok(Some(super::organizer::Request {
+                        target: selection,
+                        cover,
+                        groups: summary.collection_candidates,
+                        notes: notes.notes,
+                        maximum_bytes: notes.maximum_bytes,
+                    }))
                 }
             }),
-            |this, grouped, _, cx| {
-                if grouped {
-                    this.session
-                        .update(cx, |session, cx| session.reread(Reread::RESULTS, cx));
+            |this, decide, _, cx| match decide {
+                None => {
+                    // `clearSelection`, then the merged group's results.
+                    // TODO: select the merged group once the results hold
+                    // it, as production does.
+                    this.session.update(cx, |session, cx| {
+                        session.clear_selection(cx);
+                        session.reread(Reread::RESULTS, cx)
+                    });
                 }
-                // TODO: otherwise open the group organizer
-                // (`GroupOrganizerModal`) with the selection's groups and
-                // notes.
+                Some(request) => this.open_organizer(request, cx),
             },
             window,
+            cx,
+        );
+    }
+
+    /// A member's "Remove from Group" and "Move to Trash": the members the
+    /// menu acts on leave the collection the media view or Quick Look
+    /// shows, which closes once the collection is gone.
+    fn detach_members(
+        &mut self,
+        target: Target,
+        trash: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.quick_look {
+            self.viewer.update(cx, |viewer, cx| {
+                viewer.detach_members(target.members, trash, cx)
+            });
+            return;
+        }
+        let Some(details) = self.session.read(cx).selected_details().cloned() else {
+            return;
+        };
+        let ids: Vec<_> = target
+            .members
+            .iter()
+            .filter_map(|index| details.media.get(*index))
+            .map(|media| media.media_id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let closes = details.media.len() - ids.len() <= 1;
+        let answer =
+            crate::viewer::group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let quick_look = self.quick_look.downgrade();
+        cx.spawn_in(window, async move |_, cx| {
+            if let Ok(Ok(())) = answer.await
+                && closes
+            {
+                let _ =
+                    quick_look.update_in(cx, |quick_look, window, cx| quick_look.close(window, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// `confirmUngroup` in the collection's view: on Ungroup the members
+    /// return to the library and the view closes.
+    fn confirm_ungroup_shown(&mut self, target: Target, cx: &mut Context<Self>) {
+        let Some(root) = target.items.first().map(|item| item.root_id) else {
+            return;
+        };
+        let quick_look = target.quick_look;
+        self.ask(
+            "Ungroup?",
+            "The media will return to the library as separate items. Files and metadata will not be deleted.",
+            "Ungroup",
+            false,
+            Rc::new(move |this, window, cx| {
+                let answer = this.session.update(cx, |session, cx| {
+                    session.edit_reporting(
+                        Report::announce("collections.ungroup"),
+                        move |library| library.ungroup_collection(root, crate::now_ms()),
+                        Reread::RESULTS,
+                        cx,
+                    )
+                });
+                cx.spawn_in(window, async move |this, cx| {
+                    if let Ok(Ok(_)) = answer.await {
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            if quick_look {
+                                this.quick_look
+                                    .update(cx, |quick_look, cx| quick_look.close(window, cx));
+                            } else {
+                                this.session
+                                    .update(cx, |session, cx| session.close_viewer(cx));
+                            }
+                        });
+                    }
+                })
+                .detach();
+            }),
             cx,
         );
     }
@@ -546,4 +866,28 @@ impl Shell {
 
 fn write_text(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
+}
+
+/// `resolveTargetFilePaths`: the content hash and path of every file of
+/// these items, collection members included, in order.
+fn files_of(ids: Vec<RootId>) -> Work<Vec<(String, String)>> {
+    Box::new(move |library| {
+        let mut files = Vec::new();
+        for id in ids {
+            for media in library.details(id)?.media {
+                files.push((media.facts.content_hash, media.file_path));
+            }
+        }
+        Ok(files)
+    })
+}
+
+/// `copyTargetLinks`: a file's link, with the extension its path has.
+fn link(hash: &str, path: &str) -> String {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .map_or("bin".into(), |extension| {
+            extension.to_string_lossy().into_owned()
+        });
+    format!("media://localhost/file/{hash}.{extension}")
 }

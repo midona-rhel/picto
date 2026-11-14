@@ -524,7 +524,7 @@ impl SubscriptionsScreen {
         let dialog = self.dialog.layer(window, cx)?;
         let (presence, focus) = (dialog.presence, dialog.focus.clone());
         if matches!(dialog.content, Dialog::Cover(_)) {
-            return Some(self.cover_layer(presence, focus, window, cx));
+            return Some(cover_dialog::cover_layer(self, presence, focus, window, cx));
         }
         let dialog = self.dialog.content()?;
         let theme = theme::theme(cx);

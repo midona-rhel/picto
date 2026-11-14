@@ -2022,6 +2022,14 @@ impl TextInput {
         .detach();
         input
     }
+    /// A grid subfolder tile's in-place rename (`FolderRenameInput`, a
+    /// `GlassInput`): the UI font at 13px, otherwise as
+    /// [`TextInput::sidebar_rename`].
+    pub fn glass_rename(value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut input = Self::sidebar_rename(value, window, cx);
+        input.kind = Kind::Form;
+        input
+    }
     /// Ends an in-place rename once: committed, or cancelled.
     pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.renaming) {
