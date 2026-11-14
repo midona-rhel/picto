@@ -283,12 +283,22 @@ fn compare_names(left: &str, right: &str) -> std::cmp::Ordering {
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
 
+/// What the dock icon shows for a count: nothing for zero, the number up
+/// to 99 and "99+" past it, as Electron writes `setBadgeCount`'s on macOS.
+fn badge_label(count: u64) -> Option<String> {
+    match count {
+        0 => None,
+        1..=99 => Some(count.to_string()),
+        _ => Some("99+".to_owned()),
+    }
+}
+
 /// `app.setBadgeCount`: the number on the dock icon, none for zero.
 pub fn set_badge(count: u64) {
     let Some(application) = AnyClass::get(c"NSApplication") else {
         return;
     };
-    let label = (count > 0).then(|| NSString::from_str(&count.to_string()));
+    let label = badge_label(count).map(|label| NSString::from_str(&label));
     // SAFETY: AppKit's documented selectors, sent on the main thread
     // (GPUI's foreground), with the argument types they take.
     unsafe {
@@ -358,5 +368,19 @@ pub fn notify(title: &str, body: &str, _cx: &gpui::App) {
             addNotificationRequest: &*request,
             withCompletionHandler: done
         ];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::badge_label;
+
+    #[test]
+    fn the_dock_badge_is_the_count_up_to_ninety_nine() {
+        assert_eq!(badge_label(0), None);
+        assert_eq!(badge_label(7).as_deref(), Some("7"));
+        assert_eq!(badge_label(99).as_deref(), Some("99"));
+        assert_eq!(badge_label(100).as_deref(), Some("99+"));
+        assert_eq!(badge_label(9_999).as_deref(), Some("99+"));
     }
 }

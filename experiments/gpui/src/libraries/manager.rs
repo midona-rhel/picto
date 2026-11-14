@@ -1513,7 +1513,7 @@ impl Render for Manager {
             .children(self.removal(cx))
             .children(self.deletion(cx))
             .children(self.consent(cx))
-            .children(ui::window_chrome::rim(cx))
+            .children(ui::window_chrome::rim(window, cx))
     }
 }
 

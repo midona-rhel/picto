@@ -1152,7 +1152,7 @@ impl Render for Shell {
         // A frameless window's resizing edges (Linux), over the content.
         root = root.children(ui::window_chrome::resize_edges(window));
         // `.shellMac::after`: the window's rim, over everything.
-        root = root.children(ui::window_chrome::rim(cx));
+        root = root.children(ui::window_chrome::rim(window, cx));
         // The frame meter, when debugging: last, so that it ends the frame.
         root = root.children(crate::meter::overlay(cx));
         // Keep painting while a rail slides.

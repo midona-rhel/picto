@@ -1147,7 +1147,7 @@ impl Render for Main {
         if self.shell.is_none() {
             root = root
                 .child(self.notifications.clone())
-                .children(ui::window_chrome::rim(cx));
+                .children(ui::window_chrome::rim(window, cx));
         }
         root
     }

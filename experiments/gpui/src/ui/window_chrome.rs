@@ -60,9 +60,11 @@ pub const DECORATIONS: Option<WindowDecorations> =
 pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 74. } else { 8. };
 
 /// `.shellMac::after`: the window's rim, over everything, in the glass
-/// edges. Production draws it on macOS only.
-pub fn rim(cx: &App) -> Option<impl IntoElement + use<>> {
-    cfg!(target_os = "macos").then(|| {
+/// edges. Production draws it on macOS only. A window that fills the screen
+/// has no rim: its rounded corners and edge would stand inside the display's
+/// (production keeps drawing it there).
+pub fn rim(window: &Window, cx: &App) -> Option<impl IntoElement + use<>> {
+    (cfg!(target_os = "macos") && !window.is_fullscreen()).then(|| {
         deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(super::layer::CHROME)
     })
 }

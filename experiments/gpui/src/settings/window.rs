@@ -619,6 +619,6 @@ impl Render for SettingsWindow {
             .child(sidebar)
             .child(content);
         root.children(ui::window_chrome::resize_edges(window))
-            .children(ui::window_chrome::rim(cx))
+            .children(ui::window_chrome::rim(window, cx))
     }
 }
