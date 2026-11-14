@@ -253,7 +253,7 @@ fn first_page(kind: RendererKind, path: &Path) -> (RgbaImage, (u32, u32)) {
     let mut source = pages::open(kind, path).unwrap();
     assert!(source.page_count() > 0);
     let natural = source.page_size(0).unwrap();
-    let (width, height) = super::geometry::fit_page((400., 400.), natural).unwrap();
+    let (_, _, width, height) = crate::viewer::camera::contain(natural, (400., 400.)).unwrap();
     let size = (width.round() as u32, height.round() as u32);
     (source.render(0, size.0, size.1).unwrap(), size)
 }

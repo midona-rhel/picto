@@ -5,15 +5,16 @@
 //! opened. Its toolbar slides over the media and hides a second after the
 //! pointer last moved. Several can be open at once, one per item.
 use super::{
-    ActualSize, Boundary, End, FitToWindow, Media, NextItem, PreviousItem, ZoomIn, ZoomOut,
-    group::GroupReader, options, record_view, size_of, surface::MediaSurface,
+    Boundary, End, Media, NextItem, PreviousItem,
+    group::GroupReader,
+    record_view, size_of, step_within,
+    surface::{self, MediaSurface},
 };
 use crate::grid::menu as rows;
 use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::tooltip;
 use crate::{motion, theme, ui};
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::query::RootSummary;
 use picto_library::{RootDetails, RootId, RootKind};
@@ -221,24 +222,12 @@ impl DetailWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let surface = cx.new(|cx| {
-            let mut surface = MediaSurface::default();
-            surface.set_options(options(cx, true, true), cx);
-            surface
-        });
+        let surface = cx.new(|cx| MediaSurface::for_host(true, true, cx));
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let subscriptions = vec![
             // The toolbar shows the zoom and whether an image is there.
             cx.observe(&surface, |_, _, cx| cx.notify()),
-            cx.subscribe(
-                &crate::settings::model(cx),
-                |this, _, _: &crate::settings::Applied, cx| {
-                    let options = options(cx, true, true);
-                    this.surface
-                        .update(cx, |surface, cx| surface.set_options(options, cx));
-                },
-            ),
             // Focus shows the toolbar for a moment; leaving hides it at once.
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
@@ -298,6 +287,9 @@ impl DetailWindow {
         let Some(entry) = self.entry().cloned() else {
             return;
         };
+        // Until the new entry's details arrive, the menu and the copy keys
+        // have no file to act on rather than the previous entry's.
+        self.details = None;
         window.set_window_title(&entry.title());
         if self.recorded != Some(entry.root) {
             self.recorded = Some(entry.root);
@@ -308,7 +300,7 @@ impl DetailWindow {
                 crate::grid::thumbnails::existing(self.session.read(cx).thumbnail(&entry.hash));
             let natural = size_of(entry.width, entry.height);
             self.surface.update(cx, |surface, cx| {
-                surface.show(entry.hash.clone(), thumbnail, natural, None, cx)
+                surface.show(entry.hash.clone(), thumbnail, natural, cx)
             });
         }
         let root = entry.root;
@@ -352,32 +344,28 @@ impl DetailWindow {
     /// `navigate`: the previous or next entry, or the end's notice; with a
     /// member opened by itself, the previous or next member.
     fn step(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(opened) = self.opened {
-            let count = self
-                .details
-                .as_ref()
-                .map_or(0, |details| details.media.len());
-            let target = opened as isize + delta;
-            if target < 0 || target as usize >= count {
-                let end = if target < 0 { End::First } else { End::Last };
-                self.boundary.show(end, cx, |this| &mut this.boundary);
-                return;
-            }
-            self.boundary.clear();
-            self.opened = Some(target as usize);
-            self.present(cx);
-            return;
-        }
-        let target = self.index as isize + delta;
-        if target < 0 || target as usize >= self.entries.len() {
-            let end = if target < 0 { End::First } else { End::Last };
-            self.boundary.show(end, cx, |this| &mut this.boundary);
-            return;
-        }
+        let (current, count) = match self.opened {
+            Some(opened) => (
+                opened,
+                self.details
+                    .as_ref()
+                    .map_or(0, |details| details.media.len()),
+            ),
+            None => (self.index, self.entries.len()),
+        };
+        let target = match step_within(current, delta, count) {
+            Ok(target) => target,
+            Err(end) => return self.boundary.show(end, cx, |this| &mut this.boundary),
+        };
         self.boundary.clear();
-        self.index = target as usize;
-        self.load(window, cx);
-        cx.notify();
+        if self.opened.is_some() {
+            self.opened = Some(target);
+            self.present(cx);
+        } else {
+            self.index = target;
+            self.load(window, cx);
+            cx.notify();
+        }
     }
 
     /// `resetToolbarTimer`: shows the toolbar and hides it a second after
@@ -419,13 +407,10 @@ impl DetailWindow {
         cx.notify();
     }
 
+    /// The shown file's path: a collection's member opened by itself is
+    /// that member's, not the collection's first.
     fn copy_path(&mut self, cx: &mut Context<Self>) {
-        let path = self
-            .details
-            .as_ref()
-            .and_then(|details| details.media.first())
-            .map(|media| media.file_path.clone());
-        if let Some(path) = path {
+        if let Some((path, ..)) = self.shown_file() {
             cx.write_to_clipboard(ClipboardItem::new_string(path));
         }
     }
@@ -724,22 +709,6 @@ impl Render for DetailWindow {
             .overflow_hidden()
             .on_action(cx.listener(|this, _: &PreviousItem, window, cx| this.step(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NextItem, window, cx| this.step(1, window, cx)))
-            .on_action(cx.listener(|this, _: &FitToWindow, _, cx| {
-                this.surface.update(cx, |surface, cx| surface.fit(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ActualSize, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.actual_size(cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(true, cx));
-            }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
-                this.surface
-                    .update(cx, |surface, cx| surface.step_zoom(false, cx));
-            }))
-            .map(|pane| super::document::handle_actions(pane, &self.surface))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -772,36 +741,30 @@ impl Render for DetailWindow {
         if self.toolbar.on() || self.toolbar.animating() {
             pane = pane.child(self.toolbar(window, cx));
         }
-        let media = self.surface.read(cx).player().is_some();
-        let surface = self.surface.downgrade();
-        let mut context = super::video::key_context("DetailWindow", media);
-        // A document's pages take the scrolling keys.
-        if self.surface.read(cx).shows_pages() {
-            context.add(super::document::PAGES_CONTEXT);
-        }
-        let window_root = div().key_context(context);
-        super::video::on_actions(window_root, move |cx| {
-            surface
-                .upgrade()
-                .and_then(|surface| surface.read(cx).player())
-        })
-        .size_full()
-        .bg(theme.background())
-        .text_color(theme.text())
-        .font_family(theme::FONT_UI)
-        .text(theme::TEXT_MD)
-        .line_height(px(theme::LINE_HEIGHT))
-        .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.wake(cx)))
-        .on_action(cx.listener(|_, _: &CloseWindow, window, _| window.remove_window()))
-        .on_action(
-            cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| this.toggle_on_top(window, cx)),
-        )
-        .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
-        .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
-        .child(pane)
-        .children(self.menu.layer(window, cx))
-        // A video player that has the window to itself, over everything.
-        .children(super::video::fullscreen_layer(window, cx))
+        let window_root =
+            div().key_context(self.surface.read(cx).key_context("DetailWindow", true));
+        surface::host_actions(window_root, &self.surface)
+            .size_full()
+            .bg(theme.background())
+            .text_color(theme.text())
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_MD)
+            .line_height(px(theme::LINE_HEIGHT))
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.wake(cx)))
+            .on_action(cx.listener(|_, _: &CloseWindow, window, _| window.remove_window()))
+            .on_action(
+                cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| {
+                    this.toggle_on_top(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)),
+            )
+            .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
+            .child(pane)
+            .children(self.menu.layer(window, cx))
+            // A video player that has the window to itself, over everything.
+            .children(super::video::fullscreen_layer(window, cx))
     }
 }
 

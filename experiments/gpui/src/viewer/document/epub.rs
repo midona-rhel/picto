@@ -1,9 +1,10 @@
 //! EPUB books as `ArchiveDocumentViewer.tsx` reads them: the package
 //! document named by `META-INF/container.xml`, its spine of XHTML chapters,
 //! one chapter to a page, and the pictures each chapter refers to.
+use super::pages::{ENTRY_LIMIT, read_entry};
 use super::rich::{self, Block, Picture};
 use anyhow::{Context as _, Result, anyhow, bail};
-use std::io::Read;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// The book's chapters, as paths inside the archive, in reading order.
@@ -57,21 +58,40 @@ pub fn spine(package: &str, rootfile: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-/// One chapter's blocks, with its pictures decoded.
+/// The most a chapter's pictures take decoded, together; pictures past it
+/// are left out.
+const PICTURE_BUDGET: u64 = 256 << 20;
+
+/// One chapter's blocks, with its pictures decoded. A picture used more
+/// than once is decoded once.
 pub fn chapter(path: &Path, chapter: &str) -> Result<Vec<Block>> {
     let mut archive = open(path)?;
     let markup = read_text(&mut archive, chapter)?;
     let base = dirname(chapter).to_owned();
+    let mut decoded: HashMap<String, Option<Picture>> = HashMap::new();
+    let mut budget = PICTURE_BUDGET;
     let mut picture = |source: &str| -> Option<Picture> {
         let entry = resolve(&base, source);
-        let mut bytes = Vec::new();
-        archive.by_name(&entry).ok()?.read_to_end(&mut bytes).ok()?;
-        let image = super::pages::decode_picture(&entry, &bytes).ok()?;
-        let size = (image.width() as f32, image.height() as f32);
-        Some(Picture {
-            image: super::render_image(image),
-            size,
-        })
+        if let Some(picture) = decoded.get(&entry) {
+            return picture.clone();
+        }
+        let picture = read_entry(&mut archive, &entry, ENTRY_LIMIT)
+            .and_then(|bytes| super::pages::decode_picture(&entry, &bytes))
+            .ok()
+            .filter(|image| {
+                let bytes = image.as_raw().len() as u64;
+                let fits = bytes <= budget;
+                if fits {
+                    budget -= bytes;
+                }
+                fits
+            })
+            .map(|image| Picture {
+                size: (image.width() as f32, image.height() as f32),
+                image: super::render_image(image),
+            });
+        decoded.insert(entry, picture.clone());
+        picture
     };
     Ok(rich::xhtml(&markup, &mut picture))
 }
@@ -82,11 +102,7 @@ fn open(path: &Path) -> Result<zip::ZipArchive<std::fs::File>> {
 }
 
 fn read_text(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Result<String> {
-    let mut entry = archive
-        .by_name(name)
-        .map_err(|_| anyhow!("{name} is missing"))?;
-    let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes)?;
+    let bytes = read_entry(archive, name, ENTRY_LIMIT)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -139,7 +155,8 @@ fn percent_decode(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve, spine};
+    use super::{chapter, resolve, spine};
+    use crate::viewer::document::rich::Block;
 
     #[test]
     fn references_resolve_inside_the_archive() {
@@ -149,6 +166,38 @@ mod tests {
         );
         assert_eq!(resolve("OEBPS/", "ch1.xhtml"), "OEBPS/ch1.xhtml");
         assert_eq!(resolve("", "./ch1.xhtml"), "ch1.xhtml");
+        // Nothing climbs out of the archive's root.
+        assert_eq!(resolve("OEBPS/", "../../../etc/passwd"), "etc/passwd");
+        assert_eq!(resolve("OEBPS/", "/etc/passwd"), "etc/passwd");
+    }
+
+    #[test]
+    fn a_picture_used_many_times_is_decoded_once() {
+        use std::io::Write;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("book.epub");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        let mut png = Vec::new();
+        image::RgbaImage::new(2, 1)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        archive.start_file("a.png", options).unwrap();
+        archive.write_all(&png).unwrap();
+        archive.start_file("one.xhtml", options).unwrap();
+        let body = r#"<img src="a.png"/><img src="missing.png"/>"#.repeat(500);
+        write!(archive, "<html><body>{body}</body></html>").unwrap();
+        archive.finish().unwrap();
+        let blocks = chapter(&path, "one.xhtml").unwrap();
+        let pictures: Vec<_> = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Picture(picture) => Some(picture),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pictures.len(), 500);
+        assert!(pictures.iter().all(|picture| picture == &pictures[0]));
     }
 
     #[test]

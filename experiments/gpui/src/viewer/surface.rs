@@ -9,6 +9,7 @@
 //! [`Document`].
 use super::camera::{self, Camera, Glide, Size};
 use super::document::{self, Document, kind::RendererKind};
+use super::scaled;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -90,12 +91,10 @@ enum Mode {
     /// Ruffle's frames, fitted to the pane.
     Flash,
     /// A document viewer of its own (`DetailMediaRenderer`'s documents,
-    /// fonts and the unsupported view).
+    /// fonts and the unsupported view, which every other type gets).
     Document,
     /// Video and audio, in the media player.
     Media,
-    /// No renderer yet: the thumbnail, fitted, with a note.
-    Other,
 }
 
 /// A drag of the navigator: where the view is and where it is heading, as
@@ -161,11 +160,95 @@ pub struct MediaSurface {
     /// short delay before it appears.
     overflowing_since: Option<Instant>,
     options: Options,
+    _settings: Option<Subscription>,
+    /// Pictures replaced since the last frame, let go of GPUI's sprite
+    /// atlas once nothing draws them.
+    retired: Vec<Arc<RenderImage>>,
+    /// The original whose whole decode is still owed: `full` holds it at
+    /// the size the pane first showed it.
+    whole: Option<PathBuf>,
+    /// The window's pixels per point, as last drawn.
+    scale_factor: f32,
 }
 
 impl EventEmitter<Event> for MediaSurface {}
 
 impl MediaSurface {
+    /// A surface with a host's options. The pictures it holds leave GPUI's
+    /// sprite atlas when they are replaced, and all of them when it goes.
+    pub fn new(options: Options, cx: &mut Context<Self>) -> Self {
+        cx.on_release(|this, cx| {
+            let held = match this.held.take() {
+                Some(Held::Image { image, .. }) => Some(image),
+                _ => None,
+            };
+            let images = this.retired.drain(..);
+            for image in images.chain(
+                [this.thumbnail.take(), this.full.take(), held]
+                    .into_iter()
+                    .flatten(),
+            ) {
+                cx.drop_image(image, None);
+            }
+        })
+        .detach();
+        Self {
+            options,
+            ..Self::default()
+        }
+    }
+
+    /// A host's surface, which follows the preview settings
+    /// (`usePreviewPreferences`) as they change; `navigator` and
+    /// `follows_resize` are the host's own.
+    pub fn for_host(navigator: bool, follows_resize: bool, cx: &mut Context<Self>) -> Self {
+        let mut surface = Self::new(super::options(cx, navigator, follows_resize), cx);
+        surface._settings = Some(cx.subscribe(
+            &crate::settings::model(cx),
+            move |this, _, _: &crate::settings::Applied, cx| {
+                let options = super::options(cx, navigator, follows_resize);
+                this.set_options(options, cx);
+            },
+        ));
+        surface
+    }
+
+    /// The host's key context: `base`, with the player's keys while it
+    /// shows and, when the host lets them, the document's scrolling keys
+    /// while pages show.
+    pub fn key_context(&self, base: &'static str, pages: bool) -> KeyContext {
+        let mut context = super::video::key_context(base, self.player.is_some());
+        if pages && self.shows_pages() {
+            context.add(document::PAGES_CONTEXT);
+        }
+        context
+    }
+
+    /// Lets go of a picture that was replaced, once nothing draws it.
+    fn retire(&mut self, image: Option<Arc<RenderImage>>) {
+        self.retired.extend(image);
+    }
+
+    /// Takes the retired pictures nothing draws any more out of the sprite
+    /// atlas of every window.
+    fn release_retired(&mut self, window: &mut Window, cx: &mut App) {
+        let held = match &self.held {
+            Some(Held::Image { image, .. }) => Some(image),
+            _ => None,
+        };
+        let shown = [self.thumbnail.as_ref(), self.full.as_ref(), held];
+        let (kept, released): (Vec<_>, Vec<_>) = self.retired.drain(..).partition(|image| {
+            shown
+                .iter()
+                .flatten()
+                .any(|shown| Arc::ptr_eq(shown, image))
+        });
+        self.retired = kept;
+        for image in released {
+            cx.drop_image(image, Some(window));
+        }
+    }
+
     pub fn stop(&mut self) {
         self.flash = None;
         self.flash_task = None;
@@ -191,7 +274,7 @@ impl MediaSurface {
     /// document its measured pages with the first one's thumbnail.
     fn ready(&self, cx: &App) -> bool {
         match self.mode {
-            Mode::Image | Mode::Flash | Mode::Other => self.shown == self.key,
+            Mode::Image | Mode::Flash => self.shown == self.key,
             Mode::Document => self
                 .document
                 .as_ref()
@@ -213,7 +296,6 @@ impl MediaSurface {
         match self.mode {
             Mode::Image => self.full_key == self.key,
             Mode::Flash => self.full.is_some() && self.full_key == self.key,
-            Mode::Other => true,
             Mode::Document => self
                 .document
                 .as_ref()
@@ -254,19 +336,13 @@ impl MediaSurface {
                     pixelated: self.options.pixelated,
                 })
             }
-            Mode::Flash | Mode::Other => {
+            Mode::Flash => {
                 let picture = self.full.clone().or_else(|| self.thumbnail.clone())?;
                 let size = picture.size(0);
                 let natural = (size.width.0 as f32, size.height.0 as f32);
-                let fitted = document::geometry::fit_page(pane, natural)?;
                 Some(Held::Image {
                     image: picture,
-                    rect: (
-                        (pane.0 - fitted.0) / 2.,
-                        (pane.1 - fitted.1) / 2.,
-                        fitted.0,
-                        fitted.1,
-                    ),
+                    rect: camera::contain(natural, pane)?,
                     pixelated: false,
                 })
             }
@@ -713,10 +789,9 @@ impl MediaSurface {
             RendererKind::Flash => Mode::Flash,
             RendererKind::Image | RendererKind::JpegXl => Mode::Image,
             RendererKind::Video | RendererKind::Audio if media.is_some() => Mode::Media,
-            kind if kind.is_document() => Mode::Document,
-            _ => Mode::Other,
+            _ => Mode::Document,
         };
-        self.show(key.clone(), thumbnail.clone(), natural, None, cx);
+        self.show(key.clone(), thumbnail.clone(), natural, cx);
         self.opened = key.clone();
         self.error = None;
         // What `show` kept of the previous item stays over this one.
@@ -749,13 +824,10 @@ impl MediaSurface {
                                         for pixel in rgba.as_chunks_mut::<4>().0 {
                                             pixel.swap(0, 2);
                                         }
-                                        if let Some(old) = this.full.take() {
-                                            cx.drop_image(old, None);
-                                        }
-                                        this.full =
-                                            Some(Arc::new(RenderImage::new(smallvec::smallvec![
-                                                image::Frame::new(rgba)
-                                            ])));
+                                        let old = this.full.replace(Arc::new(RenderImage::new(
+                                            smallvec::smallvec![image::Frame::new(rgba)],
+                                        )));
+                                        this.retire(old);
                                         if this.full_key != this.key {
                                             this.full_key = this.key.clone();
                                             cx.emit(Event::Progressed);
@@ -774,7 +846,7 @@ impl MediaSurface {
                 }));
             }
             Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
-            Mode::Image => self.show(key, PathBuf::new(), natural, Some(path), cx),
+            Mode::Image => self.load_full(key, path, mime == "image/jpeg", cx),
             Mode::Document => {
                 let document = Document::open(
                     kind,
@@ -828,9 +900,6 @@ impl MediaSurface {
                 ));
                 self.player = Some(player);
             }
-            Mode::Other => {
-                self.error = Some(format!("Native preview is not implemented for {mime}"));
-            }
         }
     }
 
@@ -841,7 +910,6 @@ impl MediaSurface {
         key: String,
         thumbnail: PathBuf,
         natural: Option<Size>,
-        full: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
         if self.key != key {
@@ -849,6 +917,7 @@ impl MediaSurface {
             self.key = key.clone();
             self.natural = natural;
             self.full_task = None;
+            self.whole = None;
             self.stop();
             if held.is_some() {
                 self.held = held;
@@ -870,9 +939,11 @@ impl MediaSurface {
                     if this.key == expected {
                         // A thumbnail that fails to decode still counts as
                         // settled: the original follows on its own.
-                        this.thumbnail = result.ok();
+                        let old = std::mem::replace(&mut this.thumbnail, result.ok());
+                        this.retire(old);
                         if this.full_key != expected {
-                            this.full = None;
+                            let old = this.full.take();
+                            this.retire(old);
                         }
                         this.present_key();
                         if let Some(document) = &this.document {
@@ -884,22 +955,47 @@ impl MediaSurface {
                 });
             }));
         }
-        if let Some(full) = full {
-            let load = ImageAssetLoader::load(Resource::Path(full.into()), cx);
-            let load = cx.background_executor().spawn(load);
-            self.full_task = Some(cx.spawn(async move |entity, cx| {
-                let result = load.await;
-                let _ = entity.update(cx, |this, cx| {
-                    if this.key == key {
-                        this.full = result.ok();
-                        this.full_key = key.clone();
-                        this.present_key();
-                        cx.emit(Event::Progressed);
-                        cx.notify();
+    }
+
+    /// Decodes the original of `key`. A JPEG the pane shows at under half
+    /// its size is decoded at that size first ([`scaled`]), and whole only
+    /// once the view needs more of its pixels.
+    fn load_full(&mut self, key: String, path: PathBuf, reduce: bool, cx: &mut Context<Self>) {
+        let reduced = self
+            .natural
+            .filter(|_| reduce)
+            .and_then(|natural| scaled::fitted_pixels(natural, self.pane(), self.scale_factor));
+        self.whole = reduced.map(|_| path.clone());
+        let load = match reduced {
+            Some(size) => cx.background_executor().spawn(async move {
+                document::guarded(|| Ok(scaled::decode(&path, size, true)?.into_rgba8()))
+                    .map(document::render_image)
+                    .ok()
+            }),
+            None => {
+                let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
+                cx.background_executor()
+                    .spawn(async move { load.await.ok() })
+            }
+        };
+        self.full_task = Some(cx.spawn(async move |entity, cx| {
+            let result = load.await;
+            let _ = entity.update(cx, |this, cx| {
+                if this.key == key {
+                    let old = std::mem::replace(&mut this.full, result);
+                    this.retire(old);
+                    this.full_key = key.clone();
+                    // Without the library's size the camera was fitted to
+                    // the thumbnail's pixels; the original's differ.
+                    if this.shown == key && this.shown_natural.is_none() {
+                        this.refit();
                     }
-                });
-            }));
-        }
+                    this.present_key();
+                    cx.emit(Event::Progressed);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     /// `JpegXlViewer.tsx`: the original decoded off the drawing thread
@@ -917,7 +1013,8 @@ impl MediaSurface {
                 }
                 match result {
                     Ok(image) => {
-                        this.full = Some(image);
+                        let old = this.full.replace(image);
+                        this.retire(old);
                         this.full_key = key.clone();
                         this.present_key();
                     }
@@ -937,6 +1034,25 @@ impl MediaSurface {
         }
     }
 
+    /// Starts the whole decode of an original shown from a reduced one, once
+    /// the view shows it larger than the reduced one's pixels.
+    fn decode_whole_when_needed(&mut self, image: Option<Size>, cx: &mut Context<Self>) {
+        let (Some(image), Some(decoded)) = (image, self.full.as_ref().map(|full| full.size(0)))
+        else {
+            return;
+        };
+        if self.whole.is_none() || self.full_key != self.key || self.shown != self.key {
+            return;
+        }
+        let (_, _, width, height) = self.camera.image_rect(image, self.pane());
+        let short = |shown: f32, pixels: i32| shown * self.scale_factor > pixels as f32 * 1.01;
+        if (short(width, decoded.width.0) || short(height, decoded.height.0))
+            && let Some(path) = self.whole.take()
+        {
+            self.load_full(self.key.clone(), path, false, cx);
+        }
+    }
+
     /// Moves gliding and following cameras on by a frame; returns whether
     /// another frame is needed.
     fn animate(&mut self, cx: &mut Context<Self>) -> bool {
@@ -949,7 +1065,9 @@ impl MediaSurface {
             more |= !done;
             self.set_camera(camera, cx);
         }
-        if let Some(mut drag) = self.navigator_drag {
+        if let Some(mut drag) = self.navigator_drag
+            && drag.current != drag.target
+        {
             drag.current = camera::follow(drag.current, drag.target);
             self.navigator_drag = Some(drag);
             self.centre_on(drag.current, cx);
@@ -1121,6 +1239,8 @@ impl Render for MediaSurface {
             let opening = self.opening(image, pane);
             self.set_camera(opening, cx);
         }
+        self.scale_factor = window.scale_factor();
+        self.decode_whole_when_needed(image, cx);
         // A camera moved while drawing notifies no one (the detail window
         // observes the surface for its zoom percentage, read before this
         // ran): another frame tells them, also after a glide's last step.
@@ -1295,7 +1415,9 @@ impl Render for MediaSurface {
         }
         surface = surface
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" || event.keystroke.modifiers.platform {
+                // Escape and the command modifier's shortcuts (Ctrl off
+                // macOS) stay with the app.
+                if event.keystroke.key == "escape" || event.keystroke.modifiers.secondary(cx) {
                     return;
                 }
                 if let Some(flash) = &this.flash {
@@ -1359,6 +1481,7 @@ impl Render for MediaSurface {
         }
         surface = surface.children(navigator);
         self.release_hold(cx);
+        self.release_retired(window, cx);
         if let Some(held) = &self.held {
             let layer = div().absolute().inset_0();
             surface = surface.child(match held {
@@ -1409,33 +1532,69 @@ impl Render for MediaSurface {
                 self.flash_controls.on(),
             ));
         }
-        if let Some(flash) = &self.flash
-            && let Some(trace) = flash.traces.lock().unwrap().back()
-        {
-            surface = surface.child(
-                div()
-                    .absolute()
-                    .bottom_0()
-                    .px_2()
-                    .text_size(px(11.))
-                    .bg(crate::theme::theme(cx).glass())
-                    .child(format!("Ruffle: {trace}")),
-            );
-        }
         surface.into_any_element()
     }
 }
 
+/// The keys every host of a surface handles, on the element that has the
+/// keyboard (the surface itself never does): the zoom, a document's pages
+/// and font size, and the player's.
+pub fn host_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSurface>) -> E {
+    use super::{ActualSize, FitToWindow, ZoomIn, ZoomOut};
+    use document::{Scroll, *};
+    type Run = fn(&mut MediaSurface, &mut Context<MediaSurface>);
+    fn forward<A: Action, E: InteractiveElement>(
+        element: E,
+        surface: &Entity<MediaSurface>,
+        run: Run,
+    ) -> E {
+        let surface = surface.downgrade();
+        element.on_action(move |_: &A, _, cx| {
+            let _ = surface.update(cx, run);
+        })
+    }
+    let element = forward::<FitToWindow, _>(element, surface, |this, cx| this.fit(cx));
+    let element = forward::<ActualSize, _>(element, surface, |this, cx| this.actual_size(cx));
+    let element = forward::<ZoomIn, _>(element, surface, |this, cx| this.step_zoom(true, cx));
+    let element = forward::<ZoomOut, _>(element, surface, |this, cx| this.step_zoom(false, cx));
+    let element = forward::<PreviousPage, _>(element, surface, |this, cx| this.previous_page(cx));
+    let element = forward::<NextPage, _>(element, surface, |this, cx| this.next_page(cx));
+    let element =
+        forward::<PreviewLarger, _>(element, surface, |this, cx| this.preview_size(true, cx));
+    let element =
+        forward::<PreviewSmaller, _>(element, surface, |this, cx| this.preview_size(false, cx));
+    let element = forward::<ScrollToStart, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::Start, cx)
+    });
+    let element = forward::<ScrollToEnd, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::End, cx)
+    });
+    let element = forward::<ScrollPageUp, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::PageUp, cx)
+    });
+    let element = forward::<ScrollPageDown, _>(element, surface, |this, cx| {
+        this.scroll_pages(Scroll::PageDown, cx)
+    });
+    let surface = surface.downgrade();
+    super::video::on_actions(element, move |cx| {
+        surface
+            .upgrade()
+            .and_then(|surface| surface.read(cx).player())
+    })
+}
+
 impl MediaSurface {
+    /// A window position on the movie's stage, which is fitted to the pane.
     fn flash_position(&self, position: Point<Pixels>) -> (f64, f64) {
-        let width = f32::from(self.bounds.size.width);
-        let height = f32::from(self.bounds.size.height);
-        let scale = (width / 960.).min(height / 720.).max(0.001);
-        let x =
-            (f32::from(position.x - self.bounds.origin.x) - (width - 960. * scale) / 2.) / scale;
-        let y =
-            (f32::from(position.y - self.bounds.origin.y) - (height - 720. * scale) / 2.) / scale;
-        (x as f64, y as f64)
+        let stage = (super::flash::STAGE.0 as f32, super::flash::STAGE.1 as f32);
+        let (left, top, width, _) =
+            camera::contain(stage, self.pane()).unwrap_or((0., 0., stage.0, stage.1));
+        let scale = width / stage.0;
+        let local = position - self.bounds.origin;
+        (
+            ((f32::from(local.x) - left) / scale) as f64,
+            ((f32::from(local.y) - top) / scale) as f64,
+        )
     }
 }
 
@@ -1475,5 +1634,138 @@ fn paint_checkerboard(bounds: Bounds<Pixels>, scale: f32, window: &mut Window) {
             Bounds::new(point(px(x), px(y)), size(px(w), px(h))),
             rgb(theme::TRANSPARENCY_GRID_DARK),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MediaSurface, Options};
+    use gpui::{AnyWindowHandle, AppContext as _, RenderImage, TestAppContext};
+    use std::sync::Arc;
+
+    /// Fifty 12-megapixel originals opened and closed in turn, as the
+    /// viewer opens them: only the last one's pictures stay in the sprite
+    /// atlas (about 48 MB each), not every one ever viewed.
+    #[test]
+    fn originals_opened_and_closed_leave_the_sprite_atlas() {
+        let folder = tempfile::tempdir().unwrap();
+        let photo = folder.path().join("photo.jpg");
+        image::RgbImage::from_fn(4000, 3000, |x, y| {
+            image::Rgb([x as u8, y as u8, (x ^ y) as u8])
+        })
+        .save(&photo)
+        .unwrap();
+        let thumbnail = folder.path().join("thumbnail.jpg");
+        image::RgbImage::from_fn(400, 300, |x, _| image::Rgb([x as u8, 90, 200]))
+            .save(&thumbnail)
+            .unwrap();
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, cx| MediaSurface::new(Options::default(), cx));
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+        let mut shown: Vec<Arc<RenderImage>> = Vec::new();
+        for item in 0..50 {
+            let key = format!("item-{item}");
+            window
+                .update(&mut cx, |surface, _, cx| {
+                    let natural = Some((4000., 3000.));
+                    let (thumbnail, photo) = (thumbnail.clone(), photo.clone());
+                    surface.open(key.clone(), thumbnail, natural, photo, "image/jpeg", cx)
+                })
+                .unwrap();
+            draw(&mut cx);
+            let pictures = window
+                .read_with(&cx, |surface, _| {
+                    assert_eq!(surface.full_key, key);
+                    [surface.thumbnail.clone(), surface.full.clone()]
+                })
+                .unwrap();
+            shown.extend(
+                pictures
+                    .into_iter()
+                    .map(|picture| picture.expect("decoded")),
+            );
+            // Closed: the item rests, kept for a reopening.
+            window
+                .update(&mut cx, |surface, _, _| surface.rest())
+                .unwrap();
+            draw(&mut cx);
+        }
+        let in_atlas: Vec<bool> = cx
+            .update_window(handle, |_, window, _| {
+                shown
+                    .iter()
+                    .map(|image| window.has_image_atlas_entry(image))
+                    .collect()
+            })
+            .unwrap();
+        let (earlier, last) = in_atlas.split_at(in_atlas.len() - 2);
+        assert_eq!(last, [true, true]);
+        assert!(earlier.iter().all(|kept| !kept), "{in_atlas:?}");
+    }
+
+    /// A JPEG shown at under half its size decodes at the size shown; at
+    /// 100% the whole decode follows.
+    #[test]
+    fn a_large_jpeg_decodes_at_the_size_shown_until_the_view_needs_more() {
+        let folder = tempfile::tempdir().unwrap();
+        let photo = folder.path().join("photo.jpg");
+        image::RgbImage::from_fn(8000, 6000, |x, y| image::Rgb([x as u8, y as u8, 7]))
+            .save(&photo)
+            .unwrap();
+        let mut cx = TestAppContext::single();
+        let window = cx.add_window(|_, cx| MediaSurface::new(Options::default(), cx));
+        let handle: AnyWindowHandle = window.into();
+        let draw = |cx: &mut TestAppContext| {
+            for _ in 0..2 {
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            }
+            cx.run_until_parked();
+        };
+        // The pane is measured first, as it is once a viewer has shown: the
+        // test display's 1920 × 1080 at 2×, which shows the photo at
+        // 2880 × 2160 pixels, so it decodes at half its size.
+        draw(&mut cx);
+        let decoded = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |surface, _| {
+                    let size = surface.full.as_ref().unwrap().size(0);
+                    (size.width.0, size.height.0)
+                })
+                .unwrap()
+        };
+        window
+            .update(&mut cx, |surface, _, cx| {
+                surface.open(
+                    "photo".into(),
+                    photo.clone(),
+                    Some((8000., 6000.)),
+                    photo.clone(),
+                    "image/jpeg",
+                    cx,
+                )
+            })
+            .unwrap();
+        draw(&mut cx);
+        let reduced = decoded(&mut cx);
+        assert_eq!(reduced, (4000, 3000));
+        window
+            .update(&mut cx, |surface, _, cx| surface.actual_size(cx))
+            .unwrap();
+        draw(&mut cx);
+        assert_eq!(decoded(&mut cx), (8000, 6000));
     }
 }

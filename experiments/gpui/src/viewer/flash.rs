@@ -8,6 +8,11 @@ use std::{
 };
 
 pub type Frame = Result<image::RgbaImage, String>;
+
+/// The movie's stage, in pixels: Ruffle draws every movie at this size and
+/// the viewer fits it to the pane.
+pub const STAGE: (u32, u32) = (960, 720);
+
 pub fn key_descriptor(key: &str) -> ruffle_core::events::KeyDescriptor {
     use ruffle_core::events::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey};
     let (physical_key, logical_key) = match key {
@@ -50,9 +55,13 @@ pub struct Flash {
     control: mpsc::Sender<Control>,
     pub playback: Playback,
     pub frame: Arc<Mutex<Option<Frame>>>,
+    /// What the movie's ActionScript traced, for the checks that play one.
+    #[cfg(test)]
     pub traces: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
+#[cfg(test)]
 struct TraceLog(Arc<Mutex<std::collections::VecDeque<String>>>);
+#[cfg(test)]
 impl ruffle_core::backend::log::LogBackend for TraceLog {
     fn avm_trace(&self, message: &str) {
         let mut traces = self.0.lock().unwrap();
@@ -105,7 +114,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         };
         let first = next_frame();
-        assert_eq!(first.dimensions(), (960, 720));
+        assert_eq!(first.dimensions(), STAGE);
         flash.toggle_play();
         flash.set_volume(0.5);
         flash.stop();
@@ -119,7 +128,7 @@ mod tests {
             assert!(Instant::now() < deadline, "no frame after Stop");
             std::thread::sleep(Duration::from_millis(20));
         };
-        assert_eq!(reloaded.dimensions(), (960, 720));
+        assert_eq!(reloaded.dimensions(), STAGE);
     }
     #[test]
     #[ignore = "Requires a native GPU adapter"]
@@ -146,7 +155,7 @@ mod tests {
         initial
             .save(output.path().join("ruffle-first-frame.png"))
             .unwrap();
-        assert_eq!(initial.dimensions(), (960, 720));
+        assert_eq!(initial.dimensions(), STAGE);
         assert!(
             initial.pixels().any(|p| p != initial.get_pixel(0, 0)),
             "Ruffle frame is blank"
@@ -231,10 +240,13 @@ impl Flash {
 
 impl Flash {
     pub fn open(path: PathBuf) -> Self {
+        let silent = std::env::var_os("PICTO_GPUI_SILENT").is_some();
         let (input, events) = mpsc::channel();
         let (control, controls) = mpsc::channel::<Control>();
         let frame = Arc::new(Mutex::new(None));
+        #[cfg(test)]
         let traces = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+        #[cfg(test)]
         let trace_output = traces.clone();
         let output = frame.clone();
         std::thread::spawn(move || {
@@ -242,7 +254,7 @@ impl Flash {
                 let data = std::fs::read(&path)?;
                 anyhow::ensure!(
                     data.len() <= 64 * 1024 * 1024,
-                    "Flash file exceeds prototype limit"
+                    "This Flash movie is larger than 64 MB."
                 );
                 let url = url::Url::from_file_path(&path)
                     .map_err(|_| anyhow::anyhow!("Invalid Flash path"))?
@@ -251,19 +263,22 @@ impl Flash {
                 let build = |autoplay: bool, volume: f32| -> anyhow::Result<_> {
                     let movie = SwfMovie::from_data(&data, url.clone(), None, None)?;
                     let renderer = WgpuRenderBackend::<TextureTarget>::for_offscreen(
-                        (960, 720),
+                        STAGE,
                         wgpu::Backends::PRIMARY,
                         wgpu::PowerPreference::LowPower,
                     )
                     .map_err(|e| anyhow::anyhow!("Ruffle renderer: {e}"))?;
                     // Null navigator/storage defaults deliberately deny network and persistent writes.
                     let mut builder = PlayerBuilder::new()
-                        .with_log(TraceLog(trace_output.clone()))
                         .with_movie(movie)
                         .with_renderer(renderer)
-                        .with_viewport_dimensions(960, 720, 1.)
+                        .with_viewport_dimensions(STAGE.0, STAGE.1, 1.)
                         .with_max_execution_duration(Duration::from_millis(250))
                         .with_autoplay(autoplay);
+                    #[cfg(test)]
+                    {
+                        builder = builder.with_log(TraceLog(trace_output.clone()));
+                    }
                     match ruffle_frontend_utils::backends::audio::CpalAudioBackend::new(None) {
                         Ok(audio) => builder = builder.with_audio(audio),
                         Err(error) => {
@@ -274,7 +289,9 @@ impl Flash {
                     player.lock().unwrap().set_volume(volume);
                     Ok(player)
                 };
-                let mut volume = 1.;
+                // `PICTO_GPUI_SILENT=1` starts the movie muted, as it does
+                // the media player, for checks run while nobody is there.
+                let mut volume = if silent { 0. } else { 1. };
                 let mut player = build(true, volume)?;
                 let mut previous = Instant::now();
                 loop {
@@ -332,11 +349,12 @@ impl Flash {
             input,
             control,
             frame,
+            #[cfg(test)]
             traces,
             playback: Playback {
                 playing: true,
                 volume: 1.,
-                muted: false,
+                muted: silent,
             },
         }
     }

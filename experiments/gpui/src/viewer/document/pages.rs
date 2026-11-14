@@ -184,11 +184,8 @@ impl Comic {
             .get(index)
             .ok_or_else(|| anyhow!("No page {}", index + 1))?
             .clone();
-        let mut bytes = Vec::new();
-        self.archive
-            .by_name(&name)
-            .map_err(|_| anyhow!("Could not read page {}", index + 1))?
-            .read_to_end(&mut bytes)?;
+        let bytes = read_entry(&mut self.archive, &name, ENTRY_LIMIT)
+            .map_err(|_| anyhow!("Could not read page {}", index + 1))?;
         let image = Arc::new(decode_picture(&name, &bytes)?);
         self.decoded = Some((index, image.clone()));
         Ok(image)
@@ -211,16 +208,56 @@ pub fn comic_pages<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     pages
 }
 
+/// The most of an archive entry read: comic pages and EPUB chapters and
+/// pictures come from the internet, and an entry can inflate to far more
+/// than its archive holds.
+pub const ENTRY_LIMIT: u64 = 64 << 20;
+/// What is read of a page to find its size in its header.
+const HEADER_LIMIT: u64 = 64 << 10;
+
+/// An archive entry's bytes, up to `limit`; a longer entry is an error, not
+/// its first part.
+pub fn read_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+    limit: u64,
+) -> Result<Vec<u8>> {
+    let entry = archive
+        .by_name(name)
+        .map_err(|_| anyhow!("{name} is missing"))?;
+    let mut bytes = Vec::new();
+    entry.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        bail!("{name} is too large");
+    }
+    Ok(bytes)
+}
+
+/// The largest picture decoded from an archive, in pixels a side and bytes
+/// decoded, so a small file that claims a vast picture is refused rather
+/// than allocated.
+const PICTURE_SIDE: u32 = 16_384;
+const PICTURE_BYTES: u64 = 512 << 20;
+
 /// Decodes a page picture: raster formats through `image`, SVG through
-/// resvg at its own size.
+/// resvg at its own size, shrunk to [`MAX_RENDER_SIDE`] at most.
 pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<RgbaImage> {
     if name.to_ascii_lowercase().ends_with(".svg") {
         let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())
             .map_err(|error| anyhow!("Could not read this SVG page: {error}"))?;
-        let size = tree.size().to_int_size();
+        let natural = tree.size();
+        let scale = (MAX_RENDER_SIDE as f32 / natural.width().max(natural.height())).min(1.);
+        let size = natural
+            .to_int_size()
+            .scale_by(scale)
+            .ok_or_else(|| anyhow!("This SVG page is empty."))?;
         let mut pixmap = resvg::tiny_skia::Pixmap::new(size.width(), size.height())
             .ok_or_else(|| anyhow!("This SVG page is empty."))?;
-        resvg::render(&tree, Default::default(), &mut pixmap.as_mut());
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            size.width() as f32 / natural.width(),
+            size.height() as f32 / natural.height(),
+        );
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
         let mut data = pixmap.take();
         // tiny-skia's pixels are premultiplied.
         for pixel in data.chunks_exact_mut(4) {
@@ -234,8 +271,13 @@ pub fn decode_picture(name: &str, bytes: &[u8]) -> Result<RgbaImage> {
         return RgbaImage::from_raw(size.width(), size.height(), data)
             .ok_or_else(|| anyhow!("Could not render this SVG page."));
     }
-    Ok(image::ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()?
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(PICTURE_SIDE);
+    limits.max_image_height = Some(PICTURE_SIDE);
+    limits.max_alloc = Some(PICTURE_BYTES);
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    Ok(reader
         .decode()
         .map_err(|error| anyhow!("Could not decode {name}: {error}"))?
         .to_rgba8())
@@ -259,18 +301,21 @@ impl PageSource for Comic {
             .get(index)
             .ok_or_else(|| anyhow!("No page {}", index + 1))?
             .clone();
-        let mut bytes = Vec::new();
+        let unreadable = || anyhow!("Could not read page {}", index + 1);
+        let mut head = Vec::new();
         self.archive
             .by_name(&name)
-            .map_err(|_| anyhow!("Could not read page {}", index + 1))?
-            .read_to_end(&mut bytes)?;
-        if let Ok((width, height)) = image::ImageReader::new(Cursor::new(&bytes))
+            .map_err(|_| unreadable())?
+            .take(HEADER_LIMIT)
+            .read_to_end(&mut head)?;
+        if let Ok((width, height)) = image::ImageReader::new(Cursor::new(head))
             .with_guessed_format()
             .map_err(anyhow::Error::from)
             .and_then(|reader| Ok(reader.into_dimensions()?))
         {
             return Ok((width as f32, height as f32));
         }
+        let bytes = read_entry(&mut self.archive, &name, ENTRY_LIMIT).map_err(|_| unreadable())?;
         let image = decode_picture(&name, &bytes)?;
         Ok((image.width() as f32, image.height() as f32))
     }
@@ -294,6 +339,10 @@ impl PageSource for Comic {
 /// A JPEG XL image decoded by jxl-oxide, the decoder `core/` makes its
 /// thumbnails with.
 pub fn decode_jpeg_xl(path: &Path) -> Result<RgbaImage> {
+    super::guarded(|| decode_jpeg_xl_unguarded(path))
+}
+
+fn decode_jpeg_xl_unguarded(path: &Path) -> Result<RgbaImage> {
     let file = std::fs::File::open(path).context("read the JPEG XL image")?;
     let decoder = jxl_oxide::integration::JxlDecoder::new(file)
         .map_err(|error| anyhow!("Could not open this JPEG XL image: {error}"))?;
@@ -349,7 +398,7 @@ pub fn measure_pages(source: &mut dyn PageSource) -> Result<Vec<PageSize>> {
 /// Opens a paged document and measures its pages, for a view that lays
 /// the pages out before it shows them.
 pub fn measure(kind: RendererKind, path: &Path) -> Result<Vec<PageSize>> {
-    measure_pages(open(kind, path)?.as_mut())
+    super::guarded(|| measure_pages(open(kind, path)?.as_mut()))
 }
 
 impl PageWorker {
@@ -462,7 +511,10 @@ pub fn bound_render_size(width: u32, height: u32) -> (u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PageSource, bound_render_size, comic_pages, measure_pages, render_guarded};
+    use super::{
+        MAX_RENDER_SIDE, PageSource, bound_render_size, comic_pages, decode_picture, measure_pages,
+        read_entry, render_guarded,
+    };
     use anyhow::{Result, bail};
     use image::RgbaImage;
 
@@ -528,5 +580,39 @@ mod tests {
         assert_eq!(bound_render_size(1000, 500), (1000, 500));
         assert_eq!(bound_render_size(16384, 8192), (8192, 4096));
         assert_eq!(bound_render_size(0, 0), (1, 1));
+    }
+
+    #[test]
+    fn a_picture_that_claims_a_vast_size_is_refused_or_shrunk() {
+        // A GIF of a few bytes that claims 65535 pixels a side.
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0, 0, 0]);
+        gif.extend_from_slice(&[0x2c, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0, 2, 0, 0x3b]);
+        assert!(decode_picture("page.gif", &gif).is_err());
+        // An SVG page as large is drawn at the largest render size.
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000000" height="500000"><rect width="10" height="10"/></svg>"#;
+        let page = decode_picture("page.svg", svg).unwrap();
+        assert_eq!(
+            (page.width(), page.height()),
+            (MAX_RENDER_SIDE, MAX_RENDER_SIDE / 2)
+        );
+    }
+
+    #[test]
+    fn an_archive_entry_past_its_limit_is_refused() {
+        use std::io::Write;
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("page.png", options).unwrap();
+        archive.write_all(&vec![0; 1 << 16]).unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            read_entry(&mut archive, "page.png", 1 << 16).unwrap().len(),
+            1 << 16
+        );
+        assert!(read_entry(&mut archive, "page.png", (1 << 16) - 1).is_err());
+        assert!(read_entry(&mut archive, "../page.png", 1 << 16).is_err());
     }
 }

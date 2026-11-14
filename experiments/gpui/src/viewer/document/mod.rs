@@ -12,13 +12,13 @@ pub mod paged;
 pub mod pages;
 pub mod reader;
 pub mod rich;
+pub mod rtf;
 mod shell;
 pub mod unsupported;
 
 #[cfg(test)]
 mod matrix;
 
-use super::surface::MediaSurface;
 use crate::keymap::Scope;
 use font::FontViewer;
 use gpui::*;
@@ -67,65 +67,27 @@ pub fn scroll_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// The font preview's Cmd+= and Cmd+−, which `FontViewer.tsx` handles
-/// itself rather than through the shortcut registry, in each host that shows
-/// a document. The registry's J and L pages are bound by `crate::keymap`.
+/// The font preview's Cmd+= and Cmd+− (Ctrl off macOS), which
+/// `FontViewer.tsx` handles itself rather than through the shortcut
+/// registry, in each host that shows a document. The registry's J and L
+/// pages are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
+    let (larger, smaller) = if cfg!(target_os = "macos") {
+        ("cmd-=", "cmd--")
+    } else {
+        ("ctrl-=", "ctrl--")
+    };
     let mut bindings = Vec::new();
     for scope in [Scope::Viewer, Scope::DetailWindow] {
         let predicate = scope.predicate();
+        bindings.push(KeyBinding::new(larger, PreviewLarger, predicate.as_deref()));
         bindings.push(KeyBinding::new(
-            "cmd-=",
-            PreviewLarger,
-            predicate.as_deref(),
-        ));
-        bindings.push(KeyBinding::new(
-            "cmd--",
+            smaller,
             PreviewSmaller,
             predicate.as_deref(),
         ));
     }
     cx.bind_keys(bindings);
-}
-
-/// Hands the document keys to the media surface. A host puts this on the
-/// element that has the keyboard, since the surface itself never does.
-pub fn handle_actions<E: InteractiveElement>(element: E, surface: &Entity<MediaSurface>) -> E {
-    let (previous, next, larger, smaller) = (
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-    );
-    let (start, end, up, down) = (
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-        surface.clone(),
-    );
-    element
-        .on_action(move |_: &ScrollToStart, _, cx| {
-            start.update(cx, |surface, cx| surface.scroll_pages(Scroll::Start, cx))
-        })
-        .on_action(move |_: &ScrollToEnd, _, cx| {
-            end.update(cx, |surface, cx| surface.scroll_pages(Scroll::End, cx))
-        })
-        .on_action(move |_: &ScrollPageUp, _, cx| {
-            up.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageUp, cx))
-        })
-        .on_action(move |_: &ScrollPageDown, _, cx| {
-            down.update(cx, |surface, cx| surface.scroll_pages(Scroll::PageDown, cx))
-        })
-        .on_action(move |_: &PreviousPage, _, cx| {
-            previous.update(cx, |surface, cx| surface.previous_page(cx))
-        })
-        .on_action(move |_: &NextPage, _, cx| next.update(cx, |surface, cx| surface.next_page(cx)))
-        .on_action(move |_: &PreviewLarger, _, cx| {
-            larger.update(cx, |surface, cx| surface.preview_size(true, cx))
-        })
-        .on_action(move |_: &PreviewSmaller, _, cx| {
-            smaller.update(cx, |surface, cx| surface.preview_size(false, cx))
-        })
 }
 
 /// A scroll of a document's pages by a key.
@@ -333,6 +295,14 @@ impl Document {
     }
 }
 
+/// Runs a parser on a file that came from outside. A panic in it fails
+/// like any other error: on GPUI's background threads a panic would end the
+/// app, as it unwinds into the platform's thread pool, which cannot unwind.
+pub fn guarded<T>(parse: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("Could not read this file.")))
+}
+
 /// A decoded picture in the BGRA order GPUI draws.
 pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
     for pixel in image.chunks_exact_mut(4) {
@@ -341,4 +311,16 @@ pub fn render_image(mut image: image::RgbaImage) -> Arc<RenderImage> {
     Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
         image
     )]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::guarded;
+
+    #[test]
+    fn a_parser_that_panics_fails_like_any_other() {
+        let result: anyhow::Result<()> = guarded(|| panic!("a damaged file"));
+        assert_eq!(result.unwrap_err().to_string(), "Could not read this file.");
+        assert_eq!(guarded(|| Ok(7)).unwrap(), 7);
+    }
 }
