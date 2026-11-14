@@ -1845,9 +1845,12 @@ One model, separate views, shared components:
   field frame and text input, scrollbar, "Return to Top", badge, toggle,
   check row, select, number field, slider, window close button and rim, zoom
   control, empty state, the titlebar drag region, the filter bar's field and
-  buttons, segmented glyph controls (the match rule and the sort
-  direction), the colour editor and the date picker. Views compose these;
-  a few still draw a button or row of their own. `layer.rs` is the one
+  buttons, segmented controls (the match rule, the sort direction and the
+  tab strips), breadcrumbs, the track-drag gesture and the hover fade, the
+  colour editor and the date picker. Views compose these; a control that
+  only one view has in production (its own CSS class, such as the grid's
+  Retry button or the Tags screen's Delete Unused) is drawn by that view.
+  `layer.rs` is the one
   drawing order of everything that floats (production's `--layer-*`
   scale): GPUI sorts all deferred layers by priority whatever their
   nesting, so a tooltip in a dialog needs the higher layer.
@@ -1866,8 +1869,11 @@ One model, separate views, shared components:
   the Settings window with its sections.
 - `theme.rs` holds the design tokens, derived from one background, one
   contrast colour and one text colour as `tokens.css` derives them.
-  `motion.rs` holds durations and easing. Views take colours, sizes and
-  timings from these and write none of their own.
+  `motion.rs` holds durations and easing. Views take their colours and
+  timings from these; only colour tables that are data (the theme swatches,
+  the colour editor's presets, a chip's label shades) sit with the code
+  that lists them, and a size that belongs to one component stays with it,
+  beside the CSS rule it ports.
 
 - `application.rs` runs the application layer (`picto_core`) on the copy:
   the guard that refuses anything but a marked copy, the detaching of

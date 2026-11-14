@@ -1,8 +1,9 @@
 //! Shared components, one implementation each, as `src/shared/ui` is for the
-//! Electron frontend. Views compose these; a few still draw a button or a
-//! row of their own that belongs here. Everything that floats over the
-//! window takes its drawing order from [`layer`] and, when it opens beside
-//! a control, its place and its layer element from [`popover`].
+//! Electron frontend. Views compose these; a control that only one view has
+//! in production (its own CSS class) is drawn by that view. Everything that
+//! floats over the window takes its drawing order from [`layer`] and, when
+//! it opens beside a control, its place and its layer element from
+//! [`popover`].
 pub mod action_button;
 mod action_row;
 mod avatar;
@@ -108,6 +109,29 @@ pub fn shape_line(
 /// How wide one line of `text` is in `font` at `size`.
 pub fn text_width(text: &str, font: Font, size: f32, window: &Window) -> f32 {
     f32::from(shape_line(text.to_owned(), font, size, black(), window).width)
+}
+
+/// A breadcrumb that goes somewhere (the toolbar's path, the viewer's
+/// `.viewerBreadcrumb` parent): the secondary text colour, turning to the
+/// primary under the pointer, and underlined there when `underline`. It
+/// occludes the titlebar's drag region behind it.
+pub fn crumb(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    underline: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = theme::theme(cx);
+    div()
+        .id(id)
+        .occlude()
+        .cursor_pointer()
+        .text_color(theme.text_secondary())
+        .hover(move |style| {
+            let style = style.text_color(theme.text());
+            if underline { style.underline() } else { style }
+        })
+        .child(label.into())
 }
 
 /// The press-then-drag gesture along a track at `bounds`, set up from a

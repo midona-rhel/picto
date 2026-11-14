@@ -138,16 +138,10 @@ impl ViewerToolbar {
             .text(theme::TEXT_MD)
             .text_color(theme.text())
             .child(
-                div()
-                    .id("viewer-breadcrumb-parent")
-                    .occlude()
+                ui::crumb("viewer-breadcrumb-parent", parent, false, cx)
                     .flex_shrink(1.)
                     .min_w_0()
                     .truncate()
-                    .cursor_pointer()
-                    .text_color(theme.text_secondary())
-                    .hover(move |style| style.text_color(theme.text()))
-                    .child(parent)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.session
                             .update(cx, |session, cx| session.close_viewer(cx));

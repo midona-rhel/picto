@@ -1,7 +1,9 @@
 //! Design tokens. `src/shared/styles/tokens.css` is the source: a theme is one
 //! background, one contrast colour and one text colour, and every surface,
 //! border and overlay is the contrast colour at some strength. Views take
-//! colours and sizes from here and write none of their own.
+//! their colours from here; only colour tables that are data (the theme
+//! swatches, the colour editor's presets) sit with the code that lists
+//! them. A size that belongs to one component stays with it.
 use gpui::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
