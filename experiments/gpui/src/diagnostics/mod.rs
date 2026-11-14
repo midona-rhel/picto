@@ -315,6 +315,13 @@ impl log::Log for Logger {
         };
         let message = record.args().to_string();
         eprintln!("picto: {} {}: {message}", level.name(), record.target());
+        // GPUI reports every picture it could not load, without its path:
+        // a thumbnail not written yet, or missing, which the views already
+        // show as the torn page. Kept out of the window, where they would
+        // be most of the errors.
+        if record.target() == "gpui::asset_cache" {
+            return;
+        }
         // `try_add`: a record logged while the store is held (a panic
         // being recorded) is not worth waiting for.
         try_add(Line {
