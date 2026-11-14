@@ -244,7 +244,7 @@ impl CoverHost for LibraryCover {
             (
                 session.library_root().map(Path::to_path_buf),
                 session.thumbnail(&selected.hash),
-                session.scratch.path().to_path_buf(),
+                session.scratch().to_path_buf(),
                 session.disposable(),
             )
         };

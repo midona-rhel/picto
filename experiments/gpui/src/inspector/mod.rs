@@ -428,9 +428,6 @@ impl Inspector {
     /// What the rail would describe if it followed the selection.
     fn live_mode(&self, cx: &App) -> Mode {
         let session = self.session.read(cx);
-        if session.demo.is_some() {
-            return Mode::Item;
-        }
         wanted(
             session.screen().is_some(),
             session.viewer,
@@ -489,7 +486,7 @@ impl Inspector {
             match wanted {
                 Mode::Empty => true,
                 Mode::Scope => self.scope.ready(session),
-                Mode::Item => session.demo.is_some() || session.selected_details().is_some(),
+                Mode::Item => session.selected_details().is_some(),
                 Mode::Selection => self.selection.showable(),
             }
         };
@@ -1115,7 +1112,7 @@ impl Inspector {
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let scroller = self.scroller();
         let mut panel = Self::panel();
-        let (demo, details, entries, tags, cover_thumbnail) = {
+        let (details, entries, tags, cover_thumbnail) = {
             let session = self.session.read(cx);
             let details = self.item.clone();
             let cover_thumbnail = details.as_ref().and_then(|details| {
@@ -1137,13 +1134,7 @@ impl Inspector {
                     .filter_map(|id| session.tags.get(&id.0).cloned())
                     .collect::<Vec<_>>()
             });
-            (
-                session.demo,
-                details,
-                session.nav.clone(),
-                tags,
-                cover_thumbnail,
-            )
+            (details, session.nav.clone(), tags, cover_thumbnail)
         };
         // The preview stays decoded while the grid scrolls past it.
         let pinned = cover_thumbnail
@@ -1152,13 +1143,6 @@ impl Inspector {
         self.thumbnails.update(cx, |thumbnails, _| {
             thumbnails.pin("inspector-preview", pinned)
         });
-        if let Some((name, mime)) = demo {
-            return scroller.child(
-                panel
-                    .child(Self::property("Example", name.to_owned(), cx))
-                    .child(Self::property("Type", mime.to_owned(), cx)),
-            );
-        }
         let Some(details) = details else {
             return scroller.child(panel);
         };

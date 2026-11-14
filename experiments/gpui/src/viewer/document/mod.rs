@@ -3,7 +3,6 @@
 //! Markdown, JSON, RTF and EPUB on a page, fonts, and the view for files
 //! that cannot be shown. The media surface asks [`kind::renderer_kind`]
 //! what an item gets and hands document kinds to [`Document`].
-pub mod demos;
 pub mod epub;
 pub mod font;
 pub mod geometry;

@@ -213,7 +213,7 @@ pub enum Outbox {
 
 impl Outbox {
     pub fn from_environment() -> Self {
-        if std::env::var_os("PICTO_GPUI_HOLD_RUNS").is_some() {
+        if crate::seams::hold_runs() {
             Outbox::Held(Rc::default())
         } else {
             Outbox::Live

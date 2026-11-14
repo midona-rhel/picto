@@ -2,8 +2,10 @@
 //! bottom-left corner shows how many frames were drawn in the last second,
 //! the time between the last two, and how long the app spent drawing one
 //! (from the start of the shell's render to the end of its paint; what the
-//! GPU does afterwards is not in it). Costs nothing when the variable is
-//! unset. The meter asks for no frames of its own except one a second while
+//! GPU does afterwards is not in it). The end of each frame is also what
+//! `stats.rs` measures the gap between frames by, so either variable puts
+//! the (invisible) end marker in the window; with neither set nothing is
+//! added. The meter asks for no frames of its own except one a second while
 //! nothing else is drawing, to say so.
 use crate::theme::{self, Text as _};
 use gpui::*;
@@ -98,10 +100,41 @@ fn milliseconds(duration: Duration) -> String {
     format!("{:.1}", duration.as_secs_f64() * 1000.)
 }
 
-/// The meter, to lay over the window as its last child, when it is on.
-pub fn overlay(cx: &App) -> Option<AnyElement> {
+/// A frame of the window has been painted.
+fn frame_ended() {
+    let now = Instant::now();
+    crate::stats::frame_drawn(now);
     if !enabled() {
-        return None;
+        return;
+    }
+    if let Ok(mut meter) = meter().lock() {
+        let started = meter.started.take();
+        if !std::mem::take(&mut meter.idle_look)
+            && let Some(started) = started
+        {
+            meter.frames.push_back((now, now.duration_since(started)));
+        }
+        while meter
+            .frames
+            .front()
+            .is_some_and(|(ended, _)| now.duration_since(*ended) > Duration::from_secs(2))
+        {
+            meter.frames.pop_front();
+        }
+    }
+}
+
+/// The meter, to lay over the window as its last child, when it is on; the
+/// end-of-frame marker alone when only the stats are.
+pub fn overlay(cx: &App) -> Option<AnyElement> {
+    // Painted last, so its paint is the end of the frame's drawing.
+    let end = || {
+        canvas(|_, _, _| {}, |_, _, _, _| frame_ended())
+            .absolute()
+            .size_0()
+    };
+    if !enabled() {
+        return crate::stats::enabled().then(|| end().into_any_element());
     }
     let shown = meter()
         .lock()
@@ -116,29 +149,6 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
             draw.map_or("–".into(), |(_, longest)| milliseconds(longest)),
         ),
     };
-    // Painted last, so its paint is the end of the frame's drawing.
-    let end =
-        canvas(
-            |_, _, _| {},
-            |_, _, _, _| {
-                if let Ok(mut meter) = meter().lock() {
-                    let now = Instant::now();
-                    let started = meter.started.take();
-                    if !std::mem::take(&mut meter.idle_look)
-                        && let Some(started) = started
-                    {
-                        meter.frames.push_back((now, now.duration_since(started)));
-                    }
-                    while meter.frames.front().is_some_and(|(ended, _)| {
-                        now.duration_since(*ended) > Duration::from_secs(2)
-                    }) {
-                        meter.frames.pop_front();
-                    }
-                }
-            },
-        )
-        .absolute()
-        .size_0();
     let theme = theme::theme(cx);
     Some(
         div()
@@ -153,7 +163,7 @@ pub fn overlay(cx: &App) -> Option<AnyElement> {
             .text(theme::TEXT_XS)
             .text_color(theme.text())
             .child(text)
-            .child(end)
+            .child(end())
             .into_any_element(),
     )
 }

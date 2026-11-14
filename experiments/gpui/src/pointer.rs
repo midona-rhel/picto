@@ -1,6 +1,8 @@
 //! Opt-in pointer playback, so hover and pressed states can be checked in the
 //! running app without taking the real pointer. Set `PICTO_GPUI_POINTER` to a
-//! file or FIFO; each line written to it is replayed into the window:
+//! FIFO (a plain file is read again from its start each time it ends); each
+//! line written to it is replayed into the window. Debug builds only (see
+//! `seams.rs`); the off-screen tool plays the same lines (`offscreen.rs`):
 //!
 //!     move 320 24
 //!     down 320 24
@@ -80,8 +82,7 @@ fn modifiers_changed(modifiers: Modifiers) -> PlatformInput {
 
 pub fn parse(line: &str) -> Option<Line> {
     let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
-    // GPUI parses static text; a playback line lives for the whole run.
-    let keystroke = |text: String| Keystroke::parse(String::leak(text)).ok();
+    let keystroke = |text: String| Keystroke::parse(interned(text)).ok();
     match kind {
         "key" => return Some(Line::Keys(vec![keystroke(rest.trim().to_string())?])),
         "type" => {
@@ -99,6 +100,19 @@ pub fn parse(line: &str) -> Option<Line> {
         _ => {}
     }
     pointer(line).map(Line::Input)
+}
+
+/// GPUI parses keystrokes from static text: each distinct one is kept for
+/// the rest of the run, once.
+fn interned(text: String) -> &'static str {
+    static SEEN: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(kept) = seen.iter().find(|kept| **kept == text) {
+        return kept;
+    }
+    let kept: &'static str = String::leak(text);
+    seen.push(kept);
+    kept
 }
 
 /// Files from the system over the window at a point (`dragfiles`), and let
@@ -182,8 +196,11 @@ fn pointer(line: &str) -> Option<PlatformInput> {
     })
 }
 
+/// Plays the lines written to `PICTO_GPUI_POINTER` into `window`, if it
+/// is set.
+#[cfg(debug_assertions)]
 pub fn start(window: AnyWindowHandle, cx: &mut App) {
-    let Ok(path) = std::env::var("PICTO_GPUI_POINTER") else {
+    let Some(path) = crate::seams::pointer_file() else {
         return;
     };
     let (sender, receiver) = mpsc::channel();

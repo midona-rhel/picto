@@ -100,11 +100,15 @@ mod tests {
         assert!(!playback.muted);
     }
 
+    /// The interactive movie the checks play, a test fixture.
+    fn fixture() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fixtures/interactive.swf")
+    }
+
     #[test]
     #[ignore = "Requires a native GPU adapter"]
     fn stop_reloads_the_movie_at_its_first_frame() {
-        let fixtures = crate::demo::fixtures().unwrap();
-        let mut flash = Flash::open(fixtures.path().join("interactive.swf"));
+        let mut flash = Flash::open(fixture());
         let deadline = Instant::now() + Duration::from_secs(20);
         let next_frame = || loop {
             if let Some(result) = flash.frame.lock().unwrap().take() {
@@ -133,8 +137,7 @@ mod tests {
     #[test]
     #[ignore = "Requires a native GPU adapter"]
     fn real_swf_produces_frames_and_responds_to_mouse() {
-        let fixtures = crate::demo::fixtures().unwrap();
-        let flash = Flash::open(fixtures.path().join("interactive.swf"));
+        let flash = Flash::open(fixture());
         let deadline = Instant::now() + Duration::from_secs(20);
         let wait = || {
             loop {
@@ -240,7 +243,7 @@ impl Flash {
 
 impl Flash {
     pub fn open(path: PathBuf) -> Self {
-        let silent = std::env::var_os("PICTO_GPUI_SILENT").is_some();
+        let silent = crate::seams::silent();
         let (input, events) = mpsc::channel();
         let (control, controls) = mpsc::channel::<Control>();
         let frame = Arc::new(Mutex::new(None));

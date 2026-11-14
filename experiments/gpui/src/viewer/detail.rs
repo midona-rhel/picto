@@ -407,8 +407,10 @@ impl DetailWindow {
     /// The shown file's path: a collection's member opened by itself is
     /// that member's, not the collection's first.
     fn copy_path(&mut self, cx: &mut Context<Self>) {
-        if let Some((path, ..)) = self.shown_file() {
-            cx.write_to_clipboard(ClipboardItem::new_string(path));
+        if let Some((path, ..)) = self.shown_file()
+            && let Err(error) = crate::desktop::copy_paths(&[path.into()], cx)
+        {
+            crate::ui::notify::error("Could not copy file path", error, cx);
         }
     }
 
@@ -527,7 +529,7 @@ impl DetailWindow {
                 }
             }
             Action::CopyFile => self.copy_file(cx),
-            Action::CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(path)),
+            Action::CopyPath => self.copy_path(cx),
             Action::CopyName => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             Action::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(
                 crate::shell::media_link(&hash, &mime),

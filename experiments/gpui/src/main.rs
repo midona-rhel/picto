@@ -5,7 +5,6 @@ mod atlas;
 mod backend;
 mod cover;
 mod covered;
-mod demo;
 mod desktop;
 mod export;
 mod grid;
@@ -19,9 +18,12 @@ mod motion;
 #[cfg(test)]
 mod offscreen;
 mod platform;
+// Input playback, a test seam a release build does not hold (`seams.rs`).
+#[cfg(any(test, debug_assertions))]
 mod pointer;
 mod prompt;
 mod screens;
+mod seams;
 mod session;
 mod settings;
 mod shell;
@@ -118,10 +120,7 @@ fn prepare(cx: &mut App) {
 /// Electron window's; otherwise where it was last, on a display that is still
 /// there (`getSavedMainWindowState`), else centred at the default size.
 fn main_window_bounds(cx: &App) -> WindowBounds {
-    let exact = std::env::var("PICTO_GPUI_WINDOW").ok().and_then(|value| {
-        let (width, height) = value.split_once('x')?;
-        Some((width.parse().ok()?, height.parse().ok()?))
-    });
+    let exact = seams::exact_window();
     let centred = |width: f32, height: f32| {
         let mut bounds = Bounds::centered(None, size(px(width), px(height)), cx);
         // A centred origin can land on a half point, which makes the
@@ -166,7 +165,7 @@ fn main_window_bounds(cx: &App) -> WindowBounds {
 /// window in full screen keeps the bounds it will return to, as production's
 /// `getNormalBounds` does, and opens at them next time.
 fn remember_window(window: &Window, cx: &mut App) {
-    if std::env::var_os("PICTO_GPUI_WINDOW").is_some() {
+    if seams::exact_window().is_some() {
         return;
     }
     let (bounds, maximized) = match window.window_bounds() {
@@ -206,11 +205,10 @@ fn main() {
     // The one argument is the root of a disposable copy that run.sh or
     // `--make-copy` made. Anything else, and the library it was copied from,
     // is refused.
-    let root = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .expect("Pass the disposable library copy that run.sh made"),
-    );
+    let Some(root) = std::env::args().nth(1).map(PathBuf::from) else {
+        eprintln!("picto: pass the disposable library copy that run.sh or --make-copy made");
+        std::process::exit(2);
+    };
     let root = match application::guard(&root) {
         Ok(root) => root,
         Err(error) => {
@@ -246,19 +244,11 @@ fn main() {
             cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
         }
         app_menu::quit_with_main_window(cx);
-        // Stop the workers and checkpoint the copy before the process
-        // ends, as the Electron app closes its library before quitting.
-        cx.on_app_quit(move |cx| {
-            state::flush(cx);
-            closing.close();
-            async {}
-        })
-        .detach();
         let window_bounds = main_window_bounds(cx);
         // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
         // keyboard from whatever the user is working in, and keeps it
         // drawing while it is covered.
-        let background = covered::enabled();
+        let background = seams::background();
         let window = cx
             .open_window(
                 WindowOptions {
@@ -287,7 +277,21 @@ fn main() {
                 },
             )
             .unwrap();
+        // Stop the workers and checkpoint the copy before the process
+        // ends, as the Electron app closes its library before quitting.
+        // Registered after the window opened, so the session's own quit
+        // hook (a view change still to save) runs first.
+        cx.on_app_quit(move |cx| {
+            state::flush(cx);
+            closing.close();
+            async {}
+        })
+        .detach();
+        // Input playback is a debug build's only (`seams.rs`).
+        #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
+        #[cfg(not(debug_assertions))]
+        let _ = window;
         if !background {
             cx.activate(true);
         }

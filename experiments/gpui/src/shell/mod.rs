@@ -60,9 +60,7 @@ actions!(
         TogglePanels,
         Undo,
         Redo,
-        Quit,
-        DemoSvg,
-        DemoFlash
+        Quit
     ]
 );
 
@@ -385,9 +383,7 @@ impl Shell {
             // `PICTO_GPUI_INSPECTOR=272` opens at that width whatever was
             // kept, to compare against an Electron window whose inspector
             // was resized.
-            inspector_width: std::env::var("PICTO_GPUI_INSPECTOR")
-                .ok()
-                .and_then(|width| width.parse().ok())
+            inspector_width: crate::seams::inspector_width()
                 .map_or(kept.inspector_width, crate::state::inspector_width),
             resizing: None,
             rails,
@@ -1090,17 +1086,6 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Redo, _, cx| {
                 this.session.update(cx, |session, cx| session.redo(cx))
             }))
-            .on_action(cx.listener(|this, _: &DemoSvg, _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.show_demo("vector.svg", "image/svg+xml", cx)
-                });
-            }))
-            .on_action(cx.listener(|this, _: &DemoFlash, _, cx| {
-                this.session.update(cx, |session, cx| {
-                    session.show_demo("interactive.swf", "application/x-shockwave-flash", cx)
-                });
-            }))
-            .map(|root| crate::viewer::document::demos::handle(root, &self.session))
             .child(titlebar)
             .child(body)
             .children(sidebar_edge)

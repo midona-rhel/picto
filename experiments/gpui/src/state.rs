@@ -403,8 +403,8 @@ fn migrate(object: Map<String, Value>) -> Map<String, Value> {
 
 /// This app's own folder for what it keeps per machine.
 pub fn location() -> Option<PathBuf> {
-    if let Some(folder) = std::env::var_os("PICTO_GPUI_STATE").filter(|f| !f.is_empty()) {
-        return Some(PathBuf::from(folder));
+    if let Some(folder) = crate::seams::state_folder() {
+        return Some(folder);
     }
     if cfg!(test) {
         return None;
@@ -412,8 +412,8 @@ pub fn location() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("Picto GPUI"))
 }
 
-/// The platform's per-user configuration folder.
-fn config_folder() -> Option<PathBuf> {
+/// The platform's per-user configuration folder (`app.getPath('appData')`).
+pub fn config_folder() -> Option<PathBuf> {
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         home().map(|home| home.join("Library").join("Application Support"))
@@ -462,16 +462,28 @@ pub fn load(folder: &Path) -> (State, Map<String, Value>) {
 static WRITTEN: Mutex<u64> = Mutex::new(0);
 
 /// Writes `text` as the file in `folder` through a temporary file, unless a
-/// later write has already landed.
+/// later write has already landed. The temporary file reaches the disk
+/// before it replaces the old one, so a crash or a power cut leaves the old
+/// file or the new one, never a part of either; a write that fails removes
+/// it.
 fn write(folder: &Path, text: &str, sequence: u64) -> std::io::Result<()> {
+    use std::io::Write as _;
     let mut written = WRITTEN.lock().unwrap_or_else(|poison| poison.into_inner());
     if sequence < *written {
         return Ok(());
     }
     std::fs::create_dir_all(folder)?;
     let temporary = folder.join(format!("{FILE}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, folder.join(FILE))?;
+    let replaced = std::fs::File::create(&temporary)
+        .and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, folder.join(FILE)));
+    if let Err(error) = replaced {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     *written = sequence;
     Ok(())
 }
