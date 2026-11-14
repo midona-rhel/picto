@@ -884,7 +884,7 @@ re-checked by reading the code; the rest were checked against it.
   any platform. On macOS the pasteboard reading was checked on a pasteboard
   of a test's own, and a drop of in-memory image data (played with
   `dropdata`) was imported into a real window with its addresses as
-  sources; on Windows and Linux only the parsing of virtual-file
+  sources, and a drop of links only was refused with its notification; on Windows and Linux only the parsing of virtual-file
   descriptors, `HTML Format` and the media types read is tested, and the
   reading code is compiled in CI.
 - **macOS system integration.** Dragging items out to Finder; the Dock
@@ -898,20 +898,31 @@ re-checked by reading the code; the rest were checked against it.
   tested for the rest); moving or resizing a window by hand, so the detail
   window's aspect lock and the saving of a changed place (input playback
   cannot move a window). The detail window's always-on-top was seen raising
-  and lowering its window level.
+  and lowering its window level. Opened, a detail window takes the
+  media's shape (3926×2474 opened at 1330×838); a very narrow picture
+  (200×640) is grown to 400 wide as production grows it, which is taller
+  than the work area, and the system cuts the window to the screen
+  (400×989), so it opens off the shape its lock keeps, as production's
+  would.
 - **Pop-up menus on macOS.** Seen: placed on the screen from a press near
   the window's edges (moved up to stay above the Dock, left of the pointer
   near the right edge), a submenu in a pop-up window of its own, closing on
-  Escape and on a press in the main window. Not seen: their blur over
+  Escape and on a press in the main window; at 80%, 125% and 150% its
+  window scaled with the zoom and its panel's corner on the pointer;
+  its shadow is alpha in the window's transparent margin (dark theme: 14%
+  just outside the panel, falling to 2% at the window's edge, a 1px ring
+  of 57%; light theme at 150%: 7%, a 1.5px ring of 21%). Not seen: their blur over
   colourful content and their pop-in scale (a capture of one window shows
   neither, and capturing the screen was not allowed); the pointing-hand
   cursor in them (GPUI sets the cursor from the key window); the input
   method's candidate window for the menu's search field. A select's list
   inside a pop-up menu is checked by placement tests only.
-- **The interface zoom, partly.** Seen on macOS in a real window at 150%
-  (crisp text, the traffic lights unchanged) with a pop-up menu window
-  opened by a press: its panel's corner on the pointer on screen. Not seen
-  zoomed: the pop-up's blur over colourful content, the input method's
+- **The interface zoom, partly.** Seen on macOS in a real window at 80%,
+  125% and 150% (crisp text, the traffic lights unchanged; the main,
+  Settings and detail windows following at once; presses landing on what
+  is drawn; tooltips, the grid scrollbar's thumb under the pointer while
+  dragged, a rubber band, a tile drag over the sidebar) with a pop-up menu
+  window opened by a press at each level. Not seen zoomed: the pop-up's blur over colourful content, the input method's
   candidate window, a file dropped from Finder, a trackpad scroll, the
   resize edges on Linux, and anything on a Windows or Linux screen.
 - **Network work.** No subscription run, source run, gallery download or AI
@@ -923,12 +934,9 @@ re-checked by reading the code; the rest were checked against it.
   buttons have been driven only off-screen with `answer`.
 - **Not checked in any window:** a value typed into the filter bar's range
   editors (the Resolution editor was seen opening below its chip); the
-  volume drag; Set as Thumbnail end to end; Settings' language choice, the
-  interface zoom's other levels (80%, 125%) and every screen zoomed or in
-  German and Japanese; the log window; the AI tagger in a real window; the
-  pop-up menus' and glass panels' shadows in a light theme; a second launch
-  handing over; a pack on the command line; `dropdata` drops. (Seen in a
-  real window: the calendar and saved filters, a PDF collection scrolled,
+  volume drag; Set as Thumbnail end to end; the log window's Copy and Save
+  support report (they write the clipboard and a file the save dialog
+  names). (Seen in a real window: the calendar and saved filters, a PDF collection scrolled,
   the media player's seek, hover time, rate list, loop and controls' fade,
   the audio visualizer; EPUB pages and their buttons, text and Markdown
   pages, the font viewer's preview, an edit of its sample, waterfall,
@@ -937,7 +945,23 @@ re-checked by reading the code; the rest were checked against it.
   the insertion mark, rubber band, Sort by menu, Remove from Group and Undo;
   Delete Permanently's confirmation and the delete; text and Markdown
   thumbnails appearing in the grid by themselves after a drop; the filter
-  bar's field menu adding Resolution, Duration and File Size.)
+  bar's field menu adding Resolution, Duration and File Size; Settings'
+  language switched to German, Japanese and back, applying at once in the
+  main and Settings windows, with Settings' panels, an item menu, the Add
+  Tags dialog, the Tags, Subscriptions and Duplicates screens, the viewer's
+  toolbar and its tooltip and a notification in each; the log window
+  filling, its level, source and text filters, following the end, resized
+  by its top edge and closed with Escape; the AI tagger's Settings panel
+  with cloned models and a held download, Auto Tag from the item menu and
+  the inspector, a real run of two models over four images with the
+  review's progress advancing by itself, the cutoff, the filter, Apply,
+  "Added AI tags" and Undo and Redo from the notification and the keys;
+  the glass panels' shadow and dark ring outside menus, dialogs, pickers,
+  popovers, tooltips (shadow only, as production) and notifications in the
+  dark theme and a light one, at 100% and 150% (dark: the ring at 42% of
+  what is behind, the shadow 10–16% darker beside a panel; light: 21% and
+  7%), with no artefact at tile or preview corners; a second launch on the
+  open copy handing over and exiting; a pack given on the command line.)
 - **Performance.** No frame-time or decode-latency benchmark has been
   completed. One real-window session on this library (2,673 items, debug
   build) measured: physical footprint 308 MB after opening, 754 MB after
@@ -945,6 +969,16 @@ re-checked by reading the code; the rest were checked against it.
   the top, 542 MB after opening and closing fifty media views (peak 884 MB),
   538 MB after ten minutes idle; no view repainted and CPU read 0.0% while
   idle; a scroll in an active state of the window drew a frame every 8 ms.
+  A later session (2,674 items, the AI tagger's models loaded once) read
+  370 MB after opening, 619 MB with the log window open and closed, 537 MB
+  after a tagger run (peak 1.6 GB while two models ran), 824 MB after
+  scrolling through several hundred items and 937 MB after fifty media
+  views (peak 1.7 GB); a fresh launch read 458 MB before and 299 MB after
+  ten minutes idle, in which every view repainted once at three moments
+  with nothing logged around them (one frame each) and the process used
+  5.1 s of CPU (0.9%), all of it outside the views. Idle with the log
+  window open the process used 0.56 s of CPU in 20 s, against 0.63 s with
+  it closed.
   A covered window's frames are paced by the system (section 6). Do not call the app faster or flicker-free on this
   evidence.
 
