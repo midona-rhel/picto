@@ -518,6 +518,27 @@ impl AppSettings {
         }
     }
 
+    /// Sets whether the model with this slug runs on new imports
+    /// (`AUTO_MODEL_SETTING_KEYS`); an unknown model has no setting.
+    pub fn set_runs_model(&mut self, slug: &str, on: bool) {
+        let setting = match slug {
+            "wd14-swinv2-v3" => &mut self.ai_tagger_wd14_enabled,
+            "z3d-e621-convnext" => &mut self.ai_tagger_e621_enabled,
+            "wd14-eva02-large-v3" => &mut self.ai_tagger_eva02_enabled,
+            "oppai-oracle-v1-1" => &mut self.ai_tagger_oppai_oracle_enabled,
+            _ => return,
+        };
+        *setting = on;
+    }
+
+    /// Whether the model with this slug has an import setting.
+    pub fn has_model_setting(slug: &str) -> bool {
+        matches!(
+            slug,
+            "wd14-swinv2-v3" | "z3d-e621-convnext" | "wd14-eva02-large-v3" | "oppai-oracle-v1-1"
+        )
+    }
+
     pub fn toggle_notification_tone(&mut self, tone: &'static str) {
         if let Some(at) = self
             .notification_popup_tones

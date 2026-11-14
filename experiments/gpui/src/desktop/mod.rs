@@ -666,6 +666,7 @@ pub fn system_path(path: &Path) -> PathBuf {
 }
 
 /// Production's order: the default application first, then by name.
+#[cfg(any(test, target_os = "macos"))]
 fn sort_applications(
     applications: &mut [Application],
     compare: impl Fn(&str, &str) -> std::cmp::Ordering,
@@ -681,6 +682,33 @@ fn sort_applications(
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
+
+    /// A drag out of the window hands Explorer the same `CF_HDROP` list as
+    /// Copy does.
+    #[cfg(windows)]
+    #[test]
+    fn a_drag_out_on_windows_holds_the_clipboards_file_list() {
+        let paths = [PathBuf::from(r"C:\one.jpg"), PathBuf::from(r"D:\two é.png")];
+        assert_eq!(
+            gpui_windows::drag_drop_files(&paths),
+            super::drop_files(&paths)
+        );
+    }
+
+    /// A drag out of the window on X11 offers the same `text/uri-list` as
+    /// Copy does.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_drag_out_on_x11_offers_the_clipboards_address_list() {
+        let paths = [
+            PathBuf::from("/tmp/one.jpg"),
+            PathBuf::from("/tmp/two é#.png"),
+        ];
+        assert_eq!(
+            gpui_linux::xdnd_uri_list(&paths),
+            super::uri_list(&paths).into_bytes()
+        );
+    }
 
     /// `CF_HDROP`'s list, as production's native addon builds it.
     #[test]

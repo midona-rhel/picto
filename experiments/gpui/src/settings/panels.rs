@@ -16,6 +16,7 @@ use gpui::*;
 
 mod about;
 mod ai_models;
+pub(super) use ai_models::AiState;
 mod catalog;
 mod cloud;
 mod controls;

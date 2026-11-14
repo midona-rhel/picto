@@ -79,6 +79,14 @@ impl Tip {
         self.keys = crate::keymap::badges(id, cx);
         self
     }
+
+    /// The keys a registry shortcut is bound to now, written as one badge,
+    /// as a tooltip given the keys as text shows them
+    /// (`shortcut={formatKeysDisplay(keys)}`).
+    pub fn shortcut_written(mut self, id: &str, cx: &App) -> Self {
+        self.keys = crate::keymap::hint(id, cx).into_iter().collect();
+        self
+    }
 }
 
 /// A control's tooltip timing, kept between frames: it opens once the pointer

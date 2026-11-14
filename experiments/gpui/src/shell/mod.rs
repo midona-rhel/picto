@@ -1138,7 +1138,10 @@ impl Render for Shell {
         root = root.children(self.review_controls(cx));
         // The inspector's tag and folder pickers float over everything.
         let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
-        root = root.child(tag_picker).child(folder_picker);
+        root = root
+            .child(tag_picker)
+            .child(folder_picker)
+            .child(self.inspector.read(cx).ai_tagger());
         let (tag_dialog, folder_dialog) = self.inspector.read(cx).dialogs();
         root = root.child(tag_dialog).child(folder_dialog);
         // So are the filter bar's, in their filter mode.

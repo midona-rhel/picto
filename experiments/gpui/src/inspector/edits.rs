@@ -511,6 +511,23 @@ impl Inspector {
             .update(cx, |picker, cx| picker.close(window, cx));
         self.folder_picker
             .update(cx, |picker, cx| picker.close(window, cx));
+        self.ai_tagger
+            .update(cx, |tagger, cx| tagger.close(window, cx));
+    }
+
+    /// Auto Tag from a menu or its shortcut: the review of `target`, or of
+    /// the grid's selection when `None`, docked as a picker opened by its
+    /// shortcut is (`inspectorAnchor`).
+    pub fn open_auto_tag(
+        &mut self,
+        target: Option<picto_library::selection::SelectionTarget>,
+        visible: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let anchor = self.keyboard_anchor(visible);
+        self.ai_tagger
+            .update(cx, |tagger, cx| tagger.open(anchor, target, window, cx));
     }
 
     // ── Chips ───────────────────────────────────────────────────

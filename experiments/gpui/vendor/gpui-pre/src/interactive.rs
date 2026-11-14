@@ -721,6 +721,69 @@ impl ExternalPaths {
     }
 }
 
+/// What a drag from another application offered besides files on disk: what
+/// a web browser drags (an image's data, its address, the page's HTML for
+/// it). A platform reads it from the drag while the drop is delivered and
+/// hands it over with [`set_external_drop_data`] just before
+/// [`FileDropEvent::Submit`]; the application takes it with
+/// [`take_external_drop_data`] while it handles that drop. A drag that
+/// carries only these enters the window with no paths.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ExternalDropData {
+    /// Files held in memory rather than on disk, such as an image's data.
+    pub files: Vec<ExternalDropFile>,
+    /// Addresses, as `text/uri-list` lists them (one per line, `#` lines
+    /// being comments), one entry per offer.
+    pub uri_lists: Vec<String>,
+    /// HTML fragments (`text/html`).
+    pub html: Vec<String>,
+    /// Plain text.
+    pub text: Vec<String>,
+    /// Chromium's `DownloadURL` (`<media type>:<file name>:<address>`).
+    pub download_urls: Vec<String>,
+}
+
+impl ExternalDropData {
+    /// Whether the drag offered nothing of these.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+            && self.uri_lists.is_empty()
+            && self.html.is_empty()
+            && self.text.is_empty()
+            && self.download_urls.is_empty()
+    }
+}
+
+/// A file a drag held in memory.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct ExternalDropFile {
+    /// Its contents.
+    pub bytes: Vec<u8>,
+    /// Its name, when the source gave one.
+    pub name: Option<String>,
+    /// Its media type, as the platform named the data (`image/png`).
+    pub media_type: Option<String>,
+}
+
+static EXTERNAL_DROP_DATA: std::sync::Mutex<Option<ExternalDropData>> = std::sync::Mutex::new(None);
+
+/// Called by a platform just before it delivers [`FileDropEvent::Submit`]:
+/// what that drop offered besides its paths (empty when nothing).
+pub fn set_external_drop_data(data: ExternalDropData) {
+    *EXTERNAL_DROP_DATA
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(data);
+}
+
+/// What the drop being delivered offered besides its paths, once; `None`
+/// after it was taken or when the platform reads nothing of the kind.
+pub fn take_external_drop_data() -> Option<ExternalDropData> {
+    EXTERNAL_DROP_DATA
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take()
+}
+
 /// Data offered to the platform when an internal drag leaves the window and is
 /// promoted to a native drag session.
 #[derive(Debug, Clone, Eq, PartialEq)]

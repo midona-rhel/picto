@@ -68,7 +68,6 @@ actions!(
         Reject,
         AddTags,
         AddToFolder,
-        // TODO: open the AI tagger on the selection, beside the inspector.
         AutoTag,
         ShowTags,
         OpenDefault,
@@ -666,7 +665,6 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
         item("Auto Tag…", AutoTag)
             .keys(Keys::Shortcut("organize.autoTag"))
             .enabled(has)
-            .todo()
             .into(),
         Separator,
         Entry::Submenu {
@@ -1088,6 +1086,24 @@ pub fn reopen(cx: &mut App) {
     if let Some(main) = main {
         let _ = main.update(cx, |_, window, _| window.activate_window());
     }
+}
+
+/// `focusMainWindow`: the main window comes back if Close Window hid it,
+/// out of the Dock or taskbar if minimised, and in front with the
+/// keyboard, as when the app is asked to open files. With
+/// `PICTO_GPUI_BACKGROUND` it stays behind and says so, so a check never
+/// takes the keyboard from the user.
+pub fn bring_forward(cx: &mut App) {
+    if crate::seams::background() {
+        eprintln!("picto: the main window would come forward (held back in the background)");
+        return;
+    }
+    current(cx).main_hidden = false;
+    let main = current(cx).main;
+    if let Some(main) = main {
+        let _ = main.update(cx, |_, window, _| window.activate_window());
+    }
+    cx.activate(true);
 }
 
 /// Whether a text field has the window's keyboard.
@@ -1757,7 +1773,6 @@ mod tests {
                 "Main",
                 "Clear History",
                 "Check for Updates…",
-                "Auto Tag…",
             ]
         );
     }

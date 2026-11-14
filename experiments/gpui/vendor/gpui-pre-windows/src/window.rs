@@ -974,6 +974,38 @@ impl PlatformWindow for WindowsWindow {
         self.state.callbacks.request_frame.set(Some(callback));
     }
 
+    fn can_start_external_drag(&self) -> bool {
+        true
+    }
+
+    /// An OLE drag of the files. `DoDragDrop` runs the system's drag loop
+    /// until the drop, so it is run from a task of its own after the event
+    /// that asked for it has been handled, and the drag's end is reported
+    /// as `FileDropEvent::Ended` once it returns.
+    fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
+        let ExternalDragPayload::Files(paths) = payload;
+        let paths: Vec<PathBuf> = paths
+            .entries()
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        let this = self.0.clone();
+        self.0
+            .executor
+            .spawn(async move {
+                crate::drag_source::drag(&paths);
+                if let Some(mut input) = this.state.callbacks.input.take() {
+                    input(PlatformInput::FileDrop(FileDropEvent::Ended));
+                    this.state.callbacks.input.set(Some(input));
+                }
+            })
+            .detach();
+        true
+    }
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         self.state.callbacks.input.set(Some(callback));
     }
@@ -1204,6 +1236,24 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
                     paths: ExternalPaths(paths),
                 });
                 self.handle_drag_drop(input);
+            } else if crate::drop_data::offers_drop_data(idata_obj) {
+                // What a web browser drags (an image, its address): it
+                // enters with no paths and is read when it is dropped.
+                *pdweffect = DROPEFFECT_COPY;
+                let mut cursor_position = cursor_position;
+                ScreenToClient(self.0.hwnd, &mut cursor_position)
+                    .ok()
+                    .log_err();
+                let scale_factor = self.0.state.scale_factor.get();
+                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
+                    position: logical_point(
+                        cursor_position.x as f32,
+                        cursor_position.y as f32,
+                        scale_factor,
+                    ),
+                    paths: ExternalPaths(SmallVec::new()),
+                });
+                self.handle_drag_drop(input);
             } else {
                 *pdweffect = DROPEFFECT_NONE;
             }
@@ -1274,6 +1324,7 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
                 .ok()
                 .log_err();
         }
+        gpui::set_external_drop_data(crate::drop_data::read(idata_obj));
         let scale_factor = self.0.state.scale_factor.get();
         let input = PlatformInput::FileDrop(FileDropEvent::Submit {
             position: logical_point(

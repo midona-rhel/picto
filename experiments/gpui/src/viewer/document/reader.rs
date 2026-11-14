@@ -197,7 +197,7 @@ impl ReaderViewer {
     }
 
     /// Whether the document has been laid out, for checks that wait on it.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn loaded(&self) -> bool {
         self.blocks.is_some() || self.error.is_some()
     }

@@ -54,6 +54,7 @@ impl Picture {
 
 /// Full-range 4:2:0 luma and interleaved chroma (`420f`, what the video
 /// player draws) to RGBA, by the BT.709 matrix.
+#[cfg(any(test, target_os = "macos"))]
 pub fn rgba_from_biplanar(
     (width, height): (usize, usize),
     luma: (&[u8], usize),

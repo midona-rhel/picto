@@ -17,6 +17,7 @@
 //!     dragfiles 600 400 /path/one.png /path/two
 //!     drop 600 400 /path/one.png /path/two
 //!     dragexit
+//!     dropdata 600 400 image=/path/photo.png uri=https://e.test/photo.png
 //!     window 1
 //!
 //! `window <n>` sends the lines after it to the app's nth window (0 is the
@@ -31,8 +32,13 @@
 //! point, as a drag from Finder does (the platform's file-drop entered and
 //! pending events), `drop` also lets them go there (submit, then exited),
 //! and `dragexit` takes them out of the window again; the paths are
-//! separated by spaces, so a path cannot hold one. Nothing is read when the
-//! variable is unset.
+//! separated by spaces, so a path cannot hold one. `dropdata` drops what a
+//! web browser drags, with no files: each `image=<path>` is an in-memory
+//! file holding that file's bytes, `uri=`, `text=` and `download=` an
+//! address list, text and a Chromium `DownloadURL`, and `html=<path>` that
+//! file's text as HTML; it is let go with a release rather than the
+//! platform's drop, which would bring the app forward. Nothing is read when
+//! the variable is unset.
 use gpui::*;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
@@ -45,6 +51,13 @@ pub enum Line {
     Inputs(Vec<PlatformInput>),
     /// Pressed as though typed: bindings first, then the focused text field.
     Keys(Vec<Keystroke>),
+    /// A drop of what is not a file: the drag comes over, the platform's
+    /// reading of it is handed over, and it is let go.
+    DropData {
+        over: Vec<PlatformInput>,
+        data: ExternalDropData,
+        release: Vec<PlatformInput>,
+    },
     /// The lines after it go to this window (`window <n>`).
     Window(usize),
 }
@@ -61,6 +74,19 @@ impl Line {
             Line::Inputs(events) => {
                 for event in events {
                     window.dispatch_platform_input(event, cx);
+                }
+            }
+            Line::DropData {
+                over,
+                data,
+                release,
+            } => {
+                for event in over {
+                    window.dispatch_event(event, cx);
+                }
+                set_external_drop_data(data);
+                for event in release {
+                    window.dispatch_event(event, cx);
                 }
             }
             Line::Window(_) => {}
@@ -117,6 +143,7 @@ pub fn parse(line: &str) -> Option<Line> {
         "window" => return rest.trim().parse().ok().map(Line::Window),
         "dragexit" => return Some(Line::Input(PlatformInput::FileDrop(FileDropEvent::Exited))),
         "dragfiles" | "drop" => return file_drop(kind == "drop", rest).map(Line::Inputs),
+        "dropdata" => return drop_data(rest),
         _ => {}
     }
     pointer(line).map(Line::Input)
@@ -156,6 +183,50 @@ fn file_drop(submit: bool, rest: &str) -> Option<Vec<PlatformInput>> {
         events.push(PlatformInput::FileDrop(FileDropEvent::Exited));
     }
     Some(events)
+}
+
+/// What a web browser drags, dropped at a point (`dropdata`).
+fn drop_data(rest: &str) -> Option<Line> {
+    let mut parts = rest.split_whitespace();
+    let position = point(
+        px(parts.next()?.parse().ok()?),
+        px(parts.next()?.parse().ok()?),
+    );
+    let mut data = ExternalDropData::default();
+    for part in parts {
+        let (kind, value) = part.split_once('=')?;
+        match kind {
+            "image" => data.files.push(ExternalDropFile {
+                bytes: std::fs::read(value).ok()?,
+                name: std::path::Path::new(value)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned()),
+                media_type: None,
+            }),
+            "uri" => data.uri_lists.push(value.to_owned()),
+            "text" => data.text.push(value.to_owned()),
+            "download" => data.download_urls.push(value.to_owned()),
+            "html" => data.html.push(std::fs::read_to_string(value).ok()?),
+            _ => return None,
+        }
+    }
+    let paths = ExternalPaths(Default::default());
+    Some(Line::DropData {
+        over: vec![
+            PlatformInput::FileDrop(FileDropEvent::Entered { position, paths }),
+            PlatformInput::FileDrop(FileDropEvent::Pending { position }),
+        ],
+        data,
+        release: vec![
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }),
+            PlatformInput::FileDrop(FileDropEvent::Exited),
+        ],
+    })
 }
 
 fn pointer(line: &str) -> Option<PlatformInput> {

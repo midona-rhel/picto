@@ -105,8 +105,11 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // What the platform read from the drag besides its paths: a web
+        // browser's image data and addresses.
+        let data = gpui::take_external_drop_data().filter(|data| !data.is_empty());
         self.imports.update(cx, |imports, cx| {
-            imports.drop_paths(paths, destination, window, cx)
+            imports.drop_with_data(paths, data, destination, window, cx)
         });
     }
 

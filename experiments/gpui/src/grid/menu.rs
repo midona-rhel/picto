@@ -58,9 +58,6 @@ pub enum OpenWith {
 // yet: they are drawn where production draws them, disabled, as the
 // application menu's rows for the same features are (`.todo()`).
 
-// TODO: open the AI tagger on the items, beside the inspector
-// (`aiTaggerPortalAtom`); then enable Auto Tag here and in the inspector.
-pub const AUTO_TAG_BUILT: bool = false;
 // TODO: production uploads the original to the engine from a hidden browser
 // window and shows the results page (`runReverseImageSearch`); search by
 // image needs that upload.
@@ -791,7 +788,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             )
             .icon("menu-auto-tag")
             .shortcut(b.hint("organize.autoTag"))
-            .disabled(!ai_tag_enabled || !AUTO_TAG_BUILT)
+            .disabled(!ai_tag_enabled)
             .into(),
         );
         rows.push(

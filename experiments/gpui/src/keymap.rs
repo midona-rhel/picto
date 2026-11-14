@@ -53,6 +53,7 @@ actions!(
         NewSmartFolder,
         FolderAutoTags,
         AddTags,
+        AutoTag,
         AddToFolders,
         AddToFolder,
         ImportFiles,
@@ -191,6 +192,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.exportAs" => vec![to!(App, ExportAs)],
         // Edit.
         "organize.addTag" => vec![to!(Grid, AddTags)],
+        // An application menu accelerator in production, so the whole
+        // window's: the viewer's item, else the grid's selection.
+        "organize.autoTag" => vec![to!(App, AutoTag)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
         "edit.undo" => vec![
             to!(App, shell::Undo),
@@ -327,7 +331,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "file.addToLastFolder",
         "deferred in production; no last-folder memory",
     ),
-    ("organize.autoTag", "no AI tagger"),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
     ("view.slideshow", "deferred in production"),
