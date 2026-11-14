@@ -72,6 +72,11 @@ does not need: lens, dispersion, tint and rim light).
   resources (dropped on device loss) and interleaves blurs in `record_frame`
   as the Metal renderer does. `src/gpui_wgpu.rs` declares the module.
 - `src/shaders.wgsl`: the shadow shader takes `inset == 2`.
+- `src/wgpu_context.rs`: on Windows the instance also offers Direct3D 12.
+  This crate is used there only by the off-screen checks (GPUI's Windows
+  platform draws with DirectX itself), and a machine without a GPU, such as
+  a CI runner, has Direct3D 12 through the WARP software adapter but
+  neither Vulkan nor a usable OpenGL.
 
 `gpui-pre-windows` (DirectX)
 - `src/shaders.hlsl`: the shadow shader takes `inset == 2`. The DirectX
@@ -1801,6 +1806,25 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/shaders.wgsl b/gpui-pre-wgpu/src/shad
      }
  
      return blend_color(input.color, alpha);
+diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_context.rs b/gpui-pre-wgpu/src/wgpu_context.rs
+--- a/gpui-pre-wgpu/src/wgpu_context.rs
++++ b/gpui-pre-wgpu/src/wgpu_context.rs
+@@ -479,7 +479,14 @@
+     #[cfg(not(target_family = "wasm"))]
+     pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
+         wgpu::Instance::new(wgpu::InstanceDescriptor {
+-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
++            // On Windows this crate draws only off-screen (GPUI's Windows
++            // platform renders with DirectX itself), where Direct3D 12 is the
++            // backend a machine without a GPU still has, through WARP.
++            backends: if cfg!(windows) {
++                wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL
++            } else {
++                wgpu::Backends::VULKAN | wgpu::Backends::GL
++            },
+             flags: wgpu::InstanceFlags::default(),
+             backend_options: wgpu::BackendOptions::default(),
+             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_renderer.rs b/gpui-pre-wgpu/src/wgpu_renderer.rs
 --- a/gpui-pre-wgpu/src/wgpu_renderer.rs	2006-07-24 03:21:28
 +++ b/gpui-pre-wgpu/src/wgpu_renderer.rs	2026-11-13 20:48:32

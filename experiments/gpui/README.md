@@ -1614,6 +1614,17 @@ PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
 
+On macOS the pictures are drawn with Metal and the system's text; on Linux
+and Windows with GPUI's wgpu renderer (which finds a software adapter on a
+machine without a GPU: lavapipe on Linux, WARP through Direct3D 12 on
+Windows) and its portable text system holding only the bundled fonts. CI
+(`.github/workflows/gpui-experiment.yml`) plays `ci/smoke.txt` this way on
+Linux and Windows into a synthetic library and uploads the pictures as the
+`pictures-linux` and `pictures-windows` artifacts
+(`gh run download <run> -n pictures-linux`). They show the app's own drawing
+on those systems, not the platform layer: the window chrome they show is the
+app's, the system's (its frame, its menus, its pointer) is not in them.
+
 A system dialog cannot be driven off-screen, so `answer <path>` has the next
 folder, file or save dialog the app asks for answer with that path without
 opening (`answer` alone cancels it); put it before the line that opens the

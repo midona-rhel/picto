@@ -479,7 +479,14 @@ impl WgpuContext {
     #[cfg(not(target_family = "wasm"))]
     pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            // On Windows this crate draws only off-screen (GPUI's Windows
+            // platform renders with DirectX itself), where Direct3D 12 is the
+            // backend a machine without a GPU still has, through WARP.
+            backends: if cfg!(windows) {
+                wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL
+            } else {
+                wgpu::Backends::VULKAN | wgpu::Backends::GL
+            },
             flags: wgpu::InstanceFlags::default(),
             backend_options: wgpu::BackendOptions::default(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),

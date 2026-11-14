@@ -6528,6 +6528,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "gpui-pre-wgpu",
  "hayro",
  "icu_segmenter",
  "image 0.25.10",
