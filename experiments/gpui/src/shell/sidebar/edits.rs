@@ -164,21 +164,7 @@ impl Sidebar {
     /// or of the open folder when none is chosen. Returns false, creating
     /// nothing, unless that is exactly one folder.
     pub fn new_subfolder(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let mut targets: Vec<FolderId> = self
-            .selection
-            .iter()
-            .filter_map(|node| folder_id(node))
-            .collect();
-        if targets.is_empty() {
-            let session = self.session.read(cx);
-            targets.extend(
-                session
-                    .nav
-                    .get(session.scope)
-                    .and_then(|entry| folder_id(&entry.id())),
-            );
-        }
-        match targets.as_slice() {
+        match self.chosen_or_open_folders(cx).as_slice() {
             [folder] => {
                 self.create_folder(Some(*folder), window, cx);
                 true
@@ -196,25 +182,24 @@ impl Sidebar {
     /// `folder.autoTags`: the auto-tags editor for the folders chosen in the
     /// sidebar, or the open folder. Returns false when there is none.
     pub fn auto_tags_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let mut targets: Vec<FolderId> = self
-            .selection
-            .iter()
-            .filter_map(|node| folder_id(node))
-            .collect();
-        if targets.is_empty() {
-            let session = self.session.read(cx);
-            targets.extend(
-                session
-                    .nav
-                    .get(session.scope)
-                    .and_then(|entry| folder_id(&entry.id())),
-            );
-        }
+        let targets = self.chosen_or_open_folders(cx);
         if targets.is_empty() {
             return false;
         }
         self.edit_auto_tags(targets, window, cx);
         true
+    }
+
+    /// The folders chosen in the sidebar, or else the open folder.
+    fn chosen_or_open_folders(&self, cx: &App) -> Vec<FolderId> {
+        let chosen = self.selection.iter().filter_map(|node| folder_id(node));
+        let mut folders = chosen.collect::<Vec<_>>();
+        if folders.is_empty() {
+            let session = self.session.read(cx);
+            let open = session.nav.get(session.scope);
+            folders.extend(open.and_then(|entry| folder_id(&entry.id())));
+        }
+        folders
     }
 
     /// `createFolderAndRename`: a folder named "New Folder", revealed and

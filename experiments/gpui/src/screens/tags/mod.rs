@@ -19,6 +19,7 @@ use crate::ui::{
 use dialogs::{Dialog, Layer};
 use gpui::*;
 use model::Rows;
+use picto_library::query::ItemScope;
 use picto_library::{Library, TagId, TagNamespaceRecord, TagRecord};
 use std::time::Instant;
 
@@ -642,11 +643,9 @@ impl TagsScreen {
     /// `showTagManagerItems`: the All grid, filtered to items with the tag.
     fn show_items(&mut self, tag_id: TagId, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
-            let Some(all) = session
-                .nav
-                .iter()
-                .position(|entry| entry.screen.is_none() && !entry.random && entry.label == "All")
-            else {
+            let Some(all) = session.nav.iter().position(|entry| {
+                entry.screen.is_none() && !entry.random && entry.scope == ItemScope::All
+            }) else {
                 return;
             };
             // The filter bar shows the tag, as `showTagItems` sets it.

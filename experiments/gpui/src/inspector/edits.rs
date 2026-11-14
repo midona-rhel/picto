@@ -79,40 +79,20 @@ impl Inspector {
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
         + Send
         + 'static,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        self.edit_reading(touches, false, work, then, cx);
+        if let Some(target) = self.target(cx) {
+            let work = move |library: &Library, target: &SelectionTarget| {
+                work(library, target).map(|_| ())
+            };
+            self.edit_items(target.ids, touches, false, work, |_, _| {}, cx);
+        }
     }
 
-    /// [`Inspector::edit`], reading the destination list and the tags with
-    /// the edit when `navigation`: a tag it creates must be among the
-    /// session's tags by the time the item's chips are drawn again.
-    fn edit_reading(
-        &mut self,
-        touches: Touches,
-        navigation: bool,
-        work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<MutationReceipt>
-        + Send
-        + 'static,
-        then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(target) = self.target(cx) else {
-            return;
-        };
-        self.edit_items(
-            target.ids,
-            touches,
-            navigation,
-            move |library, target| work(library, target).map(|_| ()),
-            then,
-            cx,
-        );
-    }
-
-    /// [`Inspector::edit_reading`] for the items given rather than those the
-    /// rail describes: the Add Tags and Folders dialogs edit the grid's
+    /// [`Inspector::edit`] for the items given, reading the destination list
+    /// and the tags with the edit when `navigation` (a tag it creates must be
+    /// among the session's tags by the time the chips are drawn again), and
+    /// going on with `then`. The Add Tags and Folders dialogs edit the grid's
     /// selection.
     pub(super) fn edit_items(
         &mut self,
@@ -271,10 +251,14 @@ impl Inspector {
             self.session
                 .update(cx, |session, _| session.record_tags_use(&added));
         }
-        self.edit_reading(
+        let Some(target) = self.target(cx) else {
+            return;
+        };
+        self.edit_items(
+            target.ids,
             Touches::Tags,
             created,
-            move |library, target| library.apply_tags(target, &[tag_name], add),
+            move |library, target| library.apply_tags(target, &[tag_name], add).map(|_| ()),
             move |this, cx| {
                 this.tag_picker
                     .update(cx, |picker, cx| picker.edited(created, cx))
@@ -294,7 +278,6 @@ impl Inspector {
                     library.remove_from_folder(target, folder)
                 }
             },
-            |_, _| {},
             cx,
         );
     }
@@ -666,7 +649,6 @@ impl Inspector {
             Mode::Item => self.edit(
                 Touches::Text,
                 move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
             Mode::Selection => {
@@ -705,13 +687,11 @@ impl Inspector {
             Overwrite::Notes(notes) => self.edit(
                 Touches::Text,
                 move |library, target| library.set_notes(target, Some(notes), crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
             Overwrite::Sources(urls) => self.edit(
                 Touches::Text,
                 move |library, target| library.set_source_urls(target, urls, crate::now_ms()),
-                |_, _| {},
                 cx,
             ),
         }
