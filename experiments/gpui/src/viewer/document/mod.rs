@@ -7,6 +7,7 @@ pub mod epub;
 pub mod font;
 pub mod geometry;
 pub mod kind;
+pub mod page_picture;
 pub mod paged;
 pub mod pages;
 pub mod reader;

@@ -78,6 +78,9 @@ resvg = { version = "0.46", default-features = false }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 roxmltree = "0.21"
 pulldown-cmark = { version = "0.13", default-features = false }
+# Text laid out and drawn without a window, for the thumbnails of text
+# documents; the version GPUI's wgpu renderer already builds.
+cosmic-text = "0.19"
 # A font's family name, for loading it into GPUI's text system.
 ttf-parser = "0.25"
 # WOFF tables are zlib streams; the version zip already builds.

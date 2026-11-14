@@ -1,9 +1,12 @@
 //! Thumbnails the application's media worker cannot make, drawn here as the
 //! Electron main process draws them (`flashThumbnailService.mjs`,
-//! `pdfThumbnailService.mjs`): the first page of a PDF, DjVu or comic
-//! archive, and a Flash movie five seconds in. Each is written beside the
-//! library's own thumbnails as `<hash>.png`, where the media protocol and
-//! this grid look for it.
+//! `pdfThumbnailService.mjs`, `documentThumbnailService.mjs`): the first
+//! page of a PDF, DjVu or comic archive, a Flash movie five seconds in, and
+//! the first page of a text, Markdown, JSON or RTF document or an EPUB's
+//! first chapter as the document viewer shows it. Each is written beside
+//! the library's own thumbnails as `<hash>.png`, where the media protocol
+//! and this grid look for it, and where the application's own thumbnail
+//! work then finds it and stops retrying.
 use crate::viewer::document::kind::{RendererKind, renderer_kind};
 use anyhow::{Result, anyhow};
 use std::path::Path;
@@ -24,7 +27,11 @@ pub fn draws(mime: &str) -> bool {
     mime == "application/x-shockwave-flash"
         || matches!(
             renderer_kind(mime),
-            RendererKind::Pdf | RendererKind::Djvu | RendererKind::Cbz
+            RendererKind::Pdf
+                | RendererKind::Djvu
+                | RendererKind::Cbz
+                | RendererKind::TextDocument
+                | RendererKind::Epub
         )
 }
 
@@ -41,8 +48,19 @@ pub fn page_pixels(width: f32, height: f32) -> (u32, u32) {
 /// `.png`. Blocks for as long as the drawing takes: run it off the drawing
 /// thread.
 pub fn render(mime: &str, original: &Path, output: &Path) -> Result<()> {
+    use crate::viewer::document::{epub, page_picture, reader};
     let picture = if mime == "application/x-shockwave-flash" {
         flash(original)?
+    } else if renderer_kind(mime) == RendererKind::TextDocument {
+        let (blocks, _) = reader::load_text(original, mime)?;
+        page_picture::draw(&blocks, reader::PageStyle::Text)
+    } else if renderer_kind(mime) == RendererKind::Epub {
+        // The book viewer opens on the first chapter of the spine.
+        let first = epub::chapters(original)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("the book has no chapters"))?;
+        page_picture::draw(&epub::chapter(original, &first)?, reader::PageStyle::Book)
     } else {
         let mut pages = crate::viewer::document::pages::open(renderer_kind(mime), original)?;
         let (width, height) = pages.page_size(0)?;
@@ -113,6 +131,19 @@ mod tests {
     fn the_types_drawn_here_are_those_the_media_worker_leaves() {
         assert!(draws("application/x-shockwave-flash"));
         assert!(draws("application/pdf"));
+        for mime in [
+            "text/plain",
+            "text/markdown",
+            "application/json",
+            "application/rtf",
+            "application/epub+zip",
+        ] {
+            assert!(draws(mime), "{mime}");
+        }
+        // Word and PowerPoint files have no viewer here to draw them with.
+        assert!(!draws(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ));
         assert!(!draws("image/png"));
         assert!(!draws("video/mp4"));
     }

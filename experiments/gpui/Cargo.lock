@@ -6521,6 +6521,7 @@ dependencies = [
  "chrono",
  "core-foundation 0.10.0",
  "core-foundation-sys",
+ "cosmic-text",
  "cpal",
  "djvu-rs",
  "flate2",

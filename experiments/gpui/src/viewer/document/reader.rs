@@ -27,31 +27,31 @@ pub enum PageStyle {
 }
 
 impl PageStyle {
-    fn max_width(self) -> f32 {
+    pub(super) fn max_width(self) -> f32 {
         match self {
             PageStyle::Text => 816.,
             PageStyle::Book => 760.,
         }
     }
-    fn padding(self) -> (f32, f32) {
+    pub(super) fn padding(self) -> (f32, f32) {
         match self {
             PageStyle::Text => (72., 76.),
             PageStyle::Book => (56., 64.),
         }
     }
-    fn font_size(self) -> f32 {
+    pub(super) fn font_size(self) -> f32 {
         match self {
             PageStyle::Text => 14.,
             PageStyle::Book => 16.,
         }
     }
-    fn font(self) -> &'static str {
+    pub(super) fn font(self) -> &'static str {
         match self {
             PageStyle::Text => theme::FONT_UI,
             PageStyle::Book => theme::FONT_BOOK,
         }
     }
-    fn color(self) -> u32 {
+    pub(super) fn color(self) -> u32 {
         match self {
             PageStyle::Text => theme::DOCUMENT_TEXT,
             PageStyle::Book => theme::BOOK_TEXT,
@@ -342,7 +342,7 @@ pub fn spacing(blocks: &[Block], font_size: f32, style: PageStyle) -> Vec<(f32, 
 
 /// The page's single `<pre>` (`.plainText`): no margins, 13px monospace on
 /// a 1.6 line, wrapping.
-fn plain_text_page(blocks: &[Block]) -> bool {
+pub(super) fn plain_text_page(blocks: &[Block]) -> bool {
     !blocks.is_empty()
         && blocks
             .iter()
