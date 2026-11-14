@@ -4,39 +4,19 @@
 //! `crate::keymap`; a handler that finds nothing to act on lets the key go
 //! on (`cx.propagate()`), as an unhandled key does in production.
 use super::Shell;
+use crate::app_menu::ScopeKind;
 use crate::keymap::*;
 use crate::session::Reread;
 use crate::settings;
 use gpui::*;
 use picto_library::query::ItemScope;
 use picto_library::selection::SelectionTarget;
-use picto_library::{FolderId, Lifecycle, Rating, RootId, RootKind};
-
-/// The grid's destination, for the shortcuts that act by destination.
-pub(super) struct ScopeKind {
-    pub folder: Option<FolderId>,
-    pub trash: bool,
-    pub inbox: bool,
-}
+use picto_library::{Lifecycle, Rating, RootId, RootKind};
 
 impl Shell {
-    pub(super) fn scope_kind(&self, cx: &App) -> ScopeKind {
-        let session = self.session.read(cx);
-        let scope = session
-            .nav
-            .get(session.displayed)
-            .filter(|entry| entry.screen.is_none())
-            .map(|entry| &entry.scope);
-        ScopeKind {
-            folder: match scope {
-                Some(ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id }) => {
-                    Some(*folder_id)
-                }
-                _ => None,
-            },
-            trash: matches!(scope, Some(ItemScope::Trash)),
-            inbox: matches!(scope, Some(ItemScope::Inbox)),
-        }
+    /// Whether the grid shows this kind of destination.
+    fn in_scope(&self, kind: ScopeKind, cx: &App) -> bool {
+        self.grid_scope(cx).kind() == kind
     }
 
     /// The selected items, in grid order.
@@ -170,11 +150,12 @@ impl Shell {
     /// belongs to Remove from Folder, in the Trash it deletes permanently,
     /// elsewhere it moves the selection to the Trash.
     fn delete_items(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let kind = self.scope_kind(cx);
+        let grid = self.grid_scope(cx);
+        let trash = grid.kind() == ScopeKind::Trash;
         let count = self.session.read(cx).selection_count();
-        if (kind.folder.is_some() && !kind.trash) || count == 0 {
+        if grid.folder().is_some() || count == 0 {
             cx.propagate();
-        } else if kind.trash {
+        } else if trash {
             // Permanently, after the confirmation the menu row shows.
             self.act_on_selection(crate::grid::menu::Action::DeletePermanently, window, cx);
         } else {
@@ -186,9 +167,8 @@ impl Shell {
 
     /// `file.removeFromFolder`: takes the selection out of the open folder.
     fn remove_from_folder(&mut self, cx: &mut Context<Self>) {
-        let kind = self.scope_kind(cx);
-        match kind.folder {
-            Some(folder) if !kind.trash && !self.session.read(cx).selection.is_empty() => {
+        match self.grid_scope(cx).folder() {
+            Some(folder) if !self.session.read(cx).selection.is_empty() => {
                 let ids = self.selected_ids(cx);
                 self.edit_selection(
                     ids,
@@ -216,7 +196,7 @@ impl Shell {
     /// `inbox.reject` (`rejectTarget`): to the Trash, or deleted, as the
     /// Inbox & Deleting setting says.
     fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.scope_kind(cx).inbox || self.session.read(cx).selection.is_empty() {
+        if !self.in_scope(ScopeKind::Inbox, cx) || self.session.read(cx).selection.is_empty() {
             cx.propagate();
         } else if settings::current(cx).reject_action == "trash" {
             self.session.update(cx, |session, cx| {
@@ -393,7 +373,7 @@ impl Shell {
         .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
         .on_action(cx.listener(|this, _: &RemoveFromFolder, _, cx| this.remove_from_folder(cx)))
         .on_action(cx.listener(|this, _: &RestoreItems, _, cx| {
-            let trash = this.scope_kind(cx).trash;
+            let trash = this.in_scope(ScopeKind::Trash, cx);
             this.move_in(trash, Lifecycle::Active, cx)
         }))
         // Over the media view or Quick Look, the keys review the item
@@ -404,7 +384,7 @@ impl Shell {
                 this.review_key(crate::viewer::review::Decision::Accept, window, cx);
                 return;
             }
-            let inbox = this.scope_kind(cx).inbox;
+            let inbox = this.in_scope(ScopeKind::Inbox, cx);
             this.move_in(inbox, Lifecycle::Active, cx)
         }))
         .on_action(cx.listener(|this, _: &RejectInbox, window, cx| {

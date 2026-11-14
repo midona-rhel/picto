@@ -27,13 +27,9 @@ pub enum ScopeKind {
     SmartFolder,
 }
 
-/// `statusFilter`: the lifecycle the menu acts within.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Inbox,
-    Active,
-    Trash,
-}
+/// `statusFilter`: the lifecycle the menu acts within, as the application
+/// menu has it.
+pub use crate::app_menu::Status;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

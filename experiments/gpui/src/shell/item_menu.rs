@@ -3,10 +3,10 @@
 //! inspector preview's. The rows come from [`crate::grid::menu`]; this
 //! describes what was right-clicked, as the Electron screens do, and performs
 //! the chosen row through the session and the library.
+use super::menu_commands::shared_lifecycle;
 use super::{Shell, view_menu};
 use crate::grid::menu::{
-    self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, ScopeKind, Status,
-    Surface,
+    self as rows, Action, Description, Handlers, Kind, OpenWith, Playback, Row, Status, Surface,
 };
 use crate::ui::{self, menu::Menu};
 use crate::viewer::{MenuRequested, surface::MediaSurface};
@@ -117,22 +117,6 @@ pub(crate) fn media_link(hash: &str, mime: &str) -> String {
 impl Shell {
     // ── Opening ─────────────────────────────────────────────────
 
-    /// The destination the grid shows, as the menu tells destinations apart.
-    fn grid_scope(&self, cx: &App) -> (Option<ItemScope>, ScopeKind, Option<FolderId>) {
-        let session = self.session.read(cx);
-        let scope = session
-            .nav
-            .get(session.displayed)
-            .map(|entry| entry.scope.clone());
-        match scope {
-            Some(ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id }) => {
-                (scope, ScopeKind::Folder, Some(folder_id))
-            }
-            Some(ItemScope::SmartFolder { .. }) => (scope, ScopeKind::SmartFolder, None),
-            _ => (scope, ScopeKind::System, None),
-        }
-    }
-
     /// The grid's selection, in grid order, with the one item's cover file.
     fn selection_target(&self, cx: &App) -> Option<Target> {
         let session = self.session.read(cx);
@@ -150,7 +134,7 @@ impl Shell {
         Some(Target {
             items,
             file,
-            folder: self.grid_scope(cx).2,
+            folder: self.grid_scope(cx).folder(),
             ..Default::default()
         })
     }
@@ -188,7 +172,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.items.surface = None;
-        let (scope, scope_kind, folder) = self.grid_scope(cx);
+        let grid = self.grid_scope(cx);
+        let folder = grid.folder();
         let Some(Target { items, file, .. }) = self.selection_target(cx) else {
             return;
         };
@@ -198,17 +183,7 @@ impl Shell {
             .filter(|item| item.kind == RootKind::Collection)
             .count();
         let single = (count == 1).then(|| &items[0]);
-        // `selectionLifecycle`: shared by every selected item.
-        let lifecycle = items
-            .iter()
-            .all(|item| item.lifecycle == items[0].lifecycle)
-            .then_some(items[0].lifecycle);
-        let status = match (lifecycle, &scope) {
-            (Some(Lifecycle::Inbox), _) | (_, Some(ItemScope::Inbox)) => Some(Status::Inbox),
-            (Some(Lifecycle::Trash), _) | (_, Some(ItemScope::Trash)) => Some(Status::Trash),
-            (_, Some(ItemScope::All)) => Some(Status::Active),
-            _ => None,
-        };
+        let status = grid.tile_status(shared_lifecycle(&items));
         let media = single.is_some_and(|item| item.kind == RootKind::Media);
         let last_folder_name = self.last_folder_name(cx);
         let whole = self.session.read(cx).selects_whole();
@@ -234,7 +209,7 @@ impl Shell {
                 (!whole || self.session.read(cx).selection_count() as usize == count)
                     .then_some(collections),
             ),
-            scope: Some(scope_kind),
+            scope: Some(grid.menu_kind()),
             status,
             grayscale: self.session.read(cx).grayscale,
             clipboard_tags: !self.items.tag_clipboard.is_empty(),
@@ -369,20 +344,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.items.surface = None;
-        let (scope, scope_kind, folder) = self.grid_scope(cx);
-        let can_import = !matches!(
-            scope,
-            Some(
-                ItemScope::Trash
-                    | ItemScope::SmartFolder { .. }
-                    | ItemScope::RecentlyViewed
-                    | ItemScope::MediaMatches { .. }
-            )
-        );
+        let grid = self.grid_scope(cx);
+        let folder = grid.folder();
+        let can_import = grid.imports();
         // `hasClipboardImport`: files or an image on the clipboard.
         let clipboard_import = can_import && super::import::can_paste(cx);
         let description = Description {
-            scope: Some(scope_kind),
+            scope: Some(grid.menu_kind()),
             handlers: Handlers {
                 new_folder: true,
                 new_smart_folder: true,
@@ -484,11 +452,7 @@ impl Shell {
             }),
             single_mime: Some(file.mime.clone()),
             contains_group: !media,
-            status: (!member).then_some(match item.lifecycle {
-                Lifecycle::Inbox => Status::Inbox,
-                Lifecycle::Active => Status::Active,
-                Lifecycle::Trash => Status::Trash,
-            }),
+            status: (!member).then_some(Status::from(item.lifecycle)),
             clipboard_tags: !self.items.tag_clipboard.is_empty(),
             handlers: Handlers {
                 open_default: true,

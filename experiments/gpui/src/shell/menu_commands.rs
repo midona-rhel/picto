@@ -6,30 +6,138 @@
 use super::Shell;
 use crate::app_menu::{self, MenuContext, ScopeKind, Status};
 use crate::backend::Screen;
-use crate::grid::menu::Action as Row;
+use crate::grid::menu::{self as rows, Action as Row};
+use crate::session::Session;
 use gpui::*;
-use picto_library::query::ItemScope;
-use picto_library::{Lifecycle, RootKind};
+use picto_library::query::{ItemScope, RootSummary};
+use picto_library::{FolderId, Lifecycle, RootKind};
 
-impl Shell {
-    /// What the menu's rows depend on (`menuContext`). The selection counts
-    /// only while the grid is the destination (`gridActive`).
-    pub(super) fn menu_context(&self, cx: &App) -> MenuContext {
-        let session = self.session.read(cx);
-        let grid_active = session.screen().is_none();
-        let scope = match session
-            .nav
-            .get(session.displayed)
-            .filter(|entry| entry.screen.is_none())
-            .map(|entry| &entry.scope)
-        {
+/// The grid's destination (`gridScopeAtom`), worked out once for the
+/// application menu, the item menus, the keys and imports; none while a
+/// screen shows instead of the grid.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct GridScope(Option<ItemScope>);
+
+impl GridScope {
+    pub fn of(session: &Session) -> Self {
+        Self(
+            session
+                .nav
+                .get(session.displayed)
+                .filter(|entry| entry.screen.is_none())
+                .map(|entry| entry.scope.clone()),
+        )
+    }
+
+    /// The destination's kind (`gridScope.kind`).
+    pub fn kind(&self) -> ScopeKind {
+        match &self.0 {
             Some(ItemScope::All) => ScopeKind::All,
             Some(ItemScope::Inbox) => ScopeKind::Inbox,
             Some(ItemScope::Trash) => ScopeKind::Trash,
             Some(ItemScope::Folder { .. } | ItemScope::FolderTree { .. }) => ScopeKind::Folder,
             Some(ItemScope::SmartFolder { .. }) => ScopeKind::SmartFolder,
             _ => ScopeKind::Other,
-        };
+        }
+    }
+
+    /// The kind as the grid's menus tell destinations apart (`scopeKind`).
+    pub fn menu_kind(&self) -> rows::ScopeKind {
+        match self.kind() {
+            ScopeKind::Folder => rows::ScopeKind::Folder,
+            ScopeKind::SmartFolder => rows::ScopeKind::SmartFolder,
+            _ => rows::ScopeKind::System,
+        }
+    }
+
+    /// The folder open, with or without its subfolders.
+    pub fn folder(&self) -> Option<FolderId> {
+        match &self.0 {
+            Some(ItemScope::Folder { folder_id } | ItemScope::FolderTree { folder_id }) => {
+                Some(*folder_id)
+            }
+            _ => None,
+        }
+    }
+
+    /// Files, a folder or the clipboard can be imported here from a menu
+    /// or a key: not into the Trash, a smart folder, Recently Viewed or
+    /// media matches (`canImport`).
+    pub fn imports(&self) -> bool {
+        !matches!(
+            self.0,
+            Some(
+                ItemScope::Trash
+                    | ItemScope::SmartFolder { .. }
+                    | ItemScope::RecentlyViewed
+                    | ItemScope::MediaMatches { .. }
+            )
+        )
+    }
+
+    /// Files dropped on the grid are imported anywhere but media matches,
+    /// as production's drop handler decides.
+    pub fn takes_drops(&self) -> bool {
+        !matches!(self.0, Some(ItemScope::MediaMatches { .. }))
+    }
+
+    /// Where an import from here goes.
+    pub fn import_destination(&self) -> crate::imports::plan::Destination {
+        self.0.as_ref().map_or_else(
+            Default::default,
+            crate::imports::plan::Destination::for_scope,
+        )
+    }
+
+    /// The application menu's `statusFilter` (`menuContext`): the Trash
+    /// before the Inbox, else the lifecycle the selection shares.
+    pub fn menu_status(&self, shared: Option<Lifecycle>) -> Option<Status> {
+        let kind = self.kind();
+        if shared == Some(Lifecycle::Trash) || kind == ScopeKind::Trash {
+            Some(Status::Trash)
+        } else if shared == Some(Lifecycle::Inbox) || kind == ScopeKind::Inbox {
+            Some(Status::Inbox)
+        } else {
+            shared.map(Status::from)
+        }
+    }
+
+    /// A tile menu's `statusFilter` (`GridScreen`): the Inbox before the
+    /// Trash, and the library only in All. Production's two menus order
+    /// the two differently; both are kept.
+    pub fn tile_status(&self, shared: Option<Lifecycle>) -> Option<Status> {
+        let kind = self.kind();
+        if shared == Some(Lifecycle::Inbox) || kind == ScopeKind::Inbox {
+            Some(Status::Inbox)
+        } else if shared == Some(Lifecycle::Trash) || kind == ScopeKind::Trash {
+            Some(Status::Trash)
+        } else {
+            (kind == ScopeKind::All).then_some(Status::Active)
+        }
+    }
+}
+
+/// The lifecycle every one of `items` shares (`selectionLifecycle`,
+/// `commonLifecycle`); none for no items.
+pub(super) fn shared_lifecycle<'a>(
+    items: impl IntoIterator<Item = &'a RootSummary>,
+) -> Option<Lifecycle> {
+    let mut items = items.into_iter();
+    let first = items.next()?.lifecycle;
+    items.all(|item| item.lifecycle == first).then_some(first)
+}
+
+impl Shell {
+    pub(super) fn grid_scope(&self, cx: &App) -> GridScope {
+        GridScope::of(self.session.read(cx))
+    }
+
+    /// What the menu's rows depend on (`menuContext`). The selection counts
+    /// only while the grid is the destination (`gridActive`).
+    pub(super) fn menu_context(&self, cx: &App) -> MenuContext {
+        let session = self.session.read(cx);
+        let grid_active = session.screen().is_none();
+        let grid = GridScope::of(session);
         let selection = if grid_active {
             session.selection_count()
         } else {
@@ -48,17 +156,7 @@ impl Shell {
             .then(|| selected.first())
             .flatten()
             .map(|item| item.kind == RootKind::Collection);
-        let common = selected
-            .first()
-            .map(|first| first.lifecycle)
-            .filter(|lifecycle| selected.iter().all(|item| item.lifecycle == *lifecycle));
-        let status = if common == Some(Lifecycle::Trash) || scope == ScopeKind::Trash {
-            Some(Status::Trash)
-        } else if common == Some(Lifecycle::Inbox) || scope == ScopeKind::Inbox {
-            Some(Status::Inbox)
-        } else {
-            common.map(|_| Status::Active)
-        };
+        let status = grid.menu_status(shared_lifecycle(selected.iter().copied()));
         let thumbnails = names
             && selected
                 .iter()
@@ -66,7 +164,7 @@ impl Shell {
         MenuContext {
             selection,
             single,
-            scope,
+            scope: grid.kind(),
             status,
             names,
             thumbnails,
@@ -102,7 +200,7 @@ impl Shell {
     /// it (`foldersController.create('New Folder', parentId)`).
     fn menu_new_folder(&mut self, inside: bool, window: &mut Window, cx: &mut Context<Self>) {
         let parent = if inside {
-            match self.scope_kind(cx).folder {
+            match self.grid_scope(cx).folder() {
                 Some(folder) => Some(folder),
                 None => return,
             }
@@ -347,5 +445,165 @@ fn when<A: Action>(
         root.on_action(cx.listener(handler))
     } else {
         root
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GridScope, ScopeKind, Status, rows, shared_lifecycle};
+    use picto_library::query::{ItemScope, RootSummary};
+    use picto_library::{FolderId, Lifecycle, MediaId, Rating, RootId, RootKind};
+
+    fn item(lifecycle: Lifecycle) -> RootSummary {
+        RootSummary {
+            root_id: RootId(1),
+            kind: RootKind::Media,
+            lifecycle,
+            name: String::new(),
+            cover_media_id: MediaId(1),
+            content_hash: String::new(),
+            mime: String::new(),
+            width: None,
+            height: None,
+            duration_ms: None,
+            frame_count: None,
+            palette: Vec::new(),
+            imported_at_ms: 0,
+            captured_at_ms: None,
+            modified_at_ms: 0,
+            media_count: 1,
+            total_size_bytes: 0,
+            rating: Rating::ALL[0],
+        }
+    }
+
+    fn at(scope: ItemScope) -> GridScope {
+        GridScope(Some(scope))
+    }
+
+    #[test]
+    fn each_destination_is_one_kind_for_every_menu() {
+        let folder = FolderId(4);
+        let cases = [
+            (
+                at(ItemScope::All),
+                ScopeKind::All,
+                rows::ScopeKind::System,
+                None,
+            ),
+            (
+                at(ItemScope::Trash),
+                ScopeKind::Trash,
+                rows::ScopeKind::System,
+                None,
+            ),
+            (
+                at(ItemScope::Folder { folder_id: folder }),
+                ScopeKind::Folder,
+                rows::ScopeKind::Folder,
+                Some(folder),
+            ),
+            (
+                at(ItemScope::FolderTree { folder_id: folder }),
+                ScopeKind::Folder,
+                rows::ScopeKind::Folder,
+                Some(folder),
+            ),
+            (
+                at(ItemScope::RecentlyViewed),
+                ScopeKind::Other,
+                rows::ScopeKind::System,
+                None,
+            ),
+            // A screen instead of the grid.
+            (
+                GridScope::default(),
+                ScopeKind::Other,
+                rows::ScopeKind::System,
+                None,
+            ),
+        ];
+        for (grid, kind, menu_kind, open) in cases {
+            assert_eq!(grid.kind(), kind, "{grid:?}");
+            assert_eq!(grid.menu_kind(), menu_kind, "{grid:?}");
+            assert_eq!(grid.folder(), open, "{grid:?}");
+        }
+    }
+
+    #[test]
+    fn menus_and_keys_import_where_production_does_and_drops_go_further() {
+        let matches = at(ItemScope::MediaMatches { item_id: 3 });
+        for refused in [
+            at(ItemScope::Trash),
+            at(ItemScope::RecentlyViewed),
+            matches.clone(),
+        ] {
+            assert!(!refused.imports(), "{refused:?}");
+        }
+        assert!(at(ItemScope::Inbox).imports());
+        assert!(GridScope::default().imports());
+        // A drop is refused only over media matches (`GridScreen`'s drop
+        // handler), so the Trash takes one.
+        assert!(at(ItemScope::Trash).takes_drops());
+        assert!(!matches.takes_drops());
+        assert!(at(ItemScope::Inbox).import_destination().inbox);
+        assert_eq!(
+            at(ItemScope::Folder {
+                folder_id: FolderId(9)
+            })
+            .import_destination()
+            .folder,
+            Some(FolderId(9))
+        );
+    }
+
+    #[test]
+    fn the_two_menus_read_the_lifecycle_as_production_does() {
+        let all = at(ItemScope::All);
+        let folder = at(ItemScope::Folder {
+            folder_id: FolderId(2),
+        });
+        // In the Trash and the Inbox both menus act within them.
+        for grid in [at(ItemScope::Trash), at(ItemScope::Inbox)] {
+            let status = grid.menu_status(None);
+            assert!(status.is_some());
+            assert_eq!(grid.tile_status(None), status);
+        }
+        // Items the library holds: the application menu says so wherever
+        // they are; a tile's menu only in All.
+        assert_eq!(
+            all.menu_status(Some(Lifecycle::Active)),
+            Some(Status::Active)
+        );
+        assert_eq!(
+            all.tile_status(Some(Lifecycle::Active)),
+            Some(Status::Active)
+        );
+        assert_eq!(
+            folder.menu_status(Some(Lifecycle::Active)),
+            Some(Status::Active)
+        );
+        assert_eq!(folder.tile_status(Some(Lifecycle::Active)), None);
+        // A mixed selection outside the Trash and the Inbox.
+        assert_eq!(all.menu_status(None), None);
+        assert_eq!(all.tile_status(None), Some(Status::Active));
+        // Trashed items seen elsewhere (Recently Viewed).
+        let recent = at(ItemScope::RecentlyViewed);
+        assert_eq!(
+            recent.menu_status(Some(Lifecycle::Trash)),
+            Some(Status::Trash)
+        );
+        assert_eq!(
+            recent.tile_status(Some(Lifecycle::Trash)),
+            Some(Status::Trash)
+        );
+    }
+
+    #[test]
+    fn a_lifecycle_is_shared_only_by_all_of_the_items() {
+        let (inbox, trash) = (item(Lifecycle::Inbox), item(Lifecycle::Trash));
+        assert_eq!(shared_lifecycle([&inbox, &inbox]), Some(Lifecycle::Inbox));
+        assert_eq!(shared_lifecycle([&inbox, &trash]), None);
+        assert_eq!(shared_lifecycle(std::iter::empty()), None);
     }
 }
