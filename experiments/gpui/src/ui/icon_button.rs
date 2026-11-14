@@ -31,6 +31,10 @@ pub enum Look {
     /// subtle overlay under the pointer and the pressed overlay while held,
     /// changing over 150 ms on `--ease-default`.
     WindowClose,
+    /// `WindowControls`' close button (`.btn.destructiveClose`): the
+    /// window-close look, turning the system's red with a white cross under
+    /// the pointer, and a darker red while held.
+    CaptionClose,
     /// `GridFilterMenu.module.css` `.filterAction` and `.addButton`: 24px,
     /// no fill at rest and the subtle overlay when hovered or toggled, with
     /// no transition; disabled it fades to 25%.
@@ -69,7 +73,9 @@ impl Look {
     /// timing function.
     pub fn transition(self) -> (Duration, motion::CubicBezier) {
         match self {
-            Look::Icon | Look::WindowClose => (motion::BUTTON_HOVER, motion::EASE_DEFAULT),
+            Look::Icon | Look::WindowClose | Look::CaptionClose => {
+                (motion::BUTTON_HOVER, motion::EASE_DEFAULT)
+            }
             Look::Media => (motion::BUTTON_HOVER, motion::EASE),
             Look::Small => (motion::SMALL_BUTTON, motion::EASE),
             Look::Pin => (motion::PIN_BUTTON, motion::EASE),
@@ -85,7 +91,7 @@ impl Look {
     fn pressable(self) -> bool {
         matches!(
             self,
-            Look::Icon | Look::WindowClose | Look::Media | Look::Condition
+            Look::Icon | Look::WindowClose | Look::CaptionClose | Look::Media | Look::Condition
         )
     }
 
@@ -153,6 +159,12 @@ impl Look {
                 fill_press: theme.pressed_overlay(),
                 disabled_opacity: 0.4,
                 ..base
+            },
+            Look::CaptionClose => Paint {
+                fill_hover: rgba(theme::CAPTION_CLOSE_HOVER),
+                fill_press: rgba(theme::CAPTION_CLOSE_PRESS),
+                glyph_hover: theme.on_primary(),
+                ..Look::WindowClose.paint(theme, toggled)
             },
             Look::Filter => Paint {
                 radius: theme::RADIUS_MD,
@@ -336,6 +348,9 @@ pub struct IconButton {
     tip: Option<Tip>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
+    /// The part of the window's frame the button stands for, which the
+    /// system then handles (Windows' caption buttons).
+    window_control: Option<WindowControlArea>,
     children: Vec<AnyElement>,
 }
 
@@ -353,6 +368,7 @@ pub fn icon_button(id: impl Into<ElementId>, icon: &'static str) -> IconButton {
         tip: None,
         on_click: None,
         on_hover: None,
+        window_control: None,
         children: Vec::new(),
     }
 }
@@ -427,6 +443,14 @@ impl IconButton {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(handler));
+        self
+    }
+
+    /// Makes the button the system's minimise, maximise or close button: on
+    /// Windows the system then performs it (and offers its snap layouts over
+    /// maximise), so such a button takes no click handler there.
+    pub fn window_control(mut self, area: WindowControlArea) -> Self {
+        self.window_control = Some(area);
         self
     }
 
@@ -546,6 +570,9 @@ impl RenderOnce for IconButton {
                 .child(div().opacity(glyph_opacity).child(glyph)),
         };
         button = button.children(self.children);
+        if let Some(area) = self.window_control {
+            button = button.window_control_area(area);
+        }
         if let Some(count) = self.badge {
             button = button.child(
                 div()

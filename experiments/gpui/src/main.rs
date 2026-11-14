@@ -15,8 +15,8 @@ mod inspector;
 mod keymap;
 mod meter;
 mod motion;
-// Draws through the macOS text system and renderer.
-#[cfg(all(test, target_os = "macos"))]
+// Pictures of the app drawn off-screen, for checks without a screen.
+#[cfg(test)]
 mod offscreen;
 mod pointer;
 mod prompt;
@@ -95,7 +95,13 @@ fn prepare(cx: &mut App) {
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
     ui::focus::bind(cx);
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    if let Some(keys) = app_menu::Platform::CURRENT.quit_keys() {
+        keymap::bind_written(keys, Box::new(Quit), None, cx);
+    }
+    // Quit and Settings… are app-wide, as their menu rows (in the menu bar
+    // or the window's application menu) are.
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
     app_menu::bind(cx);
     imports::bind(cx);
     viewer::document::bind(cx);
@@ -180,8 +186,25 @@ fn remember_window(window: &Window, cx: &mut App) {
 fn main() {
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();
-    // The one argument is the root of a disposable copy that run.sh made.
-    // Anything else, and the library it was copied from, is refused.
+    // `--make-copy <library>`: make a disposable copy of the library, print
+    // where it is, and stop; the copy is then opened by passing that path.
+    if std::env::args().nth(1).as_deref() == Some("--make-copy") {
+        let Some(source) = std::env::args().nth(2) else {
+            eprintln!("picto: --make-copy takes the library to copy");
+            std::process::exit(2);
+        };
+        match application::make_copy(std::path::Path::new(&source)) {
+            Ok(copy) => println!("{}", desktop::system_path(&copy).display()),
+            Err(error) => {
+                eprintln!("picto: {error}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+    // The one argument is the root of a disposable copy that run.sh or
+    // `--make-copy` made. Anything else, and the library it was copied from,
+    // is refused.
     let root = PathBuf::from(
         std::env::args()
             .nth(1)
@@ -216,7 +239,12 @@ fn main() {
         // The dock badge and the system notifications, for the app proper
         // only.
         desktop::enable(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        // Off macOS the system files the app's notifications under this
+        // identity (the Mac takes it from the bundle).
+        if !cfg!(target_os = "macos") {
+            cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
+        }
+        app_menu::quit_with_main_window(cx);
         // Stop the workers and checkpoint the copy before the process
         // ends, as the Electron app closes its library before quitting.
         cx.on_app_quit(move |cx| {
@@ -225,7 +253,6 @@ fn main() {
             async {}
         })
         .detach();
-        cx.on_action(|_: &settings::OpenSettings, cx| settings::open(cx));
         let window_bounds = main_window_bounds(cx);
         // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
         // keyboard from whatever the user is working in, and keeps it
@@ -236,17 +263,14 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(window_bounds),
                     window_min_size: Some(size(px(1000.), px(600.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Picto GPUI · Library copy".into()),
-                        appears_transparent: true,
-                        traffic_light_position: Some(point(px(12.), px(15.))),
-                    }),
+                    focus: !background,
                     // The toolbar sits in the titlebar. AppKit would drag the
                     // window from anywhere in that zone, controls included, so
                     // the drag regions are declared by the shell instead.
-                    app_owns_titlebar_drag: true,
-                    focus: !background,
-                    ..Default::default()
+                    ..ui::window_chrome::frameless(
+                        "Picto GPUI · Library copy",
+                        Some(point(px(12.), px(15.))),
+                    )
                 },
                 move |window, cx| {
                     covered::keep_painting(window);

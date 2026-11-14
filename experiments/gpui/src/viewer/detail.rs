@@ -163,13 +163,7 @@ pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx:
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             // `frame: false`: no titlebar and no traffic lights; the toolbar
             // moves the window.
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
-                appears_transparent: true,
-                traffic_light_position: None,
-            }),
-            app_owns_titlebar_drag: true,
-            ..Default::default()
+            ..ui::window_chrome::frameless(title, None)
         },
         move |window, cx| cx.new(|cx| DetailWindow::new(session, entries, start, window, cx)),
     ) else {
@@ -402,6 +396,9 @@ impl DetailWindow {
     }
 
     fn toggle_on_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !ui::window_chrome::can_stay_on_top() {
+            return;
+        }
         self.on_top = !self.on_top;
         ui::window_chrome::set_always_on_top(window, self.on_top);
         cx.notify();
@@ -650,7 +647,8 @@ impl DetailWindow {
                 );
         }
         right = right
-            .child(
+            // Not offered where the window cannot be kept on top (Linux).
+            .children(ui::window_chrome::can_stay_on_top().then(|| {
                 // `.icBtnActive` composes `iconBtnFilled`: pinned shows the
                 // filled glyph, with no background of its own.
                 ui::icon_button("detail-pin", if self.on_top { "pin-filled" } else { "pin" })
@@ -662,8 +660,8 @@ impl DetailWindow {
                         })
                         .shortcut("view.alwaysOnTop", cx),
                     )
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_on_top(window, cx))),
-            )
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_on_top(window, cx)))
+            }))
             .child(tooltip::attach(
                 div()
                     .id("detail-close-tip")
@@ -761,7 +759,9 @@ impl Render for DetailWindow {
                 cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)),
             )
             .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
+            .relative()
             .child(pane)
+            .children(ui::window_chrome::resize_edges(window))
             .children(self.menu.layer(window, cx))
             // A video player that has the window to itself, over everything.
             .children(super::video::fullscreen_layer(window, cx))

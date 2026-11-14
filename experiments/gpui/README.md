@@ -24,6 +24,25 @@ ordinary library root, the way the Electron app opens one:
   `/tmp` are not on the same APFS volume the launcher stops with a message
   rather than copying tens of gigabytes.
 
+On Windows and Linux (and on macOS too), the app makes the copy itself:
+
+```sh
+cargo run --locked -- --make-copy /path/to/Main.library   # prints the copy's path
+cargo run --locked -- <that path>
+```
+
+(Through `cargo run`: on Linux the binary links the application core's ONNX
+Runtime libraries, `libwebgpu_dawn.so` among them, which cargo puts on the
+loader's path and a bare `target/debug/picto-gpui-spike` does not find.)
+
+It makes the same copy in a new `picto-gpui-library.*` folder of the
+system's temporary folder (`%TEMP%` on Windows): the database by SQLite's
+online backup from a read-only connection, everything else by the system's
+own file copy, which clones where the file system can (APFS, btrfs and XFS
+reflinks, ReFS block cloning) and copies in full elsewhere, so a large library
+needs that much free space there. A symbolic link anywhere in the library is
+refused, and a failed copy leaves nothing behind (`application::make_copy`).
+
 Reading the library to make the copy is the only access to it. The copy holds
 `.gpui-disposable`, naming the library it was copied from; the app refuses a
 folder without it, the library it names, and any folder inside that library,
@@ -155,7 +174,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   inspector's type label), and its shadow is cut out beneath it as CSS draws a
   `box-shadow`. Stacked panels blur each other, and a fading panel fades its
   blur. Metal (macOS) and wgpu (Linux) draw it; Windows' DirectX renderer
-  leaves the backdrop unblurred under the same translucent fill.
+  leaves the backdrop unblurred, so there the glass fill is the more opaque
+  one used where nothing blurs (`theme::Theme::glass`).
 - Existing `picto_library` query, details, smart-folder, rating, rename, notes
   and undo owners. Database work runs on one worker thread, never in the
   rendering callback.
@@ -1138,10 +1158,12 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   `desktop.rs`: the dock badge shows the Inbox count, and "Subscriptions
   finished" is a system notification when a batch of runs ends (macOS;
   it needs the app to run from a bundle, and follows the pop-up switch and
-  the Information tone, which production's does not). On Windows and Linux
-  both do nothing yet: they would need the taskbar overlay icon and a
-  toast under an AppUserModelID, and the Unity launcher entry and
-  `org.freedesktop.Notifications` over D-Bus.
+  the Information tone, which production's does not). On Windows the
+  notification is a toast through GPUI under the app's identity, and there
+  is no badge (Electron's `setBadgeCount` has none there); on Linux the
+  notification goes through GPUI's freedesktop notifications and the badge
+  is the Unity launcher's D-Bus `Update` signal. Neither has been seen on
+  those systems.
 
 ### What is kept across launches
 
@@ -1199,8 +1221,9 @@ element (`shell/rails.rs`).
   in the inspector's fields move the caret where production's only scroll.
 - A whole destination selected names no collection count in the item
   menu's Ungroup row ("Ungroup Collections..."); production looks the count
-  up. Open With Other lists the applications on macOS only; Windows'
-  chooser row has a `TODO`, and Linux offers none, as production.
+  up. Open With Other lists the applications on macOS only; on Windows it
+  opens the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`, as
+  production; not run here), and Linux offers none, as production.
 - Inbox review: a review key held down is told
   from its repeats by its release or the next key, since GPUI hands an
   action no repeat flag (the off-screen test sends no key releases, so it
@@ -1353,7 +1376,9 @@ element (`shell/rails.rs`).
   shadows) but draws the oscilloscope and orbit's blur as three faint
   copies; the radial glow is concentric discs. On Windows and Linux video
   goes through the bundled `ffmpeg` and audio through Symphonia and CPAL;
-  neither has been built or run there. An APNG plays as a still image (GPUI
+  both are built and unit-tested in CI there but have not played a file
+  (CI has no ffmpeg and no sound device). A scrub restarts the ffmpeg
+  processes at most every 100 ms. An APNG plays as a still image (GPUI
   decodes PNG as one frame). A video's picture is uploaded per frame where
   `ffmpeg` decodes it; only the AVFoundation path is zero-copy. Seen
   playing in the app: a `.mov` (AVFoundation), a `.webm` (`ffmpeg`) and an
@@ -1388,10 +1413,12 @@ element (`shell/rails.rs`).
 - Item menu rows shown, enabled as production has them, that do nothing yet
   (each with a `TODO` where it is received): Search by Image (production
   uploads the original from a hidden browser window), Auto Tag, Open
-  Folder (the grid shows no folder tiles yet) and Windows' Open With Other
-  chooser. Copy puts the files on the macOS pasteboard
-  (`NSFilenamesPboardType`, as production); on Windows and Linux it
-  reports that file copying is unavailable (`TODO` in `desktop.rs`).
+  Folder (the grid shows no folder tiles yet). Copy puts the files on the
+  macOS pasteboard (`NSFilenamesPboardType`, as production), on the
+  Windows clipboard as `CF_HDROP` (as production's native addon), and on
+  Linux as production's `text/uri-list` through `wl-copy` or `xclip`, which
+  must be installed (GPUI's clipboard holds text and images only); the
+  Windows and Linux paths have not been run.
   Production shows no notification when a menu's Copy, Regenerate
   Thumbnail or Set as Thumbnail fails; these show one. "Add Tags", "Add to Folder" and "New Smart
   Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
@@ -1515,8 +1542,25 @@ element (`shell/rails.rs`).
 - The grid is still one element tree per tile.
 - No frame-time, decode-latency or memory benchmark has been completed. Do not
   call the prototype faster, flicker-free or memory-bounded on this evidence.
-- Windows and Linux are not built or tested. The Ruffle frame path reads back
-  from the GPU and uploads again; it is not zero-copy.
+- Windows and Linux are built and unit-tested in CI, and CI photographs the
+  app drawn off-screen on both (see Checks); no one has used it on a screen
+  there. Seen in those pictures: the grid, the viewer, menus, Settings, the
+  app's own window buttons and the in-window application menu. Not
+  exercised by them: the systems' window frames, titlebar dragging, resize
+  edges, the clipboard, notifications, video and sound. Windows and Linux
+  have their own minimise/maximise/close buttons (Windows' as system caption
+  buttons), Linux client-side decorations with resize edges, the application
+  menu behind a titlebar button (`ApplicationMenuButton`), keys written
+  `Ctrl+Shift+S`, and Quit per platform; closing the main window quits
+  there (a detail or Settings window does not outlive it, as it can in
+  production). Not built there: dragging files out of the window (GPUI has
+  a native file drag on macOS and Wayland only; Windows needs an OLE
+  `DoDragDrop` run outside GPUI's event dispatch, X11 an XDND source), the
+  detail window's aspect lock (Windows `WM_SIZING`, X11 size hints) and,
+  on Linux, always-on-top (its pin is hidden there); the UI font is the
+  system's (production bundles Geist on Windows and Linux).
+  The Ruffle frame path reads back from the GPU and uploads again; it is
+  not zero-copy.
 
 ## Checks
 
@@ -1620,6 +1664,17 @@ PICTO_GPUI_COPY=/tmp/picto-gpui-library.XXXXXX/Name.library \
 PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --manifest-path experiments/gpui/Cargo.toml -- --ignored plays_a_script
 ```
+
+On macOS the pictures are drawn with Metal and the system's text; on Linux
+and Windows with GPUI's wgpu renderer (which finds a software adapter on a
+machine without a GPU: lavapipe on Linux, WARP through Direct3D 12 on
+Windows) and its portable text system holding only the bundled fonts. CI
+(`.github/workflows/gpui-experiment.yml`) plays `ci/smoke.txt` this way on
+Linux and Windows into a synthetic library and uploads the pictures as the
+`pictures-linux` and `pictures-windows` artifacts
+(`gh run download <run> -n pictures-linux`). They show the app's own drawing
+on those systems, not the platform layer: the window chrome they show is the
+app's, the system's (its frame, its menus, its pointer) is not in them.
 
 A system dialog cannot be driven off-screen, so `answer <path>` has the next
 folder, file or save dialog the app asks for answer with that path without

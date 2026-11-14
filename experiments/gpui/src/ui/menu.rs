@@ -55,6 +55,13 @@ pub enum Presentation {
 /// be shown without taking the keyboard; the in-window overlay elsewhere,
 /// and on macOS too with `PICTO_GPUI_MENU=window`. A menu whose pop-up
 /// window cannot be opened falls back to the overlay by itself.
+///
+/// Windows and Linux keep the overlay, which is what production shows on
+/// every system (its menus are drawn by the renderer, inside the window):
+/// a Wayland client cannot place a top-level window at all (GPUI's
+/// `WindowKind::PopUp` is not an `xdg_popup`), an X11 pop-up is an
+/// override-redirect window that takes no keyboard focus, and a Windows
+/// pop-up's keyboard and activation have never been checked on a screen.
 pub fn presentation() -> Presentation {
     let forced_in_window = std::env::var("PICTO_GPUI_MENU").is_ok_and(|value| value == "window");
     if cfg!(target_os = "macos") && !forced_in_window {

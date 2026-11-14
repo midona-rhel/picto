@@ -49,6 +49,11 @@ does not need: lens, dispersion, tint and rim light).
   windows) for a view that follows the pointer itself: the grid's item drag
   leaving the window. GPUI otherwise does this only for drags started with
   `on_drag` and `external_drag_payload`.
+- `src/platform/test/window.rs`: the test window keeps the decorations the
+  window asked for and reports them (`Decorations::Client` with nothing
+  tiled when the client's were asked for), as a Linux desktop that grants
+  them does, so the off-screen checks draw a frameless window's own chrome
+  (its buttons and resize edges) as on Linux.
 - Nearest-neighbour images (CSS `image-rendering: pixelated`, the Preview
   setting "Scaling: Pixelated"): `PolychromeSprite`'s padding word after
   `order` becomes `nearest` (a `PaddedBool32`, so the layout every shader
@@ -92,6 +97,11 @@ does not need: lens, dispersion, tint and rim light).
   `PolychromeSprite` struct names its second word `nearest`, and
   `fs_poly_sprite` does the nearest-neighbour read (by `select`, so the
   texture sample stays in uniform control flow).
+- `src/wgpu_context.rs`: on Windows the instance also offers Direct3D 12.
+  This crate is used there only by the off-screen checks (GPUI's Windows
+  platform draws with DirectX itself), and a machine without a GPU, such as
+  a CI runner, has Direct3D 12 through the WARP software adapter but
+  neither Vulkan nor a usable OpenGL.
 
 `gpui-pre-windows` (DirectX)
 - `src/shaders.hlsl`: the shadow shader takes `inset == 2`; the
@@ -461,6 +471,58 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
      pub tile: AtlasTile,
      pub grayscale: PaddedBool32,
      pub opacity: f32,
+diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/platform/test/window.rs
+--- a/gpui-pre/src/platform/test/window.rs
++++ b/gpui-pre/src/platform/test/window.rs
+@@ -3,8 +3,8 @@
+     Pixels, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
+     PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
+     TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
+-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
+-    WindowVisibility,
++    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowInsets,
++    WindowParams, WindowVisibility,
+ };
+ use gpui_util::ResultExt as _;
+ #[cfg(any(test, feature = "test-support"))]
+@@ -59,6 +59,7 @@
+     appearance: WindowAppearance,
+     external_drag_files: Vec<(PathBuf, bool)>,
+     start_external_drag_result: bool,
++    decorations: WindowDecorations,
+ }
+ 
+ #[derive(Clone)]
+@@ -124,6 +125,7 @@
+             appearance_change_callback: None,
+             request_frame_callback: None,
+             frame_wake_count: Rc::new(Cell::new(0)),
++            decorations: WindowDecorations::Server,
+             frame_scheduled: false,
+             frame_callback_pending: false,
+             input_handler: None,
+@@ -354,6 +356,21 @@
+         false
+     }
+ 
++    // The decorations the window asked for, as a desktop that grants them
++    // reports them, so a test sees a frameless window's own chrome.
++    fn request_decorations(&self, decorations: WindowDecorations) {
++        self.0.lock().decorations = decorations;
++    }
++
++    fn window_decorations(&self) -> crate::Decorations {
++        match self.0.lock().decorations {
++            WindowDecorations::Server => crate::Decorations::Server,
++            WindowDecorations::Client => crate::Decorations::Client {
++                tiling: crate::Tiling::default(),
++            },
++        }
++    }
++
+     fn content_size(&self) -> Size<Pixels> {
+         self.bounds().size
+     }
 diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 --- a/gpui-pre/src/window.rs
 +++ b/gpui-pre/src/window.rs
@@ -2023,6 +2085,25 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/shaders.wgsl b/gpui-pre-wgpu/src/shad
      let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
  
      var color = sample;
+diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_context.rs b/gpui-pre-wgpu/src/wgpu_context.rs
+--- a/gpui-pre-wgpu/src/wgpu_context.rs
++++ b/gpui-pre-wgpu/src/wgpu_context.rs
+@@ -479,7 +479,14 @@
+     #[cfg(not(target_family = "wasm"))]
+     pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
+         wgpu::Instance::new(wgpu::InstanceDescriptor {
+-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
++            // On Windows this crate draws only off-screen (GPUI's Windows
++            // platform renders with DirectX itself), where Direct3D 12 is the
++            // backend a machine without a GPU still has, through WARP.
++            backends: if cfg!(windows) {
++                wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL
++            } else {
++                wgpu::Backends::VULKAN | wgpu::Backends::GL
++            },
+             flags: wgpu::InstanceFlags::default(),
+             backend_options: wgpu::BackendOptions::default(),
+             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
 diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_renderer.rs b/gpui-pre-wgpu/src/wgpu_renderer.rs
 --- a/gpui-pre-wgpu/src/wgpu_renderer.rs
 +++ b/gpui-pre-wgpu/src/wgpu_renderer.rs

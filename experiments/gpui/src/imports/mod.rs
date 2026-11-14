@@ -97,17 +97,13 @@ impl Global for ImportsGlobal {}
 /// Import Folder's key, which production's application menu fixes
 /// (`Shift+CmdOrCtrl+I`) rather than the shortcut registry.
 pub fn bind(cx: &mut App) {
-    let keys = if cfg!(target_os = "macos") {
-        "cmd-shift-i"
-    } else {
-        "ctrl-shift-i"
-    };
     let context = crate::keymap::Scope::App.predicate();
-    cx.bind_keys([KeyBinding::new(
-        keys,
-        crate::keymap::ImportFolder,
+    crate::keymap::bind_written(
+        "Mod+Shift+I",
+        Box::new(crate::keymap::ImportFolder),
         context.as_deref(),
-    )]);
+        cx,
+    );
 }
 
 /// The window's imports, for the views that start one.

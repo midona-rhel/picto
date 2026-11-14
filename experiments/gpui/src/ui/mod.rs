@@ -87,10 +87,15 @@ pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) ->
 
 /// A titlebar strip that moves the window, as `data-window-drag-region` does
 /// in the Electron shell: a press that then moves drags the window, and a
-/// double-click does what the system setting says. Controls inside the strip
-/// opt out by occluding it.
+/// double-click does what the system setting says on macOS and maximises or
+/// restores the window on Linux. On Windows the strip is the system's
+/// caption (`WindowControlArea::Drag`), which also gives its double-click
+/// and snapping. Controls inside the strip opt out by occluding it.
 pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) -> Stateful<Div> {
     let id = id.into();
+    if cfg!(target_os = "windows") {
+        return div().id(id).window_control_area(WindowControlArea::Drag);
+    }
     let pressed = window.use_keyed_state(id.clone(), cx, |_, _| false);
     let (down, up, out, moved) = (pressed.clone(), pressed.clone(), pressed.clone(), pressed);
     div()
@@ -111,7 +116,11 @@ pub fn drag_region(id: impl Into<ElementId>, window: &mut Window, cx: &mut App) 
         })
         .on_click(|event, window, _| {
             if event.click_count() == 2 {
-                window.titlebar_double_click();
+                if cfg!(target_os = "macos") {
+                    window.titlebar_double_click();
+                } else {
+                    window.zoom_window();
+                }
             }
         })
 }

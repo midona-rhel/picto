@@ -649,7 +649,7 @@ impl Shell {
             .w(px(self.sidebar_width))
             .flex_none()
             .h_full()
-            .pl(px(74.))
+            .pl(px(ui::window_chrome::TITLEBAR_INSET))
             .pr(px(8.))
             .flex()
             .items_center()
@@ -668,6 +668,23 @@ impl Shell {
             .children(
                 (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
             )
+            // Off the Mac the application menu is a button at the left
+            // (`ApplicationMenuButton`), the actions kept at the right.
+            .children(crate::app_menu::in_window().then(|| {
+                ui::icon_button("application-menu", "app-menu")
+                    .size(theme::CONTROL_MD)
+                    .glyph_element(
+                        svg()
+                            .path("app-menu")
+                            .w(px(16.))
+                            .h(px(15.))
+                            .text_color(theme.text_secondary()),
+                    )
+                    .tip(ui::tip("Application menu"))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_app_menu(window, cx)))
+                    .into_any_element()
+            }))
+            .children(crate::app_menu::in_window().then(|| div().flex_1()))
             .child(
                 ui::icon_button("open-settings", "settings")
                     .tip(ui::tip("Settings").shortcut("file.settings", cx))
@@ -901,7 +918,11 @@ impl Render for Shell {
                                     .update(cx, |inspector, cx| inspector.set_pinned(pinned, cx));
                                 cx.notify();
                             })),
-                        ),
+                        )
+                        .children(ui::window_chrome::caption_buttons(
+                            "inspector-caption",
+                            window,
+                        )),
                 )
                 .child(
                     div()
@@ -913,6 +934,12 @@ impl Render for Shell {
                 // content, so it takes no width itself.
                 .child(inspector_edge)
         });
+        // The window's own buttons (Windows, Linux) go in the inspector's
+        // titlebar while the inspector is drawn, else in its reserved strip.
+        let caption = inspector
+            .is_none()
+            .then(|| ui::window_chrome::caption_buttons("titlebar-caption", window))
+            .flatten();
         let titlebar = div()
             .h(px(theme::TITLEBAR_HEIGHT))
             .flex_none()
@@ -927,11 +954,19 @@ impl Render for Shell {
             )
             .child(
                 // The inspector's share of the titlebar stays reserved, and
-                // draggable, while the inspector is hidden.
+                // draggable, while the inspector is hidden; it holds the
+                // window's buttons then (`.titlebarInspectorHidden`), and
+                // while a screen has the inspector's width, at the end of
+                // the toolbar.
                 ui::drag_region("titlebar-right", window, cx)
-                    .w(px(inspector_width))
+                    .when(inspector_width > 0., |region| region.w(px(inspector_width)))
                     .flex_none()
-                    .h_full(),
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .when(caption.is_some(), |region| region.pr(px(8.)))
+                    .children(caption),
             );
         let body = div()
             .relative()
@@ -1110,8 +1145,10 @@ impl Render for Shell {
         root = root.child(self.notifications.clone());
         // A video player that has the window to itself, over everything.
         root = root.children(crate::viewer::video::fullscreen_layer(window, cx));
+        // A frameless window's resizing edges (Linux), over the content.
+        root = root.children(ui::window_chrome::resize_edges(window));
         // `.shellMac::after`: the window's rim, over everything.
-        root = root.child(ui::window_chrome::rim(cx));
+        root = root.children(ui::window_chrome::rim(cx));
         // The frame meter, when debugging: last, so that it ends the frame.
         root = root.children(crate::meter::overlay(cx));
         // Keep painting while a rail slides.

@@ -1,8 +1,10 @@
 name: GPUI experiment
 
-# Builds and tests experiments/gpui on the platforms it is not developed on.
-# macOS is built locally on every change; this proves the same source compiles
-# and its tests pass on Windows and Linux.
+# Builds and tests experiments/gpui on the platforms it is not developed on,
+# and photographs it there. macOS is built locally on every change; this
+# proves the same source compiles and its tests pass on Windows and Linux,
+# and uploads pictures of the app drawn off-screen on each (the `pictures-*`
+# artifacts), the only way to see it on those systems from a Mac.
 on:
   push:
     branches:
@@ -10,6 +12,7 @@ on:
     paths:
       - "experiments/gpui/**"
       - "picto-library/**"
+      - "core/**"
       - ".github/workflows/gpui-experiment.yml"
   workflow_dispatch:
 
@@ -26,7 +29,7 @@ env:
 jobs:
   build:
     name: build + test (${{ matrix.platform }})
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -49,10 +52,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
-          workspaces: experiments/gpui -> target
+          workspaces: |
+            experiments/gpui -> target
+            . -> target
           cache-on-failure: true
 
-      # GPUI's Linux backends (Wayland, X11, Vulkan, fontconfig), the audio
+      # GPUI's Linux backends (Wayland, X11, Vulkan, fontconfig; lavapipe,
+      # the software Vulkan driver the pictures are drawn with), the audio
       # output Ruffle links against, and what the application core needs
       # (D-Bus for the keyring, libclang for its bindings).
       - name: Install system deps (Linux)
@@ -74,10 +80,49 @@ jobs:
             libx11-xcb-dev \
             libxkbcommon-x11-dev \
             libzstd-dev \
-            libudev-dev
+            libudev-dev \
+            mesa-vulkan-drivers
 
       - name: Build
         run: cargo build --locked
 
       - name: Test
         run: cargo test --locked
+
+      # A synthetic library of generated pictures (the application core's
+      # example), marked disposable and kept where the app's guard allows a
+      # copy: a `picto-gpui-…` folder directly in the system's temporary
+      # folder. Then the off-screen tool plays `ci/smoke.txt` into it with
+      # GPUI's wgpu renderer on the software adapter (lavapipe on Linux,
+      # WARP through Direct3D 12 on Windows).
+      - name: Pictures
+        shell: bash
+        run: |
+          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          if [[ "$RUNNER_OS" == Windows ]]; then temp="$(unix "$TEMP")"; else temp=/tmp; fi
+          scratch="$(mktemp -d "$temp/picto-gpui-synthetic.XXXXXX")"
+          library="$scratch/Synthetic.library"
+          (cd ../.. && PICTO_DEMO_ITEMS=2000 cargo run --locked -p picto_core --example million_grid_demo -- "$(native "$library")")
+          printf 'synthetic:million_grid_demo\n' > "$library/.gpui-disposable"
+          # The pictures are taken in a copy the app itself makes, as a user
+          # on this system would make one.
+          # Through cargo, which puts the libraries the core's ONNX Runtime
+          # links (libwebgpu_dawn.so on Linux) on the loader's path.
+          copy="$(cargo run --locked -q -- --make-copy "$(native "$library")" | tail -n 1)"
+          echo "copy: $copy"
+          out="$(unix "$RUNNER_TEMP")/pictures"
+          mkdir -p "$out"
+          PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
+          PICTO_GPUI_COPY="$copy" \
+          PICTO_GPUI_SCRIPT="$(native "$PWD/ci/smoke.txt")" \
+          PICTO_GPUI_OUT="$(native "$out")" \
+            cargo test --locked -- --ignored --exact offscreen::plays_a_script --nocapture
+
+      - name: Upload pictures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pictures-${{ matrix.platform }}
+          path: ${{ runner.temp }}/pictures
+          if-no-files-found: warn

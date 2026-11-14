@@ -98,6 +98,17 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features =
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_apple = { package = "gpui-pre-apple", version = "=0.3.12" }
 
+# Elsewhere the off-screen checks draw with GPUI's wgpu renderer and its
+# portable text system (on Windows too, where GPUI's own DirectX platform has
+# no headless renderer).
+[target.'cfg(not(target_os = "macos"))'.dev-dependencies]
+gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12", features = ["test-support"] }
+
+# The launcher badge's D-Bus signal on Linux; the version the notification
+# service GPUI uses already builds.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = "5"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-foundation-sys = "0.8"

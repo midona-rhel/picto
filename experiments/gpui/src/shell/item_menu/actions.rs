@@ -84,9 +84,21 @@ impl Shell {
                     );
                 }
             }
-            // TODO: Windows' application chooser (see the row, which stays
-            // disabled until then).
-            Action::OpenWithOther => {}
+            // Windows' own application chooser on the file, the only
+            // system that offers this row.
+            Action::OpenWithOther => {
+                if let Some(file) = file {
+                    self.with_path(
+                        file,
+                        |path, cx| {
+                            if let Err(error) = crate::desktop::open_with_chooser(&path, cx) {
+                                crate::ui::notify::error("Could not open file", error, cx);
+                            }
+                        },
+                        cx,
+                    );
+                }
+            }
             Action::LoadingApplications => {}
             // ── Copying ──
             Action::CopyPath => {

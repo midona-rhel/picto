@@ -106,6 +106,61 @@ pub struct SetRating {
     pub stars: u8,
 }
 
+/// The system the menu is built for: production's template differs on
+/// macOS (`isMac`) and, in a few role rows, between Windows and Linux.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl Platform {
+    pub const CURRENT: Platform = if cfg!(target_os = "macos") {
+        Platform::Mac
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    };
+
+    pub const fn is_mac(self) -> bool {
+        matches!(self, Platform::Mac)
+    }
+
+    /// The row that shows a file in the system's file browser: production's
+    /// "Reveal in Finder" on the Mac and "Show in Explorer" on Windows. On
+    /// Linux production also writes "Show in Explorer", which names a
+    /// Windows program; it says "Show in File Manager" where it means the
+    /// same elsewhere (the Library Manager), which is used here.
+    pub const fn reveal_title(self) -> &'static str {
+        match self {
+            Platform::Mac => "Reveal in Finder",
+            Platform::Windows => "Show in Explorer",
+            Platform::Linux => "Show in File Manager",
+        }
+    }
+
+    /// Electron's `quit` role's title: "Quit Picto" in the Mac's app menu,
+    /// "Exit" on Windows, "Quit" on Linux.
+    pub const fn quit_title(self) -> &'static str {
+        match self {
+            Platform::Mac => "Quit Picto",
+            Platform::Windows => "Exit",
+            Platform::Linux => "Quit",
+        }
+    }
+
+    /// Quit's keys, as Electron's `quit` role has them: ⌘Q on the Mac,
+    /// Ctrl+Q on Linux, and none on Windows, where Alt+F4 is the system's.
+    pub const fn quit_keys(self) -> Option<&'static str> {
+        match self {
+            Platform::Mac | Platform::Linux => Some("Mod+Q"),
+            Platform::Windows => None,
+        }
+    }
+}
+
 /// The destination's kind (`gridScopeAtom`'s `kind`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScopeKind {
@@ -357,8 +412,10 @@ fn by_count(count: u64, one: &str, many: impl FnOnce(u64) -> String) -> String {
     }
 }
 
-/// The menus for a context, in production's order.
-pub fn model(context: &MenuContext) -> Vec<TopMenu> {
+/// The menus for a context on a platform, in production's order. Off the
+/// Mac there is no app menu: Settings… and Quit end the File menu, and the
+/// Window menu closes the window instead of bringing all to front.
+pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
     use Entry::Separator;
     let count = context.selection;
     let has = context.has_selection();
@@ -411,7 +468,7 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
     } else {
         item("New Folder", NewFolder).keys(Keys::Shortcut("file.newFolder"))
     };
-    let file = vec![
+    let mut file = vec![
         new_folder.enabled(context.can_create_folder()).into(),
         item("New Smart Folder", NewSmartFolder)
             .keys(Keys::Shortcut("file.newSmartFolder"))
@@ -442,13 +499,26 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
         item("Export as Picto Pack...", keymap::ExportPictoPack)
             .enabled(has)
             .into(),
+    ];
+    if !platform.is_mac() {
+        file.extend([
+            Separator,
+            item("Settings…", crate::settings::OpenSettings)
+                .keys(Keys::Registry("file.settings"))
+                .into(),
+        ]);
+    }
+    file.extend([
         Separator,
         item("Check for Updates…", CheckForUpdates).todo().into(),
         Separator,
-        item("Close Window", CloseWindow)
-            .keys(fixed("Mod+W", window_key))
-            .into(),
-    ];
+        if platform.is_mac() {
+            item("Close Window", CloseWindow).keys(fixed("Mod+W", window_key))
+        } else {
+            quit(platform)
+        }
+        .into(),
+    ]);
 
     let mut edit = vec![
         if count > 1 {
@@ -625,7 +695,7 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
             .keys(Keys::Shortcut("file.openDefaultApp"))
             .enabled(context.single_media())
             .into(),
-        item("Reveal in Finder", Reveal)
+        item(platform.reveal_title(), Reveal)
             .keys(Keys::Shortcut("file.revealInFolder"))
             .enabled(context.single_media())
             .into(),
@@ -655,11 +725,38 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
             .into(),
         Separator,
         item("Toggle Full Screen", ToggleFullScreen)
-            .keys(fixed("Ctrl+Mod+F", window_key))
+            .keys(fixed(
+                if platform.is_mac() {
+                    "Ctrl+Mod+F"
+                } else {
+                    "F11"
+                },
+                window_key,
+            ))
             .into(),
     ];
 
-    vec![
+    let mut window_menu = vec![
+        item("Minimize", Minimize)
+            .keys(fixed("Mod+M", window_key))
+            .into(),
+        item("Zoom", Zoom).into(),
+    ];
+    if platform.is_mac() {
+        window_menu.extend([
+            Separator,
+            item("Bring All to Front", BringAllToFront).into(),
+        ]);
+    } else {
+        // Electron's `close` role, titled "Close" off the Mac.
+        window_menu.push(
+            item("Close", CloseWindow)
+                .keys(fixed("Mod+W", window_key))
+                .into(),
+        );
+    }
+
+    let mut menus = vec![
         TopMenu {
             title: "Picto",
             entries: vec![
@@ -679,9 +776,7 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
                     .into(),
                 item("Show All", ShowAllApps).into(),
                 Separator,
-                item("Quit Picto", crate::shell::Quit)
-                    .keys(fixed("Mod+Q", Binding::Existing))
-                    .into(),
+                quit(platform).into(),
             ],
         },
         TopMenu {
@@ -708,20 +803,26 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
         // the app's windows below these rows.
         TopMenu {
             title: "Window",
-            entries: vec![
-                item("Minimize", Minimize)
-                    .keys(fixed("Mod+M", window_key))
-                    .into(),
-                item("Zoom", Zoom).into(),
-                Separator,
-                item("Bring All to Front", BringAllToFront).into(),
-            ],
+            entries: window_menu,
         },
         TopMenu {
             title: "Help",
             entries: vec![item("About Picto", About).into()],
         },
-    ]
+    ];
+    if !platform.is_mac() {
+        menus.remove(0);
+    }
+    menus
+}
+
+/// Quit, as Electron's `quit` role is titled and keyed on `platform`.
+fn quit(platform: Platform) -> Item {
+    let quit = item(platform.quit_title(), crate::shell::Quit);
+    match platform.quit_keys() {
+        Some(keys) => quit.keys(Keys::Fixed(keys, Binding::Existing)),
+        None => quit,
+    }
 }
 
 /// Every row of `entries`, submenus included.
@@ -751,7 +852,7 @@ const SHOWN_ONLY: &str = "AppMenuKeyEquivalent";
 pub fn accelerators(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Accelerator> {
     let mut planned: Vec<Accelerator> = Vec::new();
     for context in MenuContext::variants() {
-        for menu in model(&context) {
+        for menu in model(&context, Platform::CURRENT) {
             each_item(&menu.entries, &mut |item| {
                 let binding = match item.keys {
                     Keys::None | Keys::Registry(_) => return,
@@ -813,7 +914,7 @@ fn gpui_menus(context: &MenuContext, demos: bool) -> Vec<Menu> {
             },
         }
     }
-    let mut menus: Vec<Menu> = model(context)
+    let mut menus: Vec<Menu> = model(context, Platform::CURRENT)
         .iter()
         .map(|menu| Menu {
             name: menu.title.into(),
@@ -840,6 +941,110 @@ fn gpui_menus(context: &MenuContext, demos: bool) -> Vec<Menu> {
         );
     }
     menus
+}
+
+/// Whether the window carries the application menu button
+/// (`ApplicationMenuButton`): off the Mac, where there is no menu bar; on
+/// the Mac too with `PICTO_GPUI_APP_MENU=window`, as production's
+/// development build shows it there to check the Windows and Linux menu.
+pub fn in_window() -> bool {
+    !cfg!(target_os = "macos")
+        || std::env::var("PICTO_GPUI_APP_MENU").is_ok_and(|value| value == "window")
+}
+
+/// The in-window menu's width (`width={220}`).
+pub const IN_WINDOW_WIDTH: f32 = 220.;
+
+/// The menus the in-window menu shows: this platform's, without the Mac's
+/// app menu, whose rows File and Help already hold
+/// (`picto:application-menu:get`).
+fn in_window_menus(cx: &App) -> Vec<TopMenu> {
+    let mut menus = model(&context(cx), Platform::CURRENT);
+    if Platform::CURRENT.is_mac() {
+        menus.remove(0);
+    }
+    menus
+}
+
+/// `toMenuEntries`: each menu a submenu of the button's menu; a submenu
+/// inside one (Recent Libraries, Set Rating) is laid out in place after a
+/// separator, as the shared menu nests only one level. A row is enabled as
+/// the menu bar's would be: by production's rule, by this app performing
+/// it, and by something in the window handling its action. Its value is
+/// its place in the menus, which [`in_window_action`] reads back.
+pub fn in_window_entries(window: &Window, cx: &mut App) -> Vec<crate::ui::menu::Entry> {
+    use crate::ui::menu::{self as ui_menu, Entry as Row};
+    let (preset, overrides) = crate::settings::keyboard(cx);
+    fn rows(
+        entries: &[Entry],
+        path: &str,
+        preset: KeyboardPreset,
+        overrides: &Overrides,
+        window: &Window,
+        cx: &mut App,
+    ) -> Vec<Row> {
+        let mut out = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let path = format!("{path}.{index}");
+            match entry {
+                Entry::Separator => out.push(Row::Separator),
+                Entry::Services => {}
+                Entry::Submenu { entries, .. } => {
+                    out.push(Row::Separator);
+                    out.extend(rows(entries, &path, preset, overrides, window, cx));
+                }
+                Entry::Item(item) => {
+                    // Handled in the window, or app-wide (asked of the app
+                    // while this window is being updated, only its own
+                    // handlers count).
+                    let action = item.action.as_ref();
+                    let enabled = item.enabled
+                        && item.built
+                        && (window.is_action_available(action, cx)
+                            || cx.is_action_available(action));
+                    let mut row = ui_menu::item(item.action.name(), item.title.clone())
+                        .value(path)
+                        .disabled(!enabled);
+                    if let Some(keys) = item.accelerator(preset, overrides) {
+                        row = row.shortcut(registry::display(&keys));
+                    }
+                    if item.checked {
+                        row = row.checked(true);
+                    }
+                    out.push(row.into());
+                }
+            }
+        }
+        out
+    }
+    let menus = in_window_menus(cx);
+    let mut entries = Vec::new();
+    for (index, menu) in menus.iter().enumerate() {
+        let children = rows(
+            &menu.entries,
+            &index.to_string(),
+            preset,
+            &overrides,
+            window,
+            cx,
+        );
+        entries.push(ui_menu::submenu(menu.title, children).into());
+    }
+    entries
+}
+
+/// The action of the in-window menu's row whose value is `path`.
+pub fn in_window_action(path: &str, cx: &App) -> Option<Box<dyn Action>> {
+    let menus = in_window_menus(cx);
+    let mut indices = path.split('.').map(|part| part.parse::<usize>().ok());
+    let mut entries = &menus.get(indices.next()??)?.entries;
+    loop {
+        match entries.get(indices.next()??)? {
+            Entry::Item(item) => return Some(item.action.boxed_clone()),
+            Entry::Submenu { entries: inner, .. } => entries = inner,
+            Entry::Separator | Entry::Services => return None,
+        }
+    }
 }
 
 /// `PICTO_GPUI_DEMOS=1` adds the Media Examples menu, which opens bundled
@@ -952,10 +1157,11 @@ fn edit(cx: &mut App, in_field: Option<Box<dyn Action>>, otherwise: Option<Box<d
 }
 
 /// Close Window: Settings closes as its close button closes it, dropping
-/// its draft; a detail window closes; the main window is hidden, as
-/// production's closes while the app keeps running (on macOS it does not
-/// quit when its last window closes, and the Dock icon brings a main window
-/// back).
+/// its draft; a detail window closes; on macOS the main window is hidden,
+/// as production's closes while the app keeps running (it does not quit
+/// when its last window closes, and the Dock icon brings a main window
+/// back). On Windows and Linux the main window closes, which quits the app
+/// ([`quit_with_main_window`]).
 fn close_window(cx: &mut App) {
     let Some(handle) = cx.active_window() else {
         return;
@@ -965,7 +1171,8 @@ fn close_window(cx: &mut App) {
             return;
         }
         let main = current(cx).main;
-        if main.is_some_and(|main| AnyWindowHandle::from(main) == handle) {
+        let is_main = main.is_some_and(|main| AnyWindowHandle::from(main) == handle);
+        if is_main && Platform::CURRENT.is_mac() {
             current(cx).main_hidden = true;
             let _ = handle.update(cx, |_, window, _| {
                 crate::ui::window_chrome::order_out(window)
@@ -974,6 +1181,24 @@ fn close_window(cx: &mut App) {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
     });
+}
+
+/// Off macOS the app ends with its main window, however that closes (its
+/// close button, Close, Alt+F4, the window manager), as production quits
+/// when its windows are all closed there (`window-all-closed`). Production
+/// leaves a detail or Settings window open on its own after the main one
+/// closes; here they go with it, since they show the main window's library.
+pub fn quit_with_main_window(cx: &mut App) {
+    if Platform::CURRENT.is_mac() {
+        return;
+    }
+    cx.on_window_closed(|cx, closed| {
+        let main = current(cx).main;
+        if main.is_some_and(|main| main.window_id() == closed) {
+            cx.quit();
+        }
+    })
+    .detach();
 }
 
 /// The app-wide commands: the Picto menu's, the window commands and the
@@ -1087,7 +1312,9 @@ pub fn named(line: &str, cx: &App) -> Option<Box<dyn Action>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, Keys, MenuContext, ScopeKind, Status, TopMenu, accelerators, model};
+    use super::{
+        Entry, Keys, MenuContext, Platform, ScopeKind, Status, TopMenu, accelerators, model,
+    };
     use crate::settings::registry::{KeyboardPreset, Override, Overrides};
 
     /// Keys in one spelling: modifiers in a fixed order, then the key.
@@ -1322,7 +1549,7 @@ mod tests {
             ("Organize", organize),
             ("View", leak(view("off", "off"))),
         ]);
-        assert_eq!(rows(&model(&context)), expected);
+        assert_eq!(rows(&model(&context, Platform::Mac)), expected);
     }
 
     #[test]
@@ -1335,7 +1562,7 @@ mod tests {
             thumbnails: true,
             ..MenuContext::default()
         };
-        let menus = rows(&model(&context));
+        let menus = rows(&model(&context, Platform::Mac));
         let file = &menus.iter().find(|(title, _)| title == "File").unwrap().1;
         assert_eq!(file[0], "New Subfolder|Alt+N|on");
         assert_eq!(file[1], "New Smart Folder|Mod+Alt+Shift+N|off");
@@ -1382,7 +1609,7 @@ mod tests {
             status: Some(Status::Trash),
             ..MenuContext::default()
         };
-        let menus = rows(&model(&context));
+        let menus = rows(&model(&context, Platform::Mac));
         let edit = &menus.iter().find(|(title, _)| title == "Edit").unwrap().1;
         assert_eq!(
             &edit[edit.len() - 3..],
@@ -1404,7 +1631,7 @@ mod tests {
             names: true,
             ..MenuContext::default()
         };
-        let menus = rows(&model(&context));
+        let menus = rows(&model(&context, Platform::Mac));
         let organize = &menus
             .iter()
             .find(|(title, _)| title == "Organize")
@@ -1418,7 +1645,7 @@ mod tests {
             single: Some(true),
             ..context
         };
-        let menus = rows(&model(&collection));
+        let menus = rows(&model(&collection, Platform::Mac));
         let view = &menus.iter().find(|(title, _)| title == "View").unwrap().1;
         assert_eq!(view, &view_rows("off", "on"));
     }
@@ -1443,7 +1670,7 @@ mod tests {
             import: false,
             ..MenuContext::default()
         };
-        let menus = rows(&model(&context));
+        let menus = rows(&model(&context, Platform::Mac));
         let file = &menus.iter().find(|(title, _)| title == "File").unwrap().1;
         assert_eq!(file[0], "New Folder|Mod+Shift+N|off");
         assert_eq!(file[1], "New Smart Folder|Mod+Alt+Shift+N|off");
@@ -1455,6 +1682,84 @@ mod tests {
     /// The rows this app cannot perform yet: they have no handler, so
     /// AppKit shows them disabled.
     #[test]
+    fn quit_takes_the_keys_electrons_quit_role_has() {
+        assert_eq!(Platform::Mac.quit_keys(), Some("Mod+Q"));
+        assert_eq!(Platform::Linux.quit_keys(), Some("Mod+Q"));
+        assert_eq!(Platform::Windows.quit_keys(), None);
+    }
+
+    /// The rows of one menu as `title|keys` lines.
+    fn titled(menus: &[TopMenu], title: &str) -> Vec<String> {
+        let menu = menus
+            .iter()
+            .find(|menu| menu.title == title)
+            .unwrap_or_else(|| panic!("no {title} menu"));
+        menu.entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::Item(item) => {
+                    let keys = match item.keys {
+                        Keys::Fixed(keys, _) => keys,
+                        _ => "",
+                    };
+                    format!("{}|{keys}", item.title)
+                }
+                Entry::Separator => "---".into(),
+                Entry::Submenu { title, .. } => format!("{title} >"),
+                Entry::Services => "Services".into(),
+            })
+            .collect()
+    }
+
+    /// Off the Mac, production's template has no app menu: File ends with
+    /// Settings…, Check for Updates… and the quit role, the Window menu
+    /// closes the window, and full screen is F11.
+    #[test]
+    fn windows_and_linux_take_productions_other_template() {
+        let context = MenuContext::default();
+        for platform in [Platform::Windows, Platform::Linux] {
+            let menus = model(&context, platform);
+            let titles: Vec<_> = menus.iter().map(|menu| menu.title).collect();
+            assert_eq!(
+                titles,
+                [
+                    "Library", "File", "Edit", "Organize", "View", "Window", "Help"
+                ]
+            );
+            let file = titled(&menus, "File");
+            let quit = match platform {
+                Platform::Windows => "Exit|",
+                _ => "Quit|Mod+Q",
+            };
+            assert_eq!(
+                file[file.len() - 6..],
+                [
+                    "---",
+                    "Settings…|",
+                    "---",
+                    "Check for Updates…|",
+                    "---",
+                    quit
+                ]
+            );
+            assert_eq!(
+                titled(&menus, "Window"),
+                ["Minimize|Mod+M", "Zoom|", "Close|Mod+W"]
+            );
+            let view = titled(&menus, "View");
+            assert!(view.contains(&"Toggle Full Screen|F11".to_owned()));
+            assert!(view.contains(&format!("{}|", platform.reveal_title())));
+        }
+        assert_eq!(Platform::Windows.reveal_title(), "Show in Explorer");
+        let mac = model(&context, Platform::Mac);
+        assert_eq!(mac[0].title, "Picto");
+        assert_eq!(
+            titled(&mac, "Window"),
+            ["Minimize|Mod+M", "Zoom|", "---", "Bring All to Front|"]
+        );
+    }
+
+    #[test]
     fn unbuilt_rows_are_the_known_ones() {
         let context = MenuContext {
             selection: 2,
@@ -1462,7 +1767,7 @@ mod tests {
             ..MenuContext::default()
         };
         let mut unbuilt = Vec::new();
-        for menu in model(&context) {
+        for menu in model(&context, Platform::CURRENT) {
             super::each_item(&menu.entries, &mut |item| {
                 if !item.built {
                     unbuilt.push(item.title.clone());
@@ -1588,7 +1893,7 @@ mod tests {
         let planned = crate::keymap::plan(KeyboardPreset::Us, &none);
         let menu = accelerators(KeyboardPreset::Us, &none);
         for context in MenuContext::variants() {
-            for top in model(&context) {
+            for top in model(&context, Platform::CURRENT) {
                 super::each_item(&top.entries, &mut |item| {
                     let found = match item.keys {
                         Keys::None => return,

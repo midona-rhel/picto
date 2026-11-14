@@ -7,12 +7,8 @@ use super::{
 };
 
 /// The row that shows the file in the system's file manager.
-const REVEAL: &str = if cfg!(target_os = "macos") {
-    "Reveal in Finder"
-} else {
-    "Show in Explorer"
-};
-use crate::settings::registry;
+const REVEAL: &str = crate::app_menu::Platform::CURRENT.reveal_title();
+use crate::settings::registry::{self, display};
 use picto_library::ContentSortField;
 
 /// `shortcutHint` with the default bindings: none for a deferred shortcut.
@@ -112,7 +108,7 @@ fn folder_removal_takes_the_delete_shortcut_from_trash() {
     let rows = tile(&d);
     let remove = find(&rows, "Remove from Folder").unwrap();
     assert_eq!(remove.shortcut, shortcut("file.removeFromFolder"));
-    assert_eq!(remove.shortcut.as_deref(), Some("⌘⌫"));
+    assert_eq!(remove.shortcut, Some(display("Mod+Backspace").into()));
     assert_eq!(remove.action, Action::RemoveFromFolder);
     assert_eq!(find(&rows, "Move to Trash").unwrap().shortcut, None);
     for scope in [ScopeKind::System, ScopeKind::SmartFolder] {
@@ -433,8 +429,8 @@ fn open_with_other_through_the_system_chooser() {
     let entry = find(&rows, "Open With Other...").unwrap();
     assert_eq!(entry.action, Action::OpenWithOther);
     assert_eq!(entry.shortcut, None);
-    // Disabled until the chooser is built.
-    assert!(entry.disabled);
+    // The chooser is Windows' own; elsewhere the row stays disabled.
+    assert_eq!(entry.disabled, !cfg!(target_os = "windows"));
 }
 
 #[test]
@@ -783,14 +779,25 @@ fn one_picture_in_all_has_every_row_in_order() {
             .unwrap_or_default()
     })
     .collect();
-    assert_eq!(
-        shortcuts,
-        [
-            "⇧↩", "⌘↩", "⌘O", "⌘⌥G", "⌘⇧J", "⌃R", "⌘C", "⌘⌥C", "⌘⇧A", "⌘⌫"
-        ]
-    );
-    // Paste Tags waits for something copied; Auto Tag and Open With Other
-    // for the features this app does not have yet.
+    let written: Vec<String> = [
+        "Shift+Enter",
+        "Mod+Enter",
+        "Mod+O",
+        "Mod+Alt+G",
+        "Mod+Shift+J",
+        "Ctrl+R",
+        "Mod+C",
+        "Mod+Alt+C",
+        "Mod+Shift+A",
+        "Mod+Backspace",
+    ]
+    .into_iter()
+    .map(display)
+    .collect();
+    assert_eq!(shortcuts, written);
+    // Paste Tags waits for something copied; Auto Tag for a feature this
+    // app does not have yet, and Open With Other for the system's chooser,
+    // which only Windows has.
     assert!(find(&rows, "Paste Tags").unwrap().disabled);
     assert!(
         rows.iter()
@@ -819,10 +826,10 @@ fn trash_restores_and_deletes_several_items() {
     );
     let delete = find(&rows, "Delete 3 Permanently").unwrap();
     assert!(delete.danger);
-    assert_eq!(delete.shortcut.as_deref(), Some("⌘⌫"));
+    assert_eq!(delete.shortcut, Some(display("Mod+Backspace").into()));
     assert_eq!(
-        find(&rows, "Restore 3 Items").unwrap().shortcut.as_deref(),
-        Some("⌘⇧⌫")
+        find(&rows, "Restore 3 Items").unwrap().shortcut,
+        Some(display("Mod+Shift+Backspace").into())
     );
     // Without the delete wired, the row stays and is disabled.
     d.handlers.permanent_delete = false;

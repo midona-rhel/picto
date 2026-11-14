@@ -560,3 +560,37 @@ mod tests {
         assert_eq!(shared_lifecycle(std::iter::empty()), None);
     }
 }
+
+impl Shell {
+    /// `ApplicationMenuButton`: the application menu in the window, under
+    /// the button (its left edge, 4px below it), 220px wide and without a
+    /// search row. A row chosen goes where the keyboard was when the menu
+    /// opened, as the menu bar's rows do.
+    pub(super) fn open_app_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = app_menu::in_window_entries(window, cx);
+        let button_bottom = (crate::theme::TITLEBAR_HEIGHT + crate::theme::CONTROL_MD) / 2.;
+        let position = point(
+            px(crate::ui::window_chrome::TITLEBAR_INSET),
+            px(button_bottom + 4.),
+        );
+        let opener = window.focused(cx);
+        let menu = cx.new(|cx| {
+            crate::ui::menu::Menu::new(entries, position, cx)
+                .search(false)
+                .width(app_menu::IN_WINDOW_WIDTH)
+        });
+        self.menu
+            .open(menu, window, cx, move |_, menu, _, window, cx| {
+                let Some(path) = menu.read(cx).chosen_value() else {
+                    return;
+                };
+                let Some(action) = app_menu::in_window_action(&path, cx) else {
+                    return;
+                };
+                if let Some(opener) = &opener {
+                    window.focus(opener, cx);
+                }
+                window.dispatch_action(action, cx);
+            });
+    }
+}

@@ -194,7 +194,7 @@ impl Desktop {
                         this.batch.clear();
                         this.batch_active = false;
                         if notifications_allowed(cx) {
-                            platform::notify("Subscriptions finished", &finished_body(count));
+                            platform::notify("Subscriptions finished", &finished_body(count), cx);
                         }
                     }
                     // An unavailable activity is not evidence that the run
@@ -295,7 +295,7 @@ pub fn open_link(link: &str, cx: &mut App) {
 /// `shell.openPath`: the file in its default application.
 pub fn open_default(path: &Path, cx: &App) {
     if live(cx) {
-        cx.open_with_system(path);
+        cx.open_with_system(&system_path(path));
     } else {
         record(format!("open-default {}", path.display()));
     }
@@ -304,7 +304,7 @@ pub fn open_default(path: &Path, cx: &App) {
 /// `shell.showItemInFolder`: Finder or Explorer, with the file selected.
 pub fn reveal(path: &Path, cx: &App) {
     if live(cx) {
-        cx.reveal_path(path);
+        cx.reveal_path(&system_path(path));
     } else {
         record(format!("reveal {}", path.display()));
     }
@@ -344,6 +344,20 @@ pub fn copy_files(paths: &[PathBuf], cx: &App) -> Result<(), String> {
         platform::copy_files(&unique)
     } else {
         record(format!("copy-files {}", listed(&unique)));
+        Ok(())
+    }
+}
+
+/// `picto:shell:openWithChooser`: the system's own application chooser on
+/// the file, which only Windows offers (its "Open with" dialog).
+pub fn open_with_chooser(file: &Path, cx: &App) -> Result<(), String> {
+    if !cfg!(target_os = "windows") {
+        return Err("The system application chooser is unavailable".into());
+    }
+    if live(cx) {
+        platform::open_with_chooser(&system_path(file))
+    } else {
+        record(format!("open-with-chooser {}", file.display()));
         Ok(())
     }
 }
@@ -706,6 +720,11 @@ mod platform {
     unsafe extern "C" {}
 
     /// `app.setBadgeCount`: the number on the dock icon, none for zero.
+    /// The Mac lists the applications instead (`applications`).
+    pub fn open_with_chooser(_file: &Path) -> Result<(), String> {
+        Err("The system application chooser is unavailable".into())
+    }
+
     pub fn set_badge(count: u64) {
         let Some(application) = AnyClass::get(c"NSApplication") else {
             return;
@@ -726,7 +745,7 @@ mod platform {
     /// serves only an app with a bundle identifier; a bare binary (`cargo
     /// run`) has none, and the notification is written to standard error
     /// instead.
-    pub fn notify(title: &str, body: &str) {
+    pub fn notify(title: &str, body: &str, _cx: &gpui::App) {
         let (Some(bundle), Some(center), Some(content), Some(request)) = (
             AnyClass::get(c"NSBundle"),
             AnyClass::get(c"UNUserNotificationCenter"),
@@ -784,26 +803,75 @@ mod platform {
     }
 }
 
-/// Windows would set the taskbar button's overlay icon
-/// (`ITaskbarList3::SetOverlayIcon`) and show a toast through
-/// `ToastNotificationManager` under the app's AppUserModelID; Linux would
-/// send the Unity launcher's `com.canonical.Unity.LauncherEntry` `Update`
-/// signal with the count and `org.freedesktop.Notifications.Notify` over
-/// D-Bus. Neither is built: on those systems both do nothing.
-#[cfg(not(target_os = "macos"))]
+/// Windows: no badge (Electron's `setBadgeCount` does nothing there), the
+/// notification as a toast through GPUI, the files on the clipboard as
+/// production's native addon puts them (`CF_HDROP`), and Open With Other as
+/// the system's own chooser.
+#[cfg(target_os = "windows")]
 mod platform {
     use super::Application;
+    use std::ffi::c_void;
     use std::path::{Path, PathBuf};
 
     pub fn set_badge(_count: u64) {}
 
-    pub fn notify(_title: &str, _body: &str) {}
+    pub fn notify(title: &str, body: &str, cx: &gpui::App) {
+        super::system_notification(title, body, cx);
+    }
 
-    /// TODO: put the files on the clipboard as production's native addon
-    /// does: on Windows a `CF_HDROP` `DROPFILES` list (`copy_files` in
-    /// `native/picto-node`), on Linux a `text/uri-list` of `file://` URLs.
-    pub fn copy_files(_paths: &[PathBuf]) -> Result<(), String> {
-        Err("Native file copying is unavailable on this platform.".into())
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn OpenClipboard(owner: *mut c_void) -> i32;
+        fn EmptyClipboard() -> i32;
+        fn SetClipboardData(format: u32, memory: *mut c_void) -> *mut c_void;
+        fn CloseClipboard() -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+        fn GlobalLock(memory: *mut c_void) -> *mut c_void;
+        fn GlobalUnlock(memory: *mut c_void) -> i32;
+        fn GlobalFree(memory: *mut c_void) -> *mut c_void;
+    }
+
+    /// `CF_HDROP`, and `GHND` (moveable, zeroed).
+    const CF_HDROP: u32 = 15;
+    const GHND: u32 = 0x0042;
+
+    /// `copy_files` in `native/picto-node`: a `DROPFILES` list of the paths
+    /// on the clipboard, which Explorer pastes as the files.
+    pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
+        let payload = super::drop_files(paths);
+        // SAFETY: the clipboard and global-memory calls with the arguments
+        // they take; the memory is handed to the system only when
+        // `SetClipboardData` takes it, and freed here otherwise.
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return Err("Could not open the system clipboard".into());
+            }
+            EmptyClipboard();
+            let memory = GlobalAlloc(GHND, payload.len());
+            if memory.is_null() {
+                CloseClipboard();
+                return Err("Could not allocate a file clipboard payload".into());
+            }
+            let locked = GlobalLock(memory).cast::<u8>();
+            if locked.is_null() {
+                GlobalFree(memory);
+                CloseClipboard();
+                return Err("Could not prepare a file clipboard payload".into());
+            }
+            std::ptr::copy_nonoverlapping(payload.as_ptr(), locked, payload.len());
+            GlobalUnlock(memory);
+            if SetClipboardData(CF_HDROP, memory).is_null() {
+                GlobalFree(memory);
+                CloseClipboard();
+                return Err("Could not write files to the system clipboard".into());
+            }
+            CloseClipboard();
+        }
+        Ok(())
     }
 
     /// Production picks an application on macOS only.
@@ -811,11 +879,207 @@ mod platform {
         Err("Application selection is only available on macOS".into())
     }
 
-    /// TODO: on Windows, Open With Other opens the system's own chooser
-    /// (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), as production
-    /// does; Linux offers nothing.
+    /// `picto:shell:openWithChooser`: Windows' "Open with" dialog on the
+    /// file, from which the user picks the application.
+    pub fn open_with_chooser(file: &Path) -> Result<(), String> {
+        use std::os::windows::process::CommandExt as _;
+        /// `DETACHED_PROCESS`: the chooser outlives nothing of ours.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        std::process::Command::new("rundll32.exe")
+            .arg("shell32.dll,OpenAs_RunDLL")
+            .arg(file)
+            .creation_flags(DETACHED_PROCESS)
+            .spawn()
+            .map(drop)
+            .map_err(|error| format!("Could not open the application chooser: {error}"))
+    }
+
+    /// Windows offers its own chooser instead of a list.
     pub fn applications(_file: &Path) -> Vec<Application> {
         Vec::new()
+    }
+}
+
+/// Linux: the Inbox count on the launcher (`app.setBadgeCount`, which
+/// Electron sends as the Unity launcher's D-Bus signal), the notification
+/// through GPUI (the freedesktop notification service), the files on the
+/// clipboard as production writes them (a `text/uri-list` of `file:` URLs),
+/// and no Open With Other, as production offers none there.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod platform {
+    use super::Application;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+
+    /// The badge's counts go to one thread that holds the session bus, so
+    /// connecting (which can take a while, or fail) never holds up a frame.
+    fn launcher() -> Option<&'static mpsc::Sender<u64>> {
+        static LAUNCHER: std::sync::OnceLock<Option<mpsc::Sender<u64>>> =
+            std::sync::OnceLock::new();
+        LAUNCHER
+            .get_or_init(|| {
+                let (send, counts) = mpsc::channel::<u64>();
+                std::thread::Builder::new()
+                    .name("launcher-badge".into())
+                    .spawn(move || {
+                        let Ok(bus) = zbus::blocking::Connection::session() else {
+                            return;
+                        };
+                        for count in counts {
+                            let mut properties = std::collections::HashMap::new();
+                            properties.insert("count", zbus::zvariant::Value::from(count as i64));
+                            properties
+                                .insert("count-visible", zbus::zvariant::Value::from(count > 0));
+                            let _ = bus.emit_signal(
+                                None::<&str>,
+                                super::LAUNCHER_PATH,
+                                "com.canonical.Unity.LauncherEntry",
+                                "Update",
+                                &(super::launcher_uri(), properties),
+                            );
+                        }
+                    })
+                    .ok()?;
+                Some(send)
+            })
+            .as_ref()
+    }
+
+    pub fn set_badge(count: u64) {
+        if let Some(launcher) = launcher() {
+            let _ = launcher.send(count);
+        }
+    }
+
+    pub fn notify(title: &str, body: &str, cx: &gpui::App) {
+        super::system_notification(title, body, cx);
+    }
+
+    /// `writeClipboardFilePaths` on Linux: a `text/uri-list` of the files.
+    /// GPUI's clipboard holds text and images only, so the desktop's own
+    /// clipboard tool takes the list and serves it: `wl-copy` under
+    /// Wayland, `xclip` under X11.
+    pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
+        use std::io::Write as _;
+        let list = super::uri_list(paths);
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let (program, arguments): (&str, &[&str]) = if wayland {
+            ("wl-copy", &["--type", "text/uri-list"])
+        } else {
+            (
+                "xclip",
+                &["-selection", "clipboard", "-t", "text/uri-list", "-i"],
+            )
+        };
+        let mut child = std::process::Command::new(program)
+            .args(arguments)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| {
+                format!("Copying files needs {program}, which was not found on this system.")
+            })?;
+        let written = child
+            .stdin
+            .take()
+            .map(|mut input| input.write_all(list.as_bytes()));
+        // The tool keeps serving the clipboard in the background once it has
+        // read the list; the process started here ends soon after.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        match written {
+            Some(Ok(())) => Ok(()),
+            _ => Err("Could not write files to the system clipboard".into()),
+        }
+    }
+
+    /// Production picks an application on macOS only.
+    pub fn open_with(_application: &Path, _file: &Path) -> Result<(), String> {
+        Err("Application selection is only available on macOS".into())
+    }
+
+    /// Production has no application chooser on Linux.
+    pub fn open_with_chooser(_file: &Path) -> Result<(), String> {
+        Err("The system application chooser is unavailable".into())
+    }
+
+    pub fn applications(_file: &Path) -> Vec<Application> {
+        Vec::new()
+    }
+}
+
+/// The app's identity to the desktop: Windows files its toasts under it
+/// and Linux names their sender with it.
+pub const APP_ID: &str = "dev.picto.gpui-experiment";
+pub const APP_NAME: &str = "Picto GPUI";
+
+/// The Unity launcher entry the badge updates: the app's desktop file, and
+/// the object path libunity sends from.
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+const LAUNCHER_PATH: &str = "/com/canonical/unity/launcherentry/picto";
+
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn launcher_uri() -> String {
+    format!("application://{APP_ID}.desktop")
+}
+
+/// `new Notification({ title, body }).show()` off macOS, through GPUI's
+/// system notifications under [`APP_ID`].
+#[cfg(not(target_os = "macos"))]
+fn system_notification(title: &str, body: &str, cx: &App) {
+    cx.show_system_notification(gpui::SystemNotification {
+        tag: "subscriptions-finished".into(),
+        title: title.to_owned().into(),
+        body: body.to_owned().into(),
+        actions: Vec::new(),
+    });
+}
+
+/// A `DROPFILES` clipboard payload (`CF_HDROP`): the 20-byte header (the
+/// list's offset, an unused point and client flag, and wide characters on),
+/// then each path in UTF-16 ending in a NUL, and a NUL ending the list.
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
+    const HEADER: u32 = 20;
+    let mut payload = Vec::new();
+    payload.extend(HEADER.to_le_bytes());
+    payload.extend([0u8; 12]);
+    payload.extend(1i32.to_le_bytes());
+    for path in paths {
+        let path = system_path(path);
+        for unit in path.to_string_lossy().encode_utf16().chain([0]) {
+            payload.extend(unit.to_le_bytes());
+        }
+    }
+    payload.extend(0u16.to_le_bytes());
+    payload
+}
+
+/// The `text/uri-list` production writes on Linux: each file's `file:` URL,
+/// each line ending in CRLF.
+#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+fn uri_list(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .filter_map(|path| url::Url::from_file_path(path).ok())
+        .map(|url| format!("{url}\r\n"))
+        .collect()
+}
+
+/// A path as the rest of the desktop takes it. The library's root is a
+/// canonical path, which on Windows is written with the `\\?\` prefix that
+/// Explorer, the clipboard and other applications do not read; it comes off
+/// here (`\\?\UNC\server\share` becomes `\\server\share`).
+pub fn system_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -834,6 +1098,57 @@ fn sort_applications(
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
+    /// `CF_HDROP`'s list, as production's native addon builds it.
+    #[test]
+    fn files_go_to_the_windows_clipboard_as_a_wide_dropfiles_list() {
+        let paths = [PathBuf::from(r"\\?\C:\one.jpg"), PathBuf::from("é")];
+        let payload = super::drop_files(&paths);
+        assert_eq!(&payload[..4], &20u32.to_le_bytes());
+        assert_eq!(&payload[4..16], &[0; 12]);
+        assert_eq!(&payload[16..20], &1i32.to_le_bytes());
+        let units: Vec<u16> = payload[20..]
+            .chunks(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let expected: Vec<u16> = r"C:\one.jpg"
+            .encode_utf16()
+            .chain([0])
+            .chain("é".encode_utf16())
+            .chain([0, 0])
+            .collect();
+        assert_eq!(units, expected);
+    }
+
+    /// `clipboardImport.test.mjs`: "Linux writes the standard URI-list
+    /// clipboard format".
+    #[cfg(unix)]
+    #[test]
+    fn files_go_to_the_linux_clipboard_as_a_uri_list() {
+        let paths = [PathBuf::from("/one two.jpg"), PathBuf::from("/three.png")];
+        assert_eq!(
+            super::uri_list(&paths),
+            "file:///one%20two.jpg\r\nfile:///three.png\r\n"
+        );
+    }
+
+    #[test]
+    fn windows_verbatim_paths_lose_their_prefix_for_the_desktop() {
+        assert_eq!(
+            super::system_path(Path::new(r"\\?\C:\Temp\a.jpg")),
+            PathBuf::from(r"C:\Temp\a.jpg")
+        );
+        assert_eq!(
+            super::system_path(Path::new(r"\\?\UNC\server\share\a.jpg")),
+            PathBuf::from(r"\\server\share\a.jpg")
+        );
+        assert_eq!(
+            super::system_path(Path::new("/tmp/a.jpg")),
+            PathBuf::from("/tmp/a.jpg")
+        );
+    }
+
     #[test]
     fn only_web_links_are_opened() {
         for link in [

@@ -64,10 +64,10 @@ pub const AUTO_TAG_BUILT: bool = false;
 // window and shows the results page (`runReverseImageSearch`); search by
 // image needs that upload.
 const SEARCH_BY_IMAGE_BUILT: bool = false;
-// TODO: open Windows' own application chooser on the file
-// (`rundll32.exe shell32.dll,OpenAs_RunDLL <path>`), the only system that
-// offers "Open With Other...".
-const OPEN_WITH_CHOOSER_BUILT: bool = false;
+// Windows' own application chooser on the file (`desktop::open_with_chooser`,
+// `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
+// system that offers "Open With Other..." as a chooser.
+const OPEN_WITH_CHOOSER_BUILT: bool = cfg!(target_os = "windows");
 
 /// The reverse image search providers (`REVERSE_IMAGE_SEARCH_ENGINES`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -473,10 +473,11 @@ impl Builder<'_> {
             _ => {}
         }
         if h.reveal {
-            let (label, icon) = if cfg!(target_os = "macos") {
-                ("Reveal in Finder", "menu-brand-finder")
+            let label = crate::app_menu::Platform::CURRENT.reveal_title();
+            let icon = if cfg!(target_os = "macos") {
+                "menu-brand-finder"
             } else {
-                ("Show in Explorer", "menu-folder-search")
+                "menu-folder-search"
             };
             rows.push(
                 item(Action::Reveal, label, true)

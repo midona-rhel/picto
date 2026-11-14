@@ -46,6 +46,37 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The text system the pictures are drawn with: the system's on macOS,
+/// which can be made off the main thread; elsewhere the one GPUI's Linux
+/// platform uses, holding only the fonts the app bundles, so a picture
+/// does not depend on what the machine has installed.
+#[cfg(target_os = "macos")]
+fn text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(gpui_apple::AppleTextSystem::new())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn text_system() -> Arc<dyn PlatformTextSystem> {
+    Arc::new(gpui_wgpu::CosmicTextSystem::new_without_system_fonts(
+        crate::theme::FONT_INSPECTOR,
+    ))
+}
+
+/// The renderer the pictures are drawn with: Metal on macOS; wgpu
+/// elsewhere, which finds a software adapter when the machine has no GPU
+/// (lavapipe on Linux, WARP on Windows). GPUI's Windows platform has no
+/// headless renderer of its own.
+#[cfg(target_os = "macos")]
+fn renderer() -> anyhow::Result<Option<Box<dyn gpui::PlatformHeadlessRenderer>>> {
+    gpui_platform::current_headless_renderer()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn renderer() -> anyhow::Result<Option<Box<dyn gpui::PlatformHeadlessRenderer>>> {
+    let renderer = gpui_wgpu::WgpuHeadlessRenderer::new()?;
+    Ok(Some(Box::new(renderer)))
+}
+
 /// One frame's worth of time.
 const TICK: Duration = Duration::from_millis(16);
 
@@ -111,12 +142,8 @@ fn plays_a_script() {
     let (events, delivered) = std::sync::mpsc::channel();
     let application = crate::application::Application::new(root.clone(), events);
     let closing = application.clone();
-    let text_system: Arc<dyn PlatformTextSystem> = Arc::new(gpui_apple::AppleTextSystem::new());
-    let mut cx = HeadlessAppContext::with_platform(
-        text_system,
-        Arc::new(crate::assets::Assets),
-        gpui_platform::current_headless_renderer,
-    );
+    let mut cx =
+        HeadlessAppContext::with_platform(text_system(), Arc::new(crate::assets::Assets), renderer);
     cx.allow_parking();
     cx.update(crate::prepare);
     let window = cx
@@ -125,6 +152,12 @@ fn plays_a_script() {
         })
         .unwrap();
     let main: AnyWindowHandle = window.into();
+    // The frame the app's main window asks for, so its own chrome shows as
+    // on the platform (the window's buttons and edges on Linux).
+    if let Some(decorations) = crate::ui::window_chrome::DECORATIONS {
+        cx.update_window(main, |_, window, _| window.request_decorations(decorations))
+            .unwrap();
+    }
     // A window on screen is the active one, which is what makes focus
     // changes report blurs to the views that lose it.
     cx.update_window(main, |_, window, _| window.activate_window())

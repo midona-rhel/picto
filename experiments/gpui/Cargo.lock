@@ -6528,6 +6528,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-apple",
  "gpui-pre-platform",
+ "gpui-pre-wgpu",
  "hayro",
  "icu_segmenter",
  "image 0.25.10",
@@ -6562,6 +6563,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "wgpu 27.0.1",
+ "zbus 5.19.0",
  "zip 8.6.0",
 ]
 

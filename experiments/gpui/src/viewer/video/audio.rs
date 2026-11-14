@@ -123,6 +123,21 @@ enum Command {
     Rate(f32),
 }
 
+/// What a run of queued commands comes to: the last position asked for
+/// and the last rate. A scrub queues a seek per pointer move; restarting the
+/// source once for the run, not once per move, keeps the worker (and, for
+/// video through ffmpeg, the processes it starts) to one restart at a time.
+fn folded(commands: impl IntoIterator<Item = Command>) -> (Option<f64>, Option<f32>) {
+    let (mut seek, mut rate) = (None, None);
+    for command in commands {
+        match command {
+            Command::Seek(target) => seek = Some(target),
+            Command::Rate(new) => rate = Some(new),
+        }
+    }
+    (seek, rate)
+}
+
 /// A source played through the default output device.
 pub struct Engine {
     shared: Arc<Shared>,
@@ -329,13 +344,13 @@ fn run(
         };
         // A seek or a new rate restarts the pipeline from that position.
         if let Some(command) = command {
-            let target = match command {
-                Command::Seek(target) => target,
-                Command::Rate(new) => {
-                    rate = new;
-                    shared.buffer.lock().unwrap().position()
-                }
-            };
+            let (seek, new_rate) = folded(
+                std::iter::once(command).chain(std::iter::from_fn(|| commands.try_recv().ok())),
+            );
+            if let Some(new_rate) = new_rate {
+                rate = new_rate;
+            }
+            let target = seek.unwrap_or_else(|| shared.buffer.lock().unwrap().position());
             source.seek(target)?;
             (resampler, stretch) = pipeline(rate);
             finished = false;
@@ -592,9 +607,21 @@ impl Backend for AudioPlayer {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioPlayer, Backend, Source, SymphoniaSource};
+    use super::{AudioPlayer, Backend, Command, Source, SymphoniaSource, folded};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn queued_seeks_and_rates_come_to_the_last_of_each() {
+        let commands = [
+            Command::Seek(1.),
+            Command::Rate(1.5),
+            Command::Seek(2.),
+            Command::Seek(3.5),
+        ];
+        assert_eq!(folded(commands), (Some(3.5), Some(1.5)));
+        assert_eq!(folded([Command::Rate(2.)]), (None, Some(2.)));
+    }
 
     /// Plays the file in `PICTO_GPUI_TEST_AUDIO` silently through the
     /// default output device: the clock follows the samples played, a seek
