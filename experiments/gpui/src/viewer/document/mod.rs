@@ -67,25 +67,16 @@ pub fn scroll_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// The font preview's Cmd+= and Cmd+−, which `FontViewer.tsx` handles
-/// itself rather than through the shortcut registry, in each host that shows
-/// a document. The registry's J and L pages are bound by `crate::keymap`.
+/// The font preview's Mod+= and Mod+− (Command on the Mac, Control
+/// elsewhere), which `FontViewer.tsx` handles itself rather than through
+/// the shortcut registry, in each host that shows a document. The
+/// registry's J and L pages are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
-    let mut bindings = Vec::new();
     for scope in [Scope::Viewer, Scope::DetailWindow] {
         let predicate = scope.predicate();
-        bindings.push(KeyBinding::new(
-            "cmd-=",
-            PreviewLarger,
-            predicate.as_deref(),
-        ));
-        bindings.push(KeyBinding::new(
-            "cmd--",
-            PreviewSmaller,
-            predicate.as_deref(),
-        ));
+        crate::keymap::bind_written("Mod+=", Box::new(PreviewLarger), predicate.as_deref(), cx);
+        crate::keymap::bind_written("Mod+-", Box::new(PreviewSmaller), predicate.as_deref(), cx);
     }
-    cx.bind_keys(bindings);
 }
 
 /// Hands the document keys to the media surface. A host puts this on the

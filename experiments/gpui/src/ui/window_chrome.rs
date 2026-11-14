@@ -288,9 +288,48 @@ pub fn lock_aspect_ratio(window: &Window, ratio: f64) {
     let _ = (window, ratio);
 }
 
+/// Whether [`set_always_on_top`] can float a window here: on macOS and
+/// Windows. GPUI gives no handle to the X11 connection to set
+/// `_NET_WM_STATE_ABOVE` with, and Wayland has no such request, so on Linux
+/// the control that asks for it is not shown.
+pub const fn can_stay_on_top() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
 /// Floats the window above others, or puts it back among them, as
 /// Electron's `setAlwaysOnTop` does with its default `floating` level.
 pub fn set_always_on_top(window: &Window, on_top: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn SetWindowPos(
+                window: isize,
+                after: isize,
+                x: i32,
+                y: i32,
+                width: i32,
+                height: i32,
+                flags: u32,
+            ) -> i32;
+        }
+        /// `HWND_TOPMOST` and `HWND_NOTOPMOST`.
+        const TOPMOST: isize = -1;
+        const NOT_TOPMOST: isize = -2;
+        /// `SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE`.
+        const KEEP_PLACE: u32 = 0x0001 | 0x0002 | 0x0010;
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
+            && let RawWindowHandle::Win32(win32) = handle.as_raw()
+        {
+            let after = if on_top { TOPMOST } else { NOT_TOPMOST };
+            // SAFETY: a live window's handle, with the flags that leave its
+            // size, place and activation alone.
+            unsafe {
+                SetWindowPos(win32.hwnd.get(), after, 0, 0, 0, 0, KEEP_PLACE);
+            }
+        }
+    }
     #[cfg(target_os = "macos")]
     appkit::with_ns_window(window, |ns_window| {
         // `NSFloatingWindowLevel` and `NSNormalWindowLevel`.
@@ -302,7 +341,7 @@ pub fn set_always_on_top(window: &Window, on_top: bool) {
             send_level(ns_window, appkit::selector(c"setLevel:"), level);
         }
     });
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = (window, on_top);
 }
 

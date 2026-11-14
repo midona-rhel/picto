@@ -408,6 +408,9 @@ impl DetailWindow {
     }
 
     fn toggle_on_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !ui::window_chrome::can_stay_on_top() {
+            return;
+        }
         self.on_top = !self.on_top;
         ui::window_chrome::set_always_on_top(window, self.on_top);
         cx.notify();
@@ -659,7 +662,8 @@ impl DetailWindow {
                 );
         }
         right = right
-            .child(
+            // Not offered where the window cannot be kept on top (Linux).
+            .children(ui::window_chrome::can_stay_on_top().then(|| {
                 // `.icBtnActive` composes `iconBtnFilled`: pinned shows the
                 // filled glyph, with no background of its own.
                 ui::icon_button("detail-pin", if self.on_top { "pin-filled" } else { "pin" })
@@ -671,8 +675,8 @@ impl DetailWindow {
                         })
                         .shortcut("view.alwaysOnTop", cx),
                     )
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_on_top(window, cx))),
-            )
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_on_top(window, cx)))
+            }))
             .child(tooltip::attach(
                 div()
                     .id("detail-close-tip")

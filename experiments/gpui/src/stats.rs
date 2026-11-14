@@ -100,7 +100,47 @@ fn thread_cpu_micros() -> u64 {
     time.seconds as u64 * 1_000_000 + time.nanoseconds as u64 / 1_000
 }
 
-#[cfg(not(unix))]
+/// How long the calling thread has run, in microseconds: its kernel and
+/// user times, which Windows counts in 100-nanosecond steps.
+#[cfg(windows)]
+fn thread_cpu_micros() -> u64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentThread() -> *mut std::ffi::c_void;
+        fn GetThreadTimes(
+            thread: *mut std::ffi::c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+    let (mut creation, mut exit, mut kernel, mut user) = Default::default();
+    // SAFETY: the pseudo-handle of the current thread, and four FILETIMEs
+    // for the call to fill.
+    let read = unsafe {
+        GetThreadTimes(
+            GetCurrentThread(),
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    if read == 0 {
+        return 0;
+    }
+    let ticks = |time: FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+    (ticks(kernel) + ticks(user)) / 10
+}
+
+#[cfg(not(any(unix, windows)))]
 fn thread_cpu_micros() -> u64 {
     0
 }

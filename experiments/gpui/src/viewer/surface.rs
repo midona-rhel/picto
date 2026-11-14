@@ -1283,7 +1283,9 @@ impl Render for MediaSurface {
         }
         surface = surface
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" || event.keystroke.modifiers.platform {
+                // The app's shortcuts (Command on the Mac, Control
+                // elsewhere) stay the app's; the movie gets the rest.
+                if event.keystroke.key == "escape" || event.keystroke.modifiers.secondary(cx) {
                     return;
                 }
                 if let Some(flash) = &this.flash {

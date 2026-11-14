@@ -1440,18 +1440,21 @@ impl GridView {
                         return;
                     }
                     let modifiers = event.modifiers();
+                    // `metaKey || ctrlKey`: Command on the Mac, Control on
+                    // Windows and Linux, either on any system.
+                    let additive = modifiers.platform || modifiers.control;
                     let open = event.click_count() == 2;
                     this.session.update(cx, |session, cx| {
                         if modifiers.shift {
-                            session.select_to(ordinal, modifiers.platform, cx);
-                        } else if modifiers.platform {
+                            session.select_to(ordinal, additive, cx);
+                        } else if additive {
                             session.toggle(ordinal, cx);
                         } else {
                             session.select(ordinal, cx);
                         }
                     });
                     window.focus(&this.focus, cx);
-                    if open && !modifiers.shift && !modifiers.platform {
+                    if open && !modifiers.shift && !additive {
                         cx.emit(Activated {
                             ordinal,
                             middle: false,
