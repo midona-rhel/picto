@@ -7,6 +7,7 @@ use crate::i18n::{en, t};
 use crate::session::{Report, Reread, edit_then, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
+use picto_library::selection::SelectionTarget;
 use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -879,17 +880,28 @@ impl Shell {
     }
 
     fn confirm_ungroup(&mut self, target: Target, cx: &mut Context<Self>) {
-        let collections = target
-            .items
-            .iter()
-            .filter(|item| item.kind == RootKind::Collection)
-            .count();
-        let title = if collections == 1 {
-            t("Ungroup?").to_owned()
-        } else {
-            crate::tf!("Ungroup {value0} collections?", grouped(collections as u64))
+        let selection = target.selection(self.session.read(cx));
+        // The loaded items count the collections only when they are all the
+        // selection; past them, the library's count when it has given one.
+        let loaded = matches!(
+            &selection,
+            SelectionTarget::Explicit { root_ids, .. } if root_ids.len() == target.items.len()
+        );
+        let collections = target.collections.or_else(|| {
+            loaded.then(|| {
+                target
+                    .items
+                    .iter()
+                    .filter(|item| item.kind == RootKind::Collection)
+                    .count() as u64
+            })
+        });
+        let title = match collections {
+            Some(1) => t("Ungroup?").to_owned(),
+            Some(n) => crate::tf!("Ungroup {value0} collections?", grouped(n)),
+            None => t("Ungroup the selected collections?").to_owned(),
         };
-        let message = if collections == 1 && target.items.len() == 1 {
+        let message = if collections == Some(1) && loaded && target.items.len() == 1 {
             t(
                 "Every member will return to the library as a separate item. Files and metadata will not be deleted.",
             )
@@ -898,7 +910,6 @@ impl Shell {
                 "Every member of these collections will return to the library as a separate item. Other selected items stay as they are. Files and metadata will not be deleted.",
             )
         };
-        let selection = target.selection(self.session.read(cx));
         self.ask(
             title,
             message,

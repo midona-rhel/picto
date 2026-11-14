@@ -66,6 +66,9 @@ pub(super) struct Target {
     members: Vec<usize>,
     /// Quick Look opened it, which closes when the collection is gone.
     quick_look: bool,
+    /// How many collections the selection holds, as the library counted
+    /// them, for a selection that reaches past the loaded items.
+    collections: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -190,6 +193,10 @@ impl Shell {
         let media = single.is_some_and(|item| item.kind == RootKind::Media);
         let last_folder_name = self.last_folder_name(cx);
         let whole = self.session.read(cx).selects_whole();
+        // `selectionLoaded`: the loaded items are the whole selection, so
+        // they say how many collections it holds. Otherwise only the
+        // library knows, and the menu asks it once open.
+        let loaded = !whole && self.session.read(cx).selection_count() as usize == count;
         let description = Description {
             surface: Surface::Grid,
             // With the whole destination selected, all of it.
@@ -203,15 +210,7 @@ impl Shell {
             single_name: single.map(|item| item.name.clone()),
             single_mime: single.map(|item| item.mime.clone()),
             contains_group: collections > 0,
-            // The loaded items say how many collections a whole destination
-            // holds only when it is all loaded; otherwise the count is not
-            // known here.
-            // TODO: count the collections the destination's query holds, as
-            // production looks them up, and name the number.
-            collection_count: Some(
-                (!whole || self.session.read(cx).selection_count() as usize == count)
-                    .then_some(collections),
-            ),
+            collection_count: Some(loaded.then_some(collections)),
             scope: Some(grid.menu_kind()),
             status,
             grayscale: self.session.read(cx).grayscale,
@@ -257,7 +256,7 @@ impl Shell {
                 export_pack: true,
                 organize_group: count > 1,
                 edit_group: single.is_some_and(|item| item.kind == RootKind::Collection),
-                ungroup: collections > 0,
+                ungroup: collections > 0 || !loaded,
                 sort_contents: folder.is_some(),
                 toggle_grayscale: true,
                 ..Default::default()
@@ -274,10 +273,63 @@ impl Shell {
             folder,
             ..Default::default()
         };
+        let ids = target.ids();
         let menu = self.show_item_menu(built, target, true, position, window, cx);
         if pending && let Some(file) = file {
             self.look_up_applications(file, menu.downgrade(), cx);
         }
+        if !loaded {
+            let organize = count > 1 && collections == 0;
+            self.count_collections(ids, organize, menu.downgrade(), cx);
+        }
+    }
+
+    /// Asks the library how many collections the selection holds, for a
+    /// selection that reaches past the loaded items, and puts the counted
+    /// Ungroup row (or none) in place of the uncounted one while the menu
+    /// is open; with none to merge, Group no longer says it merges.
+    /// `organize`: the menu offers Group and no loaded item is a collection.
+    fn count_collections(
+        &mut self,
+        ids: Vec<RootId>,
+        organize: bool,
+        menu: WeakEntity<Menu>,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.session.read(cx);
+        let selection = session.target_for(ids);
+        let job = session.run(move |library| library.selection_collection_count(&selection));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(count)) = job.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.items.open.as_ref() != Some(&menu) {
+                    return;
+                }
+                if let Some(target) = &mut this.items.target {
+                    target.collections = Some(count);
+                }
+                let mut replace = |label: String, rows: Vec<Row>, this: &mut Self| {
+                    this.items.actions.extend(rows::actions(&rows));
+                    let entries = rows::entries(rows, &mut |_| ui::menu::Entry::Separator);
+                    let _ = menu.update(cx, |menu, cx| menu.replace_entry(&label, entries, cx));
+                };
+                let ungroup = (count > 0)
+                    .then(|| rows::ungroup_row(Some(count as usize)))
+                    .into_iter()
+                    .collect();
+                replace(rows::ungroup_row_label(None), ungroup, this);
+                if count == 0 && organize {
+                    replace(
+                        rows::group_row_label(true),
+                        vec![rows::group_row(false)],
+                        this,
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     /// How "Open With Other" is offered for a media item: on macOS its

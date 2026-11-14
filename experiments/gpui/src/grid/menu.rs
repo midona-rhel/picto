@@ -1222,30 +1222,35 @@ fn library_cover_row() -> Row {
 }
 
 /// `groupMenuEntry`.
-fn group_row(may_merge: bool) -> Row {
-    item(
-        Action::Group,
-        if may_merge {
-            t("Merge into One Group...")
-        } else {
-            t("Group...")
-        },
-        true,
-    )
-    .icon("menu-group-create")
-    .into()
+pub fn group_row(may_merge: bool) -> Row {
+    item(Action::Group, group_row_label(may_merge), true)
+        .icon("menu-group-create")
+        .into()
+}
+
+/// The label of [`group_row`], by which an open menu finds it.
+pub fn group_row_label(may_merge: bool) -> String {
+    if may_merge {
+        t("Merge into One Group...").to_owned()
+    } else {
+        t("Group...").to_owned()
+    }
 }
 
 /// `ungroupMenuEntry`: `None` while the collections are being counted.
-fn ungroup_row(count: Option<usize>) -> Row {
-    let label = match count {
+pub fn ungroup_row(count: Option<usize>) -> Row {
+    item(Action::Ungroup, ungroup_row_label(count), true)
+        .icon("menu-group-remove")
+        .into()
+}
+
+/// The label of [`ungroup_row`], by which an open menu finds it.
+pub fn ungroup_row_label(count: Option<usize>) -> String {
+    match count {
         None => t("Ungroup Collections...").to_owned(),
         Some(n) if n > 1 => crate::tf!("Ungroup {value0} Collections...", grouped(n as u64)),
         Some(_) => t("Ungroup...").to_owned(),
-    };
-    item(Action::Ungroup, label, true)
-        .icon("menu-group-remove")
-        .into()
+    }
 }
 
 /// `buildExportContextEntry`.
