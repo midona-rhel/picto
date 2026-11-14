@@ -107,7 +107,9 @@ jobs:
           printf 'synthetic:million_grid_demo\n' > "$library/.gpui-disposable"
           # The pictures are taken in a copy the app itself makes, as a user
           # on this system would make one.
-          copy="$(./target/debug/picto-gpui-spike --make-copy "$(native "$library")" | tail -n 1)"
+          # Through cargo, which puts the libraries the core's ONNX Runtime
+          # links (libwebgpu_dawn.so on Linux) on the loader's path.
+          copy="$(cargo run --locked -q -- --make-copy "$(native "$library")" | tail -n 1)"
           echo "copy: $copy"
           out="$(unix "$RUNNER_TEMP")/pictures"
           mkdir -p "$out"
