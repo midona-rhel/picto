@@ -286,8 +286,11 @@ fn main() {
                 },
             )
             .unwrap();
+        // Input playback is a debug build's only (`seams.rs`).
         #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
+        #[cfg(not(debug_assertions))]
+        let _ = window;
         if !background {
             cx.activate(true);
         }
