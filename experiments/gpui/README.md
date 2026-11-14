@@ -119,9 +119,22 @@ with the guard. A failed copy leaves nothing behind. Run the binary through
 (`libwebgpu_dawn.so` among them), which cargo puts on the loader's path and a
 bare `target/debug/picto-gpui-spike` does not find.
 
-The binary takes one argument, the copy's root. `<copy> --detach` detaches
-the copy and exits without opening a window; `reference.sh` uses it before
-the Electron app opens the same copy.
+The binary takes the copy's root first. `<copy> --detach` detaches the copy
+and exits without opening a window; `reference.sh` uses it before the
+Electron app opens the same copy. Files after the copy are opened as
+production opens files from the file manager (`src/opening/`): a
+`.picto-pack` goes to the pack's import dialog (several wait their turn),
+a `.library` that is the open copy only brings the window forward, and any
+other `.library` is refused, since the app opens only the copy it started
+on. There is one instance per copy: a second launch on a copy already open
+hands its files to that instance, which comes forward, and exits; launches
+on other copies run side by side. A launch with files and no copy (what a
+file manager starts) hands them to the instance whose window was active
+last, or fails when none is open. On macOS the same files also arrive
+through `application:openURLs:` (Open With, `open -a`, a drop on the Dock
+icon) while the app runs. No file type is registered with the system: the
+bundle `run.sh` makes declares none, and nothing is written to the
+registry or to a `.desktop` file.
 
 `million.sh [items]` generates a synthetic library (a million items by
 default, sharing 4,096 generated JPEGs through hard links, with five smart
@@ -178,14 +191,18 @@ cargo test --locked
 GPUI is taken from `gpui-pre` and `gpui-pre-platform` `=0.3.12`, a crates.io
 snapshot of upstream GPUI (zed-industries/zed); the official `gpui` crate has
 not been published since 0.2.2 and GPUI promises no API stability between
-snapshots, so the version is pinned exactly and upgraded deliberately. Four
+snapshots, so the version is pinned exactly and upgraded deliberately. Six
 of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
-`gpui-pre-windows`) are vendored under `vendor/` and substituted with
+`gpui-pre-windows`, `gpui-pre-macos`, `gpui-pre-linux`) are vendored under
+`vendor/` and substituted with
 `[patch.crates-io]`. The patches add a backdrop-blur primitive (drawn by the
 Metal and wgpu renderers, ignored by the DirectX one), drop shadows that cut
 their element out as CSS does, nearest-neighbour image sampling for the
 "Pixelated" preview setting, a native file drag the app can start itself
-(`Window::start_platform_drag`), an interface zoom for every window
+(`Window::start_platform_drag`, given an OLE drag source on Windows and an
+XDND source on X11), what a drop from another application carries besides
+files (`ExternalDropData`: a browser's image data, its addresses, HTML and
+text, read by each platform), an interface zoom for every window
 (`App::set_ui_zoom`), and test-only hooks for the off-screen
 checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
 that keep client decorations). `vendor/README.md` explains each change and
@@ -398,6 +415,16 @@ collection questions and the task dialog and task bar; exports through
 `media.export` and `picto_pack.*`. `prompt.rs` opens the system's file,
 folder and save dialogs.
 
+**Opening files** (`src/opening/`). The command line (`parse`: the copy,
+then files), production's classification of opened files
+(`associatedFileService.mjs`: `.picto-pack` and `.library`, made absolute
+against the launch's working folder), and `accept`, which queues packs on
+the export view's pack dialog and brings the window forward.
+`opening/instance/` keeps one instance per copy: an exclusive lock on a file
+named after the copy's identity in a folder of the user's own, and a Unix
+socket (`unix.rs`) or named pipe (`windows.rs`) beside it that takes a later
+launch's working folder and arguments as one JSON line.
+
 **Desktop** (`src/desktop/`). What production's main process does around the
 window: the Inbox badge, the "Subscriptions finished" system notification,
 and the guarded file hand-offs. `mod.rs` is portable; `macos.rs`,
@@ -469,7 +496,9 @@ version are kept. The app starts on All each launch, as production does.
   `keymap::bind_written`. Every registry id is either bound or listed with
   its reason in `keymap::NOT_YET`, and a test keeps it so.
 - **Platform code** lives only in the platform leaves: `src/desktop/macos.rs`,
-  `windows.rs` and `linux.rs` for the desktop hand-offs, and
+  `windows.rs` and `linux.rs` for the desktop hand-offs,
+  `src/opening/instance/unix.rs` and `windows.rs` for the single-instance
+  socket and pipe, and
   `src/platform/macos.rs` and `windows.rs` for window-level calls (AppKit and
   Core Animation for the pop-up menus, the traffic lights, the aspect lock,
   the window level; `SetWindowPos` on Windows), each reached through one
@@ -583,6 +612,7 @@ show a restart. Script lines (blank lines and `#` comments are skipped):
 | `key <keystroke>` | a keystroke as GPUI writes them (`space`, `cmd-shift-j`; `secondary-` is Command on macOS, Control elsewhere), held modifiers reported around it |
 | `type <text>` | text typed into the focused field |
 | `dragfiles X Y PATH…`, `drop X Y PATH…`, `dragexit` | files from the system over the window, dropped there (imports into the copy), or taken away; paths cannot hold spaces |
+| `dropdata X Y KIND=VALUE…` | what a web browser drags, dropped with no files: `image=PATH` (that file's bytes, in memory), `uri=`, `text=`, `download=` (a `DownloadURL`), `html=PATH` (that file's text); released without the platform's drop, so the app is not brought forward |
 | `wait <ms>` | let the app run |
 | `pace <ms>` | how long the app runs after each input line (default 200) |
 | `shot <name>` | save `<name>.png` |
@@ -760,7 +790,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables (a problem's message and detail in its tooltip), every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
 | Subscription run pop-ups | "Subscription paused" and "Gallery download paused", "Query completed", "Subscription completed", and a settled gallery download's "Gallery downloaded", "Gallery already exists" or "Gallery import failed" with its transient subscription removed, for the whole app whichever view shows | tests (production's settle test cases as recorded sequences of `subscriptions.list`, `subscriptions.runs.get` and `subscriptions.runs.list` answers); pictures of the pop-ups; never seen after a real run (no network) |
 | Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
-| Imports and exports | drops, choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
+| Imports and exports | drops (files, and a browser's image data with its addresses as sources), choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
 | Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
 | Keyboard | every registry shortcut bound or listed in `NOT_YET`; Tab order and focus rings in dialogs, popovers and Settings | values (keymap test); read |
 | Text fields | Chromium's editing on each platform: words (with Chinese, Japanese and Thai dictionaries), rows, paragraphs, Emacs keys, the field's own undo, input method | tests |
@@ -801,9 +831,18 @@ re-checked by reading the code; the rest were checked against it.
   rows of its own (Edit's Dictation and Emoji & Symbols, Enter Full Screen,
   the Window menu's tiling rows) and titles the application menu with the
   process's name.
+- **Drops from a web browser.** No real browser drag has been dropped on
+  any platform. On macOS the pasteboard reading was checked on a pasteboard
+  of a test's own, and a drop of in-memory image data (played with
+  `dropdata`) was imported into a real window with its addresses as
+  sources; on Windows and Linux only the parsing of virtual-file
+  descriptors, `HTML Format` and the media types read is tested, and the
+  reading code is compiled in CI.
 - **macOS system integration.** Dragging items out to Finder; the Dock
   badge and the system notification (which need the app to run from its
-  bundle); a real pasteboard copy of files; launching an application through
+  bundle); a real pasteboard copy of files; files arriving through
+  `application:openURLs:` (the hand-over between two launches and packs on
+  the command line were seen working); launching an application through
   Open With, Reveal in Finder; the media player's full-screen transition;
   restoring the window maximised or on a second display (a kept place and
   size was seen restored and written back; only the pure placement code is
@@ -897,9 +936,14 @@ re-checked by reading the code; the rest were checked against it.
 - Search by Image (it uploads the file to a search engine): its engines are
   drawn in every menu as production draws a disabled row (40%, no hover, no
   tooltip).
-- Single instance, opening files and `.picto-pack` packs from the file
-  manager, and drops from a browser (GPUI delivers only file paths, so
-  in-memory files and links do not arrive).
+- Files a source promises on macOS (`NSFilePromiseReceiver`, which some
+  browsers drag an image as without its data): such a drag shows as links
+  only and is refused.
+- Opening another library from the file manager or the command line of a
+  running instance (production's `switchLibrary`): it is refused with a
+  notification.
+- On macOS, a pack opened with the app while no instance runs: the system
+  launches the bundle without a copy, which the app refuses.
 - Thumbnails of Word and PowerPoint files without an embedded picture (and
   of an EPUB without a cover): the application takes the embedded one;
   production draws the others' first page with its document viewers in a
@@ -1115,7 +1159,10 @@ Smaller differences by area†
 | System notification | toast through GPUI under the app's identity | freedesktop notification | same |
 | Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
 | Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
-| Drag items out of the window | not built (needs OLE `DoDragDrop` outside GPUI's event dispatch) | not built (needs an XDND source) | GPUI's native drag |
+| Drag items out of the window | OLE drag of a `CF_HDROP` data object (`DoDragDrop` run from a task after the event that started it); never run | XDND source (versions 3 to 5, `text/uri-list`, proxies followed; Escape does not cancel it); never run | GPUI's native drag |
+| Drops from a browser (in-memory image, addresses, HTML) | virtual files (`FileGroupDescriptorW`/`FileContents`), else `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
+| Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
+| Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |
 | Detail window aspect lock | not built | not built | not built |
 | Detail window always on top | yes | no; the pin is hidden | no; the pin is hidden |
 | UI font | the system's (production bundles Geist) | the system's | the system's |

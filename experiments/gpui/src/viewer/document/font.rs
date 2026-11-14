@@ -356,7 +356,7 @@ impl FontViewer {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn settled(&self) -> bool {
         !matches!(self.status, Status::Loading)
     }

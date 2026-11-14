@@ -21,6 +21,7 @@ use gpui::*;
 use picto_library::selection::SelectionTarget;
 use picto_library::{FolderId, SmartFolderId};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
 /// What a Picto Pack is made from (`PictoPackSource`).
@@ -280,6 +281,11 @@ pub struct Exports {
     dialog: ui::modal::Host<Dialog>,
     /// Where the keyboard goes back to.
     back: FocusHandle,
+    /// Packs the system asked the app to open (`pendingPictoPackPaths`),
+    /// shown one at a time as each dialog closes.
+    pending_packs: VecDeque<PathBuf>,
+    /// A pack is being read for its dialog.
+    pack_opening: bool,
 }
 
 struct ExportsGlobal(WeakEntity<Exports>);
@@ -314,6 +320,8 @@ impl Exports {
             session,
             dialog: ui::modal::Host::default(),
             back,
+            pending_packs: VecDeque::new(),
+            pack_opening: false,
         }
     }
 
@@ -463,6 +471,7 @@ impl Exports {
             keep_aspect: convert.keep_aspect,
         };
         self.dialog.dismiss(cx);
+        self.drain_packs(cx);
         self.export(request, "Could not export files", cx);
     }
 
@@ -514,8 +523,15 @@ impl Exports {
             "picto_pack.inspect",
             json!({ "path": path.to_string_lossy() }),
         );
+        self.pack_opening = true;
         cx.spawn(async move |this, cx| {
             let result = answer.await;
+            let _ = this.update(cx, |this, cx| {
+                this.pack_opening = false;
+                if !matches!(result, Ok(Ok(_))) {
+                    this.drain_packs(cx);
+                }
+            });
             let _ = this.update(cx, |this, cx| match result {
                 Ok(Ok(summary)) => {
                     let back = ui::menu::Return::To(this.back.clone());
@@ -599,7 +615,7 @@ impl Exports {
                                 ),
                                 cx,
                             );
-                            this.dialog.close(cx);
+                            this.close(cx);
                         }
                         Ok(Err(error)) => {
                             notify(Level::Error, t("Could not import Picto Pack"), &error, cx);
@@ -633,7 +649,7 @@ impl Exports {
                         ),
                         cx,
                     );
-                    this.dialog.close(cx);
+                    this.close(cx);
                 }
                 Ok(Err(error)) => {
                     notify(Level::Error, t("Could not export Picto Pack"), &error, cx);
@@ -660,6 +676,48 @@ impl Exports {
             return;
         }
         self.dialog.dismiss(cx);
+        self.drain_packs(cx);
+    }
+
+    /// A dialog whose work is done, or Cancel: it goes at once, and the
+    /// next pack the system asked to open comes up.
+    fn close(&mut self, cx: &mut Context<Self>) {
+        self.dialog.close(cx);
+        self.drain_packs(cx);
+    }
+
+    /// `enqueuePictoPack`: a pack opened from the file manager or a second
+    /// launch, shown once no dialog of this view is up.
+    pub fn queue_pack(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !self.pending_packs.contains(&path) {
+            self.pending_packs.push_back(path);
+        }
+        self.drain_packs(cx);
+    }
+
+    /// `startAssociatedFilesRuntime`'s drain: the next queued pack is opened
+    /// while no dialog is up (production waits for the pack dialog only;
+    /// here the Export dialog is waited for too, since one dialog of this
+    /// view shows at a time and opening the pack would close it). A pack
+    /// that cannot be opened is reported and the next one comes up.
+    fn drain_packs(&mut self, cx: &mut Context<Self>) {
+        let showing = self
+            .dialog
+            .get_mut()
+            .is_some_and(|dialog| !dialog.presence.closing());
+        if self.pack_opening || showing {
+            return;
+        }
+        // `openPictoPackImport`'s `allowTaskAction('import')`: a pack
+        // refused while an import runs is let go, as production's claim is.
+        while let Some(path) = self.pending_packs.pop_front() {
+            let allowed = crate::imports::get(cx)
+                .is_none_or(|imports| imports.update(cx, |imports, cx| imports.allow(cx)));
+            if allowed {
+                self.open_pack(path, cx);
+                return;
+            }
+        }
     }
 }
 
