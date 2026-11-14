@@ -171,22 +171,31 @@ struct Focused {
     item: RootSummary,
 }
 
-/// The height per item the grid measured for a layout geometry (width,
-/// zoom, spacing, mode, text rows), which the scrollable height of a
-/// destination is estimated from.
 /// A file's thumbnail in a library's `blobs` folder, under its content
 /// hash, for work that runs away from the session.
 pub fn thumbnail_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
-    if hash.len() < 4 {
+    blob_in(blobs, "t", hash, "jpg")
+}
+
+/// `blobs/<kind>/<ab>/<cd>/<hash>.<extension>`, the layout core's blob
+/// store keeps (`BlobStore::original_path_with_ext`, `thumbnail_path_with_ext`;
+/// opening a `BlobStore` writes its staging folder, so the layout is
+/// followed here). A hash the library hands back that is not hexadecimal,
+/// and so could step out of the folder or split a character, names no file.
+fn blob_in(blobs: &std::path::Path, kind: &str, hash: &str, extension: &str) -> PathBuf {
+    if hash.len() < 4 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return PathBuf::new();
     }
     blobs
-        .join("t")
+        .join(kind)
         .join(&hash[..2])
         .join(&hash[2..4])
-        .join(format!("{hash}.jpg"))
+        .join(format!("{hash}.{extension}"))
 }
 
+/// The height per item the grid measured for a layout geometry (width,
+/// zoom, spacing, mode, text rows), which the scrollable height of a
+/// destination is estimated from.
 pub type Density = ((u32, u32, u32, crate::grid::layout::ViewMode, u32), f32);
 
 pub struct Session {
@@ -510,6 +519,22 @@ impl Session {
         }
     }
 
+    /// The open library's folder, the one that holds its blobs.
+    pub fn library_root(&self) -> Option<&std::path::Path> {
+        self.blobs.parent()
+    }
+
+    /// What the search field holds, which the results are filtered by.
+    pub fn search_text(&self) -> &str {
+        &self.search_text
+    }
+
+    /// The library folder's name without its `.library` suffix.
+    pub fn library_name(&self) -> Option<String> {
+        let name = self.blobs.parent()?.file_name()?.to_string_lossy();
+        Some(name.trim_end_matches(".library").to_owned())
+    }
+
     /// The library's blob store.
     pub fn blobs(&self) -> &std::path::Path {
         &self.blobs
@@ -548,17 +573,12 @@ impl Session {
     /// Where the library keeps an original: beside its thumbnail's folder,
     /// under its content hash and its type's extension.
     pub fn original(&self, hash: &str, mime: &str) -> PathBuf {
-        if hash.len() < 4 {
-            return PathBuf::new();
-        }
-        self.blobs
-            .join("f")
-            .join(&hash[..2])
-            .join(&hash[2..4])
-            .join(format!(
-                "{hash}.{}",
-                picto_core::blob_store::mime_to_extension(mime)
-            ))
+        blob_in(
+            &self.blobs,
+            "f",
+            hash,
+            picto_core::blob_store::mime_to_extension(mime),
+        )
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
@@ -675,7 +695,22 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::SubscriptionActivity;
+    use super::{SubscriptionActivity, thumbnail_in};
+    use std::path::{Path, PathBuf};
+
+    /// The blob layout core keeps; a hash that is not hexadecimal names no
+    /// file, so it can neither leave the folder nor split a character.
+    #[test]
+    fn blobs_are_found_under_their_hash_and_only_a_hash() {
+        let blobs = Path::new("lib/blobs");
+        assert_eq!(
+            thumbnail_in(blobs, "abcdef12"),
+            Path::new("lib/blobs/t/ab/cd/abcdef12.jpg")
+        );
+        for hash in ["", "abc", "../../x", "ab/cdef", "é0123", "abcd\\x"] {
+            assert_eq!(thumbnail_in(blobs, hash), PathBuf::new(), "{hash}");
+        }
+    }
 
     #[test]
     fn subscription_activity_is_read_as_the_overview_reads_it() {

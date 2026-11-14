@@ -275,9 +275,6 @@ impl Session {
     }
 }
 
-/// Whether `ids` are the same items as `selected`: the grid's selection,
-/// rather than one item acted on by itself (the viewer's, a tile dragged
-/// alone).
 /// [`Session::target_for`]: `selection` (what an edit of the grid's
 /// selection addresses) when `ids` are the selected items, loaded or by id;
 /// else `ids` alone.
@@ -294,6 +291,9 @@ fn target_of(
     }
 }
 
+/// Whether `ids` are the same items as `selected`: the grid's selection,
+/// rather than one item acted on by itself (the viewer's, a tile dragged
+/// alone).
 fn same_items(ids: &[RootId], selected: &[RootId]) -> bool {
     if ids.is_empty() || ids.len() != selected.len() {
         return false;

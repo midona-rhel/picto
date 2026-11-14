@@ -92,9 +92,6 @@ impl Session {
 
     // ── Navigation ──────────────────────────────────────────────
 
-    /// Opens a sidebar destination and records it for Back and Forward.
-    /// Choosing the destination already showing does nothing, unless the
-    /// viewer is over it, which this closes.
     /// `navigateToNode('media-matches:<id>')`: every item that uses the
     /// media of `item` (Find Items with This Media), a destination with no
     /// sidebar row, titled "Items with This Media".
@@ -126,6 +123,9 @@ impl Session {
         self.navigate(index, cx);
     }
 
+    /// Opens a sidebar destination and records it for Back and Forward.
+    /// Choosing the destination already showing does nothing, unless the
+    /// viewer is over it, which this closes.
     pub fn navigate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == self.scope {
             // Choosing a screen from inside one of its places goes to its top.

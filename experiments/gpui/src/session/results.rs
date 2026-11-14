@@ -322,22 +322,6 @@ impl Session {
         }
     }
 
-    /// The open library's folder, the one that holds its blobs.
-    pub fn library_root(&self) -> Option<&std::path::Path> {
-        self.blobs.parent()
-    }
-
-    /// What the search field holds, which the results are filtered by.
-    pub fn search_text(&self) -> &str {
-        &self.search_text
-    }
-
-    /// The library folder's name without its `.library` suffix.
-    pub fn library_name(&self) -> Option<String> {
-        let name = self.blobs.parent()?.file_name()?.to_string_lossy();
-        Some(name.trim_end_matches(".library").to_owned())
-    }
-
     /// Zooms the grid, and saves the zoom to the destination's view
     /// (`saveViewPref({ target_size })`) once it has rested for 500 ms
     /// (`VIEW_PREFS_SAVE_DEBOUNCE_MS`), so a slider drag writes once.
