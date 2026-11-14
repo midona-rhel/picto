@@ -678,7 +678,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             let may_merge = d.contains_group
                 || matches!(d.collection_count, Some(None))
                 || matches!(d.collection_count, Some(Some(n)) if n > 0);
-            rows.push(group_row(may_merge, true));
+            rows.push(group_row(may_merge));
         }
         if d.single && d.single_kind == Some(Kind::Collection) {
             rows.push(
@@ -694,7 +694,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             Some(counted) => counted,
         };
         if collections.is_none_or(|n| n > 0) && h.ungroup {
-            rows.push(ungroup_row(collections, true));
+            rows.push(ungroup_row(collections));
         }
         rows.push(Row::Separator);
     }
@@ -1033,9 +1033,9 @@ pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
     let remove: Row = item(Action::RemoveFromGroup, label, true)
         .icon("menu-group-remove")
         .into();
-    let trash = rows.iter().position(|row| {
-        matches!(row, Row::Item(item) if item.label.starts_with("Move") && item.label.ends_with("to Trash"))
-    });
+    let trash = rows
+        .iter()
+        .position(|row| matches!(row, Row::Item(item) if item.action == Action::MoveToTrash));
     match trash {
         Some(at) => {
             rows.splice(at..at, [Row::Separator, remove]);
@@ -1095,7 +1095,7 @@ pub fn collection_menu() -> Vec<Row> {
 /// playback, and a frame that can become the thumbnail.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Playback {
-    /// `Some(playing)` for a Flash movie.
+    /// `Some((playing, muted))` for a Flash movie.
     pub flash: Option<(bool, bool)>,
     /// The current frame can be captured.
     pub capture: bool,
@@ -1215,7 +1215,7 @@ fn library_cover_row() -> Row {
 }
 
 /// `groupMenuEntry`.
-fn group_row(may_merge: bool, handled: bool) -> Row {
+fn group_row(may_merge: bool) -> Row {
     item(
         Action::Group,
         if may_merge {
@@ -1223,20 +1223,20 @@ fn group_row(may_merge: bool, handled: bool) -> Row {
         } else {
             "Group..."
         },
-        handled,
+        true,
     )
     .icon("menu-group-create")
     .into()
 }
 
 /// `ungroupMenuEntry`: `None` while the collections are being counted.
-fn ungroup_row(count: Option<usize>, handled: bool) -> Row {
+fn ungroup_row(count: Option<usize>) -> Row {
     let label = match count {
         None => "Ungroup Collections...".to_owned(),
         Some(n) if n > 1 => format!("Ungroup {} Collections...", grouped(n as u64)),
         Some(_) => "Ungroup...".to_owned(),
     };
-    item(Action::Ungroup, label, handled)
+    item(Action::Ungroup, label, true)
         .icon("menu-group-remove")
         .into()
 }

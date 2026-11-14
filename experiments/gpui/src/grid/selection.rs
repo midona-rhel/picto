@@ -11,6 +11,53 @@ use picto_library::query::RootQuery;
 use picto_library::selection::{RangeSpan, SelectionTarget};
 use std::collections::{BTreeMap, HashMap};
 
+/// What a left press on a tile or the grid means, by the keys held
+/// (`event.metaKey || event.ctrlKey` in production, each platform's own key):
+/// on macOS a Control-press is a secondary click, which opens the menu, and
+/// the key that adds to the selection is Command there and Control
+/// elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Press {
+    /// Selects only what was pressed (or starts a fresh rubber band).
+    Plain,
+    /// Adds what was pressed to the selection or takes it out.
+    Toggle,
+    /// Selects from the anchor to what was pressed; `keep` adds the span to
+    /// the selection rather than replacing it.
+    Range { keep: bool },
+    /// A secondary click: the menu, as a right-click.
+    Menu,
+}
+
+impl Press {
+    /// The press these keys make, on this platform (`mac`).
+    pub fn of(modifiers: gpui::Modifiers, mac: bool) -> Self {
+        if mac && modifiers.control {
+            return Press::Menu;
+        }
+        let toggle = if mac {
+            modifiers.platform
+        } else {
+            modifiers.control
+        };
+        match (modifiers.shift, toggle) {
+            (true, keep) => Press::Range { keep },
+            (false, true) => Press::Toggle,
+            (false, false) => Press::Plain,
+        }
+    }
+
+    /// The press these keys make on the platform this runs on.
+    pub fn here(modifiers: gpui::Modifiers) -> Self {
+        Self::of(modifiers, cfg!(target_os = "macos"))
+    }
+
+    /// Whether the press keeps what is selected: a rubber band adds to it.
+    pub fn keeps(self) -> bool {
+        matches!(self, Press::Toggle | Press::Range { .. })
+    }
+}
+
 /// An item and where the destination's order has it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct End {
@@ -166,8 +213,9 @@ impl Selection {
         }
     }
 
-    /// Cmd-click: adds the item, or takes it out. Taking out the last item
-    /// of a destination of `total` leaves nothing selected.
+    /// A click with the selection key: adds the item, or takes it out.
+    /// Taking out the last item of a destination of `total` leaves nothing
+    /// selected.
     pub fn toggle(&mut self, end: End, total: u64) {
         let flip = |items: &mut BTreeMap<RootId, usize>| {
             if items.remove(&end.id).is_none() {
@@ -359,6 +407,38 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_platform_adds_to_the_selection_with_its_own_key() {
+        let keys = |control, platform, shift| gpui::Modifiers {
+            control,
+            platform,
+            shift,
+            ..Default::default()
+        };
+        // macOS: Command toggles, Control is the secondary click.
+        assert_eq!(Press::of(keys(false, true, false), true), Press::Toggle);
+        assert_eq!(Press::of(keys(true, false, false), true), Press::Menu);
+        assert_eq!(Press::of(keys(true, false, true), true), Press::Menu);
+        assert_eq!(
+            Press::of(keys(false, true, true), true),
+            Press::Range { keep: true }
+        );
+        // Windows and Linux: Control toggles; the Windows key does nothing.
+        assert_eq!(Press::of(keys(true, false, false), false), Press::Toggle);
+        assert_eq!(Press::of(keys(false, true, false), false), Press::Plain);
+        assert_eq!(
+            Press::of(keys(true, false, true), false),
+            Press::Range { keep: true }
+        );
+        assert_eq!(
+            Press::of(keys(false, false, true), false),
+            Press::Range { keep: false }
+        );
+        assert_eq!(Press::of(keys(false, false, false), false), Press::Plain);
+        assert!(Press::Toggle.keeps() && Press::Range { keep: false }.keeps());
+        assert!(!Press::Plain.keeps());
+    }
 
     fn end(ordinal: usize) -> End {
         // Item ids differ from ordinals so the two are never confused.

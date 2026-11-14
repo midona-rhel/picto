@@ -27,18 +27,6 @@ fn extension_for_subtype(subtype: &str) -> &str {
     }
 }
 
-/// Compact grid label: four characters, except the five-letter JPGXL.
-/// The extension an original of this type is stored under.
-pub fn extension(mime: &str) -> String {
-    let subtype = mime.split_once('/').map_or("", |(_, subtype)| subtype);
-    match subtype.to_lowercase().as_str() {
-        // The file keeps the usual extension, not the grid label's spelling.
-        "jxl" => "jxl".to_owned(),
-        "woff2" => "woff2".to_owned(),
-        other => extension_for_subtype(other).to_owned(),
-    }
-}
-
 /// `mimeToExt`: the grid's extension for a type, as its labels spell it.
 pub fn label_extension(mime: &str) -> String {
     mime.split_once('/')
@@ -46,6 +34,7 @@ pub fn label_extension(mime: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Compact grid label: four characters, except the five-letter JPGXL.
 pub fn format_label(mime: &str) -> String {
     let Some((_, subtype)) = mime.split_once('/') else {
         return String::new();
@@ -194,6 +183,28 @@ pub fn grayscale(color: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Originals are found under the extension the library stores them
+    /// with (core's), which a copy of the real library has for each type.
+    #[test]
+    fn originals_are_looked_for_under_the_stored_extension() {
+        for (mime, stored) in [
+            ("application/pdf", "pdf"),
+            ("audio/mpeg", "mp3"),
+            ("audio/wav", "wav"),
+            ("image/gif", "gif"),
+            ("image/jpeg", "jpg"),
+            ("image/jxl", "jxl"),
+            ("image/png", "png"),
+            ("image/webp", "webp"),
+            ("text/plain", "txt"),
+            ("video/quicktime", "mov"),
+            ("video/webm", "webm"),
+            ("video/x-m4v", "m4v"),
+        ] {
+            assert_eq!(picto_core::blob_store::mime_to_extension(mime), stored);
+        }
+    }
 
     #[test]
     fn grayscale_keeps_the_luminance_of_a_colour() {

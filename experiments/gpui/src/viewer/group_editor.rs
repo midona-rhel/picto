@@ -134,8 +134,6 @@ pub struct GroupEditor {
     files: Vec<PathBuf>,
     selected: BTreeSet<MediaId>,
     anchor: Option<MediaId>,
-    /// Members whose missing thumbnail was asked for, each once.
-    rendering: std::collections::HashSet<String>,
     scroll: ScrollHandle,
     bounds: Bounds<Pixels>,
     layout: Layout,
@@ -175,16 +173,18 @@ impl GroupEditor {
             },
         )
         .detach();
+        // A missing thumbnail that was made is drawn on the next frame.
+        let thumbnails = cx.new(Thumbnails::new);
+        cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
         Self {
             session,
-            thumbnails: cx.new(Thumbnails::new),
+            thumbnails,
             focus: cx.focus_handle(),
             collection: None,
             members: Vec::new(),
             thumbs: Vec::new(),
             files: Vec::new(),
             selected: BTreeSet::new(),
-            rendering: Default::default(),
             anchor: None,
             scroll: ScrollHandle::new(),
             bounds: Bounds::default(),
@@ -271,7 +271,7 @@ impl GroupEditor {
         self.press = None;
         self.dragging = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
-        self.close_preview(cx);
+        self.preview.close(cx);
         cx.notify();
     }
 
@@ -423,29 +423,20 @@ impl GroupEditor {
             marquee::on_magnifier(&self.layout.tiles[index], x, y, text_height)
         });
         if let Some((index, _, _)) = magnifier {
-            self.preview.hide = None;
-            if self.preview.show.is_some() {
-                return;
-            }
             let target = self
                 .members
                 .get(index)
                 .filter(|item| !item.mime.starts_with("video/"))
                 .map(|item| (item.content_hash.clone(), self.files[index].clone()));
-            if let Some((hash, path)) = target {
-                self.preview.show = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor()
-                        .timer(crate::motion::HOVER_PREVIEW_DELAY)
-                        .await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.preview.show = None;
-                        this.open_preview(hash, path, cx);
-                    });
-                }));
-            }
+            let (hash, path) = target.unzip();
+            self.preview.rest_on(
+                hash,
+                move |_| async move { path },
+                |this: &mut Self| &mut this.preview,
+                cx,
+            );
         } else {
-            self.preview.show = None;
-            self.hide_preview_soon(cx);
+            self.preview.away(|this: &mut Self| &mut this.preview, cx);
         }
     }
 
@@ -454,69 +445,7 @@ impl GroupEditor {
         if self.marquee.is_none() && self.hovered.take().is_some() {
             cx.notify();
         }
-        self.preview.show = None;
-        self.preview.hide = None;
-        self.hide_preview_soon(cx);
-    }
-
-    fn hide_preview_soon(&mut self, cx: &mut Context<Self>) {
-        if self.preview.shown.is_none() || self.preview.hide.is_some() {
-            return;
-        }
-        self.preview.hide = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(crate::motion::HOVER_PREVIEW_HIDE)
-                .await;
-            let _ = this.update(cx, |this, cx| this.close_preview(cx));
-        }));
-    }
-
-    fn close_preview(&mut self, cx: &mut Context<Self>) {
-        let open = self.preview.shown.is_some();
-        if let Some(image) = self.preview.clear() {
-            super::release_image(image, cx);
-        }
-        if open {
-            cx.notify();
-        }
-    }
-
-    /// The hover preview of a member's original, decoded off the drawing
-    /// thread.
-    fn open_preview(&mut self, hash: String, path: PathBuf, cx: &mut Context<Self>) {
-        if self
-            .preview
-            .shown
-            .as_ref()
-            .is_some_and(|shown| shown.hash == hash)
-        {
-            return;
-        }
-        if let Some(image) = self
-            .preview
-            .shown
-            .take()
-            .and_then(|mut shown| shown.take_image())
-        {
-            super::release_image(image, cx);
-        }
-        let expected = hash.clone();
-        let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
-        let load = cx.background_executor().spawn(load);
-        let task = cx.spawn(async move |this, cx| {
-            let Ok(image) = load.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| match &mut this.preview.shown {
-                Some(shown) if shown.hash == expected => {
-                    shown.decoded(image);
-                    cx.notify();
-                }
-                _ => super::release_image(image, cx),
-            });
-        });
-        self.preview.shown = Some(preview::Shown::new(hash, task));
-        cx.notify();
+        self.preview.left(|this: &mut Self| &mut this.preview, cx);
     }
 
     /// A left press: on an image it may become a drag; on empty space it
@@ -711,9 +640,7 @@ impl Render for GroupEditor {
         if top != self.last_top {
             self.last_top = top;
             self.hovered = None;
-            if let Some(image) = self.preview.clear() {
-                cx.drop_image(image, Some(window));
-            }
+            self.preview.close(cx);
             self.scrolled = Instant::now();
             self.settle = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
@@ -768,48 +695,30 @@ impl Render for GroupEditor {
         self.thumbnails
             .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
         let mut missing = Vec::new();
-        let states: Vec<grid::Thumb> = {
+        let states: Vec<thumbnails::Thumb> = {
             let thumbnails = self.thumbnails.read(cx);
             visible
                 .iter()
                 .map(|index| {
                     let resource = Resource::Path(self.thumbs[*index].clone().into());
-                    if self.members[*index].mime.starts_with("font/")
-                        || thumbnails.is_loaded(&resource)
-                    {
-                        grid::Thumb::Loaded
-                    } else if thumbnails.is_failed(&resource) {
-                        missing.push(*index);
-                        grid::Thumb::Failed
-                    } else {
-                        grid::Thumb::Pending
+                    let thumb = thumbnails.thumb(&resource, &self.members[*index].mime);
+                    // A member with no thumbnail yet has one made, as the
+                    // library's grid asks for its tiles'.
+                    if thumb == thumbnails::Thumb::Failed {
+                        missing.push(thumbnails::Missing {
+                            hash: self.members[*index].content_hash.clone(),
+                            mime: self.members[*index].mime.clone(),
+                            jpeg: self.thumbs[*index].clone(),
+                        });
                     }
+                    thumb
                 })
                 .collect()
         };
-        // A member with no thumbnail yet has one made, as the library's
-        // grid asks for its tiles'.
-        for index in missing {
-            let (hash, mime, jpeg) = (
-                self.members[index].content_hash.clone(),
-                self.members[index].mime.clone(),
-                self.thumbs[index].clone(),
-            );
-            if !self.rendering.insert(hash.clone()) || thumbnails::present(&jpeg).is_some() {
-                continue;
-            }
-            let made = thumbnails::render_missing(&self.session, hash, mime, jpeg.clone(), cx);
-            cx.spawn(async move |this, cx| {
-                if made.await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.thumbnails
-                            .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
-        }
+        let session = self.session.clone();
+        self.thumbnails.update(cx, |thumbnails, cx| {
+            thumbnails.make_missing(&session, missing, cx)
+        });
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
         let decoded: Vec<(u32, bool)> = visible
             .iter()
@@ -817,7 +726,7 @@ impl Render for GroupEditor {
             .map(|(index, state)| {
                 (
                     self.members[*index].root_id.0,
-                    *state == grid::Thumb::Loaded,
+                    *state == thumbnails::Thumb::Loaded,
                 )
             })
             .collect();
@@ -834,18 +743,19 @@ impl Render for GroupEditor {
                 Some(marquee) => marquee.shows_selected(index, &selected_now),
                 None => selected_now.contains(&index),
             };
+            let alphas = reveal::alphas(self.reveal.progress(item.root_id.0, now));
             let magnifier = self.hovered == Some(index)
                 && !item.mime.starts_with("video/")
                 && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME;
-            let cell = grid::tile_art(
-                grid::TileLook {
+            let cell = grid::tile::tile_art(
+                grid::tile::TileLook {
                     tile,
-                    item: &item,
+                    item,
                     thumbnail: self.thumbs[index].clone(),
                     selected,
                     thumb,
                     original: None,
-                    alphas: reveal::alphas(self.reveal.progress(item.root_id.0, now)),
+                    alphas,
                     magnifier,
                     // The editor's grid has no Grayscale of its own.
                     grayscale: false,

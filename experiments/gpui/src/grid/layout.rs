@@ -107,6 +107,11 @@ impl Layout {
             return Self::default();
         }
         let geometry = geometry(container_width.into(), target_size.into(), gap.into());
+        // A pane narrower than the gaps around one column has no room for a
+        // tile.
+        if geometry.column_width <= 0. {
+            return Self::default();
+        }
         let text_height = f64::from(text_height);
         let (mut tiles, height) = match mode {
             ViewMode::Grid => grid(aspect_ratios.len(), &geometry, text_height),
@@ -121,7 +126,9 @@ impl Layout {
         let mut bands = vec![Vec::new(); (total_height / BAND) as usize + 1];
         for (index, tile) in tiles.iter().enumerate() {
             let first = (tile.y / BAND).max(0.) as usize;
-            let last = (((tile.y + tile.h) / BAND) as usize).min(bands.len() - 1);
+            let last = (((tile.y + tile.h) / BAND) as usize)
+                .min(bands.len() - 1)
+                .max(first);
             for band in &mut bands[first..=last] {
                 band.push(index as u32);
             }
@@ -301,6 +308,18 @@ mod tests {
         (0..count)
             .map(|i| [0.125, 8., 1., 0.5, 1.5][i % 5])
             .collect()
+    }
+
+    #[test]
+    fn a_pane_too_narrow_for_a_tile_lays_out_nothing() {
+        for mode in [ViewMode::Grid, ViewMode::Waterfall, ViewMode::Justified] {
+            for width in [1., 20., 33.] {
+                let layout = Layout::compute(&aspects(500), width, 150., 16., mode, 40.);
+                assert!(layout.tiles.iter().all(|tile| tile.w > 0. && tile.h > 0.));
+                // Looking tiles up never fails.
+                layout.visible(0., 10_000.);
+            }
+        }
     }
 
     #[test]

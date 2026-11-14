@@ -363,7 +363,7 @@ impl GroupReader {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         for member in self.members.drain(..) {
             for image in [member.thumbnail, member.full].into_iter().flatten() {
-                super::release_image(image, cx);
+                crate::atlas::release(image, cx);
             }
             if let Some(surface) = member.surface {
                 surface.update(cx, |surface, _| surface.stop());
@@ -433,7 +433,7 @@ impl GroupReader {
         for cold in self.warm.iter().filter(|member| !next.contains(member)) {
             if let Some(member) = self.members.get_mut(*cold) {
                 if let Some(image) = member.full.take() {
-                    super::release_image(image, cx);
+                    crate::atlas::release(image, cx);
                 }
                 member.reveal = motion::Fade::default();
                 member.uncover = motion::Fade::default();

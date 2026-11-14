@@ -107,7 +107,7 @@ impl PagedViewer {
         cx.on_release(|this, cx| {
             let pages = this.drawn.drain().map(|(_, drawn)| drawn.image);
             for image in pages.chain(this.thumbnail.take()) {
-                crate::viewer::release_image(image, cx);
+                crate::atlas::release(image, cx);
             }
         })
         .detach();
@@ -453,7 +453,7 @@ impl PagedViewer {
                 .collect();
             for index in far {
                 if let Some(drawn) = self.drawn.remove(&index) {
-                    crate::viewer::release_image(drawn.image, cx);
+                    crate::atlas::release(drawn.image, cx);
                 }
             }
         }
@@ -485,7 +485,7 @@ impl PagedViewer {
                 }
                 let image = super::render_image(page.image);
                 if let Some(old) = self.drawn.insert(index, Drawn { pixels, image }) {
-                    crate::viewer::release_image(old.image, cx);
+                    crate::atlas::release(old.image, cx);
                 }
                 if !self.first_drawn {
                     self.first_drawn = true;

@@ -73,6 +73,9 @@ does not need: lens, dispersion, tint and rim light).
   drawable from a framebuffer-only layer cannot be read, so the window's
   layer is made readable the first time a frame has a blur (and stays so);
   a frame whose drawable is still framebuffer-only skips its blurs.
+- `src/metal_atlas.rs`: `PlatformAtlas::contains` (test support only), so
+  `Window::has_image_atlas_entry` answers on Metal as it does headless and
+  the off-screen checks can tell whether a released picture left the atlas.
 - `src/shaders.metal`, `polychrome_sprite_fragment`: the nearest-neighbour
   read. `vendor/gpui/src/scene.rs` (the copy the Metal header is generated
   from) has the same `nearest` field.
@@ -721,6 +724,21 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
                          )
                          .log_err();
                  } else if let Some(replacement) = &mut layout_state.replacement {
+diff --color -ruN gpui-pre-apple-0.3.12/src/metal_atlas.rs b/gpui-pre-apple/src/metal_atlas.rs
+--- a/gpui-pre-apple/src/metal_atlas.rs
++++ b/gpui-pre-apple/src/metal_atlas.rs
+@@ -58,6 +58,11 @@
+     fn remove(&self, key: &AtlasKey) {
+         self.0.lock().remove(key);
+     }
++
++    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
++    fn contains(&self, key: &AtlasKey) -> bool {
++        self.0.lock().contains(key)
++    }
+ }
+ 
+ impl AtlasBackend for MetalAtlasTextures {
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/src/metal_renderer.rs
 --- a/gpui-pre-apple/src/metal_renderer.rs
 +++ b/gpui-pre-apple/src/metal_renderer.rs

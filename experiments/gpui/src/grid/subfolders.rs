@@ -5,6 +5,7 @@
 //! folder's menu on a right-click, is renamed in place, and takes items
 //! dragged onto it.
 use super::GridView;
+use super::selection::Press;
 use crate::backend::Navigation;
 use crate::theme::{self, Text as _};
 use crate::ui::{self, text_input::Renamed, text_input::TextInput};
@@ -282,10 +283,20 @@ pub struct Header {
     /// The destination the children were listed for.
     shown_for: Option<usize>,
     pub children: Vec<Child>,
+    /// What the children were listed for: the destination, whether it shows
+    /// its subfolders' items, and whether the viewer covers the grid.
+    listed: Option<(usize, bool, bool)>,
+    /// The destination list changed: the children are listed again.
+    pub relist: bool,
+    /// Which names take two lines, and the room a line has they were
+    /// measured for.
+    lines: Option<(f32, Vec<bool>)>,
     covers: HashMap<FolderId, Option<Cover>>,
     /// The folders whose covers were last asked for; asked again when the
     /// list changes or a folder changed.
     asked: Vec<FolderId>,
+    /// The latest ask: an earlier one's covers arrive late and are dropped.
+    request: super::Latest,
     pub stale: bool,
     /// The disclosure, open until it is closed; it opens again for the
     /// next folder that has children.
@@ -304,8 +315,12 @@ impl Default for Header {
         Self {
             shown_for: None,
             children: Vec::new(),
+            listed: None,
+            relist: false,
+            lines: None,
             covers: HashMap::new(),
             asked: Vec::new(),
+            request: super::Latest::default(),
             stale: false,
             expanded: true,
             geometry: Geometry::default(),
@@ -349,24 +364,41 @@ impl GridView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (children, displayed, gap, target, content, blobs) = {
+        let (displayed, gap, target, content) = {
             let session = self.session.read(cx);
-            let children = if session.viewer {
-                Vec::new()
-            } else {
-                children(
-                    &session.nav,
-                    session.displayed,
-                    session.prefs.show_subfolders,
-                )
-            };
+            let listing = (
+                session.displayed,
+                session.prefs.show_subfolders,
+                session.viewer,
+            );
+            // Listed again only when the destination, the list or what it
+            // shows changed, not every frame.
+            let header = &mut self.subfolders;
+            if header.listed != Some(listing) || header.relist {
+                header.listed = Some(listing);
+                header.relist = false;
+                header.lines = None;
+                header.children = if session.viewer {
+                    Vec::new()
+                } else {
+                    children(
+                        &session.nav,
+                        session.displayed,
+                        session.prefs.show_subfolders,
+                    )
+                };
+                // The covers are asked for again when the folders differ.
+                header.stale |= header
+                    .children
+                    .iter()
+                    .map(|child| child.folder)
+                    .ne(header.asked.iter().copied());
+            }
             (
-                children,
                 session.displayed,
                 session.prefs.gap,
                 session.tile,
                 session.total > 0,
-                session.blobs().to_path_buf(),
             )
         };
         let header = &mut self.subfolders;
@@ -376,16 +408,19 @@ impl GridView {
             header.drop = None;
             header.renaming = None;
         }
-        if children.is_empty() {
+        if header.children.is_empty() {
             header.expanded = true;
         }
-        let ids = children
-            .iter()
-            .map(|child| child.folder)
-            .collect::<Vec<_>>();
-        if (ids != header.asked || header.stale) && !ids.is_empty() {
+        if header.stale && !header.children.is_empty() {
+            let ids = header
+                .children
+                .iter()
+                .map(|child| child.folder)
+                .collect::<Vec<_>>();
             header.asked = ids.clone();
             header.stale = false;
+            let request = header.request.next();
+            let blobs = self.session.read(cx).blobs().to_path_buf();
             let job = self.session.read(cx).run(move |library| {
                 ids.iter()
                     .map(|id| (*id, read_cover(library, *id, &blobs)))
@@ -397,6 +432,9 @@ impl GridView {
                 };
                 let _ = this.update(cx, |this, cx| {
                     let header = &mut this.subfolders;
+                    if !header.request.is(request) {
+                        return;
+                    }
                     header.covers.retain(|id, _| header.asked.contains(id));
                     header.covers.extend(covers);
                     cx.notify();
@@ -406,18 +444,11 @@ impl GridView {
         }
         // A folder just made from a tile's menu is renamed once it shows.
         if let Some(node) = header.rename_next.clone()
-            && children.iter().any(|child| child.node == node)
+            && let Some(child) = header.children.iter().find(|child| child.node == node)
         {
             header.rename_next = None;
-            let name = children
-                .iter()
-                .find(|child| child.node == node)
-                .map(|child| child.label.clone())
-                .unwrap_or_default();
-            header.children = children;
+            let name = child.label.clone();
             self.rename_subfolder(node, name, window, cx);
-        } else {
-            header.children = children;
         }
         let header = &mut self.subfolders;
         let tile_width = {
@@ -425,11 +456,23 @@ impl GridView {
             columns((width - padding * 2.).max(0.), target, gap).1
         };
         let name_room = (tile_width - NAME_ICON - NAME_GAP).max(0.);
+        if header
+            .lines
+            .as_ref()
+            .is_none_or(|(room, _)| *room != name_room)
+        {
+            let two_lines = header
+                .children
+                .iter()
+                .map(|child| super::tile::name_width(&child.label, window) > name_room)
+                .collect();
+            header.lines = Some((name_room, two_lines));
+        }
         let two_lines = header
-            .children
-            .iter()
-            .map(|child| super::name_width(&child.label, window) > name_room)
-            .collect::<Vec<_>>();
+            .lines
+            .as_ref()
+            .map(|(_, lines)| lines.as_slice())
+            .unwrap_or_default();
         header.geometry = geometry(
             width,
             target,
@@ -798,7 +841,7 @@ impl GridView {
                 ))
                 .into_any_element(),
             None => {
-                let wraps = super::name_width(&child.label, window) > name_room;
+                let wraps = super::tile::name_width(&child.label, window) > name_room;
                 div()
                     .max_w(px(name_room))
                     .min_w_0()
@@ -883,17 +926,30 @@ impl GridView {
                 .truncate()
                 .child(metas),
         )
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_down(MouseButton::Left, {
+            let menu_node = menu_node.clone();
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                // A secondary click (Control on macOS) is a right-click.
+                if Press::here(event.modifiers) == Press::Menu {
+                    this.folder_menu(&menu_node, event.position, window, cx);
+                }
+            })
+        })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            let modifiers = event.modifiers();
+            let press = Press::here(event.modifiers());
+            if press == Press::Menu {
+                return;
+            }
             if event.click_count() == 2 {
                 // `onOpenFolder`: the folder's own grid.
                 this.session
                     .update(cx, |session, cx| session.navigate(open_index, cx));
                 return;
             }
-            let toggle = modifiers.platform || modifiers.control;
+            // `onSelectFolder`: the platform's selection key toggles.
+            let toggle = matches!(press, Press::Toggle | Press::Range { keep: true });
             this.session.update(cx, |session, cx| {
                 session.select_folders(vec![node.clone()], toggle, cx)
             });
@@ -903,26 +959,39 @@ impl GridView {
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                // The tile joins the selection first unless it is in it.
-                let selected = {
-                    let session = this.session.read(cx);
-                    session.folder_selection.contains(&menu_node)
-                };
-                if !selected {
-                    this.session.update(cx, |session, cx| {
-                        session.select_folders(vec![menu_node.clone()], false, cx)
-                    });
-                }
-                let selected = this.session.read(cx).folder_selection.clone();
-                cx.emit(FolderMenuRequested {
-                    node: menu_node.clone(),
-                    selected,
-                    position: event.position,
-                });
-                window.focus(&this.focus, cx);
+                this.folder_menu(&menu_node, event.position, window, cx);
             }),
         )
         .into_any_element()
+    }
+
+    /// A subfolder tile's menu, at a window position. The tile joins the
+    /// selection first unless it is in it.
+    fn folder_menu(
+        &mut self,
+        node: &str,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self
+            .session
+            .read(cx)
+            .folder_selection
+            .iter()
+            .any(|chosen| chosen == node);
+        if !selected {
+            self.session.update(cx, |session, cx| {
+                session.select_folders(vec![node.to_owned()], false, cx)
+            });
+        }
+        let selected = self.session.read(cx).folder_selection.clone();
+        cx.emit(FolderMenuRequested {
+            node: node.to_owned(),
+            selected,
+            position,
+        });
+        window.focus(&self.focus, cx);
     }
 }
 

@@ -873,7 +873,7 @@ impl Shell {
 
 /// What production caches applications by: the file's extension.
 fn type_key(mime: &str) -> String {
-    crate::grid::format::extension(mime)
+    picto_core::blob_store::mime_to_extension(mime).to_owned()
 }
 
 /// `resolveFilePath`: where the library keeps the item's file with this

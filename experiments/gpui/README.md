@@ -176,8 +176,9 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   narrows the grid the title reads "<scope> / Search results · N", the scope
   a link back to it unnarrowed.
 - Grid selection as the Electron grid has it: nothing selected when a scope
-  opens, a click selects one, Cmd-click toggles, Shift-click and Shift with a
-  move select a range, Cmd+A selects all, and Escape or a click on empty
+  opens, a click selects one, Cmd-click toggles (Ctrl-click on Windows and
+  Linux; on macOS Ctrl-click is a secondary click that opens the menu),
+  Shift-click and Shift with a move select a range, Cmd+A selects all, and Escape or a click on empty
   space clears. Only the image takes the pointer, not the text rows under it.
   The hovered image shows the magnifier corner, except on video and while
   scrolling. "Return to Top" rises once the grid has scrolled 200px.
@@ -446,8 +447,10 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   restores the window where it lay. Viewport-only tiles. Thumbnails load six at a time in the order of
   `thumbnailPlan.ts`: the viewport before the margin around it, nearest its
   middle first. A load for a tile that scrolled away is abandoned. Decoded
-  thumbnails beyond the visible band are kept for scrolling back, up to 192,
-  and one that a view is showing is never let go.
+  thumbnails beyond the visible band are kept for scrolling back, up to a
+  byte budget of three windows of the smallest tiles at 512 × 384, and one
+  that a view is showing is never let go. Every decoded picture leaves GPUI's
+  sprite atlas through `atlas::release`.
 - Keyboard movement by the rules of `useGridArrowNav.ts`: arrows and WASD,
   Home and End, Page Up and Page Down, and scrolling the target into view.
 - Sidebar rows fade their highlight over 50 ms and icon buttons over 150 ms.
@@ -1006,7 +1009,8 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   other imports.
 - Thumbnails an import is still waiting for: a tile whose thumbnail file
   does not exist asks the application to render it
-  (`media.render_thumbnail_now`, as the media protocol does on a miss), and
+  (`media.render_thumbnail_now`, as the media protocol does on a miss), two
+  files at a time and only while their tiles are on screen, and
   every `picto:thumbnail-changed` makes the grid read that thumbnail again.
   What the media worker cannot make is drawn here as the Electron main
   process draws it (`grid/rendered.rs`): a PDF's, DjVu's or comic archive's
@@ -1679,7 +1683,10 @@ often each view repainted, how long the grid took to build a frame (on the
 clock, and in the main thread's own time, with its layout and tile parts),
 the gap between grid frames, the longest the main thread kept a 4 ms timer
 waiting (a stall), how many thumbnail files were read, let go, let go
-without ever being painted, or dropped unfinished. It also prints at once
+without ever being painted, or dropped unfinished, the most bytes the
+decoded thumbnails held, and how many pictures were released from the
+sprite atlas (in the off-screen tool, also how many an atlas still held
+afterwards, which should be none). It also prints at once
 each stage of opening (database readable, application finished), each
 window of results read on the library thread and when it arrived, and each
 screen read or edit on the library thread that took 5 ms or more.
