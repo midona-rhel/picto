@@ -1026,23 +1026,27 @@ re-checked by reading the code; the rest were checked against it.
 - Reduced motion: the system setting is not read.
 - File choosers take every file type (GPUI's prompt has no type filter).
 
+### Decided by the owner, and what follows from each
+
+- Real libraries are to be opened, created and switched as production does
+  (Library Manager): being built. Until that lands the app opens only
+  disposable copies.
+- Site logins use a web view inside the app, as production's do: being
+  built.
+- The two changes to the core made for this app stay: "Add
+  open_library_reporting, which hands over the library before recovery
+  runs" (the app depends on it) and "Make the open's media recovery pass
+  list thumbnails once instead of looking for each".
+- A release build keeps the AI models where production keeps them, so both
+  apps share them; a debug build keeps them beside the copy.
+- The context menu's look in its pop-up window (shadow, outline, blur) is
+  accepted as it is.
+- File › New Folder starts a rename here (production's only creates the
+  folder), and the sidebar's row keyboard stays.
+
 ### Waiting on the owner
 
-- Whether to open, create and switch real libraries, and how (Library
-  Manager).
-- Site logins: a web view or the system browser.
 - Network features: update check and install, cloud sync, AI model download.
-- Two changes to the core made for this app: "Add open_library_reporting,
-  which hands over the library before recovery runs" (the app depends on it)
-  and "Make the open's media recovery pass list thumbnails once instead of
-  looking for each": keep or drop.
-- File › New Folder starts a rename here; production's does not.
-- The "Subscriptions finished" system notification follows Settings' pop-up
-  switch and the Information tone here; production always sends it.
-- The sidebar's row keyboard (Down or Tab from the tree filter enters the
-  rows) has no production counterpart (there Down does nothing and Tab goes
-  to the grid): keep it or not.
-- A verdict on the context menu's pop-in and the pop-up menus' blur.
 
 ### Kept different on purpose
 

@@ -36,7 +36,7 @@ pub struct Sources<'a> {
 pub fn display_tags(sources: &Sources) -> Vec<TagRecord> {
     let local = matches!(sources.view, View::Selected | View::Starred);
     let candidates = match sources.view {
-        View::Selected => crate::tags::records_by_group(sources.entity),
+        View::Selected => crate::tags::records_by_group(sources.entity, false),
         View::Starred => {
             let mut records = sources
                 .starred
