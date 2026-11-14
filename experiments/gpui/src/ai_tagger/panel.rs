@@ -213,6 +213,11 @@ impl AiTagger {
         let view = window.viewport_size();
         let width = if self.sidebar { WIDE } else { NARROW };
         self.centred = anchor.is_none();
+        // A dialog has no pin; one left on by a docked review would leave it
+        // with no backdrop to close it by.
+        if self.centred {
+            self.pinned = false;
+        }
         self.geometry =
             overlay_shell::place(overlay_shell::Opens::beside(anchor), view, width, HEIGHT);
         self.explicit = target;

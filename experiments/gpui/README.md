@@ -1473,8 +1473,8 @@ re-checked by reading the code; the rest were checked against it.
   runs" (the app depends on it) and "Make the open's media recovery pass
   list thumbnails once instead of looking for each".
 - Auto Tag from a menu or its shortcut over the grid opens its review
-  centred over a dimmed window, as Add Tags and Add to Folder open their
-  dialogs there; the inspector's Auto Tag button still docks it beside the
+  centred over a dimmed window with the dialogs' close button in place of
+  its pin, as Add Tags and Add to Folder open their dialogs there; the inspector's Auto Tag button still docks it beside the
   inspector at the button, and the viewer's menu beside the inspector as it
   docks its pickers. (Production docks it beside the inspector from every
   menu.) Its footer names what the models it ran ran on, each once, where

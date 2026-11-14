@@ -893,7 +893,18 @@ impl Render for AiTagger {
             this.pinned = !this.pinned;
             cx.notify();
         }));
-        shell = shell.header(toggle_rail).header(pin).child(body);
+        // Opened as a dialog, it is closed as one: the dialogs' close button
+        // where the docked panel has its pin.
+        shell = shell.header(toggle_rail);
+        shell = if self.centred {
+            shell.header(ui::window_chrome::close_button(
+                "ai-close",
+                cx.listener(|this, _, window, cx| this.close(window, cx)),
+            ))
+        } else {
+            shell.header(pin)
+        };
+        shell = shell.child(body);
 
         let backend = match &self.backend {
             Some(backend) => format!("· {}", crate::tf!("{value0} inference", backend)),
