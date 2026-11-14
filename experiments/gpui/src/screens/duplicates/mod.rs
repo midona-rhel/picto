@@ -11,6 +11,7 @@ mod view;
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
+use crate::i18n::t;
 use crate::motion;
 use crate::session::{Change, Session};
 use crate::ui;
@@ -40,6 +41,7 @@ actions!(
     ]
 );
 
+// i18n: a key context
 const CONTEXT: &str = "Duplicates";
 /// `getDuplicatePairs`: the queue is read 500 pairs at a time.
 const QUEUE_LIMIT: usize = 500;
@@ -143,7 +145,7 @@ fn scan_message(found: u64) -> String {
     if found > 0 {
         format!("Found {found} new review pairs")
     } else {
-        "Scan complete - no new review pairs".into()
+        crate::i18n::en("Scan complete - no new review pairs").into()
     }
 }
 
@@ -486,12 +488,12 @@ impl DuplicatesScreen {
             let _ = this.update(cx, |this, cx| match result {
                 Ok(Ok(summary)) => {
                     let found = summary["candidate_count"].as_u64().unwrap_or(0);
-                    ui::notify::info("Duplicate scan complete", scan_message(found), cx);
+                    ui::notify::info(t("Duplicate scan complete"), scan_message(found), cx);
                     this.fetch(Fetch::Queue { reset: true }, cx);
                     this.scan_fetch = Some(this.generation);
                 }
                 Ok(Err(error)) => {
-                    ui::notify::error("Unable to scan for duplicates", error.clone(), cx);
+                    ui::notify::error(t("Unable to scan for duplicates"), error.clone(), cx);
                     this.error = Some(error);
                     this.end_scan();
                     this.changed(cx);
@@ -624,8 +626,8 @@ impl DuplicatesScreen {
             Ok(fetched) if fetched.ambiguous => {
                 // The pair stays.
                 ui::notify::warning(
-                    "Smart merge needs a choice",
-                    "No clear quality winner. Choose left or right, or keep both.",
+                    t("Smart merge needs a choice"),
+                    crate::i18n::en("No clear quality winner. Choose left or right, or keep both."),
                     cx,
                 );
                 self.settle();
@@ -635,9 +637,9 @@ impl DuplicatesScreen {
             Ok(fetched) => fetched,
             Err(error) => {
                 let title = match fetch {
-                    Fetch::Resolve(..) => "Unable to resolve duplicate pair",
-                    Fetch::Pair(_) => "Unable to load duplicate media",
-                    Fetch::Queue { .. } => "Unable to load duplicate review",
+                    Fetch::Resolve(..) => t("Unable to resolve duplicate pair"),
+                    Fetch::Pair(_) => t("Unable to load duplicate media"),
+                    Fetch::Queue { .. } => t("Unable to load duplicate review"),
                 };
                 ui::notify::error(title, error.clone(), cx);
                 self.error = Some(error);

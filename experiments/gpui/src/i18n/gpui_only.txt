@@ -63,3 +63,10 @@ Run interrupted
 Select one of the images downloaded that has been added to the library.
 Sign in again
 This query stops syncing. Downloaded files stay in your library.
+Left candidate
+No clear quality winner. Choose left or right, or keep both.
+No duplicate pairs
+Review complete
+Right candidate
+Scan complete - no new review pairs
+Scan the library to find similar images.

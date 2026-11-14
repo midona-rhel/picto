@@ -70,6 +70,7 @@ const CONVERTED: &[&str] = &[
     "ui/cover_dialog.rs",
     "ui/status_badge.rs",
     "ui/progress_bar.rs",
+    "screens/duplicates/",
 ];
 
 /// Calls whose literal argument is drawn.

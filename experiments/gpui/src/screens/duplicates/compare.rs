@@ -1,6 +1,7 @@
 //! The arithmetic of duplicate review: which pair comes next, how its facts
 //! are written, and the linked zoom and pan of the two previews
 //! (`useLinkedComparisonZoom.ts`).
+use crate::i18n::t;
 use picto_library::FileId;
 
 /// A pair, by its two file IDs in ascending order.
@@ -54,7 +55,7 @@ pub fn similarity_label(distance: u32) -> String {
 pub fn dimensions(width: Option<u32>, height: Option<u32>) -> String {
     match (width, height) {
         (Some(width), Some(height)) => format!("{width} x {height}"),
-        _ => "Unknown".into(),
+        _ => t("Unknown").into(),
     }
 }
 
@@ -66,7 +67,7 @@ pub fn short_date(milliseconds: i64) -> String {
         .timestamp_millis_opt(milliseconds)
         .single()
         .map_or_else(
-            || "Unknown".into(),
+            || t("Unknown").into(),
             |date| crate::i18n::format::date(date.date_naive()),
         )
 }
