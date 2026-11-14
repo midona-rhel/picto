@@ -1197,7 +1197,7 @@ impl SubscriptionsScreen {
         let records = entry
             .automatic_tags
             .iter()
-            .map(|tag| tag_picker::record(tag))
+            .map(|tag| crate::tags::record(tag))
             .collect();
         let anchor = self.add_tag.get().origin;
         self.picking = Some(Picking::Tags(id));

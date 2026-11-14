@@ -2,25 +2,10 @@
 //! the offer to create one, the views Tab steps through, the arrow keys'
 //! steps and the rail's groups.
 use super::View;
-use crate::tags::record_name as name;
+use crate::tags::{record, record_name as name};
 use crate::ui::overlay_shell::Nav;
-use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
+use picto_library::{TagNamespaceRecord, TagRecord};
 use std::collections::BTreeSet;
-
-/// `tagRecord`: a record for a tag known only by name, in General when the
-/// name has no group.
-pub fn record(name: &str) -> TagRecord {
-    let (namespace, subname) = crate::tags::split(name);
-    let namespace = namespace.unwrap_or("general");
-    TagRecord {
-        tag_id: TagId(0),
-        namespace_id: TagNamespaceId(0),
-        namespace: namespace.to_owned(),
-        subname: subname.to_owned(),
-        active_count: 0,
-        assignment_count: 0,
-    }
-}
 
 /// `displayTagName`: the name, without its group unless prefixes show.
 pub(super) fn display_name(tag: &TagRecord, prefixes: bool) -> String {
@@ -217,7 +202,7 @@ pub(super) fn rail_groups(namespaces: &[TagNamespaceRecord]) -> Vec<TagNamespace
 
 #[cfg(test)]
 mod tests {
-    use super::{Sources, View, create_candidate, display_tags, name, next_view, record, step};
+    use super::{Sources, View, create_candidate, display_tags, name, next_view, step};
     use crate::ui::overlay_shell::Nav;
     use picto_library::{TagId, TagNamespaceId, TagRecord};
 
@@ -234,13 +219,6 @@ mod tests {
 
     fn names(tags: &[TagRecord]) -> Vec<String> {
         tags.iter().map(name).collect()
-    }
-
-    #[test]
-    fn records_by_name_fall_in_general_without_a_group() {
-        assert_eq!(name(&record("cat")), "cat");
-        assert_eq!(record("cat").namespace, "general");
-        assert_eq!(name(&record("species:cat")), "species:cat");
     }
 
     #[test]

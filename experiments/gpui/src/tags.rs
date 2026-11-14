@@ -1,10 +1,11 @@
 //! Tags apart from any one view: their names and groups, the groups'
-//! colours and order, the rows every tag context menu starts with, and the
-//! starred tags and group colours kept in the library's application
-//! settings.
+//! colours and order, what the tag browsers share (the Add Tags dialog, the
+//! tag picker and the Tags screen: their views, rail and paging), the rows
+//! every tag context menu starts with and what they do, and the starred
+//! tags and group colours kept in the library's application settings.
 use crate::ui::menu;
 use gpui::App;
-use picto_library::{TagNamespaceRecord, TagRecord};
+use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
 use std::collections::BTreeMap;
 
 // ── Names ───────────────────────────────────────────────────────
@@ -40,6 +41,21 @@ pub fn split(name: &str) -> (Option<&str>, &str) {
     match name.split_once(':') {
         Some((namespace, subname)) => (Some(namespace), subname),
         None => (None, name),
+    }
+}
+
+/// `tagRecord`: a tag known only by name, split at the first colon. A name
+/// without a group is in General, the default group every tag without one
+/// belongs to.
+pub fn record(name: &str) -> TagRecord {
+    let (namespace, subname) = split(name);
+    TagRecord {
+        tag_id: TagId(0),
+        namespace_id: TagNamespaceId(0),
+        namespace: namespace.unwrap_or("general").to_owned(),
+        subname: subname.to_owned(),
+        active_count: 0,
+        assignment_count: 0,
     }
 }
 
@@ -327,6 +343,22 @@ mod tests {
         assert_eq!(split("cat"), (None, "cat"));
         assert_eq!(split("species:cat:x"), (Some("species"), "cat:x"));
         assert!(!chip_shows_namespace("default") && chip_shows_namespace("species"));
+    }
+
+    #[test]
+    fn a_tag_known_by_name_without_a_group_is_in_general() {
+        let cat = record("cat");
+        assert_eq!(cat.namespace, "general");
+        assert_eq!(cat.tag_id, TagId(0));
+        // It is filed, starred and shown by the same name as before.
+        assert_eq!(record_name(&cat), "cat");
+        assert!(!chip_shows_namespace(&cat.namespace));
+        let cat = record("species:cat:x");
+        assert_eq!(
+            (cat.namespace.as_str(), cat.subname.as_str()),
+            ("species", "cat:x")
+        );
+        assert_eq!(record_name(&cat), "species:cat:x");
     }
 
     #[test]

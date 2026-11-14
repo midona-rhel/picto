@@ -22,7 +22,6 @@ use std::time::Duration;
 mod model;
 mod view;
 
-pub use model::record;
 use model::{Sources, create_candidate, display_tags, next_view, rail_groups, step};
 
 /// `PAGE_SIZE`

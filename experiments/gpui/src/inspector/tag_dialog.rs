@@ -6,7 +6,7 @@
 //! first are those of the item the inspector shows or last showed.
 use crate::grid::format;
 use crate::session::Session;
-use crate::tags::{Preferences, record_name as name};
+use crate::tags::{Preferences, record, record_name as name};
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{
@@ -19,7 +19,7 @@ use crate::ui::{
     text_input::TextInput,
 };
 use gpui::*;
-use picto_library::{TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
+use picto_library::{TagNamespaceRecord, TagRecord};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -57,20 +57,6 @@ pub enum Event {
 }
 
 impl EventEmitter<Event> for TagDialog {}
-
-/// `tagRecord`: a tag known only by name, with no group when the name has
-/// none.
-fn record(name: &str) -> TagRecord {
-    let (namespace, subname) = crate::tags::split(name);
-    TagRecord {
-        tag_id: TagId(0),
-        namespace_id: TagNamespaceId(0),
-        namespace: namespace.unwrap_or("").to_owned(),
-        subname: subname.to_owned(),
-        active_count: 0,
-        assignment_count: 0,
-    }
-}
 
 /// `displayTags`: the items' tags by group then name, the recent tags among
 /// those loaded, or the loaded page.

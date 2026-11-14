@@ -8,9 +8,7 @@ use super::filter_editors::{
 };
 use super::filters::{self, Field, Filters, TagChoice};
 use crate::inspector::{
-    FolderPicker, TagPicker,
-    folder_picker::Event as FolderEvent,
-    tag_picker::{self, Event as TagEvent},
+    FolderPicker, TagPicker, folder_picker::Event as FolderEvent, tag_picker::Event as TagEvent,
 };
 use crate::session::{Change, Session};
 use crate::theme;
@@ -706,7 +704,7 @@ impl FilterBar {
                             Some(record) => record.clone(),
                             None => picto_library::TagRecord {
                                 tag_id: picto_library::TagId(choice.tag_id),
-                                ..tag_picker::record(&choice.name)
+                                ..crate::tags::record(&choice.name)
                             },
                         })
                         .collect::<Vec<_>>()

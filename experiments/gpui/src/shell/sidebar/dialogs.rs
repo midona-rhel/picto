@@ -206,10 +206,7 @@ impl Sidebar {
         else {
             return;
         };
-        let records = tags
-            .iter()
-            .map(|tag| crate::inspector::tag_picker::record(tag))
-            .collect();
+        let records = tags.iter().map(|tag| crate::tags::record(tag)).collect();
         let anchor = add_button.get().origin;
         self.auto_tag_picker.update(cx, |picker, cx| {
             picker.open_above(
