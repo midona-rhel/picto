@@ -27,6 +27,11 @@ pub fn frameless(
         window_decorations: DECORATIONS,
         // `PICTO_GPUI_BACKGROUND`: no window of the app takes the keyboard.
         focus: !crate::seams::background(),
+        // A window without the keyboard keeps animating at the display's
+        // rate, as Electron's windows do (GPUI would hold it to 30 frames a
+        // second): a detail window's video, the main window's thumbnails
+        // and progress while Settings or a detail window has the keyboard.
+        inactive_frame_interval: None,
         ..Default::default()
     }
 }
