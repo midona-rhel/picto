@@ -472,11 +472,6 @@ impl TagsScreen {
         self.follow_settings(cx);
     }
 
-    fn set_starred(&mut self, name: String, starred: bool, cx: &mut Context<Self>) {
-        crate::tags::set_starred(&name, starred, cx);
-        self.follow_settings(cx);
-    }
-
     /// Moves a starred tag's star to its new name after a rename.
     fn rename_star(&mut self, previous: &str, next_name: &str, cx: &mut Context<Self>) {
         crate::tags::rename_star(previous, next_name, cx);
@@ -498,7 +493,7 @@ impl TagsScreen {
         let star_name = next_name.clone();
         self.mutate(
             Report::default(),
-            move |library| rename_or_merge(library, id, &next_name),
+            move |library| crate::tags::rename_or_merge(library, id, &next_name),
             close,
             move |this, cx| this.rename_star(&previous, &star_name, cx),
             cx,
@@ -726,27 +721,9 @@ impl TagsScreen {
     }
 }
 
-/// Renames a tag, or merges it into the tag that already has the name, as
-/// the application's `tags.rename_or_merge` does.
-fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), String> {
-    let target = library
-        .projections()
-        .snapshot()
-        .tag_ids_by_name
-        .get(name.trim())
-        .copied();
-    match target {
-        Some(target) if target != id => library.merge_tags(id, target, crate::now_ms()),
-        _ => library.rename_tag(id, name),
-    }
-    .map(|_| ())
-    .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::rename_or_merge;
-    use crate::tags::TagPager;
+    use crate::tags::{TagPager, rename_or_merge};
     use picto_library::Library;
     use std::path::PathBuf;
 

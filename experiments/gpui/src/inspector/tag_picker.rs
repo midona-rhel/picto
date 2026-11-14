@@ -6,7 +6,8 @@
 use super::membership;
 use crate::motion;
 use crate::session::Session;
-use crate::tags::{TagPager, View, record_name as name};
+use crate::session::{Report, Reread};
+use crate::tags::{Common, TagPager, View, record_name as name};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -626,40 +627,29 @@ impl TagPicker {
         let Some(tag) = self.menu_tag.clone() else {
             return;
         };
-        let tag_name = name(&tag);
-        match action {
-            "filter" => {
+        match crate::tags::run_common(action, value, &tag, cx) {
+            Some(Common::Filter) => {
                 self.close(window, cx);
                 cx.emit(Event::Filter(tag.tag_id));
             }
-            "star" => crate::tags::set_starred(&tag_name, true, cx),
-            "unstar" => crate::tags::set_starred(&tag_name, false, cx),
-            "copy" => cx.write_to_clipboard(ClipboardItem::new_string(tag_name)),
-            "move-to-group" | "remove-from-group" => {
-                let group = value.filter(|_| action == "move-to-group");
-                let next = crate::tags::name_in_group(&tag.subname, group.as_deref());
-                let id = tag.tag_id;
-                let target = next.clone();
-                let answer = self
-                    .session
-                    .read(cx)
-                    .run(move |library| library.rename_tag(id, &target));
-                cx.spawn(async move |this, cx| {
-                    let Ok(result) = answer.await else { return };
-                    let _ = this.update(cx, |this, cx| match result {
-                        Ok(_) => {
-                            crate::tags::rename_star(&tag_name, &next, cx);
+            Some(Common::Move(next)) => {
+                let (id, previous, target) = (tag.tag_id, name(&tag), next.clone());
+                crate::session::edit_then(
+                    &self.session,
+                    Report::failure("Unable to move tag"),
+                    Reread::NOTHING,
+                    move |library| crate::tags::rename_or_merge(library, id, &target),
+                    cx,
+                    move |this, result, cx| {
+                        if result.is_ok() {
+                            crate::tags::rename_star(&previous, &next, cx);
                             this.request(cx);
                             cx.emit(Event::Renamed);
                         }
-                        Err(error) => {
-                            crate::ui::notify::error("Unable to move tag", error.to_string(), cx)
-                        }
-                    });
-                })
-                .detach();
+                    },
+                );
             }
-            _ => {}
+            Some(Common::Done) | None => {}
         }
         // The keyboard goes back to the search once the menu has gone.
         let handle = self.search.read(cx).focus_handle(cx);

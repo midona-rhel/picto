@@ -7,7 +7,7 @@ use super::tag_picker;
 use super::{ChipMenu, Confirm, FOLDER_COLOR, Inspector, Mode, Overwrite};
 use crate::backend::Navigation;
 use crate::session::{Report, Reread};
-use crate::tags::record_name as name;
+use crate::tags::{Common, record_name as name};
 use crate::ui::{
     self,
     menu::{self, Menu},
@@ -633,12 +633,10 @@ impl Inspector {
 
     fn run_chip_menu(&mut self, action: &str, _: &mut Window, cx: &mut Context<Self>) {
         match self.menu_target.clone() {
-            Some(ChipMenu::Tag(tag)) => match action {
-                "filter" => self.show_tag_items(tag.tag_id, cx),
-                "star" => crate::tags::set_starred(&name(&tag), true, cx),
-                "unstar" => crate::tags::set_starred(&name(&tag), false, cx),
-                "copy" => cx.write_to_clipboard(ClipboardItem::new_string(name(&tag))),
-                "remove" => self.set_tag(name(&tag), false, false, cx),
+            Some(ChipMenu::Tag(tag)) => match crate::tags::run_common(action, None, &tag, cx) {
+                Some(Common::Filter) => self.show_tag_items(tag.tag_id, cx),
+                None if action == "remove" => self.set_tag(name(&tag), false, false, cx),
+                // A chip's menu has no group rows.
                 _ => {}
             },
             Some(ChipMenu::Folder(folder)) => match action {

@@ -5,7 +5,7 @@
 //! tags and group colours kept in the library's application settings.
 use crate::session::Session;
 use crate::ui::menu;
-use gpui::{App, Context, Entity, Task};
+use gpui::{App, ClipboardItem, Context, Entity, SharedString, Task};
 use picto_library::{Library, TagId, TagNamespaceId, TagNamespaceRecord, TagRecord};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -452,6 +452,62 @@ pub fn common_menu(
     entries
 }
 
+/// What a row of [`common_menu`] leaves to the view once [`run_common`]
+/// has done what every view does alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Common {
+    /// Starred, unstarred or copied.
+    Done,
+    /// Show the items with the tag.
+    Filter,
+    /// Move the tag into another group, or out of its own: its new name, for
+    /// [`rename_or_merge`].
+    Move(String),
+}
+
+/// The rows of [`common_menu`]: stars and copies the tag, and says what
+/// else the row asks for; `None` for a row the view added itself.
+pub fn run_common(
+    action: &str,
+    value: Option<SharedString>,
+    tag: &TagRecord,
+    cx: &mut App,
+) -> Option<Common> {
+    let name = record_name(tag);
+    Some(match action {
+        "filter" => Common::Filter,
+        "star" | "unstar" => {
+            set_starred(&name, action == "star", cx);
+            Common::Done
+        }
+        "copy" => {
+            cx.write_to_clipboard(ClipboardItem::new_string(name));
+            Common::Done
+        }
+        "move-to-group" => Common::Move(name_in_group(&tag.subname, Some(value?.as_ref()))),
+        "remove-from-group" => Common::Move(name_in_group(&tag.subname, None)),
+        _ => return None,
+    })
+}
+
+/// `tags.rename_or_merge`: renames a tag, or merges it into the tag that
+/// already has the name.
+pub fn rename_or_merge(library: &Library, id: TagId, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    let target = library
+        .projections()
+        .snapshot()
+        .tag_ids_by_name
+        .get(name)
+        .copied();
+    match target {
+        Some(target) if target != id => library.merge_tags(id, target, crate::now_ms()),
+        _ => library.rename_tag(id, name),
+    }
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 /// The tag search a [`TagTokenInput`](crate::ui::tag_token_input) offers:
 /// the library's first twelve tags matching what was typed.
 pub fn token_search(
@@ -661,6 +717,30 @@ mod tests {
             records.iter().map(record_name).collect::<Vec<_>>(),
             ["creator:b", "alpha", "item9", "item10", "zeta", "series:x"]
         );
+    }
+
+    #[test]
+    fn the_common_rows_copy_here_and_leave_filter_and_moves_to_the_view() {
+        let cx = gpui::TestAppContext::single();
+        let cat = tag(4, "species", "cat");
+        cx.update(|cx| {
+            assert_eq!(run_common("filter", None, &cat, cx), Some(Common::Filter));
+            let group = Some(SharedString::from("creator"));
+            assert_eq!(
+                run_common("move-to-group", group, &cat, cx),
+                Some(Common::Move("creator:cat".into()))
+            );
+            assert_eq!(
+                run_common("remove-from-group", None, &cat, cx),
+                Some(Common::Move("cat".into()))
+            );
+            assert_eq!(run_common("move-to-group", None, &cat, cx), None);
+            assert_eq!(run_common("copy", None, &cat, cx), Some(Common::Done));
+            let copied = cx.read_from_clipboard().and_then(|item| item.text());
+            assert_eq!(copied.as_deref(), Some("species:cat"));
+            // A view's own rows are its own.
+            assert_eq!(run_common("edit", None, &cat, cx), None);
+        });
     }
 
     #[test]
