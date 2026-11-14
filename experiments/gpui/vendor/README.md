@@ -64,6 +64,11 @@ does not need: lens, dispersion, tint and rim light).
   sprite fragment shader then reads its linear sampler at the centre of the
   texel the position falls in, which returns that texel alone; no sampler,
   binding or pipeline is added.
+- `src/elements/img.rs`: an animated image (GIF, animated WebP) plays
+  whenever its window draws, not only while the window is the active one,
+  as a browser plays it: a detail window beside the main window, or the
+  main window while another application is in front, kept its GIFs on one
+  frame. A covered or minimised window still draws nothing.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -770,7 +775,55 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
          self
      }
  
-@@ -489,13 +498,14 @@
+@@ -314,25 +323,24 @@
+ 
+                             if let Some(state) = &mut state {
+                                 state.frame_index = state.frame_index.min(max_frame_index);
++                                // An animated image plays whenever its window
++                                // draws, active or not, as a browser plays one;
++                                // a covered or minimised window draws nothing.
+                                 if frame_count > 1 && !cx.reduce_motion() {
+-                                    if window.is_window_active() {
+-                                        let current_time = Instant::now();
+-                                        if let Some(last_frame_time) = state.last_frame_time {
+-                                            let elapsed = current_time - last_frame_time;
+-                                            let frame_duration =
+-                                                Duration::from(data.delay(state.frame_index));
++                                    let current_time = Instant::now();
++                                    if let Some(last_frame_time) = state.last_frame_time {
++                                        let elapsed = current_time - last_frame_time;
++                                        let frame_duration =
++                                            Duration::from(data.delay(state.frame_index));
+ 
+-                                            if elapsed >= frame_duration {
+-                                                state.frame_index =
+-                                                    (state.frame_index + 1) % frame_count;
+-                                                state.last_frame_time =
+-                                                    Some(current_time - (elapsed - frame_duration));
+-                                            }
+-                                        } else {
+-                                            state.last_frame_time = Some(current_time);
++                                        if elapsed >= frame_duration {
++                                            state.frame_index =
++                                                (state.frame_index + 1) % frame_count;
++                                            state.last_frame_time =
++                                                Some(current_time - (elapsed - frame_duration));
+                                         }
+                                     } else {
+-                                        state.last_frame_time = None;
++                                        state.last_frame_time = Some(current_time);
+                                     }
+                                 } else {
+                                     state.last_frame_time = None;
+@@ -377,7 +385,6 @@
+ 
+                             if global_id.is_some()
+                                 && data.frame_count() > 1
+-                                && window.is_window_active()
+                                 && !cx.reduce_motion()
+                             {
+                                 window.request_animation_frame();
+@@ -489,13 +496,14 @@
                          .get_bounds(bounds, data.size(layout_state.frame_index));
                      let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                      window
