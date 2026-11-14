@@ -2147,9 +2147,17 @@ impl PlatformInputHandler {
             .ok();
     }
 
+    // The rectangles and points exchanged with the system are in the
+    // window's screen points; the handler's are in the points the window is
+    // laid out in, which differ by the interface zoom (`App::set_ui_zoom`).
+
     pub fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
         self.cx
-            .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
+            .update(|window, cx| {
+                self.handler
+                    .bounds_for_range(range_utf16, window, cx)
+                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, window.ui_zoom()))
+            })
             .ok()
             .flatten()
     }
@@ -2157,8 +2165,12 @@ impl PlatformInputHandler {
     pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
         self.cx
             .update(|window, cx| {
+                let zoom = window.ui_zoom();
                 self.handler
                     .selection_bounds_for_range(range_utf16, window, cx)
+                    .into_iter()
+                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, zoom))
+                    .collect()
             })
             .unwrap_or_default()
     }
@@ -2226,7 +2238,10 @@ impl PlatformInputHandler {
     #[allow(unused)]
     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
         self.cx
-            .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
+            .update(|window, cx| {
+                let point = point / window.ui_zoom();
+                self.handler.character_index_for_point(point, window, cx)
+            })
             .ok()
             .flatten()
     }
@@ -2244,7 +2259,11 @@ impl PlatformInputHandler {
     /// See [`InputHandler::element_bounds`].
     pub fn element_bounds(&mut self) -> Option<Bounds<Pixels>> {
         self.cx
-            .update(|window, cx| self.handler.element_bounds(window, cx))
+            .update(|window, cx| {
+                self.handler
+                    .element_bounds(window, cx)
+                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, window.ui_zoom()))
+            })
             .ok()
             .flatten()
     }

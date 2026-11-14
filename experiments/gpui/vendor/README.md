@@ -9,9 +9,9 @@ These are the crates.io sources of `gpui-pre`, `gpui-pre-apple`,
 `gpui-pre-wgpu`, `gpui-pre-windows`, `gpui-pre-macos` and `gpui-pre-linux`
 version 0.3.12 (snapshot of
 zed-industries/zed at d2a4fb6), Apache-2.0 (each keeps its `LICENSE-APACHE`),
-with a backdrop-blur primitive, nearest-neighbour image sampling and the
-reading of what a drop from another application carries besides files
-added.
+with a backdrop-blur primitive, nearest-neighbour image sampling, an
+interface zoom and the reading of what a drop from another application
+carries besides files added.
 `../Cargo.toml` substitutes them for the
 published crates with `[patch.crates-io]`; every other GPUI crate still comes
 from crates.io. Everything else in them is byte-for-byte the published
@@ -52,6 +52,32 @@ does not need: lens, dispersion, tint and rim light).
   windows) for a view that follows the pointer itself: the grid's item drag
   leaving the window. GPUI otherwise does this only for drags started with
   `on_drag` and `external_drag_payload`.
+- Interface zoom (the app's Cmd+= / Cmd+− / Cmd+0, a browser's page zoom):
+  `App::set_ui_zoom` and `App::ui_zoom` (`src/app.rs`) hold one zoom for
+  every window. A window (`src/window.rs`) takes it when it opens and, when
+  it changes, at the start of its next frame (`Window::apply_ui_zoom`): its
+  `scale_factor` becomes the display's times the zoom and its
+  `viewport_size` the platform's content size divided by it, so layout,
+  hit-testing and the scene stay in one space of points while text and
+  paths are rasterized at the zoomed size (glyphs keyed by that scale in the
+  sprite atlas), blur radii and corner radii scale with them, and the
+  renderers, which draw the scene in device pixels, are unchanged.
+  `Window::ui_zoom` reads it. Input from the platform goes through
+  `Window::dispatch_platform_input`, which divides every position (and a
+  precise scroll's distance) by the zoom before `dispatch_event`; the
+  platform's input callback uses it, and the app's playback of input
+  (`src/pointer.rs`) does too. What goes back to the platform is multiplied
+  by it: the input method's rectangles and hit point
+  (`PlatformInputHandler::bounds_for_range`, `selection_bounds_for_range`,
+  `element_bounds`, `character_index_for_point` in `src/platform.rs`, and
+  the candidate position `Window` sends), `show_window_menu`,
+  `set_input_region`, `set_client_inset`, `set_client_corner_radii`;
+  `visual_viewport_bounds` is divided. The frame (`Window::bounds`,
+  `window_bounds`, the minimum size, the traffic lights' position) stays in
+  screen points. At zoom 1 every conversion returns its input unchanged, so
+  nothing draws or hit-tests differently. Not converted: `Window::insets`
+  (safe areas, which the desktop platforms do not report) and
+  `Window::resize`, which take the platform's points.
 - `src/platform/test/window.rs`: the test window keeps the decorations the
   window asked for and reports them (`Decorations::Client` with nothing
   tiled when the client's were asked for), as a Linux desktop that grants
@@ -232,6 +258,8 @@ Metal header is generated from the `vendor/gpui` copy inside
 sides by hand, so no generated type changes. Check: `cargo test` in
 `experiments/gpui` (the blur arithmetic and batching tests are in
 `src/ui/glass.rs`) and an off-screen picture of a menu over the grid; for
+the interface zoom, `zoom::tests` (a press at screen points lands on what
+is drawn there) and the pictures `ci/smoke.txt` takes at 150% and 80%; for
 nearest sampling, an off-screen picture of a small image zoomed in the
 viewer with Settings > Preview > Scaling set to Pixelated. The WGSL was
 validated with naga 30.0.1 (the version `wgpu` 30 uses) in all three of its
@@ -240,6 +268,64 @@ variants; the HLSL was not compiled here.
 ## The diff against 0.3.12
 
 ```diff
+diff --color -ruN gpui-pre-0.3.12/src/app.rs b/gpui-pre/src/app.rs
+--- a/gpui-pre/src/app.rs
++++ b/gpui-pre/src/app.rs
+@@ -970,6 +970,8 @@
+     #[cfg(any(test, feature = "test-support", debug_assertions))]
+     pub(crate) name: Option<&'static str>,
+     pub(crate) text_rendering_mode: Rc<Cell<TextRenderingMode>>,
++    /// The interface zoom every window draws at (see [`App::set_ui_zoom`]).
++    pub(crate) ui_zoom: Rc<Cell<f32>>,
+ 
+     pub(crate) window_update_stack: Vec<WindowId>,
+     pub(crate) mode: GpuiMode,
+@@ -1024,6 +1026,7 @@
+                 platform: platform.clone(),
+                 text_system,
+                 text_rendering_mode: Rc::new(Cell::new(TextRenderingMode::default())),
++                ui_zoom: Rc::new(Cell::new(1.0)),
+                 mode: GpuiMode::Production,
+                 actions: Rc::new(ActionRegistry::default()),
+                 pending_updates: 0,
+@@ -1856,8 +1859,37 @@
+     /// Returns the current text rendering mode for the application.
+     pub fn text_rendering_mode(&self) -> TextRenderingMode {
+         self.text_rendering_mode.get()
++    }
++
++    /// Zooms the interface of every window, as a browser's page zoom does:
++    /// each window lays out in a viewport of its size divided by `zoom` and
++    /// draws at its display's scale factor times `zoom`, so everything
++    /// sized in pixels (text rasterized at the zoomed size, not stretched)
++    /// grows or shrinks together, and pointer positions from the system are
++    /// divided by `zoom` before they reach the window. What the window
++    /// hands back to the system (input method rectangles, the window menu's
++    /// position, input regions, the client inset) is multiplied by it. The
++    /// window's frame, its minimum size and `Window::bounds` stay in screen
++    /// points. Windows opened later start at this zoom; open windows take
++    /// it on their next frame. A value that is not finite and positive is
++    /// taken as 1.
++    pub fn set_ui_zoom(&mut self, zoom: f32) {
++        let zoom = if zoom.is_finite() && zoom > 0.0 {
++            zoom
++        } else {
++            1.0
++        };
++        if self.ui_zoom.get() != zoom {
++            self.ui_zoom.set(zoom);
++            self.refresh_windows();
++        }
+     }
+ 
++    /// The interface zoom set by [`App::set_ui_zoom`]; 1 unless set.
++    pub fn ui_zoom(&self) -> f32 {
++        self.ui_zoom.get()
++    }
++
+     /// Returns the operating system's power mode, or [`PowerMode::Unknown`]
+     /// when the platform cannot determine it.
+     pub fn power_mode(&self) -> PowerMode {
 diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/img.rs
 --- a/gpui-pre/src/elements/img.rs
 +++ b/gpui-pre/src/elements/img.rs
@@ -362,6 +448,67 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
  /// Data offered to the platform when an internal drag leaves the window and is
  /// promoted to a native drag session.
  #[derive(Debug, Clone, Eq, PartialEq)]
+diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
+--- a/gpui-pre/src/platform.rs
++++ b/gpui-pre/src/platform.rs
+@@ -2146,10 +2146,18 @@
+             .update(|window, cx| self.handler.paste(item, window, cx))
+             .ok();
+     }
++
++    // The rectangles and points exchanged with the system are in the
++    // window's screen points; the handler's are in the points the window is
++    // laid out in, which differ by the interface zoom (`App::set_ui_zoom`).
+ 
+     pub fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
+         self.cx
+-            .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
++            .update(|window, cx| {
++                self.handler
++                    .bounds_for_range(range_utf16, window, cx)
++                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, window.ui_zoom()))
++            })
+             .ok()
+             .flatten()
+     }
+@@ -2157,8 +2165,12 @@
+     pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
+         self.cx
+             .update(|window, cx| {
++                let zoom = window.ui_zoom();
+                 self.handler
+                     .selection_bounds_for_range(range_utf16, window, cx)
++                    .into_iter()
++                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, zoom))
++                    .collect()
+             })
+             .unwrap_or_default()
+     }
+@@ -2226,7 +2238,10 @@
+     #[allow(unused)]
+     pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
+         self.cx
+-            .update(|window, cx| self.handler.character_index_for_point(point, window, cx))
++            .update(|window, cx| {
++                let point = point / window.ui_zoom();
++                self.handler.character_index_for_point(point, window, cx)
++            })
+             .ok()
+             .flatten()
+     }
+@@ -2244,7 +2259,11 @@
+     /// See [`InputHandler::element_bounds`].
+     pub fn element_bounds(&mut self) -> Option<Bounds<Pixels>> {
+         self.cx
+-            .update(|window, cx| self.handler.element_bounds(window, cx))
++            .update(|window, cx| {
++                self.handler
++                    .element_bounds(window, cx)
++                    .map(|bounds| crate::window::zoomed_out_bounds(bounds, window.ui_zoom()))
++            })
+             .ok()
+             .flatten()
+     }
 diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/platform/test/window.rs
 --- a/gpui-pre/src/platform/test/window.rs
 +++ b/gpui-pre/src/platform/test/window.rs
@@ -769,10 +916,26 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -1634,6 +1634,33 @@
+@@ -1266,7 +1266,13 @@
+     mouse_hit_test: HitTest,
+     modifiers: Modifiers,
+     capslock: Capslock,
++    /// The display's scale factor times [`Self::ui_zoom`]: what layout
++    /// pixels are multiplied by to reach device pixels.
+     scale_factor: f32,
++    /// The interface zoom this window was last laid out at
++    /// ([`App::set_ui_zoom`]). `viewport_size` and `mouse_position` are in
++    /// zoomed points: the platform's divided by it.
++    ui_zoom: f32,
+     pub(crate) bounds_observers: SingleSubscriberSet<AnyObserver>,
+     appearance: WindowAppearance,
+     pub(crate) appearance_observers: SingleSubscriberSet<AnyObserver>,
+@@ -1632,8 +1638,35 @@
+         (false, false) => display_bounds.origin,
+     };
      window_bounds_ctor(Bounds::new(final_origin, base_size))
- }
- 
++}
++
 +/// What [`Window::paint_backdrop_blur`] does to the backdrop: CSS
 +/// `backdrop-filter: blur(blur_radius) saturate(saturation)
 +/// brightness(brightness)`.
@@ -786,8 +949,8 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    pub brightness: f32,
 +    /// How much of the filtered backdrop shows, on top of the element opacity.
 +    pub opacity: f32,
-+}
-+
+ }
+ 
 +impl BackdropFilter {
 +    /// A gaussian blur of `radius` and nothing else.
 +    pub fn blur(radius: Pixels) -> Self {
@@ -803,25 +966,176 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
  impl Window {
      pub(crate) fn new(
          handle: AnyWindowHandle,
-@@ -2958,6 +2985,14 @@
-         count
+@@ -1705,11 +1738,12 @@
+ 
+         let display_id = platform_window.display().map(|display| display.id());
+         let sprite_atlas = platform_window.sprite_atlas();
+-        let mouse_position = platform_window.mouse_position();
++        let ui_zoom = cx.ui_zoom.get();
++        let mouse_position = platform_window.mouse_position() / ui_zoom;
+         let modifiers = platform_window.modifiers();
+         let capslock = platform_window.capslock();
+-        let content_size = platform_window.content_size();
+-        let scale_factor = platform_window.scale_factor();
++        let content_size = zoomed_size(platform_window.content_size(), ui_zoom);
++        let scale_factor = platform_window.scale_factor() * ui_zoom;
+         let appearance = platform_window.appearance();
+         let text_system = Rc::new(WindowTextSystem::new(cx.text_system().clone()));
+         let invalidator = WindowInvalidator::new(handle.window_id());
+@@ -2242,7 +2276,9 @@
+             let mut cx = cx.to_async();
+             Box::new(move |event| {
+                 handle
+-                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
++                    .update(&mut cx, |_, window, cx| {
++                        window.dispatch_platform_input(event, cx)
++                    })
+                     .with_context(|| {
+                         format!("dispatching input for window {:?}", handle.window_id())
+                     })
+@@ -2390,6 +2426,7 @@
+             modifiers,
+             capslock,
+             scale_factor,
++            ui_zoom,
+             bounds_observers: SingleSubscriberSet::new(),
+             appearance,
+             appearance_observers: SingleSubscriberSet::new(),
+@@ -2731,7 +2768,14 @@
+     /// - `Some(&[])` is an empty region, so the window receives no pointer or touch input.
+     /// - `None` resets the region to the default, so the whole window receives input again.
+     pub fn set_input_region(&self, region: Option<&[Bounds<Pixels>]>) {
+-        self.platform_window.set_input_region(region);
++        let zoom = self.ui_zoom;
++        let zoomed: Option<Vec<Bounds<Pixels>>> = region.map(|rects| {
++            rects
++                .iter()
++                .map(|rect| zoomed_out_bounds(*rect, zoom))
++                .collect()
++        });
++        self.platform_window.set_input_region(zoomed.as_deref());
      }
  
+     /// Return the `WindowBounds` to indicate that how a window should be opened
+@@ -2956,6 +3000,14 @@
+             callback(self, cx);
+         }
+         count
++    }
++
 +    /// Whether the window has been invalidated since it was last drawn: what
 +    /// the platform's frame loop asks before drawing a frame. Tests use it to
 +    /// draw only the frames a real window would.
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn is_dirty(&self) -> bool {
 +        self.invalidator.is_dirty()
+     }
+ 
+     /// Spawn the future returned by the given closure on the application thread pool.
+@@ -3001,9 +3053,9 @@
+     /// the platform window, then notifies observers. Normally called automatically
+     /// by the platform's resize callback, but exposed publicly for test infrastructure.
+     pub fn bounds_changed(&mut self, cx: &mut App) {
+-        self.scale_factor = self.platform_window.scale_factor();
+-        self.viewport_size = self.platform_window.content_size();
+-        self.mouse_position = self.platform_window.mouse_position();
++        self.scale_factor = self.platform_window.scale_factor() * self.ui_zoom;
++        self.viewport_size = zoomed_size(self.platform_window.content_size(), self.ui_zoom);
++        self.mouse_position = self.platform_window.mouse_position() / self.ui_zoom;
+ 
+         self.refresh();
+ 
+@@ -3166,7 +3218,11 @@
+     /// During drawing this is a consistent frame snapshot. Outside drawing it
+     /// reflects the latest platform sample, not a synchronous geometry query.
+     pub fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
+-        self.platform_window.visual_viewport_bounds()
++        let bounds = self.platform_window.visual_viewport_bounds();
++        Bounds::new(
++            bounds.origin / self.ui_zoom,
++            zoomed_size(bounds.size, self.ui_zoom),
++        )
+     }
+ 
+     /// Returns a conservative rectangle avoiding platform-known obscured content.
+@@ -3227,7 +3283,8 @@
+ 
+     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
+     pub fn show_window_menu(&self, position: Point<Pixels>) {
+-        self.platform_window.show_window_menu(position)
++        self.platform_window
++            .show_window_menu(position * self.ui_zoom)
+     }
+ 
+     /// Handle window movement for Linux and macOS.
+@@ -3241,12 +3298,14 @@
+     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
+     pub fn set_client_inset(&mut self, inset: Pixels) {
+         self.client_inset = Some(inset);
+-        self.platform_window.set_client_inset(inset);
++        self.platform_window.set_client_inset(inset * self.ui_zoom);
+     }
+ 
+     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
+     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
+-        self.platform_window.set_client_corner_radii(radii);
++        let zoom = self.ui_zoom;
++        self.platform_window
++            .set_client_corner_radii(radii.map(|radius| *radius * zoom));
+     }
+ 
+     /// Returns the client_inset value by [`Self::set_client_inset`].
+@@ -3331,10 +3390,32 @@
+     /// Overrides the display scale factor for tests.
+     #[cfg(any(test, feature = "test-support"))]
+     pub fn set_scale_factor(&mut self, scale_factor: f32) {
+-        self.scale_factor = scale_factor;
++        self.scale_factor = scale_factor * self.ui_zoom;
+         self.refresh();
+     }
+ 
++    /// The interface zoom this window is laid out at ([`App::set_ui_zoom`]):
++    /// a point of the window's content is this many screen points.
++    pub fn ui_zoom(&self) -> f32 {
++        self.ui_zoom
 +    }
 +
-     /// Spawn the future returned by the given closure on the application thread pool.
-     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
-     /// use within your future.
-@@ -4811,6 +4846,31 @@
-         corner_radii: Corners<Pixels>,
-         shadows: &[BoxShadow],
-     ) {
++    /// Takes the application's interface zoom if it changed: the viewport,
++    /// scale factor and pointer position follow, and the whole window is
++    /// laid out again.
++    fn apply_ui_zoom(&mut self, cx: &App) {
++        let zoom = cx.ui_zoom.get();
++        if zoom == self.ui_zoom {
++            return;
++        }
++        let device_scale = self.scale_factor / self.ui_zoom;
++        self.mouse_position = self.mouse_position * (self.ui_zoom / zoom);
++        self.ui_zoom = zoom;
++        self.scale_factor = device_scale * zoom;
++        self.viewport_size = zoomed_size(self.platform_window.content_size(), zoom);
++        self.refresh();
++    }
++
+     /// The size of an em for the base font of the application. Adjusting this value allows the
+     /// UI to scale, just like zooming a web page.
+     pub fn rem_size(&self) -> Pixels {
+@@ -3672,6 +3753,7 @@
+         if self.platform_window.prepare_frame() {
+             self.refresh();
+         }
++        self.apply_ui_zoom(cx);
+         self.invalidate_entities();
+         cx.entities.clear_accessed();
+         debug_assert!(self.rendered_entity_stack.is_empty());
+@@ -4806,11 +4888,36 @@
+     ///
+     /// This method should only be called as part of the paint phase of element drawing.
+     pub fn paint_drop_shadows(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
++    ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, false);
 +    }
 +
@@ -832,11 +1146,11 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    ///
 +    /// This method should only be called as part of the paint phase of element drawing.
 +    pub fn paint_drop_shadows_outside(
-+        &mut self,
-+        bounds: Bounds<Pixels>,
-+        corner_radii: Corners<Pixels>,
-+        shadows: &[BoxShadow],
-+    ) {
+         &mut self,
+         bounds: Bounds<Pixels>,
+         corner_radii: Corners<Pixels>,
+         shadows: &[BoxShadow],
+     ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, true);
 +    }
 +
@@ -850,7 +1164,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
-@@ -4832,12 +4892,52 @@
+@@ -4832,10 +4939,50 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -859,8 +1173,8 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  pad: 0,
              });
          }
-     }
- 
++    }
++
 +    /// Show what has been painted beneath `bounds` so far blurred inside its
 +    /// rounded shape, as CSS `backdrop-filter` does; paint the element's
 +    /// fill and contents after it. The blur follows the element opacity, so
@@ -899,12 +1213,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            brightness: filter.brightness,
 +            opacity: opacity.min(1.),
 +        });
-+    }
-+
+     }
+ 
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
-     /// be called after the element's background so the shadow layers on top of the fill.
-     /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
-@@ -5215,7 +5315,7 @@
+@@ -5215,7 +5362,7 @@
  
              self.next_frame.scene.insert_primitive(PolychromeSprite {
                  order: 0,
@@ -913,7 +1225,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  grayscale: false.into(),
                  bounds,
                  corner_radii: Default::default(),
-@@ -5309,6 +5409,31 @@
+@@ -5309,6 +5456,31 @@
          frame_index: usize,
          grayscale: bool,
      ) -> Result<()> {
@@ -945,7 +1257,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let visible_bounds = bounds.intersect(&image_bounds);
-@@ -5387,7 +5512,7 @@
+@@ -5387,7 +5559,7 @@
  
          self.next_frame.scene.insert_primitive(PolychromeSprite {
              order: 0,
@@ -954,7 +1266,32 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
              grayscale: grayscale.into(),
              bounds: visible_bounds_snapped,
              content_mask,
-@@ -6037,6 +6162,16 @@
+@@ -5861,7 +6033,23 @@
+             .unwrap_or_else(|| action.name().to_string())
+     }
+ 
+-    /// Dispatch a mouse, keyboard, or touch event on the window.
++    /// Dispatch an event as the system reports it, with positions in the
++    /// window's screen points: they are divided by the interface zoom
++    /// ([`App::set_ui_zoom`]) to the points the window is laid out in, then
++    /// the event goes to [`Self::dispatch_event`]. The platform's input
++    /// callback comes here; so should anything that plays input as though
++    /// from the system.
++    pub fn dispatch_platform_input(
++        &mut self,
++        event: PlatformInput,
++        cx: &mut App,
++    ) -> DispatchEventResult {
++        let event = input_in_zoomed_points(event, self.ui_zoom);
++        self.dispatch_event(event, cx)
++    }
++
++    /// Dispatch a mouse, keyboard, or touch event on the window, with
++    /// positions in the points the window is laid out in.
+     #[profiling::function]
+     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
+         #[cfg(feature = "profiler")]
+@@ -6037,6 +6225,16 @@
          }
      }
  
@@ -971,6 +1308,125 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
          let PlatformInput::MouseMove(mouse_move) = event else {
              return;
+@@ -6946,7 +7144,9 @@
+         self.on_next_frame(|window, cx| {
+             if let Some(mut input_handler) = window.platform_window.take_input_handler() {
+                 if let Some(bounds) = input_handler.selected_bounds(window, cx) {
+-                    window.platform_window.update_ime_position(bounds);
++                    window
++                        .platform_window
++                        .update_ime_position(zoomed_out_bounds(bounds, window.ui_zoom));
+                 }
+                 window.platform_window.set_input_handler(input_handler);
+             }
+@@ -8160,9 +8360,107 @@
+         Ok(())
+     } else {
+         ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
++    }
++}
++
++/// A size the platform reports in screen points, in the points a window
++/// zoomed by `zoom` is laid out in.
++fn zoomed_size(size: Size<Pixels>, zoom: f32) -> Size<Pixels> {
++    if zoom == 1.0 {
++        return size;
+     }
++    Size {
++        width: size.width / zoom,
++        height: size.height / zoom,
++    }
+ }
+ 
++/// Bounds in a window zoomed by `zoom`, in the window's screen points.
++pub(crate) fn zoomed_out_bounds(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
++    if zoom == 1.0 {
++        return bounds;
++    }
++    Bounds::new(bounds.origin * zoom, bounds.size.map(|length| length * zoom))
++}
++
++/// An event with positions in a window's screen points, with them (and a
++/// precise scroll's distance) in the points a window zoomed by `zoom` is
++/// laid out in.
++fn input_in_zoomed_points(event: PlatformInput, zoom: f32) -> PlatformInput {
++    if zoom == 1.0 {
++        return event;
++    }
++    let at = |position: Point<Pixels>| position / zoom;
++    match event {
++        PlatformInput::MouseDown(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::MouseDown(event)
++        }
++        PlatformInput::MouseUp(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::MouseUp(event)
++        }
++        PlatformInput::MousePressure(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::MousePressure(event)
++        }
++        PlatformInput::MouseMove(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::MouseMove(event)
++        }
++        PlatformInput::MouseExited(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::MouseExited(event)
++        }
++        PlatformInput::Scroll(mut event) => {
++            event.position = at(event.position);
++            if let crate::ScrollDelta::Pixels(delta) = event.delta {
++                event.delta = crate::ScrollDelta::Pixels(at(delta));
++            }
++            PlatformInput::Scroll(event)
++        }
++        PlatformInput::Pinch(mut event) => {
++            event.position = at(event.position);
++            PlatformInput::Pinch(event)
++        }
++        PlatformInput::LongPress(mut event) => {
++            event.start_position = at(event.start_position);
++            event.position = at(event.position);
++            PlatformInput::LongPress(event)
++        }
++        PlatformInput::TouchDrag(mut event) => {
++            event.start_position = at(event.start_position);
++            event.position = at(event.position);
++            PlatformInput::TouchDrag(event)
++        }
++        PlatformInput::BackGesture(mut event) => {
++            event.start_position = at(event.start_position);
++            PlatformInput::BackGesture(event)
++        }
++        PlatformInput::FileDrop(event) => PlatformInput::FileDrop(match event {
++            FileDropEvent::Entered { position, paths } => FileDropEvent::Entered {
++                position: at(position),
++                paths,
++            },
++            FileDropEvent::Pending { position } => FileDropEvent::Pending {
++                position: at(position),
++            },
++            FileDropEvent::Submit { position } => FileDropEvent::Submit {
++                position: at(position),
++            },
++            other => other,
++        }),
++        PlatformInput::Touch(mut event) => {
++            event.position = at(event.position);
++            event.predicted_position = event.predicted_position.map(at);
++            PlatformInput::Touch(event)
++        }
++        event @ (PlatformInput::KeyDown(_)
++        | PlatformInput::KeyUp(_)
++        | PlatformInput::ModifiersChanged(_)) => event,
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_atlas.rs b/gpui-pre-apple/src/metal_atlas.rs
 --- a/gpui-pre-apple/src/metal_atlas.rs
 +++ b/gpui-pre-apple/src/metal_atlas.rs

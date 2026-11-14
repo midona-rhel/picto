@@ -144,6 +144,8 @@ pub struct State {
     pub locale: String,
     /// `picto:audio-visualization`.
     pub audio_visualization: String,
+    /// `picto-zoom-factor`: the interface zoom (`crate::zoom`).
+    pub zoom_factor: f64,
 }
 
 impl Default for State {
@@ -167,6 +169,7 @@ impl Default for State {
             shortcut_overrides: BTreeMap::new(),
             locale: String::new(),
             audio_visualization: "spectrum".into(),
+            zoom_factor: 1.0,
         }
     }
 }
@@ -297,6 +300,9 @@ impl State {
         if let Some(mode) = text("audioVisualization") {
             state.audio_visualization = mode;
         }
+        if let Some(zoom) = get("zoomFactor").and_then(Value::as_f64) {
+            state.zoom_factor = crate::zoom::clamp(zoom);
+        }
         let extra = migrated
             .into_iter()
             .filter(|(key, _)| !KNOWN.contains(&key.as_str()))
@@ -369,6 +375,7 @@ impl State {
             put("locale", json!(self.locale));
         }
         put("audioVisualization", json!(self.audio_visualization));
+        put("zoomFactor", json!(self.zoom_factor));
         Value::Object(object)
     }
 
@@ -380,7 +387,7 @@ impl State {
 }
 
 /// The fields this version reads and writes.
-const KNOWN: [&str; 17] = [
+const KNOWN: [&str; 18] = [
     "version",
     "window",
     "sidebarWidth",
@@ -398,6 +405,7 @@ const KNOWN: [&str; 17] = [
     "shortcutOverrides",
     "locale",
     "audioVisualization",
+    "zoomFactor",
 ];
 
 /// Brings a file written by an earlier version to this version's layout,
@@ -620,6 +628,7 @@ mod tests {
             keyboard_preset: "eu".into(),
             locale: "fi".into(),
             audio_visualization: "orbit".into(),
+            zoom_factor: 1.35,
             ..State::default()
         };
         state
@@ -648,6 +657,7 @@ mod tests {
             "pinnedFilters": ["size", "nonsense", 3],
             "recentFolders": { "a": [1, -2, "x", 7] },
             "window": { "width": 800 },
+            "zoomFactor": "big",
         }));
         let defaults = State::default();
         assert_eq!(state.sidebar_width, defaults.sidebar_width);
@@ -657,6 +667,10 @@ mod tests {
         assert_eq!(state.recent_folders["a"], [1, 7]);
         assert_eq!(state.window, None);
         assert_eq!(state.locale, "");
+        assert_eq!(state.zoom_factor, 1.0);
+        // A zoom outside production's limits is brought inside them.
+        let (state, _) = State::from_value(&json!({ "zoomFactor": 3.5 }));
+        assert_eq!(state.zoom_factor, 2.0);
     }
 
     #[test]

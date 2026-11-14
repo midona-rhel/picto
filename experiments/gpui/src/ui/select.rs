@@ -632,15 +632,11 @@ fn pop_up(
         && let Some(display) = window.display(cx)
     {
         state.update(cx, |state, _| state.opening = true);
-        // The pop-up's frame is its content: it has no titlebar.
-        let frame = window.bounds();
-        let content = window.viewport_size();
-        let origin = (
-            f32::from(frame.origin.x),
-            f32::from(frame.origin.y) + f32::from(frame.size.height - content.height),
-        );
+        // The pop-up's frame is its content: it has no titlebar. Placed in
+        // the interface zoom's points, framed in the screen's.
+        let origin = crate::zoom::content_origin_in_ui(window);
         let bounds = measured.get();
-        let area = display.visible_bounds();
+        let area = crate::zoom::screen_to_ui(display.visible_bounds(), window.ui_zoom());
         let (list_rect, window_rect) = pop_up_list(
             [
                 origin.0 + f32::from(bounds.origin.x),
@@ -664,9 +660,12 @@ fn pop_up(
                 return;
             }
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                    point(px(window_rect[0]), px(window_rect[1])),
-                    size(px(window_rect[2]), px(window_rect[3])),
+                window_bounds: Some(WindowBounds::Windowed(crate::zoom::ui_to_screen(
+                    Bounds::new(
+                        point(px(window_rect[0]), px(window_rect[1])),
+                        size(px(window_rect[2]), px(window_rect[3])),
+                    ),
+                    cx.ui_zoom(),
                 ))),
                 display_id: Some(display),
                 titlebar: None,
