@@ -496,11 +496,16 @@ impl SettingsWindow {
         let app = &model.read(cx).draft.app;
         let enabled = app.notification_popups_enabled;
         let mut content = card(theme).child(
-            title(theme, t("Pop-ups")).child(div().ml_auto().flex().items_center().child(
-                ui::toggle("popups", enabled).on_toggle(edit(model, |draft| {
-                    draft.app.notification_popups_enabled = !draft.app.notification_popups_enabled
-                })),
-            )),
+            title(theme, t("Pop-ups")).child(
+                div().ml_auto().flex().items_center().child(
+                    ui::toggle("popups", enabled)
+                        .name(t("Pop-ups"))
+                        .on_toggle(edit(model, |draft| {
+                            draft.app.notification_popups_enabled =
+                                !draft.app.notification_popups_enabled
+                        })),
+                ),
+            ),
         );
         if enabled {
             let names = [
@@ -545,7 +550,9 @@ impl SettingsWindow {
                         .child(
                             title(theme, t("Auto-Import")).child(
                                 div().ml_auto().flex().items_center().child(
-                                    ui::toggle("auto-import", app.auto_import_enabled).on_toggle(
+                                    ui::toggle("auto-import", app.auto_import_enabled)
+                                        .name(t("Auto-Import"))
+                                        .on_toggle(
                                         edit(model, |draft| {
                                             draft.app.auto_import_enabled = !draft.app.auto_import_enabled
                                         }),

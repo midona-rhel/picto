@@ -148,8 +148,12 @@ impl SettingsWindow {
             Slot::Keys => 0,
             Slot::Keys2 => 1,
         };
+        // A button read as the keys it holds (or "Click to bind"); pressing
+        // it listens for new keys.
         let mut input = div()
             .id(ElementId::Name(format!("binding-{id}-{slot_index}").into()))
+            .role(Role::Button)
+            .aria_label(text.clone())
             .w_full()
             .h(px(28.))
             .pl(px(8.))
@@ -378,13 +382,16 @@ impl SettingsWindow {
                         // Mantine's body `line-height: 1.55` for both lines,
                         // which overflow the 36px row evenly when there is a
                         // description.
-                        div()
-                            .truncate()
-                            .text(theme::TEXT_MD)
-                            .line_height(px(theme::TEXT_MD * 1.55))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text())
-                            .child(t(item.label)),
+                        ui::a11y::text(
+                            div().id(ElementId::Name(format!("label-{}", item.id).into())),
+                            t(item.label),
+                        )
+                        .truncate()
+                        .text(theme::TEXT_MD)
+                        .line_height(px(theme::TEXT_MD * 1.55))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text())
+                        .child(t(item.label)),
                     );
                 if let Some(description) = item.description {
                     label = label.child(

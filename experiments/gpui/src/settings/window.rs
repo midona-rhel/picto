@@ -518,6 +518,7 @@ impl Render for SettingsWindow {
                     div()
                         .id("settings-body")
                         .role(Role::TabPanel)
+                        .aria_label(t(PANELS[self.selected].label))
                         .size_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.body_scroll)

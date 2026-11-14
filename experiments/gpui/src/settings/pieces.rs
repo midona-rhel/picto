@@ -230,7 +230,8 @@ pub(super) fn swatch(
     let mut cell = div()
         .id(id)
         .role(Role::Button)
-        .aria_label(crate::tf!("{value0} theme", crate::i18n::t(name)))
+        // `theme.name`, as production writes it.
+        .aria_label(crate::tf!("{value0} theme", name))
         .aria_toggled(ui::a11y::toggled(active))
         .relative()
         .size(px(20.))

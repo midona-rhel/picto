@@ -148,6 +148,22 @@ impl<'a> At<'a> {
         if self.role() == Role::Label {
             return self.node().value().unwrap_or_default().to_owned();
         }
+        // Only these take their name from the text inside them.
+        const FROM_CONTENT: [Role; 10] = [
+            Role::Button,
+            Role::Link,
+            Role::Tab,
+            Role::MenuItem,
+            Role::ListBoxOption,
+            Role::TreeItem,
+            Role::Heading,
+            Role::ListItem,
+            Role::Cell,
+            Role::CheckBox,
+        ];
+        if !FROM_CONTENT.contains(&self.role()) {
+            return String::new();
+        }
         let mut words = Vec::new();
         for node in self.descendants() {
             if node.role() == Role::Label

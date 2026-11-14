@@ -143,12 +143,18 @@ pub fn rail_item(
     let theme = theme::theme(cx);
     let id = id.into();
     let group = SharedString::from(format!("selection-rail-{id}"));
-    let mut name = div().flex_1().min_w_0().truncate().child(label.into());
+    let (label, count) = (label.into(), count.into());
+    let mut name = div().flex_1().min_w_0().truncate().child(label.clone());
     if let Some(width) = name_width {
         name = name.max_w(px(width));
     }
+    // A view of the list: a button read as its name and count, pressed
+    // while it is the one shown.
     let mut row = div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(format!("{label} {count}"))
+        .aria_toggled(super::a11y::toggled(active))
         .group(group.clone())
         .relative()
         .h(px(ROW))
@@ -187,7 +193,7 @@ pub fn rail_item(
         );
     }
     row.child(name)
-        .child(badge(group, active, cx).ml_auto().child(count.into()))
+        .child(badge(group, active, cx).ml_auto().child(count))
 }
 
 /// `.sidebarBadge` and `.itemBadge`: a count in the monospaced caption, at

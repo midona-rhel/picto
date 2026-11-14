@@ -527,6 +527,7 @@ impl SettingsWindow {
                 .child(
                     control().child(
                         ui::toggle("auto-tag", auto)
+                            .name(t("Auto-tag new imports"))
                             .disabled(!auto && downloaded.is_empty())
                             .on_toggle(edit(model, move |draft| {
                                 if draft.app.ai_tagger_auto_on_import {
@@ -557,6 +558,9 @@ impl SettingsWindow {
                                 SharedString::from(info.slug.clone()),
                                 app.runs_model(&info.slug),
                             )
+                            // `Run ${label} on new imports`, which production
+                            // writes in English.
+                            .name(format!("Run {} on new imports", info.label))
                             .on_toggle(edit(model, move |draft| {
                                 let on = draft.app.runs_model(&slug);
                                 draft.app.set_runs_model(&slug, !on);
@@ -575,14 +579,15 @@ impl SettingsWindow {
                     t("Write rating tags"),
                     t("Store general, sensitive, questionable, or explicit as a rating tag."),
                 ))
-                .child(control().child(
-                    ui::toggle("write-rating", app.ai_tagger_write_rating).on_toggle(edit(
-                        model,
-                        |draft| {
-                            draft.app.ai_tagger_write_rating = !draft.app.ai_tagger_write_rating
-                        },
-                    )),
-                )),
+                .child(
+                    control().child(
+                        ui::toggle("write-rating", app.ai_tagger_write_rating)
+                            .name(t("Write rating tags"))
+                            .on_toggle(edit(model, |draft| {
+                                draft.app.ai_tagger_write_rating = !draft.app.ai_tagger_write_rating
+                            })),
+                    ),
+                ),
         );
         self.ai_error(cx)
             .into_iter()
