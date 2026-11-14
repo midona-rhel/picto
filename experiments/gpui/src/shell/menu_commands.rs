@@ -199,7 +199,27 @@ impl Shell {
                 this.close_diagnostics(window, cx)
             },
         );
-        self.diagnostics = Some((panel, closed));
+        // Escape closes it first, wherever the keyboard is (its shortcut
+        // scope's priority 100, in text fields too), before any binding
+        // sees the key: an open menu still closes before it.
+        let shell = cx.entity().downgrade();
+        let this_window = window.window_handle();
+        let escape = cx.intercept_keystrokes(move |event, window, cx| {
+            let keystroke = &event.keystroke;
+            if window.window_handle() != this_window
+                || keystroke.key != "escape"
+                || keystroke.modifiers.number_of_modifiers() != 0
+            {
+                return;
+            }
+            let _ = shell.update(cx, |this, cx| {
+                if !this.menu.close(cx) {
+                    this.close_diagnostics(window, cx);
+                    cx.stop_propagation();
+                }
+            });
+        });
+        self.diagnostics = Some((panel, [closed, escape]));
         cx.notify();
     }
 
