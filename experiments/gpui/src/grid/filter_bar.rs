@@ -814,7 +814,7 @@ fn pin_icon(field: Field) -> &'static str {
         Field::Color => "pin-color",
         Field::Tags => "pin-bookmark",
         Field::Folders => "pin-folder",
-        Field::Rating => "pin-star",
+        Field::Rating => "star",
         Field::Type => "pin-photo",
         Field::Imported | Field::Modified => "pin-calendar",
         Field::Resolution => "pin-dimensions",

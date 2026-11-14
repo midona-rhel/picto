@@ -66,7 +66,7 @@ impl RenderOnce for CheckBox {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (side, ring, tick, tick_size) = match self.size {
-            Size::Compact => (14., theme.pressed_overlay(), "picker-check", 10.),
+            Size::Compact => (14., theme.pressed_overlay(), "check", 10.),
             Size::Regular => (16., theme.contrast(30.), "settings-check", 11.),
         };
         let base = div()

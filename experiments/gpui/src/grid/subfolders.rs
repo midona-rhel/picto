@@ -792,7 +792,7 @@ impl GridView {
                         .items_center()
                         .justify_center()
                         .child(ui::icon(
-                            "subfolder-tile-placeholder",
+                            "pin-folder",
                             size,
                             Rgba {
                                 a: color.a * 0.2,
@@ -818,7 +818,7 @@ impl GridView {
                 ui::icon(icon.clone(), NAME_ICON, tint.unwrap_or(theme.text()))
             }
             _ => ui::icon(
-                "subfolder-tile-name",
+                "picker-folder",
                 NAME_ICON,
                 tint.unwrap_or(theme.text_tertiary()),
             ),

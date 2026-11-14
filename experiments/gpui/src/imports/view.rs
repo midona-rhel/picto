@@ -147,7 +147,7 @@ impl Imports {
             );
         }
         buttons = buttons.child(
-            ui::icon_button("task-close", "task-x")
+            ui::icon_button("task-close", "notify-close")
                 .look(IconLook::Task)
                 .tip(ui::tip("Close"))
                 .on_click(on_click(this, move |imports, cx| {

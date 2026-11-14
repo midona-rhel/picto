@@ -17,7 +17,7 @@ impl Render for TagsToolbar {
         let theme = theme::theme(cx);
         div().w(px(SEARCH_WIDTH)).flex_none().child(
             ui::field("tag-search", &self.search, Look::TitlebarSearch)
-                .icon("tags-search", 13., 7., theme.text_tertiary())
+                .icon("library-search", 13., 7., theme.text_tertiary())
                 .clearable(),
         )
     }
@@ -109,7 +109,7 @@ impl TagsScreen {
             .child(
                 self.rail_item(
                     "tags-general",
-                    "tags-bookmark",
+                    "pin-bookmark",
                     theme.text(),
                     "General".into(),
                     general,
@@ -123,7 +123,7 @@ impl TagsScreen {
             .child(
                 self.rail_item(
                     "tags-starred",
-                    "tags-star",
+                    "star",
                     theme.text(),
                     "Starred".into(),
                     self.preferences.starred.len() as u64,
@@ -206,7 +206,7 @@ impl TagsScreen {
             .line_height(px(theme::CONTROL_SM))
             .group("cleanup")
             .child(
-                ui::icon("tags-trash", 14., theme.text_secondary())
+                ui::icon("trash-2", 14., theme.text_secondary())
                     .flex_none()
                     .group_hover("cleanup", move |style| {
                         if enabled {

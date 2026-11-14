@@ -135,7 +135,7 @@ impl SettingsWindow {
                         ))
                         .child(about_link(
                             "release-notes",
-                            "settings-panel-refresh",
+                            "refresh",
                             "Release notes",
                             "https://github.com/midona-rhel/picto/releases",
                             cx,

@@ -1088,7 +1088,7 @@ impl SmartFolderEditor {
             .icon
             .clone()
             .filter(|icon| crate::assets::has_icon(icon))
-            .unwrap_or("folder".into());
+            .unwrap_or("IconFolder".into());
         let trigger = div()
             .id("icon-trigger")
             .relative()

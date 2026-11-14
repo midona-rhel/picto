@@ -84,7 +84,7 @@ impl TagPicker {
                 if filled {
                     "picker-rail-bookmark-filled"
                 } else {
-                    "picker-rail-bookmark"
+                    "pin-bookmark"
                 },
                 12.,
                 theme.text_secondary(),
@@ -167,7 +167,7 @@ impl TagPicker {
             self.rail_item(
                 "rail-starred",
                 0,
-                ui::icon("picker-star", 10., theme.text())
+                ui::icon("star", 10., theme.text())
                     .flex_none()
                     .mx(px(6.))
                     .into_any_element(),
@@ -215,13 +215,13 @@ impl TagPicker {
             _ => None,
         };
         let mark = if starred {
-            ui::icon("picker-star", 10., theme.text()).flex_none()
+            ui::icon("star", 10., theme.text()).flex_none()
         } else {
             ui::icon(
                 if checked {
                     "picker-bookmark-filled"
                 } else {
-                    "picker-bookmark"
+                    "filter-bookmark"
                 },
                 14.,
                 rgb(color),
@@ -334,7 +334,7 @@ impl TagPicker {
             } else {
                 theme.glass()
             })
-            .child(ui::icon("picker-plus", 10., theme.text_tertiary()).opacity(0.65))
+            .child(ui::icon("plus", 10., theme.text_tertiary()).opacity(0.65))
             .child(
                 div()
                     .flex_1()
@@ -587,7 +587,7 @@ impl Render for TagPicker {
                 cx.stop_propagation();
                 window.focus(&search_handle, cx);
             })
-            .child(ui::icon("picker-search", 14., theme.text_secondary()).flex_none())
+            .child(ui::icon("menu-search", 14., theme.text_secondary()).flex_none())
             .child(div().flex_1().min_w_0().h_full().child(self.search.clone()));
         let toggle_rail = overlay_shell::header_button(
             "picker-sidebar",
@@ -627,7 +627,7 @@ impl Render for TagPicker {
         let pin = overlay_shell::header_button(
             "picker-pin",
             if self.pinned {
-                "picker-pin-filled"
+                "pin-filled"
             } else {
                 "picker-pin"
             },

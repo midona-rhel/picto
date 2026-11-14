@@ -144,7 +144,7 @@ impl FolderPicker {
                     .hover(move |style| style.bg(theme.surface_active()))
                     .child(
                         svg()
-                            .path("picker-chevron")
+                            .path("chevron-right")
                             .size(px(12.))
                             .text_color(theme.text_secondary())
                             .group_hover(format!("folder-expand-{index}"), move |style| {
@@ -351,7 +351,7 @@ impl Render for FolderPicker {
                 cx.stop_propagation();
                 window.focus(&search_handle, cx);
             })
-            .child(ui::icon("picker-search", 14., theme.text_secondary()).flex_none())
+            .child(ui::icon("menu-search", 14., theme.text_secondary()).flex_none())
             .child(div().flex_1().min_w_0().h_full().child(self.search.clone()));
         let tabs = overlay_shell::view_tabs(
             "folder-picker-view",

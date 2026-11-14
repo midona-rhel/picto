@@ -248,7 +248,7 @@ impl RenderOnce for NumberInput {
                     ))
                     .child(stepper(
                         "down",
-                        "chevron-down-2",
+                        "chevron-down",
                         -1,
                         state,
                         self.disabled,

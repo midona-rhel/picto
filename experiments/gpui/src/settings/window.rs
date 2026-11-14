@@ -343,7 +343,7 @@ fn nav_icon(name: &str) -> &'static str {
 fn result_icon(name: &str) -> &'static str {
     match name {
         "settings-2" => "settings-panel-settings-2",
-        "refresh" => "settings-panel-refresh",
+        "refresh" => "refresh",
         "library" => "settings-panel-library",
         "layout-sidebar" => "settings-panel-layout-sidebar",
         "adjustments-horizontal" => "settings-panel-adjustments-horizontal",
@@ -351,7 +351,7 @@ fn result_icon(name: &str) -> &'static str {
         "command" => "settings-panel-command",
         "bell" => "settings-panel-bell",
         "folder-down" => "settings-panel-folder-down",
-        "trash" => "settings-panel-trash",
+        "trash" => "trash-2",
         "download" => "settings-panel-download",
         "cloud" => "settings-panel-cloud",
         "box" => "settings-panel-box",
@@ -426,11 +426,11 @@ impl Render for SettingsWindow {
                             .child(
                                 div().mb(px(8.)).flex_none().child(
                                     ui::field(
-                                        "settings-search",
+                                        "library-search",
                                         &self.search,
                                         FieldLook::SettingsSearch,
                                     )
-                                    .icon("settings-search", 14., 10., theme.text_tertiary())
+                                    .icon("library-search", 14., 10., theme.text_tertiary())
                                     .clearable(),
                                 ),
                             )

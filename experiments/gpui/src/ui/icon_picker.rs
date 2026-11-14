@@ -222,7 +222,7 @@ impl Render for IconPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut grid = div().flex().flex_wrap().w(px(TILE * COLUMNS as f32));
         let label = self.default_label.clone();
-        grid = grid.child(self.tile(0, "folder", label, None, window, cx));
+        grid = grid.child(self.tile(0, "IconFolder", label, None, window, cx));
         for (index, (name, label)) in CURATED_ICONS.iter().enumerate() {
             grid = grid.child(self.tile(index + 1, name, (*label).into(), Some(name), window, cx));
         }

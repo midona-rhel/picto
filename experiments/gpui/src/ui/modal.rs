@@ -300,7 +300,7 @@ impl RenderOnce for Modal {
                     .child({
                         // `WindowCloseButton`, which closes the dialog.
                         let close = self.on_close.clone();
-                        super::window_chrome::close_button("modal-close", move |_, window, cx| {
+                        super::window_chrome::close_button("window-close", move |_, window, cx| {
                             if let Some(close) = &close {
                                 close(window, cx);
                             }

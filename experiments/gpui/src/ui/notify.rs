@@ -43,7 +43,7 @@ impl Tone {
             Tone::Error => "notify-error",
             Tone::Warning => "notify-warning",
             Tone::Info => "notify-info",
-            Tone::Success => "notify-success",
+            Tone::Success => "circle-check-filled",
         }
     }
 
