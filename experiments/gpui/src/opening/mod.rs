@@ -166,11 +166,16 @@ pub fn accept(incoming: Incoming, root: &Path, cx: &mut gpui::App) {
                     // TODO: open another library (production's
                     // `switchLibrary`); the app opens only the copy it was
                     // started on.
+                    // Production's main process writes the title in
+                    // English, without a key.
                     crate::ui::notify::error(
-                        "Could not open Picto Library".to_owned(),
+                        crate::i18n::en("Could not open Picto Library"),
                         format!(
-                            "{} is not the library open here. Start the app on a disposable copy of it instead.",
-                            entry.path.display()
+                            "{}\n{}",
+                            entry.path.display(),
+                            crate::i18n::en(
+                                "This is not the library open here. Start the app on a disposable copy of it instead."
+                            )
                         ),
                         cx,
                     );

@@ -11,12 +11,16 @@
 use gpui::{ExternalDropData, ExternalDropFile};
 use std::path::{Path, PathBuf};
 
+// Production's main process writes these in English, without a key.
 /// Production's error for a drop that holds no file.
-pub const LINKS_ONLY: &str = "Links cannot be imported. Drop an image file instead.";
+pub const LINKS_ONLY: &str =
+    crate::i18n::en("Links cannot be imported. Drop an image file instead.");
 /// Production's error when no in-memory file of the drop could be written.
-pub const NO_IMAGE: &str = "The dropped browser item did not contain an importable image.";
-const NOT_AN_IMAGE: &str = "The dropped browser item did not contain valid image data.";
-const EMPTY: &str = "The dropped browser item did not contain media data.";
+pub const NO_IMAGE: &str =
+    crate::i18n::en("The dropped browser item did not contain an importable image.");
+const NOT_AN_IMAGE: &str =
+    crate::i18n::en("The dropped browser item did not contain valid image data.");
+const EMPTY: &str = crate::i18n::en("The dropped browser item did not contain media data.");
 
 /// `readUrls`: the web addresses the drop names, in production's order (a
 /// `DownloadURL`'s address, the dragged image's `src`, the address list,
@@ -38,6 +42,7 @@ pub fn source_urls(data: &ExternalDropData) -> Vec<String> {
     for candidate in candidates {
         let candidate = candidate.trim();
         let lower = candidate.to_ascii_lowercase();
+        // i18n: schemes, not shown
         let web = lower.starts_with("http://") || lower.starts_with("https://");
         if web && !urls.iter().any(|url| url == candidate) {
             urls.push(candidate.to_owned());

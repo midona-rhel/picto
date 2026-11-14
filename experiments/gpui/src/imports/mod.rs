@@ -217,7 +217,11 @@ impl Imports {
         let directory = self.session.read(cx).scratch().join("drops");
         match drop::stage(paths, data.as_ref(), &directory) {
             drop::Staged::Refused(message) => {
-                self.report("Could not import dropped media", &message, cx);
+                self.report(
+                    crate::i18n::t("Could not import dropped media"),
+                    &message,
+                    cx,
+                );
             }
             drop::Staged::Paths(paths) => self.drop_paths(paths, destination, window, cx),
             drop::Staged::Browser {
@@ -232,8 +236,8 @@ impl Imports {
                         let _ = std::fs::remove_file(path);
                     }
                     self.report(
-                        "Could not import Picto Pack",
-                        "Drop one Picto Pack at a time without other files.",
+                        crate::i18n::t("Could not import Picto Pack"),
+                        crate::i18n::t("Drop one Picto Pack at a time without other files."),
                         cx,
                     );
                     return;

@@ -1,7 +1,7 @@
 # Texts with no key in production's en.json: they stay English in every
 # language. Nearly all are texts production also writes in English without
-# t(); this app's own are Could not copy file, Could not copy file path and
-# This font cannot be previewed. One per line, as written in the code
+# t(); this app's own are Could not copy file, Could not copy file path,
+# This font cannot be previewed and This is not the library open here. One per line, as written in the code
 # (a line break as \n). The guard (guard.rs) keeps this list exact.
 
 Edit Rules
@@ -85,3 +85,9 @@ Folders can be nested up to 8 levels. Choose a higher destination or flatten the
 Invalid empty name
 Use default folder icon
 Default
+Links cannot be imported. Drop an image file instead.
+The dropped browser item did not contain an importable image.
+The dropped browser item did not contain valid image data.
+The dropped browser item did not contain media data.
+Could not open Picto Library
+This is not the library open here. Start the app on a disposable copy of it instead.
