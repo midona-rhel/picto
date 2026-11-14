@@ -35,6 +35,9 @@ pub struct Toolbar {
     screen_controls: Vec<(Screen, AnyView)>,
     /// Where the "View options" button was painted.
     view_button: Rc<Cell<Bounds<Pixels>>>,
+    /// The width the grid's controls (zoom, view options, filter, search)
+    /// were last painted at, which decides which of them show.
+    controls_width: Rc<Cell<Pixels>>,
     /// The view menu while it is open or fading, which keeps the button
     /// lit (`active={viewMenu.state != null}`).
     view_menu: Option<(Entity<Menu>, Subscription)>,
@@ -97,6 +100,7 @@ impl Toolbar {
             zoom,
             screen_controls: Vec::new(),
             view_button: Rc::new(Cell::new(Bounds::default())),
+            controls_width: Rc::new(Cell::new(px(f32::MAX))),
             view_menu: None,
             _subscriptions: subscriptions,
         }
@@ -346,7 +350,31 @@ impl Render for Toolbar {
                 )
                 .into_any_element();
         }
-        toolbar
+        // `.toolbar` is a size container: the zoom gives way when it is
+        // 350px wide or less, then the search at 240px
+        // (`@container (max-width: …)`). Its width is the one painted last.
+        let width = self.controls_width.get();
+        let mut controls = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .child({
+                let painted = self.controls_width.clone();
+                canvas(
+                    move |bounds, window, _| {
+                        if bounds.size.width != painted.get() {
+                            painted.set(bounds.size.width);
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+            })
             .child(
                 // The zoom is centred in the space between the history
                 // buttons and the right-hand controls. It has the app
@@ -359,7 +387,9 @@ impl Render for Toolbar {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(zoom::section(cx).child(self.zoom.clone())),
+                    .children(
+                        (width > px(350.)).then(|| zoom::section(cx).child(self.zoom.clone())),
+                    ),
             )
             .child(
                 div()
@@ -396,16 +426,18 @@ impl Render for Toolbar {
                         this.session
                             .update(cx, |session, cx| session.set_filter_bar_open(!bar_open, cx));
                     })),
-            )
-            .child(div().ml(px(4.)).w(px(148.)).flex_none().child(
+            );
+        if width > px(240.) {
+            controls = controls.child(div().ml(px(4.)).w(px(148.)).flex_none().child(
                 ui::field("search", &self.search, Look::Search).icon(
                     "search",
                     14.,
                     8.,
                     theme.text_tertiary(),
                 ),
-            ))
-            .into_any_element()
+            ));
+        }
+        toolbar.child(controls).into_any_element()
     }
 }
 
