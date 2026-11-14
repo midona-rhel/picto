@@ -204,11 +204,10 @@ fn main() {
     // The one argument is the root of a disposable copy that run.sh or
     // `--make-copy` made. Anything else, and the library it was copied from,
     // is refused.
-    let root = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .expect("Pass the disposable library copy that run.sh made"),
-    );
+    let Some(root) = std::env::args().nth(1).map(PathBuf::from) else {
+        eprintln!("picto: pass the disposable library copy that run.sh or --make-copy made");
+        std::process::exit(2);
+    };
     let root = match application::guard(&root) {
         Ok(root) => root,
         Err(error) => {

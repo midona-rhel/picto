@@ -349,8 +349,8 @@ pub struct Session {
     pub library_cover: Option<PathBuf>,
     /// The grid draws its thumbnails without colour.
     pub grayscale: bool,
-    /// A folder of the session's own, removed when it ends, that the library
-    /// cover's crops are written to.
+    /// A folder of the session's own, in the copy's temporary folder, that
+    /// the library cover's crops are written to.
     scratch: Option<tempfile::TempDir>,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,

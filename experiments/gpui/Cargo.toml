@@ -38,7 +38,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features =
 picto_library = { path = "../../picto-library" }
 # The application layer the Electron app talks to: commands, workers, events.
 picto_core = { path = "../../core" }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The library's auxiliary reads hand out its own SQLite connection; the same
 # version it builds, so no second copy is compiled.
 rusqlite = "0.40"
@@ -115,7 +115,7 @@ core-foundation-sys = "0.8"
 # Video playback through AVFoundation, presented as CoreVideo pixel buffers
 # by GPUI's `surface` element; the same versions GPUI builds.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSKeyValueObserving", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = ["NSDictionary", "NSString", "NSURL", "NSValue", "NSObject", "NSArray", "NSError", "NSGeometry"] }
 objc2-core-foundation = "0.3"
 objc2-core-video = { version = "0.3", features = ["CVPixelBuffer", "CVImageBuffer", "CVBuffer", "CVReturn", "CVPixelBufferIOSurface"] }
 objc2-core-media = { version = "0.3", features = ["CMTime", "CMTimeRange"] }

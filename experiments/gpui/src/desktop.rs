@@ -1138,10 +1138,10 @@ pub const APP_NAME: &str = "Picto GPUI";
 
 /// The Unity launcher entry the badge updates: the app's desktop file, and
 /// the object path libunity sends from.
-#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const LAUNCHER_PATH: &str = "/com/canonical/unity/launcherentry/picto";
 
-#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn launcher_uri() -> String {
     format!("application://{APP_ID}.desktop")
 }
@@ -1161,7 +1161,7 @@ fn system_notification(title: &str, body: &str, cx: &App) {
 /// A `DROPFILES` clipboard payload (`CF_HDROP`): the 20-byte header (the
 /// list's offset, an unused point and client flag, and wide characters on),
 /// then each path in UTF-16 ending in a NUL, and a NUL ending the list.
-#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+#[cfg(any(test, target_os = "windows"))]
 fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
     const HEADER: u32 = 20;
     let mut payload = Vec::new();
@@ -1180,7 +1180,7 @@ fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
 
 /// The `text/uri-list` production writes on Linux: each file's `file:` URL,
 /// each line ending in CRLF.
-#[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
+#[cfg(any(not(any(target_os = "macos", target_os = "windows")), all(test, unix)))]
 fn uri_list(paths: &[PathBuf]) -> String {
     paths
         .iter()
