@@ -13,6 +13,8 @@ pub struct Toggle {
     id: ElementId,
     on: bool,
     disabled: bool,
+    /// Its accessible name (`ToggleSwitch`'s `ariaLabel`).
+    name: Option<SharedString>,
     on_toggle: Option<ToggleHandler>,
 }
 
@@ -21,11 +23,19 @@ pub fn toggle(id: impl Into<ElementId>, on: bool) -> Toggle {
         id: id.into(),
         on,
         disabled: false,
+        name: None,
         on_toggle: None,
     }
 }
 
 impl Toggle {
+    /// What assistive technology calls the switch: the label of the row
+    /// it sits in, or production's `ariaLabel` for it.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -54,6 +64,9 @@ impl RenderOnce for Toggle {
         let focus = super::focus::control(&self.id, window, cx);
         let mut toggle = div()
             .id(self.id)
+            .role(Role::Switch)
+            .aria_toggled(super::a11y::toggled(on))
+            .aria_disabled(self.disabled)
             .occlude()
             .relative()
             .w(px(32.))
@@ -85,6 +98,9 @@ impl RenderOnce for Toggle {
                             .blur_radius(px(3.)),
                     ]),
             );
+        if let Some(name) = self.name {
+            toggle = toggle.aria_label(name);
+        }
         if self.disabled {
             return toggle.opacity(0.35);
         }

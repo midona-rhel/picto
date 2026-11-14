@@ -3989,7 +3989,7 @@ impl Window {
 
         self.a11y.sync_active_flag();
         if self.a11y.is_active() {
-            self.a11y.begin_frame();
+            self.a11y.begin_frame(self.ui_zoom);
         }
 
         let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
@@ -7502,6 +7502,41 @@ impl Window {
     /// Debug representation of the last frame's accessibility information.
     pub fn debug_a11y_tree_json(&self) -> Option<String> {
         self.a11y.debug_tree_json()
+    }
+
+    /// Builds the accessibility tree from the next frame on as though
+    /// assistive technology had asked for it (or stops, with `false`), for
+    /// tests and off-screen tools, whose platform never asks.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_a11y_active_for_test(&mut self, active: bool) {
+        self.a11y.set_active_flag(active);
+        self.refresh();
+    }
+
+    /// The tree the last frame built (what was, or would have been, sent to
+    /// the platform's adapter), while the tree is being built.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn last_a11y_tree_update(&self) -> Option<accesskit::TreeUpdate> {
+        self.a11y.last_tree_update()
+    }
+
+    /// Performs an action assistive technology asked for, as the platform's
+    /// adapter hands it over.
+    #[cfg(all(any(test, feature = "test-support"), not(target_family = "wasm")))]
+    pub fn dispatch_a11y_action_for_test(
+        &mut self,
+        request: accesskit::ActionRequest,
+        cx: &mut App,
+    ) {
+        self.handle_a11y_action(request, cx);
+    }
+
+    /// Elements in the last frame that took a click but had no role, so
+    /// assistive technology could not see or press them: each one's source
+    /// location (debug builds) and bounds. Recorded while the tree is built.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn a11y_unexposed_clickables(&self) -> Vec<(String, Bounds<Pixels>)> {
+        self.a11y.unexposed_clickables.clone()
     }
 
     /// Register a listener for an accessibility action on a specific node.

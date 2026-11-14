@@ -96,6 +96,11 @@ impl A11yDebug {
         self.last_node_info = node_info.clone();
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn last_tree_update(&self) -> Option<TreeUpdate> {
+        self.last_tree_update.clone()
+    }
+
     /// Serialize the last tree update to a readable JSON string. Node ids are
     /// replaced with short ephemeral ids (`a`, `b`, ..., `z`, `aa`, ...).
     pub(crate) fn to_json(&self) -> Option<String> {

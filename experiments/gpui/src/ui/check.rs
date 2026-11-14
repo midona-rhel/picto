@@ -200,6 +200,14 @@ impl RenderOnce for Check {
             );
         let mut row = div()
             .id(self.id)
+            .role(if self.radio {
+                Role::RadioButton
+            } else {
+                Role::CheckBox
+            })
+            .aria_label(self.label.clone())
+            .aria_toggled(super::a11y::toggled(self.checked))
+            .aria_disabled(self.disabled)
             .relative()
             .min_h(px(26.))
             // `margin-left: -6px` on a full-width row: shifted, not widened.

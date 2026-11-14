@@ -235,6 +235,10 @@ impl Control {
     /// `kind`, `press` running for Enter or Space (a click with no
     /// pointer). A disabled control is no stop: leave it unattached.
     ///
+    /// The control's node in the accessibility tree (when it has a role)
+    /// stands for the stop: assistive technology sees it focused while the
+    /// stop is, and focusing it from there puts the keyboard on the stop.
+    ///
     /// The tab stop is a child of no size, which a pointer never reaches,
     /// so a press on the control leaves the keyboard where it was (see the
     /// module's note); the press is remembered as where the next Tab
@@ -246,7 +250,7 @@ impl Control {
         press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> E
     where
-        E: InteractiveElement + ParentElement + Sized,
+        E: StatefulInteractiveElement + ParentElement + Sized,
     {
         let Control {
             handle,
@@ -256,6 +260,7 @@ impl Control {
         let pressed = handle.clone();
         let at = bounds.clone();
         let mut element = element
+            .a11y_focus(&handle)
             .key_context(kind.context())
             .on_action(move |_: &Press, window, cx| {
                 let event = ClickEvent::Keyboard(KeyboardClickEvent {
@@ -305,7 +310,7 @@ pub fn button<E>(
     press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> E
 where
-    E: InteractiveElement + ParentElement + Sized,
+    E: StatefulInteractiveElement + ParentElement + Sized,
 {
     control(id, window, cx).attach(element, Kind::Button, press)
 }

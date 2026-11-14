@@ -346,6 +346,10 @@ pub struct IconButton {
     toggled: bool,
     badge: Option<usize>,
     tip: Option<Tip>,
+    /// The accessible name when it is not the tooltip's text.
+    name: Option<SharedString>,
+    /// `aria-pressed`, for the buttons production marks as toggles.
+    pressed: Option<bool>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
     /// The part of the window's frame the button stands for, which the
@@ -366,6 +370,8 @@ pub fn icon_button(id: impl Into<ElementId>, icon: &'static str) -> IconButton {
         toggled: false,
         badge: None,
         tip: None,
+        name: None,
+        pressed: None,
         on_click: None,
         on_hover: None,
         window_control: None,
@@ -429,6 +435,20 @@ impl IconButton {
 
     pub fn tip(mut self, tip: Tip) -> Self {
         self.tip = Some(tip);
+        self
+    }
+
+    /// What assistive technology calls the button, where production's
+    /// `aria-label` is not its tooltip's text (or it has no tooltip). By
+    /// default it is named by its label, else by its tooltip.
+    pub fn name(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Reports the button as a toggle, on or off (`aria-pressed`).
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = Some(pressed);
         self
     }
 
@@ -528,8 +548,14 @@ impl RenderOnce for IconButton {
         // there by its bounds; it also stops the press from going on to the
         // window's own listeners (a grid's marquee under a dialog), which
         // the panel holding it can no longer stop once it is occluded.
+        let name = self.name.clone().or_else(|| match &self.content {
+            Content::Label(label) => Some(label.clone()),
+            _ => self.tip.as_ref().map(|tip| tip.label().clone()),
+        });
         let mut button = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_disabled(disabled)
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .relative()
@@ -570,6 +596,12 @@ impl RenderOnce for IconButton {
                 .child(div().opacity(glyph_opacity).child(glyph)),
         };
         button = button.children(self.children);
+        if let Some(name) = name {
+            button = button.aria_label(name);
+        }
+        if let Some(pressed) = self.pressed {
+            button = button.aria_toggled(super::a11y::toggled(pressed));
+        }
         if let Some(area) = self.window_control {
             button = button.window_control_area(area);
         }

@@ -1443,6 +1443,58 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set the disabled state for this element: assistive technology shows
+    /// it but does not offer to press or edit it.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria.disabled = disabled;
+        self
+    }
+
+    /// Set the read-only state for this element (a field whose text can be
+    /// read and selected but not changed).
+    fn aria_read_only(mut self, read_only: bool) -> Self {
+        self.interactivity().aria.read_only = read_only;
+        self
+    }
+
+    /// Mark this element as modal: while it is shown, assistive technology
+    /// treats what lies outside it as inert (`aria-modal`).
+    fn aria_modal(mut self, modal: bool) -> Self {
+        self.interactivity().aria.modal = modal;
+        self
+    }
+
+    /// Mark this element as busy (`aria-busy`): its contents are still
+    /// being loaded.
+    fn aria_busy(mut self, busy: bool) -> Self {
+        self.interactivity().aria.busy = busy;
+        self
+    }
+
+    /// Make this element a live region (`aria-live`): changes to its text
+    /// are announced, politely or at once.
+    fn aria_live(mut self, live: accesskit::Live) -> Self {
+        self.interactivity().aria.live = Some(live);
+        self
+    }
+
+    /// Mark this element as allowing more than one of its items to be
+    /// selected (`aria-multiselectable`).
+    fn aria_multiselectable(mut self, multiselectable: bool) -> Self {
+        self.interactivity().aria.multiselectable = multiselectable;
+        self
+    }
+
+    /// Report this element's node as the one standing for `handle`, a focus
+    /// handle a descendant without a node of its own tracks: assistive
+    /// technology sees this node as focused while `handle` is, and its
+    /// `Focus` action focuses `handle`. Unlike `track_focus`, a click on the
+    /// element does not move the focus.
+    fn a11y_focus(mut self, handle: &FocusHandle) -> Self {
+        self.interactivity().a11y_focus_handle = Some(handle.clone());
+        self
+    }
+
     /// Set the expanded state for this element.
     fn aria_expanded(mut self, expanded: bool) -> Self {
         self.interactivity().aria.expanded = Some(expanded);
@@ -2175,6 +2227,12 @@ pub(crate) struct AriaProperties {
     pub(crate) column_index: Option<usize>,
     pub(crate) row_count: Option<usize>,
     pub(crate) column_count: Option<usize>,
+    pub(crate) disabled: bool,
+    pub(crate) read_only: bool,
+    pub(crate) modal: bool,
+    pub(crate) busy: bool,
+    pub(crate) multiselectable: bool,
+    pub(crate) live: Option<accesskit::Live>,
 }
 
 /// The interactivity struct. Powers all of the general-purpose
@@ -2247,6 +2305,7 @@ pub struct Interactivity {
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
     pub(crate) aria: AriaProperties,
+    pub(crate) a11y_focus_handle: Option<FocusHandle>,
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
@@ -2392,6 +2451,29 @@ impl Interactivity {
                         .a11y
                         .note_focus_without_node(focus_handle.id, "it has no element id");
                 }
+            }
+        }
+
+        if window.a11y.is_active() {
+            if let Some(handle) = self.a11y_focus_handle.as_ref()
+                && let Some(global_id) = global_id
+                && self.override_role.is_some()
+            {
+                let node_id = global_id.accesskit_node_id();
+                window.a11y.set_focusable(node_id, handle.id);
+                if handle.is_focused(window) {
+                    window.a11y.set_focus(node_id);
+                }
+            }
+            if self.override_role.is_none() && !self.click_listeners.is_empty() {
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                let at = self
+                    .source_location
+                    .map(|location| location.to_string())
+                    .unwrap_or_default();
+                #[cfg(not(any(feature = "inspector", debug_assertions)))]
+                let at = String::new();
+                window.a11y.unexposed_clickables.push((at, bounds));
             }
         }
 
@@ -3652,10 +3734,31 @@ impl Interactivity {
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
         }
-        if !self.click_listeners.is_empty() {
+        if self.aria.disabled {
+            node.set_disabled();
+        }
+        if self.aria.read_only {
+            node.set_read_only();
+        }
+        if self.aria.modal {
+            node.set_modal();
+        }
+        if self.aria.busy {
+            node.set_busy();
+        }
+        if self.aria.multiselectable {
+            node.set_multiselectable();
+        }
+        if let Some(live) = self.aria.live {
+            node.set_live(live);
+        }
+        if !self.click_listeners.is_empty() && !self.aria.disabled {
             node.add_action(accesskit::Action::Click);
         }
-        if self.tracked_focus_handle.is_some() || self.focusable {
+        if self.tracked_focus_handle.is_some()
+            || self.focusable
+            || self.a11y_focus_handle.is_some()
+        {
             node.add_action(accesskit::Action::Focus);
         }
         for (action, _) in &self.a11y_action_listeners {

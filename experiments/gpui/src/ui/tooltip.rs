@@ -51,6 +51,12 @@ impl Tip {
         }
     }
 
+    /// What the tooltip says, which also names an icon-only control for
+    /// assistive technology (production's `aria-label` repeats it).
+    pub fn label(&self) -> &SharedString {
+        &self.label
+    }
+
     /// `.themeSwatch[data-tooltip]::after`, Settings' own bubble: shown at
     /// once (give its [`Hover`] [`Hover::set_now`]), above the control, in
     /// the small text, with a `--color-contrast-15` top edge, growing from

@@ -149,6 +149,9 @@ pub(crate) struct A11y {
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+    /// Elements this frame that took a click without having a role (see
+    /// [`crate::Window::a11y_unexposed_clickables`]).
+    pub(crate) unexposed_clickables: Vec<(String, Bounds<Pixels>)>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -177,6 +180,7 @@ impl A11y {
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
+            unexposed_clickables: Vec::new(),
             window_title,
             last_focus_without_node: None,
             debug: debug::A11yDebug::default(),
@@ -211,6 +215,16 @@ impl A11y {
     /// for more commentary.
     pub(crate) fn sync_active_flag(&mut self) {
         self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn set_active_flag(&mut self, active: bool) {
+        self.active_flag.store(active, Ordering::SeqCst);
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn last_tree_update(&self) -> Option<TreeUpdate> {
+        self.debug.last_tree_update()
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -272,11 +286,20 @@ impl A11y {
     }
 
     /// Clear per-frame state and push the root node to start a new frame.
-    pub(crate) fn begin_frame(&mut self) {
+    ///
+    /// `ui_zoom` is the window's interface zoom: nodes' bounds are in its
+    /// points, which the root's transform scales to the window's.
+    pub(crate) fn begin_frame(&mut self, ui_zoom: f32) {
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.action_listeners.clear();
+        self.unexposed_clickables.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
+        if ui_zoom != 1.0
+            && let Some(root) = self.nodes.current_node_mut()
+        {
+            root.set_transform(accesskit::Affine::scale(ui_zoom as f64));
+        }
     }
 
     /// Finalize the tree and produce a [`TreeUpdate`] for the platform adapter.
@@ -654,7 +677,7 @@ mod tests {
 
     fn new_a11y() -> A11y {
         let mut a11y = A11y::new(Arc::new(AtomicBool::new(true)), false, None);
-        a11y.begin_frame();
+        a11y.begin_frame(1.0);
         a11y
     }
 

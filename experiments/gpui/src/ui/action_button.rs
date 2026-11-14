@@ -211,8 +211,15 @@ impl RenderOnce for ActionButton {
                 theme.on_primary(),
             ),
         };
+        // Named by its label, or by its tooltip when it shows only a glyph.
+        let name = self
+            .label
+            .clone()
+            .or_else(|| self.tip.as_ref().map(|tip| tip.label().clone()));
         let mut button = div()
             .id(self.id.clone())
+            .role(Role::Button)
+            .aria_disabled(self.disabled)
             .occlude()
             .relative()
             .h(px(self.height))
@@ -244,6 +251,9 @@ impl RenderOnce for ActionButton {
         }
         if let Some((icon, size)) = self.icon {
             button = button.child(super::icon(icon, size, text).flex_none());
+        }
+        if let Some(name) = name {
+            button = button.aria_label(name);
         }
         if let Some(label) = self.label {
             button = button.child(label);
