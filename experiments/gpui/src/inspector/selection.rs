@@ -25,8 +25,6 @@ use std::time::{Duration, Instant};
 /// loading state (`useSelectionSummary`'s 250 ms timer); until then the rail
 /// keeps what it showed.
 const LOADING_AFTER: Duration = Duration::from_millis(250);
-/// `.summarySpinner`'s turn.
-const SPIN: Duration = Duration::from_millis(650);
 
 /// A stack card may be leaving while six others show.
 const STACK_PINS: [&str; stack::CARDS + 1] = [
@@ -595,21 +593,18 @@ impl Inspector {
             .map(|(_, _, turned)| (turned.card.clone(), turned.mask.clone(), turned.size))
     }
 
-    /// `.summarySpinner`: a 10px ring open on its right, turning once every
-    /// 650 ms while the selection loads.
+    /// `.summarySpinner`: the property row's spinner, turning from when the
+    /// selection started loading.
     fn spinner(&self, window: &mut Window, cx: &App) -> Svg {
-        window.request_animation_frame();
-        let since = self
-            .selection
+        ui::property_row::spinner(self.loading_since(), window, cx)
+    }
+
+    /// When the selection shown loading started loading.
+    fn loading_since(&self) -> Instant {
+        self.selection
             .loading
             .as_ref()
-            .map_or_else(Instant::now, |(_, since)| *since);
-        let turn = since.elapsed().as_secs_f32() / SPIN.as_secs_f32();
-        let mut color = theme::theme(cx).text_secondary();
-        color.a *= 0.65;
-        ui::icon("inspector-spinner", 10., color).with_transformation(Transformation::rotate(
-            radians(turn.fract() * std::f32::consts::TAU),
-        ))
+            .map_or_else(Instant::now, |(_, since)| *since)
     }
 
     /// `.pendingSection` and `.pendingRating`: a 20px line with the spinner
@@ -721,22 +716,8 @@ impl Inspector {
         let mut properties = if loading {
             let mut properties = div().child(self.pending(window, cx));
             for label in ["Media", "Size"] {
-                // `PropertyRow` with `loading`: the spinner as its value.
-                properties = properties.child(
-                    div()
-                        .relative()
-                        .child(Self::property(label, String::new(), cx))
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .right_0()
-                                .h(px(20.))
-                                .flex()
-                                .items_center()
-                                .child(self.spinner(window, cx)),
-                        ),
-                );
+                properties = properties
+                    .child(Self::property(label, String::new(), cx).loading(self.loading_since()));
             }
             properties
         } else {

@@ -43,8 +43,9 @@ pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 74. } else { 8. }
 /// `.shellMac::after`: the window's rim, over everything, in the glass
 /// edges. Production draws it on macOS only.
 pub fn rim(cx: &App) -> Option<impl IntoElement + use<>> {
-    cfg!(target_os = "macos")
-        .then(|| deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(100))
+    cfg!(target_os = "macos").then(|| {
+        deferred(super::glass_edges(theme::WINDOW_RADIUS, cx)).with_priority(super::layer::CHROME)
+    })
 }
 
 /// Whether the app draws the window's minimise, maximise and close buttons

@@ -87,17 +87,22 @@ impl Rect {
 }
 
 /// `placeMenu`: the panel's corner at the pointer, moved inward so the
-/// panel keeps the margin from every edge of the area. The height is the
-/// panel's full height, before any maximum.
+/// panel keeps the margin from every edge of the area: a panel placed over
+/// the pointer and kept inside, by the one rule that places floating panels.
+/// The height is the panel's full height, before any maximum.
 pub(super) fn place(pointer: (f32, f32), w: f32, h: f32, area: Rect) -> (f32, f32) {
-    let (mut x, mut y) = pointer;
-    if x + w > area.right() - MARGIN {
-        x = area.right() - w - MARGIN;
-    }
-    if y + h > area.bottom() - MARGIN {
-        y = area.bottom() - h - MARGIN;
-    }
-    (x.max(area.x + MARGIN), y.max(area.y + MARGIN))
+    use crate::ui::popover::{self, Placement, Side};
+    let anchor = Bounds::new(
+        point(px(pointer.0 - area.x), px(pointer.1 - area.y)),
+        Size::default(),
+    );
+    let at = popover::place(
+        anchor,
+        size(w, h),
+        size(px(area.w), px(area.h)),
+        Placement::new(Side::Over { centred: false }, 0., MARGIN),
+    );
+    (at.x + area.x, at.y + area.y)
 }
 
 /// `placeMenu`'s `transform-origin` for the panel `place` puts there: the

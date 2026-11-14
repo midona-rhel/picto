@@ -54,10 +54,13 @@ pub const DRAG: usize = 50;
 /// The grid's hover preview (`HoverPreviewPortal`, `z-index` 200002).
 pub const PREVIEW: usize = 55;
 
-/// `--layer-notification`: notifications, over every other layer here.
-/// Only the window's rim (`window_chrome::rim`, `.shellMac::after`, at
-/// priority 100) is drawn above them.
+/// `--layer-notification`: notifications, over every other layer here
+/// but the window's rim.
 pub const NOTIFICATION: usize = 60;
+
+/// The window's rim (`window_chrome::rim`, `.shellMac::after`), over
+/// everything the window draws.
+pub const CHROME: usize = 100;
 
 #[cfg(test)]
 mod tests {
@@ -77,8 +80,7 @@ mod tests {
             DRAG,
             PREVIEW,
             NOTIFICATION,
-            // `window_chrome::rim`.
-            100,
+            CHROME,
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
         // A few dialogs can stack before they reach the review pill.
