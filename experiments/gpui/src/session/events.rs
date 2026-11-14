@@ -4,6 +4,7 @@ use super::edits::when_answered;
 use super::{Change, SUBSCRIPTION_POLL, Session, SubscriptionActivity};
 use crate::application::{self, Event};
 use crate::backend;
+use crate::i18n::t;
 use gpui::*;
 
 impl Session {
@@ -147,9 +148,9 @@ impl Session {
             this.subscriptions.busy = false;
             if let Some(Err(error)) = result {
                 let title = if paused {
-                    "Could not pause subscriptions"
+                    t("Could not pause subscriptions")
                 } else {
-                    "Could not resume subscriptions"
+                    t("Could not resume subscriptions")
                 };
                 crate::ui::notify::error(title, error, cx);
             }

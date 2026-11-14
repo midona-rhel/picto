@@ -3,6 +3,7 @@
 use super::{Change, SavedGrid, Session, Transition, Visit};
 use crate::backend::Navigation;
 use crate::grid::filters::Filters;
+use crate::i18n::t;
 use crate::motion;
 use gpui::*;
 use picto_library::{RootId, TagRecord};
@@ -107,7 +108,7 @@ impl Session {
             Some(index) => index,
             None => {
                 self.nav.push(Navigation {
-                    label: "Items with This Media".into(),
+                    label: t("Items with This Media").into(),
                     count: None,
                     scope,
                     screen: None,

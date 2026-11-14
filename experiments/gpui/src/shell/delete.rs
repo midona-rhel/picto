@@ -2,6 +2,7 @@
 //! be undone, Empty Trash, and the delete through the library.
 use super::item_menu::{Run, Target};
 use crate::grid::format::grouped;
+use crate::i18n::t;
 use crate::session::{Report, Reread, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
@@ -38,12 +39,13 @@ fn cancelled(done: &Option<Done>) -> Option<Run> {
 fn permanent_delete_message(media: u128, undo_limit: i64) -> String {
     let limit = grouped(undo_limit.max(0) as u64);
     match media {
-        _ if undo_limit == 0 => "Delete undo is disabled. This cannot be undone.".to_owned(),
+        _ if undo_limit == 0 => t("Delete undo is disabled. This cannot be undone.").to_owned(),
         count if count <= undo_limit as u128 => {
-            "You can undo this until Picto closes. After that the files are removed.".to_owned()
+            t("You can undo this until Picto closes. After that the files are removed.").to_owned()
         }
-        _ => format!(
-            "This exceeds the undo limit of {limit} media items, including collection members, so it cannot be undone."
+        _ => crate::tf!(
+            "This exceeds the undo limit of {value0} media items, including collection members, so it cannot be undone.",
+            limit
         ),
     }
 }
@@ -130,13 +132,13 @@ impl Shell {
                 }
                 let undoable = undo_limit > 0 && summary.media_count <= undo_limit as u128;
                 let (title, label) = if empty_trash {
-                    ("Empty Trash".to_owned(), "Delete All")
+                    (t("Empty Trash").to_owned(), t("Delete All"))
                 } else if count == 1 {
-                    ("Delete permanently?".to_owned(), "Delete Permanently")
+                    (t("Delete permanently?").to_owned(), t("Delete Permanently"))
                 } else {
                     (
-                        format!("Delete {} items permanently?", grouped(count)),
-                        "Delete Permanently",
+                        crate::tf!("Delete {value0} items permanently?", grouped(count)),
+                        t("Delete Permanently"),
                     )
                 };
                 let delete = Deletion {
@@ -234,7 +236,7 @@ impl Shell {
                     let cancel = cancelled(&delete.done);
                     this.ask_with(
                         delete.title.clone(),
-                        "This delete can no longer be undone. Delete permanently anyway?",
+                        t("This delete can no longer be undone. Delete permanently anyway?"),
                         delete.label,
                         true,
                         Rc::new(move |this, window, cx| {
@@ -245,7 +247,7 @@ impl Shell {
                     );
                 }
                 Err(error) => {
-                    crate::ui::notify::error("Delete Permanently", error.to_string(), cx);
+                    crate::ui::notify::error(t("Delete Permanently"), error.to_string(), cx);
                     if let Some(done) = &delete.done {
                         done(this, false, window, cx);
                     }

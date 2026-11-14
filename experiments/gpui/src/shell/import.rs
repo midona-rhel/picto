@@ -3,6 +3,7 @@
 //! import commands of the menus and keys, which all import into the grid's
 //! destination through [`crate::imports`].
 use super::Shell;
+use crate::i18n::t;
 use crate::imports::{self, plan::Destination};
 use crate::keymap::{ImportFiles, ImportFolder, PasteImport};
 use crate::theme;
@@ -146,13 +147,13 @@ impl Shell {
                         .text_size(px(theme::TEXT_MD))
                         .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_BODY))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("Drop files to import")
+                        .child(t("Drop files to import"))
                         .children(destination.folder.map(|_| {
                             div()
                                 .text_size(px(theme::TEXT_SM))
                                 .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
                                 .opacity(0.8)
-                                .child("into current folder")
+                                .child(t("into current folder"))
                         })),
                 ),
         )

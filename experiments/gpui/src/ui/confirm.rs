@@ -1,5 +1,6 @@
 //! `ConfirmModal`: a small dialog asking before a destructive action, with
 //! its message, Cancel, and the confirming button (red when dangerous).
+use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::action_button::{Look, action_button};
@@ -40,7 +41,7 @@ pub fn confirm(
         title: title.into(),
         message: message.into(),
         confirm_label: confirm_label.into(),
-        cancel_label: "Cancel".into(),
+        cancel_label: t("Cancel").into(),
         danger: false,
         busy: false,
         priority: None,

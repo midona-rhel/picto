@@ -2,6 +2,7 @@
 //! format (`*` keeps the old name, `%N`… numbers them) or by replacing a
 //! piece of every name, with a preview of each old and new name. Rename
 //! writes them all as one edit (`items.rename_many`), announced with Undo.
+use crate::i18n::t;
 use crate::session::{Report, Reread, Session};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
@@ -125,7 +126,7 @@ impl BatchRename {
         let pattern = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
         let replacement = cx.new(|cx| {
             TextInput::new(Kind::Form, cx)
-                .placeholder("Replace with")
+                .placeholder(t("Replace with"))
                 .submits()
         });
         let start = cx.new(|cx| TextInput::new(Kind::Form, cx).submits());
@@ -191,7 +192,7 @@ impl BatchRename {
         }
         // Find shares the format's text, as one field in production.
         self.pattern.update(cx, |input, _| {
-            input.set_placeholder(if mode == Mode::Replace { "Find" } else { "" })
+            input.set_placeholder(if mode == Mode::Replace { t("Find") } else { "" })
         });
         cx.notify();
     }
@@ -223,7 +224,7 @@ impl BatchRename {
         }
         crate::session::edit_then(
             &self.session,
-            Report::failure("Could not rename items").and_announce("items.rename_many"),
+            Report::failure(t("Could not rename items")).and_announce("items.rename_many"),
             Reread::RESULTS,
             move |library| library.rename_roots(&renames, crate::now_ms()),
             cx,
@@ -268,7 +269,10 @@ impl Render for BatchRename {
             ui::segmented::segmented(
                 "batch-rename-mode",
                 ui::segmented::Look::FilledTabs,
-                vec![ui::segmented::tab("Format"), ui::segmented::tab("Replace")],
+                vec![
+                    ui::segmented::tab(t("Format")),
+                    ui::segmented::tab(t("Replace")),
+                ],
                 Some(usize::from(open.mode == Mode::Replace)),
             )
             .on_select(move |index, _, cx| {
@@ -285,7 +289,7 @@ impl Render for BatchRename {
             Mode::Format => body
                 .child(form::field(
                     &theme,
-                    "Name format",
+                    t("Name format"),
                     div()
                         .flex()
                         .flex_col()
@@ -298,14 +302,14 @@ impl Render for BatchRename {
                         .child(
                             help_text(
                                 theme,
-                                "* keeps the original name. %N, %NN, and %NNN add padded numbering.",
+                                t("* keeps the original name. %N, %NN, and %NNN add padded numbering."),
                             )
                             .line_height(px(18.)),
                         ),
                 ))
                 .child(form::field(
                     &theme,
-                    "Start at",
+                    t("Start at"),
                     div().w(px(96.)).child(ui::field(
                         "batch-rename-start",
                         &self.start,
@@ -329,7 +333,7 @@ impl Render for BatchRename {
         body = body.child(preview_list(&self.list, &open.items, names, &theme));
         let modal = ui::modal(
             "batch-rename",
-            format!("Batch Rename {} Items", open.items.len()),
+            crate::tf!("Batch Rename {value0} Items", open.items.len()),
             layer.presence,
         )
         .size(ui::modal::Size::Medium)
@@ -343,14 +347,14 @@ impl Render for BatchRename {
         .child(body)
         .footer(
             ui::action_button("batch-rename-cancel", ButtonLook::Standard)
-                .label("Cancel")
+                .label(t("Cancel"))
                 .on_click(on(|this, cx| {
                     this.dialog.close(cx);
                 })),
         )
         .footer(
             ui::action_button("batch-rename-go", ButtonLook::Primary)
-                .label("Rename")
+                .label(t("Rename"))
                 .disabled(disabled)
                 .on_click(on(BatchRename::rename)),
         );
@@ -395,7 +399,7 @@ fn preview_list(
                     .child(cell(old[index].clone().into()).text_color(tertiary))
                     .child(
                         cell(if new.is_empty() {
-                            "Invalid empty name".into()
+                            crate::i18n::en("Invalid empty name").into()
                         } else {
                             new.clone().into()
                         })

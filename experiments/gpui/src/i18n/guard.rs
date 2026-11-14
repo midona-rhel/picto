@@ -80,6 +80,13 @@ const CONVERTED: &[&str] = &[
     "ui/progress_bar.rs",
     "screens/duplicates/",
     "settings/",
+    "ui/",
+    "shell/delete.rs",
+    "shell/batch_rename.rs",
+    "shell/export.rs",
+    "shell/import.rs",
+    "history.rs",
+    "session/",
 ];
 
 /// Calls whose literal argument is drawn.

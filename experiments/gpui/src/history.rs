@@ -3,6 +3,7 @@
 //! items to Trash" after an undo, and a notification with an Undo button
 //! after a broad or destructive change.
 use crate::grid::format::grouped;
+use crate::i18n::t;
 use crate::session::Session;
 use crate::ui::notify;
 use gpui::{App, Entity};
@@ -30,125 +31,137 @@ pub const ANNOUNCED: &[&str] = &[
 /// for a command not worded here.
 pub fn describe(entry: &HistoryEntrySummary) -> String {
     let count = entry.count;
-    let n = || grouped(count as i128);
+    // Production writes counts in the interface's language here
+    // (`toLocaleString(getLocale())`), except for deletes and rejects,
+    // which it writes in the system's.
+    let n = || in_language(count);
     let one = count == 1;
     let detail = entry.detail.as_deref();
     let pick = |single: &str, many: String| if one { single.to_owned() } else { many };
     match entry.command.as_str() {
         "items.set_lifecycle" => match detail {
             Some("trash") => pick(
-                "Moved an item to Trash",
-                format!("Moved {} items to Trash", n()),
+                t("Moved an item to Trash"),
+                crate::tf!("Moved {value0} items to Trash", n()),
             ),
             Some("inbox") => pick(
-                "Moved an item to the Inbox",
-                format!("Moved {} items to the Inbox", n()),
+                t("Moved an item to the Inbox"),
+                crate::tf!("Moved {value0} items to the Inbox", n()),
             ),
             _ => pick(
-                "Moved an item into the library",
-                format!("Moved {} items into the library", n()),
+                t("Moved an item into the library"),
+                crate::tf!("Moved {value0} items into the library", n()),
             ),
         },
         "items.set_rating" => rating(count, detail),
         "items.apply_tags" => {
             if detail == Some("remove") {
                 pick(
-                    "Removed tags from an item",
-                    format!("Removed tags from {} items", n()),
+                    t("Removed tags from an item"),
+                    crate::tf!("Removed tags from {value0} items", n()),
                 )
             } else {
                 pick(
-                    "Added tags to an item",
-                    format!("Added tags to {} items", n()),
+                    t("Added tags to an item"),
+                    crate::tf!("Added tags to {value0} items", n()),
                 )
             }
         }
-        "items.apply_ai_tags" => "Added AI tags".into(),
+        "items.apply_ai_tags" => t("Added AI tags").into(),
         "items.delete" => pick(
-            "Deleted an item permanently",
-            format!("Deleted {} items permanently", n()),
+            t("Deleted an item permanently"),
+            crate::tf!("Deleted {value0} items permanently", grouped(count as i128)),
         ),
-        "items.reject" => pick("Rejected an item", format!("Rejected {} items", n())),
+        "items.reject" => pick(
+            t("Rejected an item"),
+            crate::tf!("Rejected {value0} items", grouped(count as i128)),
+        ),
         "items.set_folder" => {
             if detail == Some("remove") {
                 pick(
-                    "Removed an item from a folder",
-                    format!("Removed {} items from a folder", n()),
+                    t("Removed an item from a folder"),
+                    crate::tf!("Removed {value0} items from a folder", n()),
                 )
             } else {
                 pick(
-                    "Added an item to a folder",
-                    format!("Added {} items to a folder", n()),
+                    t("Added an item to a folder"),
+                    crate::tf!("Added {value0} items to a folder", n()),
                 )
             }
         }
         "items.patch_metadata" => match detail {
             Some(detail) if detail.starts_with("rating:") => rating(count, Some(&detail[7..])),
-            Some("notes") => "Changed notes".into(),
-            Some("source_urls") => "Changed source links".into(),
+            Some("notes") => t("Changed notes").into(),
+            Some("source_urls") => t("Changed source links").into(),
             _ => pick(
-                "Changed the details of an item",
-                format!("Changed the details of {} items", n()),
+                t("Changed the details of an item"),
+                crate::tf!("Changed the details of {value0} items", n()),
             ),
         },
-        "items.set_notes" => "Changed notes".into(),
-        "items.set_source_urls" => "Changed source links".into(),
-        "items.rename" => "Renamed an item".into(),
-        "items.rename_many" => pick("Renamed an item", format!("Renamed {} items", n())),
-        "items.clear_recent_views" => "Cleared recently viewed".into(),
+        "items.set_notes" => t("Changed notes").into(),
+        "items.set_source_urls" => t("Changed source links").into(),
+        "items.rename" => t("Renamed an item").into(),
+        "items.rename_many" => pick(
+            t("Renamed an item"),
+            crate::tf!("Renamed {value0} items", n()),
+        ),
+        "items.clear_recent_views" => t("Cleared recently viewed").into(),
         "collections.organize" => pick(
-            "Made a collection",
-            format!("Grouped {} items into a collection", n()),
+            t("Made a collection"),
+            crate::tf!("Grouped {value0} items into a collection", n()),
         ),
         "collections.ungroup" => {
             if count > 1 {
-                format!("Ungrouped {} collections", n())
+                crate::tf!("Ungrouped {value0} collections", n())
             } else {
-                "Ungrouped a collection".into()
+                t("Ungrouped a collection").into()
             }
         }
         "collections.detach" => pick(
-            "Removed an item from a collection",
-            format!("Removed {} items from a collection", n()),
+            t("Removed an item from a collection"),
+            crate::tf!("Removed {value0} items from a collection", n()),
         ),
-        "collections.reorder" => "Reordered a collection".into(),
-        "collections.set_cover" => "Changed a collection’s cover".into(),
-        "duplicates.resolve" => "Resolved a duplicate".into(),
-        "folders.create" => "Created a folder".into(),
-        "folders.duplicate" => "Duplicated a folder".into(),
-        "folders.set_metadata" => "Edited a folder".into(),
-        "folders.set_cover" => "Changed a folder’s cover".into(),
-        "folders.set_watch" => "Changed folder watching".into(),
-        "folders.clear_watch" => "Stopped watching a folder".into(),
-        "folders.rename" => "Renamed a folder".into(),
-        "folders.move" => "Moved a folder".into(),
-        "folders.reorder" => "Reordered folders".into(),
-        "folders.sort_tree" => "Sorted folders".into(),
-        "folders.sort_items" => "Reordered items in a folder".into(),
-        "folders.set_auto_tags" => "Changed a folder’s automatic tags".into(),
-        "folders.delete" => pick("Deleted a folder", format!("Deleted {} folders", n())),
-        "smart_folders.create" => "Created a smart folder".into(),
-        "smart_folders.update" => "Edited a smart folder".into(),
+        "collections.reorder" => t("Reordered a collection").into(),
+        "collections.set_cover" => t("Changed a collection’s cover").into(),
+        "duplicates.resolve" => t("Resolved a duplicate").into(),
+        "folders.create" => t("Created a folder").into(),
+        "folders.duplicate" => t("Duplicated a folder").into(),
+        "folders.set_metadata" => t("Edited a folder").into(),
+        "folders.set_cover" => t("Changed a folder’s cover").into(),
+        "folders.set_watch" => t("Changed folder watching").into(),
+        "folders.clear_watch" => t("Stopped watching a folder").into(),
+        "folders.rename" => t("Renamed a folder").into(),
+        "folders.move" => t("Moved a folder").into(),
+        "folders.reorder" => t("Reordered folders").into(),
+        "folders.sort_tree" => t("Sorted folders").into(),
+        "folders.sort_items" => t("Reordered items in a folder").into(),
+        "folders.set_auto_tags" => t("Changed a folder’s automatic tags").into(),
+        "folders.delete" => pick(
+            t("Deleted a folder"),
+            crate::tf!("Deleted {value0} folders", n()),
+        ),
+        "smart_folders.create" => t("Created a smart folder").into(),
+        "smart_folders.update" => t("Edited a smart folder").into(),
         "smart_folders.delete" => pick(
-            "Deleted a smart folder",
-            format!("Deleted {} smart folders", n()),
+            t("Deleted a smart folder"),
+            crate::tf!("Deleted {value0} smart folders", n()),
         ),
-        "smart_folders.reorder" => "Reordered smart folders".into(),
+        "smart_folders.reorder" => t("Reordered smart folders").into(),
         "tags.rename_or_merge" => {
             if detail == Some("merge") {
-                "Merged tags".into()
+                t("Merged tags").into()
             } else {
-                "Renamed a tag".into()
+                t("Renamed a tag").into()
             }
         }
-        "tags.delete" => "Deleted a tag".into(),
-        "tags.delete_unused" => "Deleted unused tags".into(),
-        "tags.group.create" => "Created a tag group".into(),
+        "tags.delete" => t("Deleted a tag").into(),
+        "tags.delete_unused" => t("Deleted unused tags").into(),
+        "tags.group.create" => t("Created a tag group").into(),
         "tags.group.rename" => {
             if detail == Some("merge") {
-                "Merged tag groups".into()
+                t("Merged tag groups").into()
             } else {
-                "Renamed a tag group".into()
+                t("Renamed a tag group").into()
             }
         }
         _ => entry.label.clone(),
@@ -160,15 +173,21 @@ fn rating(count: u64, stars: Option<&str>) -> String {
     let stars = stars
         .and_then(|stars| stars.parse::<u32>().ok())
         .unwrap_or(0);
-    let n = grouped(count as i128);
+    let n = in_language(count);
     match (count == 1, stars) {
-        (true, 0) => "Cleared the rating of an item".into(),
-        (false, 0) => format!("Cleared the rating of {n} items"),
-        (true, 1) => "Rated an item 1 star".into(),
-        (false, 1) => format!("Rated {n} items 1 star"),
-        (true, stars) => format!("Rated an item {stars} stars"),
-        (false, stars) => format!("Rated {n} items {stars} stars"),
+        (true, 0) => t("Cleared the rating of an item").into(),
+        (false, 0) => crate::tf!("Cleared the rating of {value0} items", n),
+        (true, 1) => t("Rated an item 1 star").into(),
+        (false, 1) => crate::tf!("Rated {value0} items 1 star", n),
+        (true, stars) => crate::tf!("Rated an item {value0} stars", stars),
+        (false, stars) => crate::tf!("Rated {value0} items {value1} stars", n, stars),
     }
+}
+
+/// `count.toLocaleString(getLocale())`: grouped as the interface's
+/// language groups numbers.
+fn in_language(count: u64) -> String {
+    crate::i18n::format::grouped_in(crate::i18n::current(), count as i128)
 }
 
 /// The newest undo entry's id, read before a change, so that
@@ -195,7 +214,7 @@ pub fn announced(
 pub fn announce(entry: &HistoryEntrySummary, session: Entity<Session>, cx: &mut App) {
     notify::show(
         notify::Tone::Success,
-        notify::Options::new(describe(entry), "").action("Undo", move |_, cx| {
+        notify::Options::new(describe(entry), "").action(t("Undo"), move |_, cx| {
             session.update(cx, |session, cx| session.step_history_entry(true, cx))
         }),
         cx,
@@ -240,11 +259,11 @@ pub fn step(library: &Library, undo: bool) -> Result<Stepped, String> {
 /// the opposite step while there is one.
 pub fn show_step(stepped: &Stepped, undo: bool, session: Entity<Session>, cx: &mut App) {
     let mut options = notify::Options::new(
-        if undo { "Undone" } else { "Redone" },
+        if undo { t("Undone") } else { t("Redone") },
         describe(&stepped.entry),
     );
     if stepped.reversible {
-        options = options.action(if undo { "Redo" } else { "Undo" }, move |_, cx| {
+        options = options.action(if undo { t("Redo") } else { t("Undo") }, move |_, cx| {
             session.update(cx, |session, cx| session.step_history_entry(!undo, cx))
         });
     }

@@ -92,6 +92,7 @@ impl RenderOnce for CheckBox {
                 Some((tick, theme.on_primary())),
             ),
             Mark::Included => (theme.primary(), clear, Some((tick, theme.on_primary()))),
+            // i18n: an icon's name
             Mark::Excluded => (theme.negative(), clear, Some(("x", theme.on_primary()))),
             Mark::Removed => (theme.negative(), clear, Some(("minus", theme.on_primary()))),
         };

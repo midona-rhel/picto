@@ -79,3 +79,7 @@ Gray
 Light
 Light Gray
 Purple
+100% similar
+Folders can be nested up to 8 levels. Choose a higher destination or flatten the folder structure.
+Invalid empty name
+Use default folder icon

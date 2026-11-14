@@ -248,8 +248,12 @@ impl ViewOptions {
                     .map_or(ItemScope::All, |entry| entry.scope.clone()),
             )
         };
+        // A label longer than the room left (German, Finnish) is cut with an
+        // ellipsis rather than pushing the controls out of the menu.
         let label = |text: &'static str| {
             div()
+                .min_w_0()
+                .truncate()
                 .text(theme::TEXT_SM)
                 .text_color(theme.text_tertiary())
                 .child(text)
@@ -296,7 +300,12 @@ impl ViewOptions {
                     )
                 });
             });
-            let mut controls = div().flex().items_center().gap(px(4.)).child(select);
+            let mut controls = div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(select);
             if prefs.sort.field != SortField::Random {
                 let directions = [SortDirection::Ascending, SortDirection::Descending];
                 let pill_handle = cx.entity().downgrade();

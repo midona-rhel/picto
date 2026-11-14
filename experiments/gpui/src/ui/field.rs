@@ -533,6 +533,7 @@ impl RenderOnce for Field {
                     .hover(move |style| style.bg(theme.subtle_overlay()))
                     .child(
                         svg()
+                            // i18n: an icon's name
                             .path("x")
                             .size(px(12.))
                             .text_color(theme.text_secondary())
@@ -557,6 +558,7 @@ impl RenderOnce for Field {
                     .cursor_pointer()
                     .child(
                         svg()
+                            // i18n: an icon's name
                             .path("x")
                             .size(px(12.))
                             .text_color(theme.text_tertiary())
