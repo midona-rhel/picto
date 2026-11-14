@@ -462,16 +462,28 @@ pub fn load(folder: &Path) -> (State, Map<String, Value>) {
 static WRITTEN: Mutex<u64> = Mutex::new(0);
 
 /// Writes `text` as the file in `folder` through a temporary file, unless a
-/// later write has already landed.
+/// later write has already landed. The temporary file reaches the disk
+/// before it replaces the old one, so a crash or a power cut leaves the old
+/// file or the new one, never a part of either; a write that fails removes
+/// it.
 fn write(folder: &Path, text: &str, sequence: u64) -> std::io::Result<()> {
+    use std::io::Write as _;
     let mut written = WRITTEN.lock().unwrap_or_else(|poison| poison.into_inner());
     if sequence < *written {
         return Ok(());
     }
     std::fs::create_dir_all(folder)?;
     let temporary = folder.join(format!("{FILE}.{}.tmp", std::process::id()));
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, folder.join(FILE))?;
+    let replaced = std::fs::File::create(&temporary)
+        .and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, folder.join(FILE)));
+    if let Err(error) = replaced {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
     *written = sequence;
     Ok(())
 }

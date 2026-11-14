@@ -122,6 +122,8 @@ const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
 /// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
 /// this long.
 const VIEW_SAVE_DELAY: Duration = Duration::from_millis(500);
+/// How long quitting waits for the library's thread to save a view change.
+const QUIT_WAIT: Duration = Duration::from_millis(200);
 /// `gridController.scheduleRefresh`: a refresh after background changes
 /// waits at least this long, and at most a second, three times as long as
 /// the last refresh took, counted from when it finished.
@@ -312,6 +314,8 @@ pub struct Session {
     blobs: PathBuf,
     /// The disposable copy the application opened.
     root: PathBuf,
+    /// The library the copy was made from, which the recents are kept under.
+    library_key: String,
     /// Whether `root` passed the guard when the session began. The root
     /// never changes, so the guard's file checks are not run again.
     disposable: bool,
@@ -367,11 +371,12 @@ impl Session {
     ) -> Self {
         let blobs = root.join("blobs");
         let disposable = crate::application::guard(&root).is_ok();
+        let library_key = crate::state::library_key(&root);
         let (recent_folders, recent_tags) = {
             let kept = crate::state::get(cx);
             let folders = kept
                 .recent_folders
-                .get(&crate::state::library_key(&root))
+                .get(&library_key)
                 .map(|ids| ids.iter().map(|id| picto_library::FolderId(*id)).collect())
                 .unwrap_or_default();
             (folders, kept.recent_tags.clone())
@@ -391,6 +396,9 @@ impl Session {
                         if let Either::Right((None, _)) = first.await {
                             woken = None;
                         }
+                        // One look takes every reply sent so far, so the
+                        // wakes sent with them are spent too.
+                        while let Some(Ok(())) = woken.as_mut().map(|wake| wake.try_recv()) {}
                     }
                     None => tick.await,
                 }
@@ -413,9 +421,31 @@ impl Session {
                     .ok()
             })
             .or_else(|| tempfile::tempdir().ok());
-        let library_cover = scratch
-            .as_ref()
-            .and_then(|scratch| crate::cover::prepare(&root, scratch.path()));
+        // The library's cover is cropped off the thread that draws, and
+        // shown once it is ready.
+        if let Some(folder) = scratch.as_ref().map(|scratch| scratch.path().to_path_buf()) {
+            let library = root.clone();
+            let prepared = cx
+                .background_executor()
+                .spawn(async move { crate::cover::prepare(&library, &folder) });
+            cx.spawn(async move |session, cx| {
+                let cover = prepared.await;
+                let _ = session.update(cx, |this: &mut Self, cx| {
+                    if cover.is_some() && this.library_cover.is_none() {
+                        this.library_cover = cover;
+                        cx.emit(Change::Navigation);
+                    }
+                });
+            })
+            .detach();
+        }
+        // A zoom change still waiting to be saved is saved as the app quits,
+        // before the application closes the library.
+        cx.on_app_quit(|this: &mut Self, _| {
+            this.save_view_now();
+            async {}
+        })
+        .detach();
         Self {
             sender,
             receiver,
@@ -480,7 +510,8 @@ impl Session {
             blobs,
             root,
             disposable,
-            library_cover,
+            library_key,
+            library_cover: None,
             grayscale: false,
             scratch,
             place_label: None,

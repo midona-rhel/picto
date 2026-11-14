@@ -192,7 +192,7 @@ impl Session {
         if !std::mem::take(&mut self.recents_changed) {
             return;
         }
-        let library = crate::state::library_key(&self.root);
+        let library = self.library_key.clone();
         let folders = self.recent_folders.iter().map(|folder| folder.0).collect();
         let tags = self.recent_tags.clone();
         crate::state::update(cx, |state| {

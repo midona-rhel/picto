@@ -1,8 +1,8 @@
 //! The destination's results: the query, its windows, refreshes in place,
 //! the replies from the library's thread, view preferences and the zoom.
 use super::{
-    Change, Focused, REFRESH_MAX, REFRESH_MIN, REFRESH_RETRY, Session, Transition, VIEW_SAVE_DELAY,
-    Visit,
+    Change, Focused, QUIT_WAIT, REFRESH_MAX, REFRESH_MIN, REFRESH_RETRY, Session, Transition,
+    VIEW_SAVE_DELAY, Visit,
 };
 use crate::backend::{self, Arrived, Fetch, Reply, Request};
 use crate::grid::selection::End;
@@ -351,15 +351,33 @@ impl Session {
             }
             let timer = cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(VIEW_SAVE_DELAY).await;
-                let _ = this.update(cx, |this, _| {
-                    if let Some((key, size, _)) = this.tile_save.take() {
-                        this.write_view(key, serde_json::json!({ "target_size": size }));
-                    }
-                });
+                let _ = this.update(cx, |this, _| this.save_waiting_zoom());
             });
             self.tile_save = Some((key, tile, timer));
         }
         cx.emit(Change::Results);
+    }
+
+    /// Saves the zoom change waiting for its delay, if any.
+    fn save_waiting_zoom(&mut self) {
+        if let Some((key, size, _)) = self.tile_save.take() {
+            self.write_view(key, serde_json::json!({ "target_size": size }));
+        }
+    }
+
+    /// The app is quitting: the zoom change waiting for its delay is saved
+    /// now, and the library's thread is given a moment to write it, as the
+    /// application closes the library next.
+    pub(super) fn save_view_now(&mut self) {
+        if self.tile_save.is_none() {
+            return;
+        }
+        self.save_waiting_zoom();
+        let (written, waited) = std::sync::mpsc::channel();
+        let _ = self.sender.send(Request::Job(Box::new(move |_| {
+            let _ = written.send(());
+        })));
+        let _ = waited.recv_timeout(QUIT_WAIT);
     }
 
     pub(super) fn receive(&mut self, cx: &mut Context<Self>) {
@@ -412,7 +430,18 @@ impl Session {
                     }
                     cx.emit(Change::Results);
                 }
-                Reply::Error(error) => eprintln!("picto: {error}"),
+                // The library could not be opened or read: the grid says
+                // so instead of loading for ever, and nothing more comes.
+                Reply::Error(error) => {
+                    eprintln!("picto: {error}");
+                    self.error = Some(error);
+                    self.loading = false;
+                    self.refreshing = false;
+                    if matches!(self.transition, Transition::Waiting) {
+                        self.show_error(cx);
+                    }
+                    cx.emit(Change::Results);
+                }
                 _ => {}
             }
         }

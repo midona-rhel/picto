@@ -314,7 +314,11 @@ impl Session {
             // Turning around mid fade-in continues from the current opacity.
             Transition::FadingIn(started) => {
                 let shown = motion::progress(started.elapsed(), motion::SCOPE_FADE);
-                Transition::FadingOut(Instant::now() - motion::SCOPE_FADE.mul_f32(1. - shown))
+                let now = Instant::now();
+                Transition::FadingOut(
+                    now.checked_sub(motion::SCOPE_FADE.mul_f32(1. - shown))
+                        .unwrap_or(now),
+                )
             }
             Transition::Idle => Transition::FadingOut(Instant::now()),
         };

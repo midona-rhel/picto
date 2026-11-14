@@ -244,14 +244,6 @@ fn main() {
             cx.set_app_identity(desktop::APP_ID, desktop::APP_NAME);
         }
         app_menu::quit_with_main_window(cx);
-        // Stop the workers and checkpoint the copy before the process
-        // ends, as the Electron app closes its library before quitting.
-        cx.on_app_quit(move |cx| {
-            state::flush(cx);
-            closing.close();
-            async {}
-        })
-        .detach();
         let window_bounds = main_window_bounds(cx);
         // `PICTO_GPUI_BACKGROUND=1` opens the window without taking the
         // keyboard from whatever the user is working in, and keeps it
@@ -285,6 +277,16 @@ fn main() {
                 },
             )
             .unwrap();
+        // Stop the workers and checkpoint the copy before the process
+        // ends, as the Electron app closes its library before quitting.
+        // Registered after the window opened, so the session's own quit
+        // hook (a view change still to save) runs first.
+        cx.on_app_quit(move |cx| {
+            state::flush(cx);
+            closing.close();
+            async {}
+        })
+        .detach();
         // Input playback is a debug build's only (`seams.rs`).
         #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
