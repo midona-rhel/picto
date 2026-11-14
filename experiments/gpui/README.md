@@ -600,13 +600,13 @@ a fault.
 
 ### Driving a real window
 
-A debug build plays input lines into its main window from
+A debug build plays input lines into its windows from
 `PICTO_GPUI_POINTER=<path>` (`src/pointer.rs`), so hover, pressed, tooltip,
 menu, rubber-band and keyboard states can be checked without taking the real
 pointer. The path must be a FIFO: the reader reopens it each time it ends, so
 a plain file is played again from the start every 20 ms, forever. It takes
-the input lines of the table above (`move` to `dragexit`); clicks carry no
-modifiers, so use `key` for modifier shortcuts.
+the input lines of the table above (`move` to `dragexit`, and `window`);
+clicks carry no modifiers, so use `key` for modifier shortcuts.
 
 ```sh
 mkfifo /tmp/picto-pointer
@@ -615,12 +615,33 @@ PICTO_GPUI_POINTER=/tmp/picto-pointer PICTO_GPUI_BACKGROUND=1 PICTO_GPUI_WINDOW=
 echo "move 320 24" > /tmp/picto-pointer
 ```
 
+A `window <n>` line sends the lines after it to the app's nth window (0 the
+main one, the others in the order they opened, pop-up menus included, as the
+off-screen tool counts them); when that window closes they go to the main
+one again.
+
 GPUI stops painting a window that is fully covered; `PICTO_GPUI_BACKGROUND=1`
-opens the window without taking the keyboard and keeps it drawing behind
-other applications (`src/covered.rs`). `PICTO_GPUI_WINDOW=WxH` opens it
-centred at that size and does not remember it. A pop-up menu closes when the
-app is not the active one; `PICTO_GPUI_MENU=window` keeps menus in the
-window.
+opens every window of the app (main, detail and Settings) without taking the
+keyboard and keeps them drawing behind other applications
+(`src/covered.rs`). `PICTO_GPUI_WINDOW=WxH` opens the main window centred at
+that size and does not remember it; any value that is not a size (`none`)
+opens it where `state.json` says. `PICTO_GPUI_MENU=window` keeps menus in the
+window; a pop-up menu window opened while the app is not the active one
+stays above every application until Escape or a press elsewhere closes it,
+so keep such checks short.
+
+What a window driven this way shows differs from what a person sees in
+three ways. A window without the keyboard draws at most 30 frames a second
+(GPUI's `inactive_frame_interval`), so frame gaps from `PICTO_GPUI_STATS`
+read about 33 ms there; while the display sleeps the system slows the frame
+source further (4 frames a second were seen). Lines written together are
+played in one tick, before the next frame: a click right after the move
+that reveals a control (a detail window's toolbar, a fading button) is
+tested against the frame before it and goes to what was under it, so leave
+a frame (50 ms) between them. And a capture of one window (`screencapture
+-l`) shows that window alone: neither a pop-up menu's blur of what lies
+behind it nor its pop-in scale (a Core Animation transform) can be seen in
+one.
 
 ### The production reference
 
@@ -661,7 +682,7 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_FPS`, `PICTO_GPUI_STATS` | every build | frame meter, counters (section 2) |
 | `PICTO_FFMPEG_DIR` | every build | where `ffmpeg` is |
 | `PICTO_GPUI_POINTER` | debug builds | input lines from a FIFO |
-| `PICTO_GPUI_BACKGROUND` | debug builds | open without the keyboard, keep drawing while covered |
+| `PICTO_GPUI_BACKGROUND` | debug builds | every window opens without the keyboard and keeps drawing while covered |
 | `PICTO_GPUI_WINDOW=WxH` | debug builds, off-screen tool | exact window size, not remembered |
 | `PICTO_GPUI_MENU=window` | debug builds | menus in the window on macOS |
 | `PICTO_GPUI_APP_MENU=window` | debug builds | the in-window application menu button on macOS |
@@ -770,14 +791,22 @@ re-checked by reading the code; the rest were checked against it.
 - **macOS system integration.** Dragging items out to Finder; the Dock
   badge and the system notification (which need the app to run from its
   bundle); a real pasteboard copy of files; launching an application through
-  Open With; the media player's full-screen transition; restoring the window
-  maximised or on a second display (only the pure placement code is tested).
-- **Pop-up menus on macOS.** They have been seen reaching past the window,
-  with a submenu, and closing on a press in the main window. Not seen: their
-  blur over colourful content, on a submenu or past the window's edge; the
-  pointing-hand cursor in them (GPUI sets the cursor from the key window);
-  the input method's candidate window for the menu's search field. A select's
-  list inside a pop-up menu is checked by placement tests only.
+  Open With, Reveal in Finder; the media player's full-screen transition;
+  restoring the window maximised or on a second display (a kept place and
+  size was seen restored and written back; only the pure placement code is
+  tested for the rest); moving or resizing a window by hand, so the detail
+  window's aspect lock and the saving of a changed place (input playback
+  cannot move a window). The detail window's always-on-top was seen raising
+  and lowering its window level.
+- **Pop-up menus on macOS.** Seen: placed on the screen from a press near
+  the window's edges (moved up to stay above the Dock, left of the pointer
+  near the right edge), a submenu in a pop-up window of its own, closing on
+  Escape and on a press in the main window. Not seen: their blur over
+  colourful content and their pop-in scale (a capture of one window shows
+  neither, and capturing the screen was not allowed); the pointing-hand
+  cursor in them (GPUI sets the cursor from the key window); the input
+  method's candidate window for the menu's search field. A select's list
+  inside a pop-up menu is checked by placement tests only.
 - **The interface zoom, partly.** Seen on macOS in a real window at 150%
   (crisp text, the traffic lights unchanged) with a pop-up menu window
   opened by a press: its panel's corner on the pointer on screen. Not seen
@@ -790,15 +819,37 @@ re-checked by reading the code; the rest were checked against it.
 - **System dialogs with the pointer.** Paste Import, the file and folder
   choosers, the export and Picto Pack dialogs and the empty states' import
   buttons have been driven only off-screen with `answer`.
-- **Not even off-screen:** the filter bar's calendar, range editors and saved
-  filters; the document viewers, font viewer and Flash controls with a
-  pointer (hover, tooltips, scrolling, the volume drag, the controls' fade);
-  the media player's timings, hover states and volume and rate pop-ups;
-  Set as Thumbnail end to end; the rubber band in the collection editor.
-- **Performance.** No frame-time, decode-latency or memory benchmark has
-  been completed. Do not call the app faster, flicker-free or
-  memory-bounded on this evidence. Per-frame work is bounded by the grid's
-  window by construction and test, not by measurement at scale.
+- **Not checked in any window:** the filter bar's range editors; the font
+  viewer, EPUB and text viewers and Flash controls with a pointer; the
+  volume drag; Set as Thumbnail end to end; the collection editor and its
+  rubber band. (Seen in a real window: the calendar and saved filters, a PDF
+  collection scrolled, the media player's seek, hover time, rate list, loop
+  and controls' fade, the audio visualizer.)
+- **Performance.** No frame-time or decode-latency benchmark has been
+  completed. One real-window session on this library (2,673 items, debug
+  build) measured: physical footprint 308 MB after opening, 754 MB after
+  scrolling through about 900 items, 683 MB further down and 595 MB back at
+  the top, 542 MB after opening and closing fifty media views (peak 884 MB),
+  538 MB after ten minutes idle; no view repainted and CPU read 0.0% while
+  idle; a scroll in an active state of the window drew a frame every 8 ms.
+  Frame timing of a window without the keyboard is GPUI's 30 frames a
+  second (section 6). Do not call the app faster or flicker-free on this
+  evidence.
+
+### Seen wrong in a real window, not fixed
+
+- The first frame after clicking a theme swatch in the Settings window still
+  shows the old theme there (with the new swatch ringed); the new theme
+  arrives 0.15–0.3 s later. The main window changes in the same frame.
+- Twice, the first list a Settings select opened (Language) was drawn but
+  did not appear until another frame was drawn; seven later attempts showed
+  it at once. GPUI's own warnings go through the `log` crate, for which the
+  app installs no logger, so a renderer warning (a skipped frame, say) is
+  never seen; install one before chasing this further.
+- With a video playing, Playback speed's tooltip covers the bottom row (3x)
+  of the speed list while the pointer stays on the button, as in production.
+- A sidebar drag that moves a smart folder under another is two undo steps
+  (reorder, then move), as production's two commands are.
 
 ### Missing features
 

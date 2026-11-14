@@ -139,7 +139,7 @@ pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx:
         .and_then(|windows| windows.0.get(&label).copied());
     if let Some(handle) = existing
         && handle
-            .update(cx, |_, window, _| window.activate_window())
+            .update(cx, |_, window, _| ui::window_chrome::activate(window))
             .is_ok()
     {
         return;
@@ -175,7 +175,7 @@ pub fn open(session: Entity<Session>, mut entries: Vec<Entry>, start: usize, cx:
         if let Some(ratio) = aspect_ratio(shape) {
             ui::window_chrome::lock_aspect_ratio(window, ratio);
         }
-        window.activate_window();
+        ui::window_chrome::activate(window);
     });
     cx.default_global::<Windows>().0.insert(label, handle);
 }
@@ -593,7 +593,7 @@ impl DetailWindow {
                 if let Some(main) = crate::app_menu::main_window(cx) {
                     let _ = main.update(cx, move |shell, window, cx| {
                         shell.open_library_cover(Some(candidate), cx);
-                        window.activate_window();
+                        ui::window_chrome::activate(window);
                     });
                 }
             }
