@@ -131,8 +131,8 @@ const RETURN_TO_TOP_AFTER: f32 = 200.;
 /// line's ascent and descent and lands half a point lower.
 const CANVAS_TEXT_LIFT: f32 = -0.5;
 
-/// A tile name's width in the grid's 13px UI font.
-fn name_width(text: &str, window: &Window) -> f32 {
+/// A tile name shaped in the grid's 13px UI font.
+fn name_line(text: &str, window: &Window) -> ShapedLine {
     let run = TextRun {
         len: text.len(),
         font: font(theme::FONT_UI),
@@ -141,12 +141,14 @@ fn name_width(text: &str, window: &Window) -> f32 {
         underline: None,
         strikethrough: None,
     };
-    f32::from(
-        window
-            .text_system()
-            .shape_line(text.to_owned().into(), px(theme::TEXT_MD), &[run], None)
-            .width,
-    )
+    window
+        .text_system()
+        .shape_line(text.to_owned().into(), px(theme::TEXT_MD), &[run], None)
+}
+
+/// A tile name's width in the grid's 13px UI font.
+fn name_width(text: &str, window: &Window) -> f32 {
+    f32::from(name_line(text, window).width)
 }
 
 /// The files `media.resolve_target_paths` answered with, each once, in
@@ -263,6 +265,9 @@ pub(crate) struct TileLook<'a> {
     pub alphas: (f32, f32),
     /// The pointer rests on the image: the magnifier marks it.
     pub magnifier: bool,
+    /// Grayscale (`gridGrayscaleAtom`): the whole tile without colour, its
+    /// placeholder included.
+    pub grayscale: bool,
 }
 
 /// One grid tile, drawn to the rules of the Electron canvas grid
@@ -288,6 +293,7 @@ pub(crate) fn tile_art(
         original,
         alphas,
         magnifier,
+        grayscale,
     } = look;
     let image_height = tile.h - prefs.text_height();
     let audio = item.mime.starts_with("audio/");
@@ -301,7 +307,14 @@ pub(crate) fn tile_art(
     let placeholder = item
         .palette
         .first()
-        .map(|color| rgb(format::lab_to_rgb(color.l, color.a, color.b)))
+        .map(|color| {
+            let color = format::lab_to_rgb(color.l, color.a, color.b);
+            rgb(if grayscale {
+                format::grayscale(color)
+            } else {
+                color
+            })
+        })
         .unwrap_or(theme.surface_2());
     let (image_alpha, placeholder_alpha) = alphas;
     let mut cell = div()
@@ -413,7 +426,7 @@ pub(crate) fn tile_art(
                         .opacity(image_alpha * 0.5),
                 )
         } else {
-            media.child(image.opacity(image_alpha))
+            media.child(image.grayscale(grayscale).opacity(image_alpha))
         };
         // A picture that fills a tile of another shape (the grid mode
         // with Fit Thumbnails on) is drawn larger than the tile: cut it
@@ -514,9 +527,21 @@ pub(crate) fn tile_art(
                             } else {
                                 name
                             };
-                            format::truncate_to(&label, tile.w - 8., |text| {
-                                name_width(text, window)
-                            })
+                            let max = tile.w - 8.;
+                            format::truncate_to(
+                                &label,
+                                max,
+                                |text| name_width(text, window),
+                                // The whole name was shaped this frame
+                                // already: shaping it again is a lookup.
+                                || {
+                                    let line = name_line(&label, window);
+                                    let ellipsis = name_width("…", window);
+                                    format::characters_before(&label, max, ellipsis, |at| {
+                                        f32::from(line.x_for_index(at))
+                                    })
+                                },
+                            )
                         })),
                 ),
         );
@@ -658,30 +683,9 @@ impl GridView {
             {
                 continue;
             }
-            let answer = self.session.read(cx).dispatch(
-                "media.render_thumbnail_now",
-                serde_json::json!({ "file_hash": hash }),
-            );
-            let (original, disposable) = {
-                let session = self.session.read(cx);
-                (session.original(&hash, &mime), session.disposable())
-            };
+            let made = thumbnails::render_missing(&self.session, hash, mime, jpeg.clone(), cx);
             cx.spawn(async move |this, cx| {
-                let _ = answer.await;
-                let png = thumbnails::png_for(&jpeg);
-                // Only into a marked disposable copy, as every write here.
-                if !jpeg.exists() && !png.exists() && disposable && rendered::draws(&mime) {
-                    // A thread of its own: a movie plays for seconds first.
-                    let (sent, drawn) = futures::channel::oneshot::channel();
-                    let output = png.clone();
-                    std::thread::spawn(move || {
-                        let _ = sent.send(rendered::render(&mime, &original, &output));
-                    });
-                    if let Ok(Err(error)) = drawn.await {
-                        eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
-                    }
-                }
-                if jpeg.exists() || png.exists() {
+                if made.await {
                     let _ = this.update(cx, |this, cx| {
                         this.thumbnails
                             .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
@@ -1411,6 +1415,7 @@ impl GridView {
                 original,
                 alphas: reveal::alphas(self.reveal.progress(item.root_id.0, now)),
                 magnifier,
+                grayscale: self.session.read(cx).grayscale,
             },
             prefs,
             &mut self.art,
@@ -1493,7 +1498,7 @@ enum Surface {
 impl Render for GridView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Grid);
-        let build_started = std::time::Instant::now();
+        let build_started = crate::stats::Started::now();
         // A rubber band near the top or bottom edge scrolls the grid each
         // frame; the rectangle follows below.
         if let Some(speed) = self
@@ -1605,6 +1610,7 @@ impl Render for GridView {
                 session.window_epoch,
             ));
             if key != self.layout_key {
+                let laying_out = crate::stats::Started::now();
                 let window_changed = self.layout_key.map(|key| key.5) != key.map(|key| key.5);
                 if window_changed {
                     // Tiles of the window before mean other items now.
@@ -1723,6 +1729,7 @@ impl Render for GridView {
                 self.layout_ids = ids;
                 self.layout_start = session.start;
                 self.layout_key = key;
+                crate::stats::grid_part(crate::stats::GridPart::Layout, laying_out);
             }
             // An item moved to (a key, the viewer) comes into view once its
             // window is laid out.
@@ -2042,9 +2049,11 @@ impl Render for GridView {
                     .top(px(header))
                     .w_full()
                     .h(px(self.placement.height));
+                let building = crate::stats::Started::now();
                 for data in tiles {
                     content = content.child(self.tile(data, &prefs, now, window, cx));
                 }
+                crate::stats::grid_part(crate::stats::GridPart::Tiles, building);
                 if let Some(marker) = self.reorder_marker(&prefs, cx) {
                     content = content.child(marker);
                 }

@@ -27,6 +27,12 @@
 //! and starts from what it holds; without it every run starts from the
 //! defaults and keeps nothing.
 //!
+//! Nothing here reaches the desktop: opening a file in another
+//! application, showing it in Finder and putting files on the clipboard are
+//! written down instead (`crate::desktop`). A `desktop` line appends what
+//! was asked since the last one, and the clipboard's text, to
+//! `desktop.log` in the output folder.
+//!
 //! A system file, folder or save dialog cannot be driven here, so
 //! `answer <path>` answers the next one the app asks for with that path
 //! without opening it, and `answer` alone cancels the next one
@@ -165,6 +171,17 @@ fn plays_a_script() {
             cx.update_window(window, |_, window, cx| window.dispatch_action(action, cx))
                 .unwrap();
             settle(&mut cx, window, pace, lazy);
+        } else if line == "desktop" {
+            let mut log = crate::desktop::requests();
+            let text = cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            log.push(format!("clipboard {}", text.unwrap_or_default()));
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(out.join("desktop.log"))
+                .unwrap();
+            std::io::Write::write_all(&mut file, format!("{}\n", log.join("\n")).as_bytes())
+                .unwrap();
         } else if let Some(rest) = line.strip_prefix("invoke ") {
             // An application command, as the renderer's `invoke` sends it;
             // its answer is printed, and the script goes on once it came.

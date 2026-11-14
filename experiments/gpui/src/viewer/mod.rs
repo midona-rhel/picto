@@ -5,6 +5,7 @@
 //! view's controls are in the titlebar, where [`toolbar::ViewerToolbar`]
 //! takes the grid toolbar's place.
 pub mod camera;
+pub mod capture;
 pub mod detail;
 pub mod document;
 pub mod flash;
@@ -46,12 +47,11 @@ actions!(
     ]
 );
 
-/// The viewer was right-clicked at this window position; `flash` says a
-/// Flash movie is showing, `member` that a collection's member was.
+/// The viewer was right-clicked at this window position; `member` says a
+/// collection's member was.
 #[derive(Default)]
 pub struct MenuRequested {
     pub position: Point<Pixels>,
-    pub flash: bool,
     pub member: bool,
     /// The members a member's menu acts on, by their place in the
     /// collection: the editor's selection, or the one right-clicked.
@@ -892,13 +892,11 @@ impl Render for Viewer {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    let flash = this.surface.read(cx).flash();
                     if this.member_open {
                         // `MediaView`'s menu for the member by itself.
                         let member = this.session.read(cx).member;
                         cx.emit(MenuRequested {
                             position: event.position,
-                            flash,
                             member: true,
                             members: vec![member],
                             alone: true,
@@ -913,7 +911,6 @@ impl Render for Viewer {
                     }
                     cx.emit(MenuRequested {
                         position: event.position,
-                        flash,
                         ..Default::default()
                     });
                 }),

@@ -134,6 +134,8 @@ pub struct GroupEditor {
     files: Vec<PathBuf>,
     selected: BTreeSet<MediaId>,
     anchor: Option<MediaId>,
+    /// Members whose missing thumbnail was asked for, each once.
+    rendering: std::collections::HashSet<String>,
     scroll: ScrollHandle,
     bounds: Bounds<Pixels>,
     layout: Layout,
@@ -159,6 +161,20 @@ pub struct GroupEditor {
 
 impl GroupEditor {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
+        // A member's thumbnail written again (regenerated, or a captured
+        // frame) is read again.
+        cx.subscribe(
+            &session,
+            |this, session, event: &crate::application::Event, cx| {
+                if let crate::application::Event::Thumbnail(hash) = event {
+                    let jpeg = session.read(cx).thumbnail(hash);
+                    this.thumbnails
+                        .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
         Self {
             session,
             thumbnails: cx.new(Thumbnails::new),
@@ -168,6 +184,7 @@ impl GroupEditor {
             thumbs: Vec::new(),
             files: Vec::new(),
             selected: BTreeSet::new(),
+            rendering: Default::default(),
             anchor: None,
             scroll: ScrollHandle::new(),
             bounds: Bounds::default(),
@@ -750,6 +767,7 @@ impl Render for GroupEditor {
             .collect();
         self.thumbnails
             .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
+        let mut missing = Vec::new();
         let states: Vec<grid::Thumb> = {
             let thumbnails = self.thumbnails.read(cx);
             visible
@@ -761,6 +779,7 @@ impl Render for GroupEditor {
                     {
                         grid::Thumb::Loaded
                     } else if thumbnails.is_failed(&resource) {
+                        missing.push(*index);
                         grid::Thumb::Failed
                     } else {
                         grid::Thumb::Pending
@@ -768,6 +787,29 @@ impl Render for GroupEditor {
                 })
                 .collect()
         };
+        // A member with no thumbnail yet has one made, as the library's
+        // grid asks for its tiles'.
+        for index in missing {
+            let (hash, mime, jpeg) = (
+                self.members[index].content_hash.clone(),
+                self.members[index].mime.clone(),
+                self.thumbs[index].clone(),
+            );
+            if !self.rendering.insert(hash.clone()) || thumbnails::present(&jpeg).is_some() {
+                continue;
+            }
+            let made = thumbnails::render_missing(&self.session, hash, mime, jpeg.clone(), cx);
+            cx.spawn(async move |this, cx| {
+                if made.await {
+                    let _ = this.update(cx, |this, cx| {
+                        this.thumbnails
+                            .update(cx, |thumbnails, cx| thumbnails.forget(&jpeg, cx));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
         let decoded: Vec<(u32, bool)> = visible
             .iter()
@@ -805,6 +847,8 @@ impl Render for GroupEditor {
                     original: None,
                     alphas: reveal::alphas(self.reveal.progress(item.root_id.0, now)),
                     magnifier,
+                    // The editor's grid has no Grayscale of its own.
+                    grayscale: false,
                 },
                 &prefs,
                 &mut self.art,
@@ -936,6 +980,27 @@ impl Render for GroupEditor {
                 let members = this.selected();
                 if !members.is_empty() {
                     cx.emit(RemoveRequested(members));
+                }
+            }))
+            // `edit.copy` (`GroupSurface`): the selected members' files, or
+            // every member's when none is selected.
+            .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| {
+                let selected = this.selected();
+                let files: Vec<PathBuf> = if selected.is_empty() {
+                    this.files.clone()
+                } else {
+                    selected
+                        .iter()
+                        .filter_map(|index| this.files.get(*index).cloned())
+                        .collect()
+                };
+                let copied = if files.is_empty() {
+                    Err("The selection has no physical files to copy.".to_owned())
+                } else {
+                    crate::desktop::copy_files(&files, cx)
+                };
+                if let Err(error) = copied {
+                    crate::ui::notify::error("Could not copy selection", error, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &QuickLookMember, _, cx| {

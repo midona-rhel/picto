@@ -446,7 +446,7 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
 
     let mut edit = vec![
         if count > 1 {
-            item("Batch Rename…", BatchRename).todo()
+            item("Batch Rename…", BatchRename)
         } else {
             item("Rename", Rename)
         }
@@ -503,7 +503,6 @@ pub fn model(context: &MenuContext) -> Vec<TopMenu> {
         )
         .keys(Keys::Shortcut("file.regenerateThumbnail"))
         .enabled(context.thumbnails)
-        .todo()
         .into(),
         Separator,
         item("Select All", EditSelectAll)
@@ -881,6 +880,11 @@ pub fn set_menus(cx: &mut App) {
     cx.set_menus(gpui_menus(&context, demos()));
 }
 
+/// The main window, for what other windows send to it.
+pub fn main_window(cx: &App) -> Option<WindowHandle<crate::shell::Shell>> {
+    cx.try_global::<Current>()?.main
+}
+
 /// The main window, for the rows production sends to it whichever window
 /// has the keyboard, and for Close Window.
 pub fn set_main_window(window: AnyWindowHandle, cx: &mut App) {
@@ -1011,11 +1015,16 @@ pub fn bind(cx: &mut App) {
         });
     });
     cx.on_action(|_: &EditCut, cx| edit(cx, Some(Box::new(crate::ui::text_input::Cut)), None));
+    // Outside a text field, Copy puts the files themselves on the
+    // clipboard, as ⌘C over the grid, the viewer and a detail window does.
+    // (Production's row only copies text; chosen with the pointer over the
+    // grid it copies nothing.)
     cx.on_action(|_: &EditCopy, cx| {
-        // TODO: outside a text field, copy the selected files, as ⌘C over
-        // the grid and the viewer does in production; GPUI's macOS
-        // clipboard cannot hold files yet.
-        edit(cx, Some(Box::new(crate::ui::text_input::Copy)), None)
+        edit(
+            cx,
+            Some(Box::new(crate::ui::text_input::Copy)),
+            Some(Box::new(keymap::CopyFiles)),
+        )
     });
     cx.on_action(|_: &EditPaste, cx| {
         edit(
@@ -1463,8 +1472,6 @@ mod tests {
                 "Main",
                 "Clear History",
                 "Check for Updates…",
-                "Batch Rename…",
-                "Regenerate 2 Thumbnails",
                 "Auto Tag…",
                 "Log Window",
             ]

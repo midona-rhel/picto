@@ -430,6 +430,16 @@ impl DetailWindow {
         }
     }
 
+    /// `edit.copy` and the menu's Copy (`copyFileForHash`): the shown file
+    /// itself on the clipboard.
+    fn copy_file(&mut self, cx: &mut Context<Self>) {
+        if let Some((path, ..)) = self.shown_file()
+            && let Err(error) = crate::desktop::copy_files(&[path.into()], cx)
+        {
+            crate::ui::notify::error("Could not copy file", error, cx);
+        }
+    }
+
     /// The file of its item the entry names: a collection member opened in
     /// a window of its own is its collection's file of that hash; any
     /// other item shows its first.
@@ -494,7 +504,7 @@ impl DetailWindow {
         };
         let playback = rows::Playback {
             flash: self.surface.read(cx).flash_playback(),
-            capture: self.surface.read(cx).flash(),
+            capture: self.surface.read(cx).can_capture(cx),
         };
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::viewer_menu(&description, playback, &hints);
@@ -526,14 +536,15 @@ impl DetailWindow {
             return;
         };
         match action {
-            Action::OpenDefault => cx.open_with_system(std::path::Path::new(&path)),
-            Action::Reveal => cx.reveal_path(std::path::Path::new(&path)),
+            Action::OpenDefault => crate::desktop::open_default(std::path::Path::new(&path), cx),
+            Action::Reveal => crate::desktop::reveal(std::path::Path::new(&path), cx),
             Action::OpenInNewWindow => {
                 // One window per file: this one, brought forward.
                 if let Some(entry) = self.entry().cloned() {
                     open(self.session.clone(), vec![entry], 0, cx);
                 }
             }
+            Action::CopyFile => self.copy_file(cx),
             Action::CopyPath => cx.write_to_clipboard(ClipboardItem::new_string(path)),
             Action::CopyName => cx.write_to_clipboard(ClipboardItem::new_string(name)),
             Action::CopyLink => cx.write_to_clipboard(ClipboardItem::new_string(
@@ -549,10 +560,37 @@ impl DetailWindow {
                 self.surface
                     .update(cx, |surface, cx| surface.control_flash(control, cx));
             }
+            Action::RegenerateThumbnails => {
+                crate::grid::thumbnails::regenerate(&self.session, vec![(hash, mime)], cx);
+            }
+            Action::SetAsThumbnail => {
+                super::capture::set_as_thumbnail(&self.surface, &self.session, hash, cx);
+            }
+            Action::SetLibraryCover => {
+                // Production's detail window has no dialog layer, so its row
+                // does nothing there; here the main window's dialog opens
+                // on the file, framed at once.
+                let Some(entry) = self.entry() else {
+                    return;
+                };
+                let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                    media_item: i64::from(entry.root.0),
+                    size: (entry.width.unwrap_or(1), entry.height.unwrap_or(1)),
+                    thumbnail: crate::grid::thumbnails::present(
+                        &self.session.read(cx).thumbnail(&hash),
+                    ),
+                    hash,
+                };
+                if let Some(main) = crate::app_menu::main_window(cx) {
+                    let _ = main.update(cx, move |shell, window, cx| {
+                        shell.open_library_cover(Some(candidate), cx);
+                        window.activate_window();
+                    });
+                }
+            }
             _ => {
-                // TODO: Copy (the file itself), Search by Image, Regenerate
-                // Thumbnails, Set as Library Cover and Set as Thumbnail, as
-                // the main window's viewer menu will once they exist there.
+                // TODO: Search by Image, which uploads the file to the
+                // engine from a hidden browser window (`runReverseImageSearch`).
             }
         }
     }
@@ -722,8 +760,7 @@ impl Render for DetailWindow {
                     cx.propagate();
                 }
             }))
-            // TODO: Copy (the file to the clipboard) and the per-image zoom
-            // memory (`zoomCache`).
+            // TODO: the per-image zoom memory (`zoomCache`).
             .child(if self.group && self.opened.is_none() {
                 self.reader.clone().into_any_element()
             } else {
@@ -760,6 +797,7 @@ impl Render for DetailWindow {
             cx.listener(|this, _: &ToggleAlwaysOnTop, window, cx| this.toggle_on_top(window, cx)),
         )
         .on_action(cx.listener(|this, _: &crate::keymap::CopyFilePath, _, cx| this.copy_path(cx)))
+        .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| this.copy_file(cx)))
         .child(pane)
         .children(self.menu.layer(window, cx))
     }

@@ -4,14 +4,18 @@
 //! rest for scrolling back until there are too many.
 use gpui::*;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 pub struct Thumbnails {
-    entries: HashMap<Resource, ImageCacheItem>,
-    recent: VecDeque<Resource>,
+    /// Each thumbnail, and when it was last used (`clock`), for letting go
+    /// of the least recently used first. A use only stamps its entry: a
+    /// resource is a path, and comparing paths walks their components, so
+    /// nothing is searched for in a list on the way.
+    entries: HashMap<Resource, Entry>,
+    clock: u64,
     /// Images a view outside the grid is showing, which stay decoded. Such a
     /// view does not repaint as the grid scrolls, so if its image were
     /// evicted it would go on drawing whatever took the freed texture.
@@ -20,6 +24,14 @@ pub struct Thumbnails {
     wanted: HashSet<Resource>,
     pub hits: u64,
     pub loads: u64,
+}
+
+struct Entry {
+    item: ImageCacheItem,
+    /// When it was last used, by `Thumbnails::clock`.
+    used: u64,
+    /// It was painted at least once.
+    drawn: bool,
 }
 
 /// Decoded thumbnails kept beyond the ones wanted now.
@@ -63,6 +75,148 @@ pub fn existing(jpeg: PathBuf) -> PathBuf {
     if png.exists() { png } else { jpeg }
 }
 
+/// The thumbnail file there is for this `.jpg` path, if any: the `.jpg`,
+/// else the `.png`.
+pub fn present(jpeg: &Path) -> Option<PathBuf> {
+    [jpeg.to_path_buf(), png_for(jpeg)]
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+/// Where `regenerateThumbnail` keeps a thumbnail aside while it is made
+/// again: beside it, named for this process and the moment.
+pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
+    let mut name = thumbnail.as_os_str().to_owned();
+    name.push(format!(".{process}.{stamp}.regenerate-backup"));
+    PathBuf::from(name)
+}
+
+/// `scheduleThumbnailAfterMiss`: asks the application to render a missing
+/// thumbnail (`media.render_thumbnail_now`), as the media protocol does on a
+/// miss, and draws one it cannot make (Flash, PDF and the other paged
+/// documents) as the Electron main process does (`renderExternalThumbnail`).
+/// Resolves to whether there is a thumbnail now. The library's grid and a
+/// collection's editor both ask through this.
+pub fn render_missing(
+    session: &gpui::Entity<crate::session::Session>,
+    hash: String,
+    mime: String,
+    jpeg: PathBuf,
+    cx: &mut App,
+) -> Task<bool> {
+    let answer = session.read(cx).dispatch(
+        "media.render_thumbnail_now",
+        serde_json::json!({ "file_hash": hash }),
+    );
+    let (original, disposable) = {
+        let session = session.read(cx);
+        (session.original(&hash, &mime), session.disposable())
+    };
+    cx.spawn(async move |_| {
+        let _ = answer.await;
+        let png = png_for(&jpeg);
+        // Only into a marked disposable copy, as every write here.
+        if present(&jpeg).is_none() && disposable && crate::grid::rendered::draws(&mime) {
+            // A thread of its own: a movie plays for seconds first.
+            let (sent, drawn) = futures::channel::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = sent.send(crate::grid::rendered::render(&mime, &original, &png));
+            });
+            if let Ok(Err(error)) = drawn.await {
+                eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
+            }
+        }
+        present(&jpeg).is_some()
+    })
+}
+
+/// `media.regenerate_thumbnails` as the Electron main process performs it
+/// (`regenerateThumbnail`), one file after another: the thumbnail is kept
+/// aside, made again by the application (or drawn here for Flash and paged
+/// documents), and the old one restored if no new one could be made. Every
+/// view showing it reads it again. The first failure stops the rest and is
+/// shown as production's menu shows it. Only a marked disposable copy is
+/// written to. `files` are content hashes and types.
+pub fn regenerate(
+    session: &gpui::Entity<crate::session::Session>,
+    files: Vec<(String, String)>,
+    cx: &mut App,
+) {
+    if files.is_empty() || !session.read(cx).disposable() {
+        return;
+    }
+    let files: Vec<_> = files
+        .into_iter()
+        .map(|(hash, mime)| {
+            let session = session.read(cx);
+            let (jpeg, original) = (session.thumbnail(&hash), session.original(&hash, &mime));
+            (hash, mime, jpeg, original)
+        })
+        .collect();
+    let session = session.clone();
+    cx.spawn(async move |cx| {
+        for (hash, mime, jpeg, original) in files {
+            let made = regenerate_one(&session, &hash, &mime, &jpeg, &original, cx).await;
+            session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
+            if let Err(error) = made {
+                cx.update(|cx| crate::ui::notify::error("Menu action failed", error, cx));
+                break;
+            }
+        }
+    })
+    .detach();
+}
+
+/// One file of [`regenerate`].
+async fn regenerate_one(
+    session: &gpui::Entity<crate::session::Session>,
+    hash: &str,
+    mime: &str,
+    jpeg: &std::path::Path,
+    original: &std::path::Path,
+    cx: &mut gpui::AsyncApp,
+) -> Result<(), String> {
+    use crate::grid::rendered;
+    let previous = present(jpeg);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let backup = previous
+        .as_ref()
+        .map(|previous| backup_for(previous, std::process::id(), stamp));
+    if let (Some(previous), Some(backup)) = (&previous, &backup) {
+        std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
+    }
+    let answer = session.update(cx, |session, _| {
+        session.dispatch(
+            "media.render_thumbnail_now",
+            serde_json::json!({ "file_hash": hash }),
+        )
+    });
+    let _ = answer.await;
+    let png = png_for(jpeg);
+    if present(jpeg).is_none() && rendered::draws(mime) {
+        // A thread of its own: a movie plays for seconds first.
+        let (sent, drawn) = futures::channel::oneshot::channel();
+        let (mime, original) = (mime.to_owned(), original.to_path_buf());
+        std::thread::spawn(move || {
+            let _ = sent.send(rendered::render(&mime, &original, &png));
+        });
+        let _ = drawn.await;
+    }
+    if present(jpeg).is_some() {
+        if let Some(backup) = backup {
+            let _ = std::fs::remove_file(backup);
+        }
+        Ok(())
+    } else {
+        if let (Some(previous), Some(backup)) = (previous, backup) {
+            let _ = std::fs::rename(backup, previous);
+        }
+        Err("No thumbnail renderer supports this file.".into())
+    }
+}
+
 /// The `.png` a `.jpg` thumbnail resource falls back to.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {
@@ -86,8 +240,8 @@ fn primary(resource: &Resource) -> Option<Resource> {
 impl Thumbnails {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.on_release(|cache, cx| {
-            for (_, item) in std::mem::take(&mut cache.entries) {
-                if let Some(Ok(image)) = item.get() {
+            for (_, entry) in std::mem::take(&mut cache.entries) {
+                if let Some(Ok(image)) = entry.item.get() {
                     cx.drop_image(image, None);
                 }
             }
@@ -95,7 +249,7 @@ impl Thumbnails {
         .detach();
         Self {
             entries: HashMap::new(),
-            recent: VecDeque::new(),
+            clock: 0,
             pins: HashMap::new(),
             wanted: HashSet::new(),
             hits: 0,
@@ -113,7 +267,7 @@ impl Thumbnails {
     }
 
     fn state(&self, resource: &Resource) -> Option<bool> {
-        match self.entries.get(resource)?.get()? {
+        match self.entries.get(resource)?.item.get()? {
             Ok(_) => Some(true),
             Err(_) => Some(false),
         }
@@ -146,12 +300,12 @@ impl Thumbnails {
 
     /// The decoded thumbnail, once it is ready.
     pub fn image(&self, resource: &Resource) -> Option<Arc<RenderImage>> {
-        self.entries.get(resource)?.get()?.ok()
+        self.entries.get(resource)?.item.get()?.ok()
     }
 
     /// The decoded size of a thumbnail, in its pixels, once it is ready.
     pub fn size(&self, resource: &Resource) -> Option<(f32, f32)> {
-        match self.entries.get(resource)?.get()? {
+        match self.entries.get(resource)?.item.get()? {
             Ok(image) => {
                 let size = image.size(0);
                 Some((size.width.0 as f32, size.height.0 as f32))
@@ -169,13 +323,18 @@ impl Thumbnails {
             Resource::Path(jpeg.into()),
             Resource::Path(png_for(jpeg).into()),
         ] {
-            if let Some(item) = self.entries.remove(&resource)
-                && let Some(Ok(image)) = item.get()
+            if let Some(entry) = self.entries.remove(&resource)
+                && let Some(Ok(image)) = entry.item.get()
             {
                 cx.drop_image(image, None);
             }
-            self.recent.retain(|kept| *kept != resource);
         }
+    }
+
+    /// A tick of the clock that orders uses.
+    fn tick(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
     }
 
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
@@ -184,8 +343,15 @@ impl Thumbnails {
         // The view that asked is told when it is ready.
         item.use_image(window);
         self.loads += 1;
-        self.entries.insert(resource.clone(), item);
-        self.recent.push_back(resource.clone());
+        let used = self.tick();
+        self.entries.insert(
+            resource.clone(),
+            Entry {
+                item,
+                used,
+                drawn: false,
+            },
+        );
     }
 
     /// The grid's thumbnails for this frame, most wanted first. A load that
@@ -198,19 +364,17 @@ impl Thumbnails {
         let abandoned = self
             .entries
             .iter()
-            .filter(|(resource, item)| item.get().is_none() && !self.held(resource))
+            .filter(|(resource, entry)| entry.item.get().is_none() && !self.held(resource))
             .map(|(resource, _)| resource.clone())
             .collect::<Vec<_>>();
         for resource in &abandoned {
             self.entries.remove(resource);
-        }
-        if !abandoned.is_empty() {
-            self.recent.retain(|resource| !abandoned.contains(resource));
+            crate::stats::thumbnail_abandoned();
         }
         let mut pending = self
             .entries
             .values()
-            .filter(|item| item.get().is_none())
+            .filter(|entry| entry.item.get().is_none())
             .count();
         for resource in &wanted {
             if pending >= CONCURRENCY {
@@ -222,24 +386,30 @@ impl Thumbnails {
             }
         }
         let capacity = CAPACITY.max(self.wanted.len() + self.pins.len());
-        let mut kept = Vec::new();
-        while self.entries.len() > capacity {
-            let Some(oldest) = self.recent.pop_front() else {
+        if self.entries.len() <= capacity {
+            return;
+        }
+        let mut oldest_first = self
+            .entries
+            .iter()
+            .map(|(resource, entry)| (entry.used, resource.clone()))
+            .collect::<Vec<_>>();
+        oldest_first.sort_unstable_by_key(|(used, _)| *used);
+        let mut over = self.entries.len() - capacity;
+        for (_, resource) in oldest_first {
+            if over == 0 {
                 break;
-            };
-            if self.held(&oldest) {
-                kept.push(oldest);
+            }
+            if self.held(&resource) {
                 continue;
             }
-            if let Some(item) = self.entries.remove(&oldest)
-                && let Some(Ok(image)) = item.get()
+            over -= 1;
+            if let Some(entry) = self.entries.remove(&resource)
+                && let Some(Ok(image)) = entry.item.get()
             {
                 cx.drop_image(image, Some(window));
-                crate::stats::thumbnail_evicted();
+                crate::stats::thumbnail_evicted(entry.drawn);
             }
-        }
-        for resource in kept.into_iter().rev() {
-            self.recent.push_front(resource);
         }
     }
 }
@@ -251,11 +421,12 @@ impl ImageCache for Thumbnails {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
-        if let Some(item) = self.entries.get(resource) {
+        let used = self.tick();
+        if let Some(entry) = self.entries.get_mut(resource) {
             self.hits += 1;
-            self.recent.retain(|r| r != resource);
-            self.recent.push_back(resource.clone());
-            let image = item.use_image(window);
+            entry.used = used;
+            let image = entry.item.use_image(window);
+            entry.drawn |= matches!(image, Some(Ok(_)));
             if let Some(Err(_)) = &image
                 && let Some(png) = fallback(resource)
             {
@@ -276,6 +447,15 @@ impl ImageCache for Thumbnails {
 mod tests {
     use super::{fallback, load_order, primary};
     use gpui::Resource;
+    use std::path::Path;
+
+    #[test]
+    fn a_thumbnail_is_kept_aside_beside_itself() {
+        assert_eq!(
+            super::backup_for(Path::new("/l/blobs/t/ab/cd/abcd.jpg"), 42, 1700),
+            Path::new("/l/blobs/t/ab/cd/abcd.jpg.42.1700.regenerate-backup")
+        );
+    }
 
     #[test]
     fn a_jpg_thumbnail_falls_back_to_png_and_back() {

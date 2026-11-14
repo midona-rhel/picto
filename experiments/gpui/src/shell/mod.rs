@@ -2,6 +2,7 @@
 //! left block keeps the sidebar's width, above a body in which the sidebar
 //! and inspector are rails that slide away. Each part is its own cached view,
 //! so this root only places them.
+mod batch_rename;
 mod delete;
 mod export;
 mod import;
@@ -9,6 +10,7 @@ mod item_menu;
 mod rails;
 pub(crate) use item_menu::media_link;
 pub mod library;
+mod library_cover;
 mod menu_commands;
 mod review;
 mod shortcuts;
@@ -112,6 +114,10 @@ pub struct Shell {
     imports: Entity<crate::imports::Imports>,
     /// Exports and Picto Packs, and their dialogs.
     exports: Entity<crate::export::Exports>,
+    /// The batch rename dialog.
+    batch_rename: Entity<batch_rename::BatchRename>,
+    /// The library cover dialog.
+    library_cover: Entity<library_cover::LibraryCover>,
     /// Files dragged from the system over the window, until they are
     /// dropped or leave it.
     file_drag: Option<Vec<PathBuf>>,
@@ -302,6 +308,10 @@ impl Shell {
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
         let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
         let exports = cx.new(|cx| crate::export::Exports::new(session.clone(), focus.clone(), cx));
+        let batch_rename =
+            cx.new(|cx| batch_rename::BatchRename::new(session.clone(), focus.clone(), cx));
+        let library_cover =
+            cx.new(|cx| library_cover::LibraryCover::new(session.clone(), focus.clone(), cx));
         let mut subscriptions = subscriptions;
         // The rails as the user left them.
         let kept = crate::state::get(cx).clone();
@@ -391,6 +401,8 @@ impl Shell {
             items: Default::default(),
             imports,
             exports,
+            batch_rename,
+            library_cover,
             file_drag: None,
             reviewer: Default::default(),
             review_flash: None,
@@ -614,7 +626,7 @@ impl Shell {
         });
         cx.spawn(async move |_, cx| {
             if let Ok(Some(path)) = read.await {
-                cx.update(|cx| cx.open_with_system(std::path::Path::new(&path)));
+                cx.update(|cx| crate::desktop::open_default(std::path::Path::new(&path), cx));
             }
         })
         .detach();
@@ -1069,6 +1081,8 @@ impl Render for Shell {
         // Imports in progress, below the menus and dialogs.
         root = root.child(self.imports.clone());
         root = root.child(self.exports.clone());
+        root = root.child(self.batch_rename.clone());
+        root = root.child(self.library_cover.clone());
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);

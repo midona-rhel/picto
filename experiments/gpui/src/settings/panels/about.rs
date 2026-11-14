@@ -40,7 +40,7 @@ fn about_link(
             13.,
             theme.text_tertiary(),
         ))
-        .on_click(move |_, _, cx| cx.open_url(url))
+        .on_click(move |_, _, cx| crate::desktop::open_link(url, cx))
 }
 
 impl SettingsWindow {

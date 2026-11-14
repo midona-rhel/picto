@@ -14,6 +14,7 @@ pub struct Tabs {
     labels: Vec<SharedString>,
     selected: usize,
     on_select: Option<SelectHandler>,
+    filled: bool,
 }
 
 pub fn tabs(id: impl Into<ElementId>, labels: Vec<SharedString>, selected: usize) -> Tabs {
@@ -22,6 +23,7 @@ pub fn tabs(id: impl Into<ElementId>, labels: Vec<SharedString>, selected: usize
         labels,
         selected,
         on_select: None,
+        filled: false,
     }
 }
 
@@ -30,12 +32,25 @@ impl Tabs {
         self.on_select = Some(Box::new(handler));
         self
     }
+
+    /// `BatchRenameModal.module.css`'s `.tabs`: the tabs share the strip's
+    /// width, 28px tall on a 2px black-20% track with 7px corners; a tab is
+    /// the secondary text colour, on the hover surface in the primary
+    /// colour under the pointer, and on the active surface (no shadow) when
+    /// chosen.
+    pub fn filled(mut self) -> Self {
+        self.filled = true;
+        self
+    }
 }
 
 impl RenderOnce for Tabs {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
         let handler = self.on_select.map(std::rc::Rc::new);
+        if self.filled {
+            return filled(self.id, self.labels, self.selected, handler, &theme);
+        }
         let mut strip = div()
             .id(self.id)
             .flex()
@@ -78,4 +93,50 @@ impl RenderOnce for Tabs {
         }
         strip
     }
+}
+
+fn filled(
+    id: ElementId,
+    labels: Vec<SharedString>,
+    selected: usize,
+    handler: Option<std::rc::Rc<SelectHandler>>,
+    theme: &theme::Theme,
+) -> Stateful<Div> {
+    let mut strip = div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(px(7.))
+        .bg(rgba(theme::BLACK_20));
+    for (index, label) in labels.into_iter().enumerate() {
+        let chosen = index == selected;
+        let text = theme.text();
+        let mut tab = div()
+            .id(("tab", index))
+            .flex_1()
+            .min_w_0()
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .font_family(theme::FONT_UI)
+            .text(theme::TEXT_MD)
+            .whitespace_nowrap()
+            .child(label);
+        tab = if chosen {
+            tab.bg(theme.surface_active()).text_color(text)
+        } else {
+            let hover = theme.surface_hover();
+            tab.text_color(theme.text_secondary())
+                .hover(move |style| style.bg(hover).text_color(text))
+        };
+        if let Some(handler) = handler.clone() {
+            tab = tab.on_click(move |_, window, cx| handler(index, window, cx));
+        }
+        strip = strip.child(tab);
+    }
+    strip
 }
