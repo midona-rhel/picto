@@ -1,3 +1,4 @@
+mod ai_tagger;
 mod app_menu;
 mod application;
 mod assets;

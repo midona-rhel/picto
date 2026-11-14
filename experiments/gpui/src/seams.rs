@@ -88,9 +88,53 @@ pub fn silent() -> bool {
     seam!("PICTO_GPUI_SILENT").is_some()
 }
 
+/// `PICTO_GPUI_APP_DATA=<folder>`: the application data the core keeps
+/// outside a library (its AI models, in `models/`) is there instead of
+/// beside the copy (`application::application_data`).
+pub fn app_data() -> Option<PathBuf> {
+    seam!("PICTO_GPUI_APP_DATA")
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+}
+
+/// How a held model download answers (`PICTO_GPUI_HOLD_DOWNLOADS`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HeldDownload {
+    /// It never finishes; the model reports this share downloaded (0–1)
+    /// until Cancel ends it.
+    Progress(f64),
+    /// It fails at once.
+    Fail,
+}
+
+/// `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>|fail]`: AI model downloads are
+/// written down and answered by the app instead of sent to the core, which
+/// would fetch the model from the network (`ai_tagger::commands`).
+pub fn hold_downloads() -> Option<HeldDownload> {
+    held_download(&seam!("PICTO_GPUI_HOLD_DOWNLOADS")?.to_string_lossy())
+}
+
+fn held_download(value: &str) -> Option<HeldDownload> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("fail") {
+        return Some(HeldDownload::Fail);
+    }
+    let percent = value.parse::<f64>().unwrap_or(0.).clamp(0., 100.);
+    Some(HeldDownload::Progress(percent / 100.))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::window_size;
+    use super::{HeldDownload, held_download, window_size};
+
+    #[test]
+    fn a_held_download_reports_its_share_or_fails() {
+        assert_eq!(held_download("1"), Some(HeldDownload::Progress(0.01)));
+        assert_eq!(held_download("42"), Some(HeldDownload::Progress(0.42)));
+        assert_eq!(held_download(""), Some(HeldDownload::Progress(0.)));
+        assert_eq!(held_download("250"), Some(HeldDownload::Progress(1.)));
+        assert_eq!(held_download("FAIL"), Some(HeldDownload::Fail));
+    }
 
     #[test]
     fn a_window_size_is_a_width_by_a_height() {

@@ -323,6 +323,16 @@ impl Shell {
             }
         }))
         .on_action(cx.listener(|this, _: &AddTags, window, cx| this.pick(Picker::Tags, window, cx)))
+        // `organize.autoTag`: the review of the item viewed, else of the
+        // selection, when there is one.
+        .on_action(cx.listener(|this, _: &AutoTag, window, cx| {
+            let session = this.session.read(cx);
+            if session.selection.is_empty() && !session.viewer {
+                cx.propagate();
+                return;
+            }
+            this.act_on_selection(Row::AutoTag, window, cx)
+        }))
         .on_action(
             cx.listener(|this, _: &AddToFolders, window, cx| {
                 this.pick(Picker::Folders, window, cx)

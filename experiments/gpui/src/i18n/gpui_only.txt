@@ -85,3 +85,5 @@ Folders can be nested up to 8 levels. Choose a higher destination or flatten the
 Invalid empty name
 Use default folder icon
 Default
+Downloading
+Optimizing

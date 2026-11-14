@@ -68,7 +68,6 @@ actions!(
         Reject,
         AddTags,
         AddToFolder,
-        // TODO: open the AI tagger on the selection, beside the inspector.
         AutoTag,
         ShowTags,
         OpenDefault,
@@ -666,7 +665,6 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
         item("Auto Tag…", AutoTag)
             .keys(Keys::Shortcut("organize.autoTag"))
             .enabled(has)
-            .todo()
             .into(),
         Separator,
         Entry::Submenu {
@@ -1758,7 +1756,6 @@ mod tests {
                 "Main",
                 "Clear History",
                 "Check for Updates…",
-                "Auto Tag…",
                 "Log Window",
             ]
         );

@@ -341,6 +341,9 @@ impl Shell {
         root = when(root, has, cx, |_, _: &app_menu::AddToFolder, window, cx| {
             window.dispatch_action(Box::new(crate::keymap::AddToFolder), cx)
         });
+        root = when(root, has, cx, |this, _: &app_menu::AutoTag, window, cx| {
+            this.act_on_selection(Row::AutoTag, window, cx)
+        });
         root = when(
             root,
             has,

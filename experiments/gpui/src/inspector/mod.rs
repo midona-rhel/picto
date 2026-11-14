@@ -160,6 +160,8 @@ pub struct Inspector {
     holding: Option<usize>,
     tag_picker: Entity<TagPicker>,
     folder_picker: Entity<FolderPicker>,
+    /// The AI tagger's review, which opens beside the rail as the pickers do.
+    ai_tagger: Entity<crate::ai_tagger::AiTagger>,
     /// The Add Tags and Folders dialogs the grid's shortcuts and menu open.
     tag_dialog: Entity<TagDialog>,
     folder_dialog: Entity<FolderDialog>,
@@ -210,6 +212,8 @@ impl Inspector {
         let selection = selection::SelectionState::new(window, cx);
         let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));
         let folder_picker = cx.new(|cx| FolderPicker::new(session.clone(), cx));
+        let ai_tagger =
+            cx.new(|cx| crate::ai_tagger::AiTagger::new(session.clone(), thumbnails.clone(), cx));
         let tag_dialog = cx.new(|cx| TagDialog::new(session.clone(), cx));
         let folder_dialog = cx.new(|cx| FolderDialog::new(session.clone(), cx));
         let sources = sources::SourcesState::new(cx);
@@ -369,6 +373,7 @@ impl Inspector {
             holding: None,
             tag_picker,
             folder_picker,
+            ai_tagger,
             tag_dialog,
             folder_dialog,
             places: Rc::new(RefCell::new(HashMap::new())),
@@ -391,6 +396,11 @@ impl Inspector {
     /// The pickers, which the window draws above everything.
     pub fn pickers(&self) -> (Entity<TagPicker>, Entity<FolderPicker>) {
         (self.tag_picker.clone(), self.folder_picker.clone())
+    }
+
+    /// The AI tagger's review, which the window draws above everything.
+    pub fn ai_tagger(&self) -> Entity<crate::ai_tagger::AiTagger> {
+        self.ai_tagger.clone()
     }
 
     /// The Add Tags and Folders dialogs, which the window draws above
@@ -613,7 +623,8 @@ impl Inspector {
 
     /// The in-flow Auto Tag action after the properties
     /// (`InspectorAutoTagAction`): "Auto Tag N Images" for more than one,
-    /// dimmed without a tooltip when nothing in it is an image.
+    /// dimmed, with a tooltip that says why, when nothing in it is an
+    /// image.
     fn auto_tag(
         &self,
         id: &'static str,
@@ -627,8 +638,6 @@ impl Inspector {
         } else {
             t("Auto Tag").to_owned()
         };
-        // Production's disabled look until the AI tagger is built.
-        let enabled = enabled && crate::grid::menu::AUTO_TAG_BUILT;
         let row = ui::action_row(
             SharedString::from(format!("{id}-action")),
             "inspector-auto-tag",
@@ -636,20 +645,30 @@ impl Inspector {
         )
         .glyph(14.)
         .height(theme::CONTROL_MD)
-        .disabled(!enabled);
-        let row = div().mt(px(12.)).child(row);
-        if !enabled {
-            return row.into_any_element();
-        }
-        // TODO: Auto Tag opens the AI tagger beside the rail for these items.
+        .disabled(!enabled)
+        // `openPortal`: the review opens beside the rail at the button, on
+        // the selection.
+        .on_click(cx.listener(move |this, _, window, cx| {
+            let anchor = this.anchor(id);
+            this.ai_tagger
+                .update(cx, |tagger, cx| tagger.open(anchor, None, window, cx));
+        }));
+        let row = div().relative().child(row).child(self.place(id));
+        // Disabled, the tooltip says why.
+        let tip = if enabled {
+            t("Suggest tags with AI")
+        } else {
+            t("AI tagging requires an explicit image selection")
+        };
         ui::tooltip::attach(
             div().id(id).child(row),
             SharedString::from(format!("{id}-tip")),
-            ui::tip(t("Suggest tags with AI")).shortcut("organize.autoTag", cx),
+            ui::tip(tip).shortcut_written("organize.autoTag", cx),
             theme::CONTROL_MD,
             window,
             cx,
         )
+        .mt(px(12.))
         .into_any_element()
     }
 

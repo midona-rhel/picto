@@ -507,8 +507,7 @@ fn tag_rows_use_the_bookmark_glyphs() {
     ] {
         let entry = find(&rows, label).unwrap();
         assert_eq!(entry.icon, Some(icon));
-        // Auto Tag is disabled until the AI tagger is built.
-        assert_eq!(entry.disabled, label == "Auto Tag", "{label}");
+        assert!(!entry.disabled, "{label}");
     }
     // Copying and pasting tags have deferred shortcuts, so none is shown.
     assert_eq!(find(&rows, "Copy Tags").unwrap().shortcut, None);

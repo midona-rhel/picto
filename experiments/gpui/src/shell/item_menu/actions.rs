@@ -359,9 +359,20 @@ impl Shell {
                 self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
             }
-            // TODO: open the AI tagger on the selection, beside the inspector
-            // (the row stays disabled until then).
-            Action::AutoTag => {}
+            Action::AutoTag => {
+                // The grid's selection is reviewed as it changes, as
+                // production's portal falls back to the live selection; the
+                // viewer's item and a collection's members are named.
+                let session = self.session.read(cx);
+                let named = target.member || target.group || session.viewer;
+                let selection = target.selection(session);
+                let explicit = named.then_some(selection);
+                let visible = !self.inspector_collapsed;
+                self.inspector.update(cx, |inspector, cx| {
+                    inspector.open_auto_tag(explicit, visible, window, cx)
+                });
+                return;
+            }
             Action::CopyTags => self.copy_tags(target, cx),
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();

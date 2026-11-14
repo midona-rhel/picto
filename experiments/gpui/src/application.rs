@@ -379,6 +379,23 @@ pub fn detach(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The folder the core keeps its application data in (the AI models, in
+/// `models/`). A release build uses the one production uses, `picto` in the
+/// platform's per-user application data folder (`app.getPath('appData')`:
+/// `~/Library/Application Support` on macOS, `%APPDATA%` on Windows,
+/// `$XDG_CONFIG_HOME` or `~/.config` on Linux), so the models production
+/// downloaded are found. A debug build keeps it beside the copy, never in
+/// the user's own folder, unless `PICTO_GPUI_APP_DATA` names one.
+pub fn application_data(copy: &Path) -> Option<PathBuf> {
+    if let Some(folder) = crate::seams::app_data() {
+        return Some(folder);
+    }
+    if cfg!(debug_assertions) || cfg!(test) {
+        return copy.parent().map(|scratch| scratch.join("app-data"));
+    }
+    crate::state::config_folder().map(|folder| folder.join("picto"))
+}
+
 /// The open application, its runtime, and where its events go.
 pub struct Application {
     runtime: tokio::runtime::Runtime,
@@ -392,11 +409,10 @@ impl Application {
     /// Prepares the application for a guarded copy and starts delivering its
     /// events to `events`. Nothing is opened until [`Application::open`].
     pub fn new(root: PathBuf, events: mpsc::Sender<Event>) -> Arc<Self> {
-        // Models, credentials caches and other data the application keeps
-        // outside a library go beside the copy, never into the user's own
-        // application folder. This can be set once per process.
-        if let Some(scratch) = root.parent() {
-            let _ = picto_core::state::set_application_data_root(scratch.join("app-data"));
+        // Where the AI models the application keeps outside a library are.
+        // This can be set once per process.
+        if let Some(data) = application_data(&root) {
+            let _ = picto_core::state::set_application_data_root(data);
         }
         picto_core::state::init_tracing();
         let events = std::sync::Mutex::new(events);
