@@ -85,6 +85,33 @@ pub fn icon(name: impl Into<SharedString>, size: f32, color: impl Into<Hsla>) ->
     svg().path(name).size(px(size)).text_color(color.into())
 }
 
+/// One line of `text` shaped in `font` at `size`, to measure or paint.
+pub fn shape_line(
+    text: impl Into<SharedString>,
+    font: Font,
+    size: f32,
+    color: impl Into<Hsla>,
+    window: &Window,
+) -> ShapedLine {
+    let text = text.into();
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color: color.into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_line(text, px(size), &[run], None)
+}
+
+/// How wide one line of `text` is in `font` at `size`.
+pub fn text_width(text: &str, font: Font, size: f32, window: &Window) -> f32 {
+    f32::from(shape_line(text.to_owned(), font, size, black(), window).width)
+}
+
 /// A titlebar strip that moves the window, as `data-window-drag-region` does
 /// in the Electron shell: a press that then moves drags the window, and a
 /// double-click does what the system setting says on macOS and maximises or

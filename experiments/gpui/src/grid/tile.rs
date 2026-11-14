@@ -19,17 +19,13 @@ const CANVAS_TEXT_LIFT: f32 = -0.5;
 
 /// A tile name shaped in the grid's 13px UI font.
 pub(super) fn name_line(text: &str, window: &Window) -> ShapedLine {
-    let run = TextRun {
-        len: text.len(),
-        font: font(theme::FONT_UI),
-        color: black(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    window
-        .text_system()
-        .shape_line(text.to_owned().into(), px(theme::TEXT_MD), &[run], None)
+    crate::ui::shape_line(
+        text.to_owned(),
+        font(theme::FONT_UI),
+        theme::TEXT_MD,
+        black(),
+        window,
+    )
 }
 
 /// A tile name's width in the grid's 13px UI font.
@@ -375,7 +371,7 @@ pub(crate) fn tile_art(
                                 name
                             };
                             let max = tile.w - 8.;
-                            format::truncate_to(
+                            crate::text::truncate_to(
                                 &label,
                                 max,
                                 |text| name_width(text, window),

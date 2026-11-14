@@ -1,7 +1,7 @@
 //! What export shows: the Export dialog (`ExportModal.tsx`) and the Picto
 //! Pack dialog (`PictoPackModal.tsx`), both on the shared dialog with
 //! `GlassModal.module.css`'s form layout.
-use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource, format_bytes};
+use super::{Convert, Dialog, Exports, Format, Pack, PackMode, PackSource};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look as ButtonLook;
 use crate::ui::field::Look as FieldLook;
@@ -248,7 +248,10 @@ impl Exports {
                     "Smart folders",
                     summary.smart_folder_count.to_string(),
                 ))
-                .child(fact("Original size", format_bytes(summary.total_bytes))),
+                .child(fact(
+                    "Original size",
+                    crate::text::size_to_terabytes(summary.total_bytes),
+                )),
             PackMode::Export { count, .. } => fact("Selected items", count.to_string()),
         };
         let busy = pack.busy;

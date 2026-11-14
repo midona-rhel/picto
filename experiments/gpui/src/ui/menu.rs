@@ -706,20 +706,7 @@ impl Menu {
         let rows = self.submenu_rows(top);
         let has_icons = self.has_icons(&rows);
         let measure = |text: &SharedString, size: f32| {
-            let run = TextRun {
-                len: text.len(),
-                font: font(theme::FONT_UI),
-                color: black(),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text.clone(), px(size), &[run], None)
-                    .width,
-            )
+            super::text_width(text, font(theme::FONT_UI), size, window)
         };
         let widest = rows
             .iter()

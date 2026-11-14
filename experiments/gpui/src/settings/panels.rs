@@ -258,7 +258,10 @@ impl SettingsWindow {
                         count(stats.active_items + stats.inbox_items + stats.trash_items),
                     ),
                     ("Media assets", count(stats.media_assets)),
-                    ("Size", crate::text::size_to_terabytes(stats.original_bytes)),
+                    (
+                        "Size",
+                        crate::text::size_to_terabytes(stats.original_bytes.max(0) as u64),
+                    ),
                 ],
             ),
             section(

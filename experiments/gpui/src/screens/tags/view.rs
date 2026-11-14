@@ -268,16 +268,12 @@ impl TagsScreen {
         let count = format!("({})", tag.assignment_count);
         // The name keeps its own width beside the count unless it is too
         // long, when it takes what is left and ends in an ellipsis.
-        let measure = |text: SharedString, font: &'static str, size: f32, window: &mut Window| {
-            let mut style = window.text_style();
-            style.font_family = font.into();
-            let run = style.to_run(text.len());
-            f32::from(
-                window
-                    .text_system()
-                    .shape_line(text, px(size), &[run], None)
-                    .width,
-            )
+        let measure = |text: SharedString, family: &'static str, size: f32, window: &mut Window| {
+            let face = Font {
+                family: family.into(),
+                ..window.text_style().font()
+            };
+            ui::text_width(&text, face, size, window)
         };
         let label: SharedString = tag.subname.clone().into();
         let room = width

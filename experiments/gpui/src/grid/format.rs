@@ -103,56 +103,6 @@ pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
         | channel(x * 0.0557 + y * -0.204 + z * 1.057)
 }
 
-/// `truncateText`: the text whole when it fits in `max`, else as many of
-/// its characters as fit with "…" after them, measured by `measure`.
-///
-/// Each measurement is a text shaping, and a window of new tiles (a jump, a
-/// fast scroll) shapes every name it shows, so they are few: `guess` says
-/// how many characters probably fit (from the whole text's own shaping),
-/// the cuts on either side of it are measured, and only when the guess was
-/// off is the rest found by halving. A longer cut is never narrower.
-pub fn truncate_to(
-    text: &str,
-    max: f32,
-    measure: impl Fn(&str) -> f32,
-    guess: impl FnOnce() -> usize,
-) -> String {
-    if measure(text) <= max {
-        return text.to_owned();
-    }
-    let chars = text.chars().collect::<Vec<_>>();
-    let cut = |end: usize| chars[..end].iter().collect::<String>() + "…";
-    let fit = |end: usize| measure(&cut(end)) <= max;
-    // The longest cut that fits lies in `fits..=last`; nothing at all ("…"
-    // alone) is the answer when none does.
-    let (mut fits, mut last) = (0, chars.len().saturating_sub(1));
-    let guess = guess().min(last);
-    if guess > 0 && !fit(guess) {
-        last = guess - 1;
-        if last > 0 && fit(last) {
-            fits = last;
-        }
-    } else {
-        fits = guess;
-        if guess < last {
-            if fit(guess + 1) {
-                fits = guess + 1;
-            } else {
-                last = guess;
-            }
-        }
-    }
-    while fits < last {
-        let middle = (fits + last).div_ceil(2);
-        if fit(middle) {
-            fits = middle;
-        } else {
-            last = middle - 1;
-        }
-    }
-    cut(fits)
-}
-
 /// How many of a text's characters fit in `max` before an ellipsis
 /// `ellipsis` wide, from where each character starts in the whole text's
 /// shaping (`x_at` takes a byte index).
@@ -216,21 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn names_truncate_with_an_ellipsis_to_what_fits() {
-        // Ten units a character.
-        let measure = |text: &str| text.chars().count() as f32 * 10.;
-        let none = || 0;
-        assert_eq!(truncate_to("Tribal", 60., measure, none), "Tribal");
-        assert_eq!(
-            truncate_to("Main Four - Communal", 100., measure, none),
-            "Main Four…"
-        );
-        // A space before the cut stays, as `slice` keeps it.
-        assert_eq!(truncate_to("Main Four - C", 60., measure, none), "Main …");
-        assert_eq!(truncate_to("ab", 5., measure, none), "…");
-    }
-
-    #[test]
     fn a_name_is_cut_where_one_character_at_a_time_would_cut_it() {
         // Characters of different widths, as a proportional font has them.
         let width = |c: char| match c {
@@ -264,7 +199,7 @@ mod tests {
                 let max = max as f32;
                 for guess in 0..=name.chars().count() + 1 {
                     assert_eq!(
-                        truncate_to(name, max, measure, || guess),
+                        crate::text::truncate_to(name, max, measure, || guess),
                         one_at_a_time(name, max),
                         "{name} in {max}, guessing {guess}"
                     );
@@ -284,7 +219,7 @@ mod tests {
             let x_at = |end: usize| measure(&name[..end]);
             let guess = || characters_before(name, max, measure("…"), x_at);
             assert_eq!(
-                truncate_to(name, max, counted, guess),
+                crate::text::truncate_to(name, max, counted, guess),
                 one_at_a_time(name, max)
             );
             assert!(count.get() <= 3, "{max}: {}", count.get());
