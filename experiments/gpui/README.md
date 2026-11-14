@@ -850,8 +850,9 @@ Text and keyboard
 Navigation and results
 - A filter change or a search is not a step of Back and Forward, and the
   grid returns to its top.
-- A collection reorder or sort that fails is written only to standard
-  error; a detail window whose item fails to load stays blank.
+- A detail window on one item whose details cannot be read keeps the
+  thumbnail and never opens the file; production opens the file by its hash
+  without reading details.
 - The Tags screen shows changes made elsewhere only when it is opened again,
   and Undo does not reach tag edits†.
 - Settings reads the library's statistics and cloud state once when it

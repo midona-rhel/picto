@@ -299,12 +299,19 @@ impl Shell {
                 if target.quick_look {
                     let details = self.session.read(cx).selected_details().cloned();
                     if let Some(details) = details {
-                        drop(crate::viewer::group::sort(
-                            &self.session,
-                            &details,
-                            field,
-                            cx,
-                        ));
+                        let root = details.root.root_id;
+                        let answer = crate::viewer::group::sort(&self.session, &details, field, cx);
+                        let quick_look = self.quick_look.downgrade();
+                        cx.spawn(async move |_, cx| {
+                            if let Ok(result) = answer.await {
+                                let _ = quick_look.update(cx, |quick_look, cx| {
+                                    let failure =
+                                        result.err().map(|error| error.to_string().into());
+                                    quick_look.collection_edited(root, failure, cx);
+                                });
+                            }
+                        })
+                        .detach();
                     }
                 } else {
                     self.viewer
@@ -743,16 +750,20 @@ impl Shell {
             return;
         }
         let closes = details.media.len() - ids.len() <= 1;
-        let answer =
-            crate::viewer::group::detach(&self.session, details.root.root_id, ids, trash, cx);
+        let root = details.root.root_id;
+        let answer = crate::viewer::group::detach(&self.session, root, ids, trash, cx);
         let quick_look = self.quick_look.downgrade();
         cx.spawn_in(window, async move |_, cx| {
-            if let Ok(Ok(())) = answer.await
-                && closes
-            {
-                let _ =
-                    quick_look.update_in(cx, |quick_look, window, cx| quick_look.close(window, cx));
-            }
+            let Ok(result) = answer.await else {
+                return;
+            };
+            let _ = quick_look.update_in(cx, |quick_look, window, cx| match result {
+                Ok(()) if closes => quick_look.close(window, cx),
+                result => {
+                    let failure = result.err().map(|error| error.to_string().into());
+                    quick_look.collection_edited(root, failure, cx);
+                }
+            });
         })
         .detach();
     }
