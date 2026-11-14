@@ -2,7 +2,7 @@
 //! most wanted first, as `thumbnailPlan.ts` orders them; this loads those a
 //! few at a time, drops loads the grid has scrolled away from, and keeps the
 //! rest for scrolling back until they take more memory than the budget.
-use crate::i18n::t;
+use crate::i18n::{en, t};
 use gpui::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -165,9 +165,10 @@ pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
 /// thumbnail (`media.render_thumbnail_now`), as the media protocol does on a
 /// miss, and draws one it cannot make (Flash, PDF and the other paged
 /// documents) as the Electron main process does
-/// (`renderExternalThumbnail`), off the main thread and only into a marked
-/// disposable copy, as every write here. Resolves to whether there is a
-/// thumbnail now.
+/// (`renderExternalThumbnail`), off the main thread, only into the library
+/// open in the window (`libraries::writable`) and only inside its folder
+/// (`libraries::confine`), as every write here. Resolves to whether there
+/// is a thumbnail now.
 async fn make(
     session: &gpui::Entity<crate::session::Session>,
     hash: &str,
@@ -175,23 +176,28 @@ async fn make(
     jpeg: &Path,
     cx: &mut AsyncApp,
 ) -> bool {
-    let (answer, original, disposable) = session.update(cx, |session, _| {
+    let (answer, original, writable) = session.update(cx, |session, cx| {
         (
             session.dispatch(
                 "media.render_thumbnail_now",
                 serde_json::json!({ "file_hash": hash }),
             ),
             session.original(hash, mime),
-            session.disposable(),
+            session.writable_root(cx),
         )
     });
     let _ = answer.await;
     let (hash, mime, jpeg) = (hash.to_owned(), mime.to_owned(), jpeg.to_path_buf());
     cx.background_executor()
         .spawn(async move {
-            if present(&jpeg).is_none() && disposable && crate::grid::rendered::draws(&mime) {
-                let png = png_for(&jpeg);
-                if let Err(error) = crate::grid::rendered::render(&mime, &original, &png) {
+            if present(&jpeg).is_none()
+                && let Some(root) = writable
+                && crate::grid::rendered::draws(&mime)
+            {
+                let drawn = rendered_target(&root, &jpeg)
+                    .map_err(anyhow::Error::msg)
+                    .and_then(|png| crate::grid::rendered::render(&mime, &original, &png));
+                if let Err(error) = drawn {
                     eprintln!("picto: could not draw the thumbnail of {hash}: {error:#}");
                 }
             }
@@ -200,21 +206,40 @@ async fn make(
         .await
 }
 
+/// Where a thumbnail this app draws goes: the `.png` beside the `.jpg`
+/// the library names, if that lies inside the library at `root`.
+pub fn rendered_target(root: &Path, jpeg: &Path) -> Result<PathBuf, String> {
+    crate::libraries::confine(root, &png_for(jpeg))
+}
+
+/// The thumbnail `previous` set aside at `backup` while it is made again,
+/// both inside the library at `root`, or why not.
+pub fn set_aside(root: &Path, previous: &Path, backup: &Path) -> Result<(), String> {
+    let previous = crate::libraries::confine(root, previous)?;
+    let backup = crate::libraries::confine(root, backup)?;
+    std::fs::rename(previous, backup).map_err(|error| error.to_string())
+}
+
 /// `media.regenerate_thumbnails` as the Electron main process performs it
 /// (`regenerateThumbnail`), one file after another: the thumbnail is kept
 /// aside, made again by the application (or drawn here for Flash and paged
 /// documents), and the old one restored if no new one could be made. Every
 /// view showing it reads it again. The first failure stops the rest and is
-/// shown as production's menu shows it. Only a marked disposable copy is
-/// written to. `files` are content hashes and types.
+/// shown as production's menu shows it. Only the library open in the
+/// window is written to, and only inside its folder. `files` are content
+/// hashes and types.
 pub fn regenerate(
     session: &gpui::Entity<crate::session::Session>,
     files: Vec<(String, String)>,
     cx: &mut App,
 ) {
-    if files.is_empty() || !session.read(cx).disposable() {
+    if files.is_empty() {
         return;
     }
+    let Some(root) = session.read(cx).writable_root(cx) else {
+        crate::ui::notify::error(t("Menu action failed"), en("No library is open."), cx);
+        return;
+    };
     let files: Vec<_> = files
         .into_iter()
         .map(|(hash, mime)| {
@@ -225,7 +250,7 @@ pub fn regenerate(
     let session = session.clone();
     cx.spawn(async move |cx| {
         for (hash, mime, jpeg) in files {
-            let made = regenerate_one(&session, &hash, &mime, &jpeg, cx).await;
+            let made = regenerate_one(&session, &root, &hash, &mime, &jpeg, cx).await;
             session.update(cx, |session, cx| session.thumbnail_written(hash, cx));
             if let Err(error) = made {
                 cx.update(|cx| crate::ui::notify::error(t("Menu action failed"), error, cx));
@@ -239,6 +264,7 @@ pub fn regenerate(
 /// One file of [`regenerate`].
 async fn regenerate_one(
     session: &gpui::Entity<crate::session::Session>,
+    root: &Path,
     hash: &str,
     mime: &str,
     jpeg: &Path,
@@ -252,7 +278,7 @@ async fn regenerate_one(
         .as_ref()
         .map(|previous| backup_for(previous, std::process::id(), stamp));
     if let (Some(previous), Some(backup)) = (&previous, &backup) {
-        std::fs::rename(previous, backup).map_err(|error| error.to_string())?;
+        set_aside(root, previous, backup)?;
     }
     if make(session, hash, mime, jpeg, cx).await {
         if let Some(backup) = backup {
@@ -261,7 +287,7 @@ async fn regenerate_one(
         Ok(())
     } else {
         if let (Some(previous), Some(backup)) = (previous, backup) {
-            let _ = std::fs::rename(backup, previous);
+            let _ = set_aside(root, &backup, &previous);
         }
         Err("No thumbnail renderer supports this file.".into())
     }

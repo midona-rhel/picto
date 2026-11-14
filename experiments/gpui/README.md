@@ -80,8 +80,8 @@ copy, whatever the library stored. Links are opened only when they are
 `http:` or `https:` (`desktop::open_link`).
 
 Delete Permanently, Empty Trash and the Duplicates screen's Keep and Smart
-merge therefore remove files from the copy's blobs only. The source library
-is only ever read, to copy it.
+merge remove files only through the core, from the open library's blobs.
+The source library of a copy is only ever read, to copy it.
 
 ### Opening a library you keep
 
@@ -175,8 +175,40 @@ reads nothing of a library the user keeps, not even whether its folder
 exists. Listing reads a listed library's folder and its cover file and
 writes nothing there (`listing_a_kept_library_writes_nothing_to_it`);
 statistics are read only for the open library, through its application.
-Edits that cannot be undone and that the app already kept to copies
-(Delete Permanently, rendered thumbnails, captures) still are.
+
+Edits that cannot be undone work on the open library whichever way it was
+admitted, as production does them on every library, and on nothing else.
+One predicate decides (`libraries::writable`, through
+`Session::writable_root`): the session's library must be the one open in
+the main window; with nothing open, another library open or the library
+closing, each is refused with "No library is open."
+(`edits_are_refused_unless_their_library_is_the_open_one`). Each file an
+edit writes, replaces or removes itself must lie inside that library's
+folder (`libraries::confine`, the desktop hand-offs' check: its folder made
+canonical, so a link leading out is caught, and the file itself not a
+link), or nothing is written
+(`writes_are_confined_to_the_open_library`,
+`a_thumbnail_is_written_only_inside_the_library`,
+`the_cover_is_written_only_inside_the_library`):
+
+- Delete Permanently, Empty Trash and Reject (when it deletes) run the
+  core's own delete (`Library::permanently_delete`, `delete_rejected`, what
+  production's `items.delete` and `items.reject_delete` run) with
+  production's confirmation and words; the core's media worker removes the
+  files. This app removes none.
+- Thumbnails the core cannot make (PDF, DjVu, comics, Flash, documents) are
+  drawn to `<hash>.png` beside the library's own thumbnail, as production's
+  main process draws them.
+- Regenerate Thumbnails sets the thumbnail aside beside itself, has it made
+  again, and puts it back if that failed (`regenerateThumbnail`).
+- Set as Thumbnail writes the frame as `<hash>.png` and removes the `.jpg`
+  (`setThumbnail`).
+- The library's cover is written as `.picto-library-cover.*` and
+  `.picto-library-cover.json` in the library's folder (`setLibraryMeta`).
+
+The session's scratch folder (the cover's crops, dropped data) is in a
+copy's own temporary folder, or the system's for a library the user keeps:
+nothing is written beside a library the user keeps.
 
 What stays as it was: `--make-copy` reads its source read-only;
 `<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
@@ -492,7 +524,7 @@ loads thumbnails six at a time in `thumbnailPlan.ts`'s order and keeps
 decoded ones up to a byte budget of three windows of the smallest tiles;
 `originals.rs` decodes originals for tiles larger than their 512 px
 thumbnail; `rendered.rs` draws the thumbnails the core cannot make (PDF,
-DjVu and comic first pages, Flash frames), only in a marked copy. Also here:
+DjVu and comic first pages, Flash frames), only into the open library. Also here:
 the context-menu rows (`menu.rs`, pure functions), filters and the filter
 bar, rubber band, keyboard movement, hover preview, subfolder tiles, drag
 out. Rule: every decoded picture leaves GPUI's sprite atlas through

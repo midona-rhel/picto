@@ -249,7 +249,7 @@ impl Global for HandOff {}
 /// link or a `..` step; Windows' verbatim prefix (`\\?\C:\`, `\\?\UNC\`) is
 /// read as the plain form it stands for, and Windows compares names without
 /// case, as its file systems do. The root itself is not inside.
-fn inside(root: &Path, path: &Path) -> bool {
+pub(crate) fn inside(root: &Path, path: &Path) -> bool {
     let (root, path) = (system_path(root), system_path(path));
     let same = |left: std::path::Component, right: std::path::Component| {
         if cfg!(windows) {

@@ -83,6 +83,86 @@ pub enum Kind {
     Real,
 }
 
+/// Where the edits that write files themselves (rendered and regenerated
+/// thumbnails, Set as Thumbnail, the library's cover) may write, and the
+/// gate on Delete Permanently and Empty Trash: the canonical root of the
+/// library open in the main window, however it was admitted (a disposable
+/// copy the guard accepted, or a library the user keeps that
+/// `admission::admit` let through with the user's consent), when `root` is
+/// that library. `None` when nothing is open, another library is, or it is
+/// being closed. The one predicate for all of them.
+pub fn writable(root: &Path, cx: &gpui::App) -> Option<PathBuf> {
+    let open = host::current(cx).map(|(open, _)| open);
+    writable_in(open.as_deref(), root)
+}
+
+/// [`writable`], given the library open now.
+pub fn writable_in(open: Option<&Path>, root: &Path) -> Option<PathBuf> {
+    let open = open?.canonicalize().ok()?;
+    let root = root.canonicalize().ok()?;
+    (open == root).then_some(root)
+}
+
+/// `path` as a file inside the library at `root` (canonical), or why it may
+/// not be written: the desktop hand-off's check (`desktop::inside`), for a
+/// file that may not exist yet. Its folder is made canonical, the nearest
+/// part of it that exists followed to where it really is (so a link on the
+/// way that leads out of the library is caught), and what does not exist
+/// yet must be plain names. The file itself must not be a link: replacing
+/// or removing it then touches that name only, never what a link points at.
+pub fn confine(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let outside = || {
+        format!(
+            "{} is not inside the open library {}, so it was not written.",
+            path.display(),
+            root.display()
+        )
+    };
+    let plain = |name: &std::ffi::OsStr| {
+        matches!(
+            Path::new(name).components().collect::<Vec<_>>().as_slice(),
+            [std::path::Component::Normal(_)]
+        )
+    };
+    let name = path
+        .file_name()
+        .filter(|name| plain(name))
+        .ok_or_else(outside)?;
+    if path
+        .symlink_metadata()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+    {
+        return Err(outside());
+    }
+    let mut existing = path.parent().ok_or_else(outside)?.to_path_buf();
+    let mut rest = Vec::new();
+    let mut folder = loop {
+        match existing.canonicalize() {
+            Ok(canonical) => break canonical,
+            // A link that leads nowhere.
+            Err(_) if existing.symlink_metadata().is_ok() => return Err(outside()),
+            Err(_) => {
+                let part = existing
+                    .file_name()
+                    .filter(|part| plain(part))
+                    .ok_or_else(outside)?
+                    .to_owned();
+                rest.push(part);
+                existing = existing.parent().ok_or_else(outside)?.to_path_buf();
+            }
+        }
+    };
+    for part in rest.into_iter().rev() {
+        folder.push(part);
+    }
+    let confined = folder.join(name);
+    if crate::desktop::inside(root, &confined) {
+        Ok(confined)
+    } else {
+        Err(outside())
+    }
+}
+
 /// A library's name as production shows it: its folder's name without
 /// `.library` (`getLibraryName`).
 pub fn name(path: &str) -> String {
@@ -431,6 +511,99 @@ mod tests {
         );
         second.close();
         drop(picto_core::state::lock_library(&two).unwrap());
+    }
+
+    /// The edits that cannot be undone (Delete Permanently, Empty Trash,
+    /// rendered and regenerated thumbnails, Set as Thumbnail, the cover)
+    /// all ask `writable`: refused with no library open, for a library
+    /// that is not the open one, and allowed for the open one whichever
+    /// way it was admitted.
+    #[test]
+    fn edits_are_refused_unless_their_library_is_the_open_one() {
+        let folder = tempfile::tempdir().unwrap();
+        let kept = admission::tests::real_library(folder.path(), "Kept");
+        let other = admission::tests::real_library(folder.path(), "Other");
+        assert_eq!(writable_in(None, &kept), None);
+        assert_eq!(writable_in(Some(&other), &kept), None);
+        assert_eq!(writable_in(Some(&kept), &kept), Some(kept.clone()));
+        // Through the app: nothing is open in a fresh one.
+        let cx = gpui::TestAppContext::single();
+        cx.update(|cx| {
+            assert_eq!(writable(&kept, cx), None);
+            assert!(host::current(cx).is_none());
+        });
+    }
+
+    /// Every path an edit writes or removes is checked against the open
+    /// library's folder, as the desktop hand-offs are.
+    #[cfg(unix)]
+    #[test]
+    fn writes_are_confined_to_the_open_library() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = admission::tests::real_library(folder.path(), "Kept");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = elsewhere.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("blobs/t/ab")).unwrap();
+        // A file there, a file to be made, folders to be made.
+        for inside in [
+            root.join("library.sqlite"),
+            root.join(".picto-library-cover.png"),
+            root.join("blobs/t/ab/abcd.png"),
+            root.join("blobs/t/cd/ef/new.png"),
+        ] {
+            assert_eq!(
+                confine(&root, &inside).unwrap(),
+                inside,
+                "{}",
+                inside.display()
+            );
+        }
+        // The library's folder itself, a sibling, a step out, elsewhere.
+        for refused in [
+            root.clone(),
+            folder
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("Kept.library2/x.png"),
+            root.join("blobs/../../x.png"),
+            root.join("blobs/t/new/../../../../x.png"),
+            outside.join("x.png"),
+        ] {
+            assert!(confine(&root, &refused).is_err(), "{}", refused.display());
+        }
+        // A folder that is a link out of the library.
+        std::os::unix::fs::symlink(&outside, root.join("blobs/f")).unwrap();
+        assert!(confine(&root, &root.join("blobs/f/x.png")).is_err());
+        assert!(confine(&root, &root.join("blobs/f/new/x.png")).is_err());
+        // The file itself a link, wherever it points.
+        std::os::unix::fs::symlink(outside.join("x.png"), root.join("dangling.png")).unwrap();
+        std::os::unix::fs::symlink(root.join("library.sqlite"), root.join("inner.png")).unwrap();
+        assert!(confine(&root, &root.join("dangling.png")).is_err());
+        assert!(confine(&root, &root.join("inner.png")).is_err());
+        // A folder that is a dangling link.
+        std::os::unix::fs::symlink(outside.join("gone"), root.join("blobs/g")).unwrap();
+        assert!(confine(&root, &root.join("blobs/g/x.png")).is_err());
+        // Thumbnails drawn here and set aside while made again.
+        let jpeg = root.join("blobs/t/ab/abcd.jpg");
+        assert_eq!(
+            crate::grid::thumbnails::rendered_target(&root, &jpeg).unwrap(),
+            root.join("blobs/t/ab/abcd.png")
+        );
+        assert!(
+            crate::grid::thumbnails::rendered_target(&root, &root.join("blobs/f/x.jpg")).is_err()
+        );
+        std::fs::write(outside.join("old.jpg"), b"kept").unwrap();
+        assert!(
+            crate::grid::thumbnails::set_aside(
+                &root,
+                &root.join("blobs/f/old.jpg"),
+                &root.join("blobs/t/ab/old.jpg.backup")
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(outside.join("old.jpg")).unwrap(), b"kept");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
     }
 
     #[test]

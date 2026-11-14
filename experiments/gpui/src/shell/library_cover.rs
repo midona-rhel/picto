@@ -141,7 +141,9 @@ impl LibraryCover {
 
 /// `setLibraryMeta` for an image: the thumbnail of `hash` copied beside the
 /// database as the cover (replacing one of the other type), and the frame
-/// written beside it. Only a marked disposable copy is written to.
+/// written beside it. Only the library open in the window is written to
+/// (`libraries::writable`), and each file only inside its folder
+/// (`libraries::confine`).
 fn write_cover(
     library: &Path,
     blobs_thumbnail: &Path,
@@ -163,6 +165,7 @@ fn write_cover(
             .map_or(0, |since| since.as_millis())
     );
     let replace = |destination: PathBuf, write: &dyn Fn(&Path) -> std::io::Result<()>| {
+        let destination = crate::libraries::confine(library, &destination)?;
         let mut temporary = destination.clone().into_os_string();
         temporary.push(format!(".{stamp}.tmp"));
         let temporary = PathBuf::from(temporary);
@@ -177,7 +180,12 @@ fn write_cover(
         &|temporary| std::fs::copy(&source, temporary).map(|_| ()),
     )?;
     for other in COVER_EXTENSIONS.iter().filter(|other| **other != extension) {
-        let _ = std::fs::remove_file(library.join(format!(".picto-library-cover.{other}")));
+        if let Ok(other) = crate::libraries::confine(
+            library,
+            &library.join(format!(".picto-library-cover.{other}")),
+        ) {
+            let _ = std::fs::remove_file(other);
+        }
     }
     let frame = cover_frame(hash, crop);
     replace(library.join(".picto-library-cover.json"), &|temporary| {
@@ -242,16 +250,15 @@ impl CoverHost for LibraryCover {
             return;
         };
         let crop = cover.crop;
-        let (library, thumbnail, scratch, disposable) = {
+        let (library, thumbnail, scratch) = {
             let session = self.session.read(cx);
             (
-                session.library_root().map(Path::to_path_buf),
+                session.writable_root(cx),
                 session.thumbnail(&selected.hash),
-                session.scratch().to_path_buf(),
-                session.disposable(),
+                session.scratch(),
             )
         };
-        let Some(library) = library.filter(|_| disposable) else {
+        let Some(library) = library else {
             ui::notify::error(
                 t("Could not set library cover"),
                 en("No library is open."),
@@ -314,6 +321,38 @@ impl Render for LibraryCover {
 mod tests {
     use super::cover_frame;
     use crate::cover::Crop;
+
+    /// The cover is written into the library's folder only: a cover file
+    /// that is a link out of it is neither followed nor replaced.
+    #[cfg(unix)]
+    #[test]
+    fn the_cover_is_written_only_inside_the_library() {
+        let library = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let root = library.path().canonicalize().unwrap();
+        let thumbnail = root.join("blobs/t/ab/abcd.jpg");
+        std::fs::create_dir_all(thumbnail.parent().unwrap()).unwrap();
+        std::fs::write(&thumbnail, b"jpeg").unwrap();
+        let crop = Crop {
+            focus_x: 500.,
+            focus_y: 500.,
+            zoom: 100.,
+        };
+        super::write_cover(&root, &thumbnail, "ab", crop).unwrap();
+        assert_eq!(
+            std::fs::read(root.join(".picto-library-cover.jpg")).unwrap(),
+            b"jpeg"
+        );
+        assert!(root.join(".picto-library-cover.json").is_file());
+        // The frame's file a link to another folder: refused, untouched.
+        std::fs::remove_file(root.join(".picto-library-cover.json")).unwrap();
+        let target = elsewhere.path().join("frame.json");
+        std::fs::write(&target, b"theirs").unwrap();
+        std::os::unix::fs::symlink(&target, root.join(".picto-library-cover.json")).unwrap();
+        assert!(super::write_cover(&root, &thumbnail, "ab", crop).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"theirs");
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn the_frame_is_written_as_production_writes_it() {

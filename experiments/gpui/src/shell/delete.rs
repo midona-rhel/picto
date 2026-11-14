@@ -55,9 +55,13 @@ impl Shell {
     /// be undone, and deletes through the library. A rejection (the
     /// setting that skips the Trash) asks only when it cannot be undone.
     ///
-    /// Only a marked disposable copy of a library is changed this way. The
-    /// library keeps the files of an undoable delete until it leaves the
-    /// history; the application removes the files a larger delete frees.
+    /// Only the library open in this window is changed (`libraries::writable`),
+    /// a disposable copy or a library the user keeps, through the core's own
+    /// delete (`Library::permanently_delete` and `delete_rejected`, which the
+    /// `items.delete` and `items.reject_delete` commands production sends
+    /// run). The library keeps the files of an undoable delete until it
+    /// leaves the history; the application's media worker removes the files
+    /// a larger delete frees. Nothing here removes a file.
     pub(super) fn request_permanent_delete(
         &mut self,
         target: Target,
@@ -175,8 +179,13 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.session.read(cx).disposable() {
-            eprintln!("picto: refusing to delete from a library that is not a disposable copy");
+        // Only the library open in this window, however it was admitted.
+        if self.session.read(cx).writable_root(cx).is_none() {
+            crate::ui::notify::error(
+                t("Delete Permanently"),
+                crate::i18n::en("No library is open."),
+                cx,
+            );
             if let Some(done) = &delete.done {
                 done(self, false, window, cx);
             }
@@ -200,7 +209,7 @@ impl Shell {
                 .update(cx, |session, cx| session.close_viewer(cx));
         }
         // `deleteTarget` announces what it deleted, with Undo. The files a
-        // delete that cannot be undone frees are removed from the copy's
+        // delete that cannot be undone frees are removed from the library's
         // blobs by the application's media worker (`drain_blob_cleanup`), as
         // in production.
         let command = if reject {

@@ -351,7 +351,8 @@ pub struct Session {
     /// that query or older bring the preferences from before it.
     view_patch: Option<(u64, serde_json::Value)>,
     blobs: PathBuf,
-    /// The disposable copy the application opened.
+    /// The library the application opened: a disposable copy or one the
+    /// user keeps.
     root: PathBuf,
     /// The library the copy was made from, which the recents are kept under.
     library_key: String,
@@ -361,8 +362,8 @@ pub struct Session {
     pub library_cover: Option<PathBuf>,
     /// The grid draws its thumbnails without colour.
     pub grayscale: bool,
-    /// A folder of the session's own, in the copy's temporary folder, that
-    /// the library cover's crops are written to.
+    /// A folder of the session's own, in a copy's temporary folder or the
+    /// system's, that the library cover's crops are written to.
     scratch: Option<tempfile::TempDir>,
     /// What the open place of a screen is called, for the scope title.
     pub place_label: Option<SharedString>,
@@ -450,9 +451,11 @@ impl Session {
             }
         })
         .detach();
-        // In the copy's own temporary folder, beside it, else the system's.
+        // In a copy's own temporary folder, beside it, else the system's.
+        // Never beside a library the user keeps: its folder is the user's.
         let scratch = root
             .parent()
+            .filter(|_| disposable)
             .and_then(|holder| {
                 tempfile::Builder::new()
                     .prefix("scratch.")
@@ -582,24 +585,31 @@ impl Session {
         self.application.retire();
     }
 
-    /// Whether the open library is a marked disposable copy, which edits
-    /// that cannot be undone require.
+    /// Whether the open library is a marked disposable copy, which the
+    /// library switcher says so it is never taken for the library it was
+    /// copied from. Nothing is gated on it: see [`Session::writable_root`].
     pub fn disposable(&self) -> bool {
         self.disposable
     }
 
-    /// The disposable copy's canonical root.
+    /// Where the edits that write files themselves may write, and whether
+    /// Delete Permanently may run: this session's library when it is the
+    /// one open, however it was admitted (`libraries::writable`).
+    pub fn writable_root(&self, cx: &App) -> Option<std::path::PathBuf> {
+        crate::libraries::writable(&self.root, cx)
+    }
+
+    /// The open library's canonical root.
     pub fn root(&self) -> &std::path::Path {
         &self.root
     }
 
     /// The session's scratch folder, for the library cover's crops: its own
-    /// temporary folder, or, when none could be made, the folder that holds
-    /// the copy.
-    pub fn scratch(&self) -> &std::path::Path {
+    /// temporary folder, or, when none could be made, the system's.
+    pub fn scratch(&self) -> std::path::PathBuf {
         match &self.scratch {
-            Some(scratch) => scratch.path(),
-            None => self.root.parent().unwrap_or(&self.root),
+            Some(scratch) => scratch.path().to_path_buf(),
+            None => std::env::temp_dir(),
         }
     }
 

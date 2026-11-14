@@ -122,17 +122,23 @@ pub fn from_pixel_buffer(buffer: &objc2_core_video::CVPixelBuffer) -> Result<Pic
 
 /// "Set as Thumbnail" on what `surface` shows, the file `hash`: the picture
 /// is taken now, then encoded and written off the thread that draws, and
-/// every view showing the thumbnail reads it again. Only a marked
-/// disposable copy is written to.
+/// every view showing the thumbnail reads it again. Only the library open
+/// in the window is written to (`libraries::writable`), and only inside its
+/// folder.
 pub fn set_as_thumbnail(
     surface: &gpui::Entity<super::surface::MediaSurface>,
     session: &gpui::Entity<crate::session::Session>,
     hash: String,
     cx: &mut gpui::App,
 ) {
-    if !session.read(cx).disposable() {
+    let Some(root) = session.read(cx).writable_root(cx) else {
+        crate::ui::notify::error(
+            "Could not set thumbnail",
+            crate::i18n::en("No library is open."),
+            cx,
+        );
         return;
-    }
+    };
     let Some(picture) = surface.read(cx).current_picture(cx) else {
         return;
     };
@@ -140,7 +146,7 @@ pub fn set_as_thumbnail(
     let written = cx.background_executor().spawn(async move {
         picture
             .and_then(Picture::png)
-            .and_then(|png: Vec<u8>| write_thumbnail(&jpeg, &png))
+            .and_then(|png: Vec<u8>| write_thumbnail(&root, &jpeg, &png))
     });
     let session = session.clone();
     cx.spawn(async move |cx| {
@@ -155,15 +161,17 @@ pub fn set_as_thumbnail(
 
 /// `setThumbnail`: `png` becomes the thumbnail whose `.jpg` path is `jpeg`,
 /// written beside it as `.png` (through a temporary file), and the `.jpg`
-/// goes so the `.png` is the one read.
-pub fn write_thumbnail(jpeg: &Path, png: &[u8]) -> Result<(), String> {
+/// goes so the `.png` is the one read. Both must lie inside the library at
+/// `root` (`libraries::confine`).
+pub fn write_thumbnail(root: &Path, jpeg: &Path, png: &[u8]) -> Result<(), String> {
     if png.is_empty() || png.len() > LARGEST {
         return Err("Invalid thumbnail size".into());
     }
     if !png.starts_with(&PNG_SIGNATURE) {
         return Err("Thumbnail data is not a PNG".into());
     }
-    let output = crate::grid::thumbnails::png_for(jpeg);
+    let output = crate::libraries::confine(root, &crate::grid::thumbnails::png_for(jpeg))?;
+    let jpeg = &crate::libraries::confine(root, jpeg)?;
     if let Some(folder) = output.parent() {
         std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     }
@@ -206,18 +214,44 @@ mod tests {
     #[test]
     fn a_frame_becomes_the_png_thumbnail_and_the_jpg_goes() {
         let folder = tempfile::tempdir().unwrap();
-        let jpeg = folder.path().join("ab/cd/abcd.jpg");
+        let root = folder.path().canonicalize().unwrap();
+        let jpeg = root.join("ab/cd/abcd.jpg");
         std::fs::create_dir_all(jpeg.parent().unwrap()).unwrap();
         std::fs::write(&jpeg, b"old").unwrap();
         let png = Picture::from_bgra(1, 1, &[0, 0, 255, 255]).png().unwrap();
-        write_thumbnail(&jpeg, &png).unwrap();
+        write_thumbnail(&root, &jpeg, &png).unwrap();
         assert!(!jpeg.exists());
         let written = image::open(jpeg.with_extension("png")).unwrap().to_rgba8();
         // BGRA blue-green-red in, red out.
         assert_eq!(written.get_pixel(0, 0).0, [255, 0, 0, 255]);
         assert_eq!(
-            write_thumbnail(&jpeg, b"not a png"),
+            write_thumbnail(&root, &jpeg, b"not a png"),
             Err("Thumbnail data is not a PNG".into())
         );
+    }
+
+    /// A thumbnail whose folder leads out of the library (a link) is not
+    /// written, and nothing is removed or written where it leads.
+    #[cfg(unix)]
+    #[test]
+    fn a_thumbnail_is_written_only_inside_the_library() {
+        let library = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let root = library.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("blobs")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), root.join("blobs/t")).unwrap();
+        std::fs::write(elsewhere.path().join("abcd.jpg"), b"kept").unwrap();
+        let png = Picture::from_bgra(1, 1, &[0, 0, 255, 255]).png().unwrap();
+        let jpeg = root.join("blobs/t/abcd.jpg");
+        assert!(write_thumbnail(&root, &jpeg, &png).is_err());
+        assert_eq!(
+            std::fs::read(elsewhere.path().join("abcd.jpg")).unwrap(),
+            b"kept"
+        );
+        assert!(!elsewhere.path().join("abcd.png").exists());
+        // Another library's thumbnail, by its own path.
+        let other = tempfile::tempdir().unwrap();
+        assert!(write_thumbnail(&root, &other.path().join("x.jpg"), &png).is_err());
+        assert!(!other.path().join("x.png").exists());
     }
 }

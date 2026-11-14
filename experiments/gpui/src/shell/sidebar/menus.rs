@@ -584,7 +584,7 @@ impl Sidebar {
             ],
             "system:trash" => vec![
                 // Deletes everything in the Trash for good, after a
-                // confirmation. The files are the disposable copy's.
+                // confirmation, through the core (`shell::delete`).
                 menu::item("empty-trash", "Empty Trash")
                     .icon("menu-trash")
                     .danger(true)
