@@ -169,6 +169,9 @@ struct Visit {
     viewing: bool,
     /// A place inside a screen, such as the subscription it has open.
     place: Option<i64>,
+    /// The filters the grid had, as an index into `Session::filter_steps`:
+    /// a change of filters is a step of its own (`navigateWithGridFilters`).
+    filters: usize,
 }
 
 /// A destination's grid as it was left: its window, where it lay, and
@@ -252,9 +255,12 @@ pub struct Session {
     /// each item opened from one.
     history: Vec<Visit>,
     history_index: usize,
-    /// What each destination's grid held when it was last left, so going
-    /// back shows it where it was.
-    saved: HashMap<usize, SavedGrid>,
+    /// What each destination's grid held, with each set of filters, when
+    /// it was last left, so going back shows it where it was.
+    saved: HashMap<(usize, usize), SavedGrid>,
+    /// Every set of filters a step of Back and Forward has had, once each;
+    /// the first is none.
+    filter_steps: Vec<Filters>,
     /// A saved grid to show once the surface has faded out.
     pending_restore: Option<SavedGrid>,
     /// How far the grid is scrolled, which the grid reports as it paints.
@@ -493,9 +499,11 @@ impl Session {
                 scope: 0,
                 viewing: false,
                 place: None,
+                filters: 0,
             }],
             history_index: 0,
             saved: HashMap::new(),
+            filter_steps: vec![Filters::default()],
             pending_restore: None,
             grid_scroll: 0.,
             restore_scroll: None,
@@ -616,10 +624,12 @@ impl Session {
         if self.place() == place {
             return;
         }
+        let filters = self.filters_step();
         self.record(Visit {
             scope: self.scope,
             viewing: false,
             place,
+            filters,
         });
         cx.emit(Change::Navigation);
     }

@@ -852,8 +852,6 @@ Text and keyboard
   next key (GPUI hands an action no repeat flag)†.
 
 Navigation and results
-- A filter change or a search is not a step of Back and Forward, and the
-  grid returns to its top.
 - A detail window on one item whose details cannot be read keeps the
   thumbnail and never opens the file; production opens the file by its hash
   without reading details.
