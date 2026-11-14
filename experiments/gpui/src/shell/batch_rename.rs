@@ -217,26 +217,21 @@ impl BatchRename {
         if let Some(open) = self.dialog.content_mut() {
             open.busy = true;
         }
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(
-                Report::failure("Could not rename items").and_announce("items.rename_many"),
-                move |library| library.rename_roots(&renames, crate::now_ms()),
-                Reread::RESULTS,
-                cx,
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            let done = matches!(answer.await, Ok(Ok(_)));
-            let _ = this.update(cx, |this, cx| {
-                if done {
+        crate::session::edit_then(
+            &self.session,
+            Report::failure("Could not rename items").and_announce("items.rename_many"),
+            Reread::RESULTS,
+            move |library| library.rename_roots(&renames, crate::now_ms()),
+            cx,
+            |this, renamed, cx| {
+                if renamed.is_ok() {
                     this.dialog.close(cx);
                 } else if let Some(open) = this.dialog.content_mut() {
                     open.busy = false;
                     cx.notify();
                 }
-            });
-        })
-        .detach();
+            },
+        );
     }
 }
 

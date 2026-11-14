@@ -2,7 +2,7 @@
 //! deleting, moving and renaming folders and smart folders, their
 //! appearance, sorting and Quick Access.
 use super::{Renaming, Sidebar, folder_id, smart_folder, smart_folder_id, tree};
-use crate::session::{Change, Report, Reread};
+use crate::session::{Change, Report, Reread, edit_then_in};
 use crate::ui::text_input::{Renamed, TextInput};
 use gpui::*;
 use picto_library::model::ContentSortField;
@@ -51,87 +51,6 @@ pub(super) fn sorted_by_name(mut input: SmartFolderInput) -> SmartFolderInput {
 
 impl Sidebar {
     // ── Edits ───────────────────────────────────────────────────────
-
-    /// Runs an edit on the library's thread through the session and hands
-    /// its answer to `then`. Names, counts and the trees follow the
-    /// library's change events.
-    pub(super) fn edit<T: Send + 'static>(
-        &self,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_reading(work, Reread::NOTHING, then, window, cx);
-    }
-
-    /// An edit whose follow-up needs the new destination list at once: a
-    /// folder it made, revealed and renamed in place.
-    fn create<T: Send + 'static>(
-        &self,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_reading(work, Reread::NAVIGATION, then, window, cx);
-    }
-
-    pub(super) fn edit_reading<T: Send + 'static>(
-        &self,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        reread: Reread,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_reporting(Report::default(), work, reread, then, window, cx);
-    }
-
-    /// [`Sidebar::edit`], telling the user what `report` says, as the
-    /// production call does.
-    pub(super) fn edit_as<T: Send + 'static>(
-        &self,
-        report: Report,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_reporting(report, work, Reread::NOTHING, then, window, cx);
-    }
-
-    /// [`Sidebar::create`], telling the user what `report` says.
-    fn create_as<T: Send + 'static>(
-        &self,
-        report: Report,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.edit_reporting(report, work, Reread::NAVIGATION, then, window, cx);
-    }
-
-    pub(super) fn edit_reporting<T: Send + 'static>(
-        &self,
-        report: Report,
-        work: impl FnOnce(&Library) -> picto_library::Result<T> + Send + 'static,
-        reread: Reread,
-        then: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(report, work, reread, cx)
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(Ok(value)) = answer.await {
-                let _ = this.update_in(cx, move |this, window, cx| then(this, value, window, cx));
-            }
-        })
-        .detach();
-    }
 
     /// `file.newFolder`: a top-level folder, renamed in place.
     pub fn new_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -203,14 +122,18 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create_as(
+        edit_then_in(
+            &self.session,
             Report::folder_depth(),
+            Reread::NAVIGATION,
             move |library| library.create_folder("New Folder", parent),
-            |this, (id, _), window, cx| {
-                this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
-            },
             window,
             cx,
+            |this, result, window, cx| {
+                if let Ok((id, _)) = result {
+                    this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
+                }
+            },
         );
     }
 
@@ -231,20 +154,24 @@ impl Sidebar {
         } else {
             Report::failure("Could not create folder")
         };
-        self.create_as(
+        edit_then_in(
+            &self.session,
             report,
-            move |library| {
+            Reread::NAVIGATION,
+            move |library| -> picto_library::Result<_> {
                 let (id, _) = library.create_folder("New Folder", parent)?;
                 if let Some(members) = &members {
                     library.add_to_folder(members, id)?;
                 }
                 Ok(id)
             },
-            |this, id, window, cx| {
-                this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
-            },
             window,
             cx,
+            |this, result, window, cx| {
+                if let Ok(id) = result {
+                    this.rename_new(format!("folder:{}", id.0), "New Folder".into(), window, cx)
+                }
+            },
         );
     }
 
@@ -255,13 +182,18 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.create(
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::NAVIGATION,
             move |library| library.create_smart_folder(new_group(parent)),
-            |this, (id, _), window, cx| {
-                this.rename_new(format!("smart:{}", id.0), "Untitled".into(), window, cx)
-            },
             window,
             cx,
+            |this, result, window, cx| {
+                if let Ok((id, _)) = result {
+                    this.rename_new(format!("smart:{}", id.0), "Untitled".into(), window, cx)
+                }
+            },
         );
     }
 
@@ -278,9 +210,11 @@ impl Sidebar {
             .map(|node| self.label_of(node, cx).unwrap_or_default())
             .collect::<Vec<_>>();
         let single = nodes.len() == 1;
-        self.create_as(
+        edit_then_in(
+            &self.session,
             Report::folder_depth(),
-            move |library| {
+            Reread::NAVIGATION,
+            move |library| -> picto_library::Result<_> {
                 let mut made = Vec::new();
                 for (node, name) in nodes.iter().zip(&names) {
                     if let Some(id) = folder_id(node) {
@@ -295,13 +229,15 @@ impl Sidebar {
                 }
                 Ok(made)
             },
-            move |this, made, window, cx| {
-                if let (true, Some((node, name))) = (single, made.into_iter().next()) {
-                    this.rename_new(node, name, window, cx);
-                }
-            },
             window,
             cx,
+            move |this, result, window, cx| {
+                if let Ok(made) = result {
+                    if let (true, Some((node, name))) = (single, made.into_iter().next()) {
+                        this.rename_new(node, name, window, cx);
+                    }
+                }
+            },
         );
     }
 
@@ -329,9 +265,11 @@ impl Sidebar {
         } else {
             "smart_folders.delete"
         };
-        self.edit_as(
+        edit_then_in(
+            &self.session,
             Report::announce(announce),
-            move |library| {
+            Reread::NOTHING,
+            move |library| -> picto_library::Result<_> {
                 if !folders.is_empty() {
                     library.delete_folders(&folders)?;
                 }
@@ -340,14 +278,16 @@ impl Sidebar {
                 }
                 Ok(())
             },
-            move |this, (), _, cx| {
-                if bulk {
-                    this.selection.clear();
-                }
-                cx.notify();
-            },
             window,
             cx,
+            move |this, result, _, cx| {
+                if result.is_ok() {
+                    if bulk {
+                        this.selection.clear();
+                    }
+                    cx.notify();
+                }
+            },
         );
     }
 
@@ -371,22 +311,28 @@ impl Sidebar {
             }
         });
         if let Some(id) = folder_id(node) {
-            self.edit(
+            edit_then_in(
+                &self.session,
+                Report::default(),
+                Reread::NOTHING,
                 move |library| library.rename_folder(id, &name).map(|_| ()),
-                |_, (), _, _| {},
                 window,
                 cx,
+                |_, _, _, _| {},
             );
         } else if let Some(id) = smart_folder_id(node) {
-            self.edit(
+            edit_then_in(
+                &self.session,
+                Report::default(),
+                Reread::NOTHING,
                 move |library| {
                     let mut input = smart_input(library, id)?;
                     input.name = name;
                     library.update_smart_folder(id, input).map(|_| ())
                 },
-                |_, (), _, _| {},
                 window,
                 cx,
+                |_, _, _, _| {},
             );
         }
     }
@@ -490,16 +436,23 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit(
-            move |library| {
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            move |library| -> picto_library::Result<_> {
                 for id in folders {
                     library.sort_folder_items(id, field)?;
                 }
                 Ok(())
             },
-            |this, (), _, cx| this.reload_if_showing(None, cx),
             window,
             cx,
+            |this, result, _, cx| {
+                if result.is_ok() {
+                    this.reload_if_showing(None, cx)
+                }
+            },
         );
     }
 
@@ -521,8 +474,11 @@ impl Sidebar {
                 .collect::<Vec<_>>()
         };
         let parent = under.as_deref().and_then(smart_folder_id);
-        self.edit(
-            move |library| {
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::NOTHING,
+            move |library| -> picto_library::Result<_> {
                 for id in moving {
                     let mut input = smart_input(library, id)?;
                     input.parent_id = parent;
@@ -530,9 +486,9 @@ impl Sidebar {
                 }
                 Ok(())
             },
-            |_, (), _, _| {},
             window,
             cx,
+            |_, _, _, _| {},
         );
     }
 

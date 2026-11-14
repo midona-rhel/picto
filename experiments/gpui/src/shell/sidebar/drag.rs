@@ -4,7 +4,7 @@
 //! (`dragState.ts`, `dragController.executeDrop`).
 use super::{Sidebar, folder_id, smart_folder_id, tree};
 use crate::grid::drag::{self, DragEvent, ItemDrag};
-use crate::session::{Report, Reread};
+use crate::session::{Report, Reread, edit_then_in};
 use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
@@ -204,7 +204,15 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let work = drop_work(&self.session, &items, target, cx);
-        self.edit_reading(work, Reread::RESULTS, |_, (), _, _| {}, window, cx);
+        edit_then_in(
+            &self.session,
+            Report::default(),
+            Reread::RESULTS,
+            work,
+            window,
+            cx,
+            |_, _, _, _| {},
+        );
     }
 
     /// A left press on a folder or smart-folder row, which becomes a drag
@@ -314,12 +322,14 @@ impl Sidebar {
                 .iter()
                 .filter_map(|id| folder_id(id))
                 .collect::<Vec<_>>();
-            self.edit_as(
+            edit_then_in(
+                &self.session,
                 Report::failure("Could not move folder"),
+                Reread::NOTHING,
                 move |library| move_folders(library, &moving, parent, &ordered),
-                |_, (), _, _| {},
                 window,
                 cx,
+                |_, _, _, _| {},
             );
         } else {
             let moving = plan
@@ -333,12 +343,14 @@ impl Sidebar {
                 .iter()
                 .filter_map(|id| smart_folder_id(id))
                 .collect::<Vec<_>>();
-            self.edit_as(
+            edit_then_in(
+                &self.session,
                 Report::failure("Could not move smart folder"),
+                Reread::NOTHING,
                 move |library| move_smart_folders(library, &moving, parent, &ordered),
-                |_, (), _, _| {},
                 window,
                 cx,
+                |_, _, _, _| {},
             );
         }
     }
