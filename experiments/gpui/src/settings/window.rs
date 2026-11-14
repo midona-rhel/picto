@@ -6,7 +6,12 @@ use super::SettingsModel;
 use super::panels::{self, PANELS};
 use super::registry::Slot;
 use crate::theme::Text as _;
-use crate::ui::{self, action_button::Look, field::Look as FieldLook, text_input::TextInput};
+use crate::ui::{
+    self,
+    action_button::Look,
+    field::Look as FieldLook,
+    text_input::{Kind, TextInput},
+};
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -88,8 +93,9 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
 
 impl SettingsWindow {
     fn new(model: Entity<SettingsModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::form("Search...", cx));
-        let shortcut_search = cx.new(|cx| TextInput::form("Search shortcuts…", cx));
+        let search = cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder("Search..."));
+        let shortcut_search =
+            cx.new(|cx| TextInput::new(Kind::Form, cx).placeholder("Search shortcuts…"));
         let capture_focus = cx.focus_handle();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);

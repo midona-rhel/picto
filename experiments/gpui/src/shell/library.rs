@@ -10,7 +10,7 @@ use crate::grid::thumbnails::Thumbnails;
 use crate::session::Session;
 use crate::theme::Text as _;
 use crate::ui::popover::{self, Opening, Placement, Side};
-use crate::ui::text_input::TextInput;
+use crate::ui::text_input::{Kind, TextInput};
 use crate::{theme, ui};
 use gpui::*;
 use std::cell::Cell;
@@ -218,7 +218,8 @@ impl LibraryPopover {
         control: Rc<Cell<Bounds<Pixels>>>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| TextInput::popover("Search libraries…", cx));
+        let search =
+            cx.new(|cx| TextInput::new(Kind::Popover, cx).placeholder("Search libraries…"));
         let subscriptions = vec![cx.observe(&search, |_, _, cx| cx.notify())];
         let mut this = Self {
             session,

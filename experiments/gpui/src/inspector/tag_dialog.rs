@@ -16,7 +16,7 @@ use crate::ui::{
     menu::Return,
     modal::{self, Size},
     selection_modal::{self as shell, Key, ROW},
-    text_input::TextInput,
+    text_input::{Kind, TextInput},
 };
 use gpui::*;
 use picto_library::{TagNamespaceRecord, TagRecord};
@@ -113,7 +113,7 @@ pub struct TagDialog {
 
 impl TagDialog {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(|cx| TextInput::list_search("Search tags...", cx));
+        let search = cx.new(|cx| TextInput::new(Kind::Menu, cx).placeholder("Search tags..."));
         let subscriptions = vec![cx.observe(&search, |this, search, cx| {
             let query = search.read(cx).value();
             if query != this.query {

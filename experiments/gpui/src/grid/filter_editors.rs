@@ -5,7 +5,11 @@
 use super::filters;
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::{self, field::Look, text_input::TextInput};
+use crate::ui::{
+    self,
+    field::Look,
+    text_input::{Kind, TextInput},
+};
 use gpui::*;
 use std::time::Duration;
 
@@ -52,7 +56,7 @@ impl RangeEditor {
         let multiplier = units.get(unit).map_or(1, |(_, multiplier)| *multiplier);
         let field = |value: Option<u64>, placeholder: &'static str, cx: &mut Context<Self>| {
             cx.new(|cx| {
-                let mut input = TextInput::compact(placeholder, cx);
+                let mut input = TextInput::new(Kind::Compact, cx).placeholder(placeholder);
                 if let Some(value) = value {
                     input.set_text(filters::scaled_value(value, multiplier), cx);
                 }
@@ -285,7 +289,11 @@ impl EventEmitter<SaveRequested> for SaveFilterEditor {}
 
 impl SaveFilterEditor {
     pub fn new(savable: bool, cx: &mut Context<Self>) -> Self {
-        let name = cx.new(|cx| TextInput::dialog("Filter name", cx));
+        let name = cx.new(|cx| {
+            TextInput::new(Kind::Form, cx)
+                .placeholder("Filter name")
+                .submits()
+        });
         let subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
             cx.subscribe(&name, |this, _, _: &ui::text_input::Submitted, cx| {

@@ -3,7 +3,13 @@
 //! viewer toolbar while an item is open.
 use crate::backend::Screen;
 use crate::session::{Change, Session, Transition};
-use crate::ui::{self, field::Look, menu::Menu, text_input::TextInput, zoom};
+use crate::ui::{
+    self,
+    field::Look,
+    menu::Menu,
+    text_input::{Kind, TextInput},
+    zoom,
+};
 use crate::viewer::{Viewer, toolbar::ViewerToolbar};
 use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
@@ -41,7 +47,7 @@ impl Toolbar {
     }
 
     pub fn new(session: Entity<Session>, viewer: &Entity<Viewer>, cx: &mut Context<Self>) -> Self {
-        let search = cx.new(TextInput::new);
+        let search = cx.new(|cx| TextInput::new(Kind::Search, cx).placeholder("Search"));
         let zoom = cx.new(|_| Zoom::new());
         let subscriptions = vec![
             cx.observe(&search, |this, search, cx| {

@@ -3,7 +3,7 @@
 //! colour", and the hex code. Dragging and typing settle for 250 ms before
 //! the colour is committed; a preset commits at once.
 use super::field::{self, Look};
-use super::text_input::TextInput;
+use super::text_input::{Kind, TextInput};
 use crate::theme::Text as _;
 use crate::{grid::filters, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -143,7 +143,7 @@ impl ColorEditor {
             .map(str::to_uppercase)
             .unwrap_or_else(|| "#808080".into());
         let hex = cx.new(|cx| {
-            let mut input = TextInput::mono(cx);
+            let mut input = TextInput::new(Kind::Mono, cx);
             input.set_text(shown.clone(), cx);
             input
         });

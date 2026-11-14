@@ -28,7 +28,7 @@ use crate::ui::{
     self,
     field::Look,
     menu, modal,
-    text_input::{self, TextInput},
+    text_input::{self, Kind, TextInput},
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -193,8 +193,18 @@ impl Inspector {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let name = cx.new(|cx| TextInput::expanding("Name", window, cx));
-        let notes = cx.new(|cx| TextInput::expanding("Notes", window, cx));
+        let name = cx.new(|cx| {
+            TextInput::new(Kind::Inspector, cx)
+                .placeholder("Name")
+                .commits_on_blur(window, cx)
+                .expanding()
+        });
+        let notes = cx.new(|cx| {
+            TextInput::new(Kind::Inspector, cx)
+                .placeholder("Notes")
+                .commits_on_blur(window, cx)
+                .expanding()
+        });
         let scope = scope::ScopeState::new(window, cx);
         let selection = selection::SelectionState::new(window, cx);
         let tag_picker = cx.new(|cx| TagPicker::new(session.clone(), cx));

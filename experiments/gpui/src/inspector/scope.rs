@@ -6,7 +6,11 @@ use super::{Inspector, PREVIEW};
 use crate::grid::format;
 use crate::session::Session;
 use crate::theme;
-use crate::ui::{self, field::Look, text_input::TextInput};
+use crate::ui::{
+    self,
+    field::Look,
+    text_input::{self, TextInput},
+};
 use gpui::*;
 use picto_library::query::ItemScope;
 use picto_library::{FolderId, FolderRecord, LibraryError, SmartFolderId, SmartFolderRecord};
@@ -129,8 +133,18 @@ fn described(session: &Session) -> (usize, Option<FolderId>) {
 impl ScopeState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Inspector>) -> Self {
         Self {
-            name: cx.new(|cx| TextInput::expanding("Name", window, cx)),
-            notes: cx.new(|cx| TextInput::expanding("Notes", window, cx)),
+            name: cx.new(|cx| {
+                TextInput::new(text_input::Kind::Inspector, cx)
+                    .placeholder("Name")
+                    .commits_on_blur(window, cx)
+                    .expanding()
+            }),
+            notes: cx.new(|cx| {
+                TextInput::new(text_input::Kind::Inspector, cx)
+                    .placeholder("Notes")
+                    .commits_on_blur(window, cx)
+                    .expanding()
+            }),
             view: None,
             records: HashMap::new(),
             asked: None,

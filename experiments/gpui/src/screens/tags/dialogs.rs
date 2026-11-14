@@ -8,7 +8,7 @@ use crate::ui::{
     action_button::Look as ButtonLook,
     field::Look,
     modal::{Presence, Size},
-    text_input::{Submitted, TextInput},
+    text_input::{Kind, Submitted, TextInput},
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::{TagNamespaceRecord, TagRecord};
@@ -97,10 +97,12 @@ fn input_with(
     cx: &mut Context<TagsScreen>,
 ) -> Entity<TextInput> {
     cx.new(|cx| {
-        let mut input = TextInput::dialog(placeholder, cx);
+        let mut input = TextInput::new(Kind::Form, cx)
+            .placeholder(placeholder)
+            .submits();
         if let Some(text) = text {
             input.set_text(text, cx);
-            input.caret_to_end(cx);
+            input.caret_at_end(cx);
         }
         input
     })

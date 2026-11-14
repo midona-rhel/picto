@@ -9,7 +9,11 @@ use crate::grid::format;
 use crate::session::{Report, Reread};
 use crate::theme;
 use crate::theme::Text as _;
-use crate::ui::{self, field::Look, text_input::TextInput};
+use crate::ui::{
+    self,
+    field::Look,
+    text_input::{Kind, TextInput},
+};
 use gpui::*;
 use picto_library::selection::{SelectionSummary, SelectionTarget};
 use picto_library::{Library, MutationReceipt, Rating, RootId};
@@ -96,7 +100,12 @@ fn chosen_order(previous: &[RootId], selected: &[RootId], focus: Option<RootId>)
 impl SelectionState {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Inspector>) -> Self {
         Self {
-            notes: cx.new(|cx| TextInput::expanding("Notes", window, cx)),
+            notes: cx.new(|cx| {
+                TextInput::new(Kind::Inspector, cx)
+                    .placeholder("Notes")
+                    .commits_on_blur(window, cx)
+                    .expanding()
+            }),
             order: Vec::new(),
             shown: None,
             asked: None,

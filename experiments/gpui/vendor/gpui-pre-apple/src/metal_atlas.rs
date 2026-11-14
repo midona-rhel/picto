@@ -58,6 +58,11 @@ impl PlatformAtlas for MetalAtlas {
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
+
+    #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
+    fn contains(&self, key: &AtlasKey) -> bool {
+        self.0.lock().contains(key)
+    }
 }
 
 impl AtlasBackend for MetalAtlasTextures {

@@ -12,7 +12,7 @@ use crate::ui::color_editor::{ColorCommitted, ColorEditor};
 use crate::ui::field::Look;
 use crate::ui::popover::{Dismissal, Flip, Placement, Side, floating, place};
 use crate::ui::tag_token_input::{self, TagTokenInput};
-use crate::ui::text_input::{Submitted, TextInput};
+use crate::ui::text_input::{Kind, Submitted, TextInput};
 use crate::ui::{self, action_button::Look as ButtonLook, modal::Presence, modal::Size};
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::predicate::{ItemSort, ViewQuerySpec};
@@ -147,13 +147,15 @@ impl SmartFolderEditor {
             ),
         };
         let name = cx.new(|cx| {
-            let mut input = TextInput::dialog("Smart Folder Name", cx);
+            let mut input = TextInput::new(Kind::Form, cx)
+                .placeholder("Smart Folder Name")
+                .submits();
             input.set_text(name, cx);
             input.caret_at_end(cx);
             input
         });
         let notes = cx.new(|cx| {
-            let mut input = TextInput::text_area("Notes...", cx);
+            let mut input = TextInput::new(Kind::Area, cx).placeholder("Notes...");
             input.set_text(notes, cx);
             input
         });
@@ -245,7 +247,9 @@ impl SmartFolderEditor {
     fn rule_row(&mut self, rule: Rule, window: &mut Window, cx: &mut Context<Self>) -> RuleRow {
         let field = |text: String, placeholder: &'static str, cx: &mut Context<Self>| {
             let input = cx.new(|cx| {
-                let mut input = TextInput::dialog(placeholder, cx);
+                let mut input = TextInput::new(Kind::Form, cx)
+                    .placeholder(placeholder)
+                    .submits();
                 input.set_text(text, cx);
                 input
             });

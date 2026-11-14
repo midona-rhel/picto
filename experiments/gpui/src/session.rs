@@ -521,7 +521,10 @@ impl Session {
             .join("f")
             .join(&hash[..2])
             .join(&hash[2..4])
-            .join(format!("{hash}.{}", crate::grid::format::extension(mime)))
+            .join(format!(
+                "{hash}.{}",
+                picto_core::blob_store::mime_to_extension(mime)
+            ))
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
