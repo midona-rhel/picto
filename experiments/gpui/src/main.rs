@@ -7,6 +7,7 @@ mod backend;
 mod cover;
 mod covered;
 mod desktop;
+mod diagnostics;
 mod export;
 mod grid;
 mod history;
@@ -231,6 +232,9 @@ fn main() {
         }
         return;
     }
+    // Panics are recorded for the log window from here on, and those of
+    // the previous session are shown there.
+    diagnostics::crash::install();
     let (events, delivered) = std::sync::mpsc::channel();
     let application = application::Application::new(root.clone(), events);
     let closing = application.clone();

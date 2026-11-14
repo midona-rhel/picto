@@ -92,6 +92,9 @@ pub struct Issue {
     pub id: i64,
     pub kind: String,
     pub message: String,
+    /// More about the failure, shown with the message in the row's
+    /// tooltip.
+    pub detail: Option<String>,
     pub last_seen_at: String,
     pub target: Option<String>,
     pub url: Option<String>,
@@ -437,7 +440,7 @@ fn issues(
     let mut statement = connection.prepare(
         "SELECT issue.issue_id, issue.issue_kind, issue.message,
                 issue.last_seen_at, item.item_key, post.post_key, post.title,
-                COALESCE(post.canonical_url, item.canonical_url)
+                COALESCE(post.canonical_url, item.canonical_url), issue.detail
          FROM subscription_issue issue
          LEFT JOIN source_item item ON item.source_item_id = CASE
              WHEN issue.issue_kind = 'download_item'
@@ -469,6 +472,7 @@ fn issues(
                     .or(post_key)
                     .or(item_key),
                 url: row.get(7)?,
+                detail: row.get(8)?,
             })
         },
     )?;

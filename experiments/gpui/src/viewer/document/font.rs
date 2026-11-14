@@ -4,6 +4,7 @@
 //! size control floating at the bottom.
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
+use crate::ui::text_input::{Face, Kind, TextInput};
 use crate::{theme, ui};
 use anyhow::{Result, anyhow, bail};
 use gpui::prelude::FluentBuilder as _;
@@ -218,6 +219,11 @@ pub struct FontViewer {
     paper: Paper,
     scale: f32,
     scroll: ScrollHandle,
+    /// The preview's sample, editable in place (`contentEditable`): its
+    /// heading, its paragraph and its alphabet.
+    sample: [Entity<TextInput>; 3],
+    /// The waterfall's lines, each editable on its own.
+    waterfall: Vec<Entity<TextInput>>,
     _task: Task<()>,
 }
 
@@ -230,7 +236,39 @@ impl FontViewer {
             Some(family) => (Status::Ready(family), Task::ready(())),
             None => (Status::Loading, Self::load(path, cx)),
         };
-        Self {
+        let field = |kind: Kind, text: String, cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                let mut input = TextInput::new(kind, cx);
+                input.set_text(text, cx);
+                input
+            })
+        };
+        let sample = [
+            field(
+                Kind::Area,
+                t("The quick brown fox jumps over the lazy dog.").to_string(),
+                cx,
+            ),
+            field(
+                Kind::Area,
+                t("Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers.").to_string(),
+                cx,
+            ),
+            field(
+                Kind::Area,
+                format!(
+                    "{}\n{}\n0123456789",
+                    t("ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+                    t("abcdefghijklmnopqrstuvwxyz")
+                ),
+                cx,
+            ),
+        ];
+        let waterfall = WATERFALL_SIZES
+            .iter()
+            .map(|_| field(Kind::Form, t("Hamburgefontsiv 0123456789").to_string(), cx))
+            .collect();
+        let mut viewer = Self {
             name,
             mime,
             status,
@@ -238,7 +276,33 @@ impl FontViewer {
             paper: Paper::Auto,
             scale: 1.,
             scroll: ScrollHandle::new(),
+            sample,
+            waterfall,
             _task: task,
+        };
+        viewer.apply_faces(cx);
+        viewer
+    }
+
+    /// The editable samples' faces: the font at the preview's size.
+    fn apply_faces(&mut self, cx: &mut Context<Self>) {
+        let Some(family) = self.family() else {
+            return;
+        };
+        let scale = self.scale;
+        let faces = sample_faces(&family, scale);
+        for (input, face) in self.sample.iter().zip(faces) {
+            input.update(cx, |input, cx| input.set_face(face, cx));
+        }
+        for (input, size) in self.waterfall.iter().zip(WATERFALL_SIZES) {
+            let size = size * scale;
+            let face = Face {
+                family: family.clone(),
+                size,
+                line_height: size * 1.35,
+                weight: FontWeight::NORMAL,
+            };
+            input.update(cx, |input, cx| input.set_face(face, cx));
         }
     }
 
@@ -261,6 +325,7 @@ impl FontViewer {
                     }
                     Err(_) => Status::Failed,
                 };
+                this.apply_faces(cx);
                 cx.notify();
             });
         })
@@ -279,6 +344,7 @@ impl FontViewer {
 
     fn set_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
         self.scale = ((scale * 10.).round() / 10.).clamp(MIN_SCALE, MAX_SCALE);
+        self.apply_faces(cx);
         cx.notify();
     }
 
@@ -315,6 +381,29 @@ impl FontViewer {
             ),
         }
     }
+}
+
+/// The preview's sample in `family` at `scale`: the heading at 38 px on a
+/// 1.25 line in the medium weight, the paragraphs at 18 px on a 1.6 line.
+pub fn sample_faces(family: &SharedString, scale: f32) -> [Face; 3] {
+    let heading = 38. * scale;
+    let body = 18. * scale;
+    let paragraph = Face {
+        family: family.clone(),
+        size: body,
+        line_height: body * 1.6,
+        weight: FontWeight::NORMAL,
+    };
+    [
+        Face {
+            family: family.clone(),
+            size: heading,
+            line_height: heading * 1.25,
+            weight: FontWeight::MEDIUM,
+        },
+        paragraph.clone(),
+        paragraph,
+    ]
 }
 
 /// Adds the font to the text system and finds the family name it answers to.
@@ -513,54 +602,32 @@ impl Render for FontViewer {
             }
             (Status::Loading, _) => message(t("Loading font…")).into_any_element(),
             (Status::Failed, _) => message(en("This font cannot be previewed.")).into_any_element(),
-            (Status::Ready(family), Tab::Preview) => {
-                let size = 38. * scale;
-                let body = 18. * scale;
-                // TODO: the sample is editable in production
-                // (`contentEditable`); it is fixed text here.
+            (Status::Ready(_), Tab::Preview) => {
+                // `.article h2` and `.article p`, each edited in place.
+                let [heading, paragraph, alphabet] = self.sample.clone();
                 div()
-                    .font_family(family.clone())
-                    .child(
-                        div()
-                            .mb(px(24.))
-                            .text_size(px(size))
-                            .line_height(px(size * 1.25))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(t("The quick brown fox jumps over the lazy dog.")),
-                    )
-                    .child(
-                        div()
-                            .mb(px(20.))
-                            .text_size(px(body))
-                            .line_height(px(body * 1.6))
-                            .child(
-                                t("Typography gives language a visible voice. Edit this sample to test the font with your own words, punctuation, and numbers."),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .mb(px(20.))
-                            .text_size(px(body))
-                            .line_height(px(body * 1.6))
-                            // i18n: a font sample, the same in every language
-                            .child("ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789"),
-                    )
+                    .child(div().mb(px(24.)).child(heading))
+                    .child(div().mb(px(20.)).child(paragraph))
+                    .child(div().mb(px(20.)).child(alphabet))
                     .into_any_element()
             }
-            (Status::Ready(family), Tab::Waterfall) => div()
-                .font_family(family.clone())
+            // `.waterfall`: lines that run past the page are cut at its
+            // edge.
+            (Status::Ready(_), Tab::Waterfall) => div()
+                .overflow_hidden()
                 .flex()
                 .flex_col()
-                .children(WATERFALL_SIZES.map(|size| {
-                    let size = size * scale;
-                    div()
-                        .py(px(4.))
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_size(px(size))
-                        .line_height(px(size * 1.35))
-                        .child(t("Hamburgefontsiv 0123456789"))
-                }))
+                .children(
+                    WATERFALL_SIZES
+                        .iter()
+                        .zip(&self.waterfall)
+                        .map(|(size, input)| {
+                            div()
+                                .py(px(4.))
+                                .h(px(size * scale * 1.35 + 8.))
+                                .child(input.clone())
+                        }),
+                )
                 .into_any_element(),
             (Status::Ready(family), Tab::Glyphs) => div()
                 .children(GLYPH_GROUPS.map(|(label, glyphs)| {
@@ -673,21 +740,29 @@ impl Render for FontViewer {
                     .overflow_y_scroll()
                     .size_full()
                     .child(
-                        // `.page`: 900px at most, 48px from the window's
-                        // sides, 24px from the top.
+                        // `.page`: `min(900px, 100% - 96px)` wide, centred in
+                        // the view less its scrollbar's gutter
+                        // (`scrollbar-gutter: stable`), 24px from the top.
                         div()
-                            .mx_auto()
-                            .my(px(24.))
-                            .w(relative(1.))
-                            .max_w(px(900.))
+                            .w_full()
                             .min_h_full()
-                            .px(px(48.))
-                            .pb(px(72.))
-                            .bg(paper)
-                            .text_color(ink)
-                            .child(header)
-                            .child(toolbar)
-                            .child(div().pt(px(20.)).child(content)),
+                            .pl(px(48.))
+                            .pr(px(48. + ui::scrollbar::GUTTER))
+                            .py(px(24.))
+                            .child(
+                                div()
+                                    .mx_auto()
+                                    .w_full()
+                                    .max_w(px(900.))
+                                    .min_h_full()
+                                    .px(px(48.))
+                                    .pb(px(72.))
+                                    .bg(paper)
+                                    .text_color(ink)
+                                    .child(header)
+                                    .child(toolbar)
+                                    .child(div().pt(px(20.)).child(content)),
+                            ),
                     ),
             )
             .child(ui::scrollbar("font-scrollbar", &self.scroll, window, cx))
@@ -697,7 +772,21 @@ impl Render for FontViewer {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_name, load, unpack_woff};
+    use super::{format_name, load, sample_faces, unpack_woff};
+    use gpui::{FontWeight, SharedString};
+
+    #[test]
+    fn the_sample_is_edited_in_the_font_at_the_preview_size() {
+        let family = SharedString::from("Fira Mono");
+        let [heading, paragraph, alphabet] = sample_faces(&family, 1.5);
+        // `.article h2`: 38px on a 1.25 line, medium; `.article p`: 18px on
+        // a 1.6 line; both times the preview's scale.
+        assert_eq!((heading.size, heading.line_height), (57., 71.25));
+        assert_eq!(heading.weight, FontWeight::MEDIUM);
+        assert_eq!((paragraph.size, paragraph.line_height), (27., 43.2));
+        assert_eq!(paragraph, alphabet);
+        assert_eq!(heading.family, family);
+    }
 
     #[test]
     fn formats_are_named_as_production_names_them() {

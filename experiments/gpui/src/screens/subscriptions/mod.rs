@@ -8,7 +8,7 @@ mod detail;
 mod dialogs;
 mod format;
 mod home;
-mod requests;
+pub mod requests;
 
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
@@ -225,9 +225,9 @@ pub struct SubscriptionsScreen {
     /// sources that cannot run without one.
     logins: Vec<format::Login>,
     login_health: Vec<format::Login>,
-    /// Gallery downloads' progress, and the galleries being cleaned up.
+    /// Gallery downloads' progress. The session settles those that end
+    /// (`session::settle`).
     gallery_progress: HashMap<i64, GalleryProgress>,
-    settling: HashSet<i64>,
     /// A subscription just created, opened once the list has it.
     pending_open: Option<i64>,
     /// Whether the screen showed at the last navigation, to read the list
@@ -346,7 +346,6 @@ impl SubscriptionsScreen {
             logins: Vec::new(),
             login_health: Vec::new(),
             gallery_progress: HashMap::new(),
-            settling: HashSet::new(),
             pending_open: None,
             shown: false,
             place_seen: None,
@@ -538,8 +537,9 @@ impl SubscriptionsScreen {
     }
 
     /// Gallery downloads: a running one's progress is read, with its total
-    /// kept once known (`retainGalleryProgressTotals`); one whose run has
-    /// settled is announced and removed (`settleFinishedGalleryImports`).
+    /// kept once known (`retainGalleryProgressTotals`). One whose run has
+    /// settled is announced and removed by the session, for the whole app
+    /// (`session::settle`).
     fn follow_galleries(&mut self, cx: &mut Context<Self>) {
         let jobs: Vec<(i64, bool)> = self
             .list
@@ -584,88 +584,8 @@ impl SubscriptionsScreen {
                     });
                 })
                 .detach();
-            } else if self.settling.insert(id) {
-                self.settle_gallery(id, cx);
             }
         }
-    }
-
-    /// A gallery download that is not running: once its latest run has
-    /// ended, it is announced and the transient subscription removed.
-    fn settle_gallery(&mut self, id: i64, cx: &mut Context<Self>) {
-        let runs = self.send(requests::runs(id), cx);
-        cx.spawn(async move |this, cx| {
-            let latest = runs
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .and_then(|runs| {
-                    serde_json::from_value::<
-                            picto_core::subscription_activity::SubscriptionRunList,
-                        >(runs)
-                        .ok()
-                })
-                .and_then(|list| list.runs.into_iter().next());
-            let Some(latest) =
-                latest.filter(|run| !matches!(run.status.as_str(), "pending" | "running"))
-            else {
-                // Not started yet, or still going: looked at again later.
-                let _ = this.update(cx, |this, _| this.settling.remove(&id));
-                return;
-            };
-            let Ok(cleanup) =
-                this.update(cx, |this, cx| this.send(requests::clean_up_gallery(id), cx))
-            else {
-                return;
-            };
-            let cleaned = cleanup.await.ok().and_then(Result::ok);
-            let _ = this.update(cx, |this, cx| {
-                let name = this
-                    .subscription(id)
-                    .map(|job| job.name.clone())
-                    .unwrap_or_default();
-                let title = cleaned
-                    .as_ref()
-                    .and_then(|value| value.get("title"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or(name);
-                let exists = cleaned
-                    .as_ref()
-                    .and_then(|value| value.get("already_exists"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                match latest.status.as_str() {
-                    "succeeded" if exists => crate::ui::notify::success(
-                        t("Gallery already exists"),
-                        format!("{title} is already in the library."),
-                        cx,
-                    ),
-                    "succeeded" => crate::ui::notify::success(
-                        t("Gallery downloaded"),
-                        format!("{title} has been downloaded."),
-                        cx,
-                    ),
-                    "cancelled" => {}
-                    status => crate::ui::notify::error(
-                        t("Gallery import failed"),
-                        latest.error_message.clone().unwrap_or_else(|| {
-                            format!(
-                                "Gallery worker failed ({}).",
-                                latest.failure_kind.as_deref().unwrap_or(status)
-                            )
-                        }),
-                        cx,
-                    ),
-                }
-                if let Some(list) = &mut this.list {
-                    list.retain(|entry| entry.id != id);
-                }
-                this.settling.remove(&id);
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     /// Sends `command` for each of `ids`, then reads what changed. The

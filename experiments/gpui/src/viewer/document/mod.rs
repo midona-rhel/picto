@@ -7,6 +7,7 @@ pub mod epub;
 pub mod font;
 pub mod geometry;
 pub mod kind;
+pub mod page_picture;
 pub mod paged;
 pub mod pages;
 pub mod reader;
@@ -34,6 +35,7 @@ actions!(
         NextPage,
         PreviewLarger,
         PreviewSmaller,
+        PreviewReset,
         ScrollToStart,
         ScrollToEnd,
         ScrollPageUp,
@@ -66,27 +68,47 @@ pub fn scroll_bindings() -> Vec<KeyBinding> {
     bindings
 }
 
-/// The font preview's Cmd+= and Cmd+− (Ctrl off macOS), which
-/// `FontViewer.tsx` handles itself rather than through the shortcut
-/// registry, in each host that shows a document. The registry's J and L
-/// pages are bound by `crate::keymap`.
+/// The font preview's keys, which `FontViewer.tsx` handles itself rather
+/// than through the shortcut registry, in each host that shows a document:
+/// `=` or `+` (Shift+= on most layouts) larger, `-` smaller, with Command
+/// or Control on the Mac and Control elsewhere (`metaKey || ctrlKey`).
+/// Command+0 (Control+0 elsewhere) is the registry's Actual Size, which
+/// resets the preview too; Control+0 on the Mac resets it here. A key the
+/// preview does not take goes on to the interface zoom. The registry's J
+/// and L pages are bound by `crate::keymap`.
 pub fn bind(cx: &mut App) {
-    let (larger, smaller) = if cfg!(target_os = "macos") {
-        ("cmd-=", "cmd--")
+    let modifiers: &[&str] = if cfg!(target_os = "macos") {
+        &["Mod", "Ctrl"]
     } else {
-        ("ctrl-=", "ctrl--")
+        &["Mod"]
     };
-    let mut bindings = Vec::new();
     for scope in [Scope::Viewer, Scope::DetailWindow] {
         let predicate = scope.predicate();
-        bindings.push(KeyBinding::new(larger, PreviewLarger, predicate.as_deref()));
-        bindings.push(KeyBinding::new(
-            smaller,
-            PreviewSmaller,
-            predicate.as_deref(),
-        ));
+        let context = predicate.as_deref();
+        for modifier in modifiers {
+            crate::keymap::bind_written(
+                &format!("{modifier}+="),
+                Box::new(PreviewLarger),
+                context,
+                cx,
+            );
+            crate::keymap::bind_written(
+                &format!("{modifier}++"),
+                Box::new(PreviewLarger),
+                context,
+                cx,
+            );
+            crate::keymap::bind_written(
+                &format!("{modifier}+-"),
+                Box::new(PreviewSmaller),
+                context,
+                cx,
+            );
+        }
+        if cfg!(target_os = "macos") {
+            crate::keymap::bind_written("Ctrl+0", Box::new(PreviewReset), context, cx);
+        }
     }
-    cx.bind_keys(bindings);
 }
 
 /// A scroll of a document's pages by a key.

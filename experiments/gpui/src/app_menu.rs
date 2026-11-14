@@ -74,7 +74,7 @@ actions!(
         Reveal,
         OpenInNewWindow,
         ShowDuplicates,
-        // TODO: show or hide the log window (`menu:toggle-diagnostics`).
+        // Shows or hides the log window (`menu:toggle-diagnostics`).
         LogWindow,
         ToggleFullScreen,
         Minimize,
@@ -719,7 +719,6 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
         Separator,
         item("Log Window", LogWindow)
             .keys(Keys::Shortcut("view.toggleLogs"))
-            .todo()
             .into(),
         Separator,
         item("Toggle Full Screen", ToggleFullScreen)
@@ -1756,7 +1755,6 @@ mod tests {
                 "Main",
                 "Clear History",
                 "Check for Updates…",
-                "Log Window",
             ]
         );
     }
@@ -1784,8 +1782,7 @@ mod tests {
     #[test]
     fn rows_bind_their_keys_and_follow_rebinding() {
         let none = Overrides::new();
-        // A row whose keys the registry binds to another action only shows
-        // them; one only the menu has binds them for real.
+        // A row whose keys the registry binds only shows them.
         let rename = accelerators(KeyboardPreset::Us, &none)
             .into_iter()
             .find(|accelerator| accelerator.action.partial_eq(&super::Rename))
@@ -1796,8 +1793,10 @@ mod tests {
             .into_iter()
             .find(|accelerator| accelerator.action.partial_eq(&super::LogWindow))
             .unwrap();
+        // The registry binds ⌘L to the log window where the window's content
+        // has the keyboard; the row shows it.
         assert_eq!(logs.keystroke, spelled("cmd-l"));
-        assert_eq!(logs.predicate, crate::keymap::Scope::App.predicate());
+        assert_eq!(logs.predicate.as_deref(), Some(super::SHOWN_ONLY));
         let close = bound(KeyboardPreset::Us, &none, &super::CloseWindow);
         assert_eq!(close, [spelled("cmd-w")]);
         // The Delete key: Move to Trash outside a folder, Remove from Folder

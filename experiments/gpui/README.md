@@ -740,11 +740,13 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Item menus | tile, empty space, viewer and inspector preview menus with production's rows, order, labels and enabled rules; copy, open with, batch rename, regenerate thumbnails, grouping, export, Set as Library Cover, Set as Thumbnail | pictures (grid menu); values (production's menu test cases) |
 | Application menu | production's menus and rows, keys from the registry, enabled by production's rules; in-window button off macOS | values (model tests); pictures of the in-window menu off-screen (CI) |
 | Viewer | media view, zoom and pan, navigator, Quick Look, detail windows, Inbox review, collections (reader and editor), Recently Viewed recording | pictures (Quick Look, detail window, JPEG, GIF, JPEG XL, a PDF collection); values (camera arithmetic, detail window size) |
-| Documents | PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, fonts, JPEG XL, SVG; others show the unsupported view | tests (format matrix decodes every fixture and draws every viewer off-screen; real PDFs, a JPEG XL, a text file, a GIF and a WebP from a library) |
+| Documents | PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, fonts, JPEG XL, SVG; others show the unsupported view; a font's sample and waterfall edited in place, its preview sized by ⌘= / ⌘+ (⌘⇧=) / ⌘− and Control with them on the Mac | tests (format matrix decodes every fixture and draws every viewer off-screen; real PDFs, a JPEG XL, a text file, a GIF and a WebP from a library); pictures of the font viewer (preview, an edit, the waterfall: 3% of the page differing) |
+| Document thumbnails | the first page of a text, Markdown, JSON or RTF file, and an EPUB's first chapter when the book has no cover, drawn as the viewer lays the page out, at production's size (the 816-point page at two pixels a point, as the hidden window shows it), through the same queue as PDF and Flash; the application's own thumbnail work finds the picture and stops retrying | pictures of the thumbnails against production's (0.1–0.9% of pixels differing for text, JSON, RTF and a short Markdown file; 2.5% for a Markdown file with code, quotes and a table, where the viewers differ) |
 | Video and audio | the media player, its controls, speeds, loop, volume, visualizer; AVFoundation and `ffmpeg` paths on macOS | pictures (`.mov`, `.webm`, MP3); seen playing in a real window on macOS |
 | Flash | Ruffle playback, controls, Set as Thumbnail | tests (GPU tests: frames, mouse, Stop) |
 | Tags screen | rail, groups, sections, paging, search, every edit | pictures |
-| Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables, every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
+| Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables (a problem's message and detail in its tooltip), every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
+| Subscription run pop-ups | "Subscription paused" and "Gallery download paused", "Query completed", "Subscription completed", and a settled gallery download's "Gallery downloaded", "Gallery already exists" or "Gallery import failed" with its transient subscription removed, for the whole app whichever view shows | tests (production's settle test cases as recorded sequences of `subscriptions.list`, `subscriptions.runs.get` and `subscriptions.runs.list` answers); pictures of the pop-ups; never seen after a real run (no network) |
 | Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
 | Imports and exports | drops, choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
 | Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
@@ -754,12 +756,12 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
 | Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
+| Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
 add to last folder, copy and paste tags, slideshow, navigator, the layout and
-tile-label keys (all deferred in production too), Auto Tag (no AI tagger) and
-Toggle Logs (no log window).
+tile-label keys (all deferred in production too) and Auto Tag (no AI tagger).
 
 Measured once on the million-item synthetic library on a macOS development
 machine: every grid window read took 0.3–9 ms wherever it lay; the summary of
@@ -875,21 +877,25 @@ re-checked by reading the code; the rest were checked against it.
 - The AI tagger: Auto Tag in the item menu, the inspector and the Organize
   menu is disabled, its shortcut unbound; every AI model shows as not
   downloaded and download, optimise and delete do nothing.
-- The log window, diagnostics and support report; no panic hook.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
-- Site logins and the Accounts window; a login problem's Fix login; the
-  Problems tab's other recovery actions (Retry now, Review source) and its
-  detail tooltip; a subscription run's own pop-ups ("Subscription paused",
-  "Query completed", "Subscription completed").
-- Search by Image (disabled in every menu).
+- Site logins and the Accounts window: the Accounts button and a source's
+  login chip do nothing, and a login problem's Fix login shows disabled.
+  (Production derives no Retry now or Review source action for a problem,
+  so neither button shows in either app.)
+- Search by Image (it uploads the file to a search engine): its engines are
+  drawn in every menu as production draws a disabled row (40%, no hover, no
+  tooltip).
 - Single instance, opening files and `.picto-pack` packs from the file
   manager, and drops from a browser (GPUI delivers only file paths, so
   in-memory files and links do not arrive).
-- Thumbnails for text, Markdown, JSON, RTF, EPUB, Word and PowerPoint files
-  (production draws them in a hidden window); they show the torn page.
+- Thumbnails of Word and PowerPoint files without an embedded picture (and
+  of an EPUB without a cover): the application takes the embedded one;
+  production draws the others' first page with its document viewers in a
+  hidden window, and this app has no Word or PowerPoint viewer to draw with,
+  so they show the torn page.
 - Document viewers: PDF text selection, text selection on text and book
-  pages, the editable font sample, WOFF2 fonts, RTF character formatting,
+  pages, WOFF2 fonts, RTF character formatting,
   Markdown images and raw HTML (shown as text)†, an EPUB chapter's own
   stylesheet†.
 - Detail windows: per-image zoom memory, "Loading..." placeholder†, a menu on
@@ -1053,11 +1059,26 @@ Smaller differences by area†
   menu; the visualizer's reflection and glow are approximations; an APNG
   plays as a still image; Flash's stage is 960×720 rather than fitted to the
   movie, and the media keys do not reach Flash.
+- Document thumbnails: drawn with cosmic-text rather than the system's text,
+  so on macOS the system font's optical sizes are approximated by spacing;
+  they follow this app's viewer where it differs from production's (RTF
+  character formatting, a code block's tint, a table's header, a nested
+  list's marker); a text page taller than the window is drawn from its top,
+  where production's capture starts wherever its viewer had scrolled and
+  takes the page buttons in.
+- Font viewer: the sample is edited block by block (its heading, paragraph
+  and alphabet each a field), not as one region as production's
+  `contentEditable` article; a waterfall line wider than the page is cut
+  off rather than scrolled sideways.
 - Documents: a page larger than the view starts at its top-left; only the
   vertical scrollbar is drawn; text files over 4 MB show their first 4 MB and
   say so; a PDF page is drawn at most 8,192 px on its longest side;
   encrypted PDFs show a message; Quick Look scrolls a document's pages with
   the pointer only.
+- Log window: its lines cannot be selected with the pointer (Copy copies
+  them); the `main` source holds only panics of earlier sessions, since this
+  app's own messages go to standard error, not to the log; a command's time
+  is its whole round trip, without production's native and delivery split.
 - Settings: a stored vibrancy, Liquid Glass, Mica or Acrylic theme shows as
   Dark; a shortcut field cannot capture keys the app binds itself (⌘Q, ⌘,);
   "Pixelated" scaling does not apply to a collection's members or the

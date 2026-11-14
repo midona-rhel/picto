@@ -303,6 +303,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "dup.prevPair" => vec![to!(Duplicates, duplicates::PreviousPair)],
         "dup.nextPair" => vec![to!(Duplicates, duplicates::NextPair)],
         // Video.
+        "view.toggleLogs" => vec![to!(App, crate::app_menu::LogWindow)],
         "video.togglePlay" => vec![to!(Media, viewer::video::TogglePlay)],
         "video.seekBackward" => vec![to!(Media, viewer::video::SeekBackward)],
         "video.seekForward" => vec![to!(Media, viewer::video::SeekForward)],
@@ -339,7 +340,6 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("view.layoutJustified", "deferred in production"),
     ("view.toggleTileName", "deferred in production"),
     ("view.toggleTileMetadata", "deferred in production"),
-    ("view.toggleLogs", "no log window"),
 ];
 
 /// Binds keys written as the registry writes them (`Mod+Q`), spelled for

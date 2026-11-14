@@ -183,6 +183,36 @@ impl Shell {
     }
 
     /// Opens a screen destination (`menu:navigate`).
+    /// View › Log Window: opens the log window, or closes it.
+    pub(crate) fn toggle_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.diagnostics.is_some() {
+            self.close_diagnostics(window, cx);
+            return;
+        }
+        let session = self.session.clone();
+        let panel = cx.new(|cx| crate::diagnostics::panel::Panel::new(session, cx));
+        let closed = cx.subscribe_in(
+            &panel,
+            window,
+            |this, _, _: &crate::diagnostics::panel::Closed, window, cx| {
+                this.close_diagnostics(window, cx)
+            },
+        );
+        self.diagnostics = Some((panel, closed));
+        cx.notify();
+    }
+
+    /// Closes the log window; the keyboard goes back to the window's
+    /// content if it was in the panel.
+    pub(crate) fn close_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((panel, _)) = self.diagnostics.take() {
+            if panel.focus_handle(cx).contains_focused(window, cx) {
+                window.focus(&self.focus, cx);
+            }
+            cx.notify();
+        }
+    }
+
     pub(crate) fn show_screen(&mut self, screen: Screen, cx: &mut Context<Self>) {
         let index = self
             .session
@@ -360,6 +390,12 @@ impl Shell {
             true,
             cx,
             |this, _: &app_menu::ShowDuplicates, _, cx| this.show_screen(Screen::Duplicates, cx),
+        );
+        root = when(
+            root,
+            true,
+            cx,
+            |this, _: &app_menu::LogWindow, window, cx| this.toggle_diagnostics(window, cx),
         );
         root = row::<app_menu::OpenDefault>(root, menu.single_media(), Row::OpenDefault, false, cx);
         root = row::<app_menu::Reveal>(root, menu.single_media(), Row::Reveal, false, cx);

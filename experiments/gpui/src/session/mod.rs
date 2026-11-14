@@ -6,6 +6,7 @@ mod events;
 mod navigation;
 mod results;
 mod selection;
+pub mod settle;
 
 pub use edits::{Report, Reread, edit_then, edit_then_in};
 
@@ -242,6 +243,8 @@ pub struct Session {
     activity_reading: Coalesced,
     /// Reads progress again while a run is going.
     activity_poll: Option<Task<()>>,
+    /// What runs have announced, and what is being read to announce.
+    settle: settle::Settle,
     /// The sidebar's destinations are being read again.
     navigation_reading: Coalesced,
     pub nav: Vec<Navigation>,
@@ -490,6 +493,7 @@ impl Session {
             subscriptions: SubscriptionActivity::default(),
             activity_reading: Coalesced::default(),
             activity_poll: None,
+            settle: settle::Settle::default(),
             navigation_reading: Coalesced::default(),
             nav: Vec::new(),
             tags: HashMap::new(),

@@ -19,8 +19,8 @@ use std::ops::Range;
 use editing::Typing;
 use element::TextElement;
 use gpui::{
-    App, Bounds, Context, CursorStyle, FocusHandle, Focusable, KeyBinding, MouseButton, Pixels,
-    Point, ShapedLine, SharedString, Window, actions, div, prelude::*, px,
+    App, Bounds, Context, CursorStyle, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton,
+    Pixels, Point, ShapedLine, SharedString, Window, actions, div, prelude::*, px,
 };
 pub use keys::bind;
 use mouse::Granularity;
@@ -136,6 +136,19 @@ pub struct TextInput {
     autoscroll: Option<gpui::Task<()>>,
     /// The last edit was a kill (Control-K), which the next one adds to.
     killing: bool,
+    /// The face the field draws in instead of its kind's.
+    face: Option<Face>,
+}
+
+/// A face a field draws its text in, for text edited in place in the face
+/// it shows (a font's sample): the family, size, line and weight, with the
+/// caret in the text's own colour, as a `contentEditable` element draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Face {
+    pub family: SharedString,
+    pub size: f32,
+    pub line_height: f32,
+    pub weight: FontWeight,
 }
 
 impl TextInput {
@@ -177,7 +190,29 @@ impl TextInput {
             drag_point: None,
             autoscroll: None,
             killing: false,
+            face: None,
         }
+    }
+
+    /// Draws the field in `face` rather than its kind's.
+    pub fn set_face(&mut self, face: Face, cx: &mut Context<Self>) {
+        if self.face.as_ref() != Some(&face) {
+            self.face = Some(face);
+            cx.notify();
+        }
+    }
+
+    /// The field's line height: its face's, else its kind's.
+    pub(super) fn line_height(&self) -> f32 {
+        self.face
+            .as_ref()
+            .map_or(self.kind.line_height(), |face| face.line_height)
+    }
+
+    /// Whether the caret takes the text's colour (a field in a face of its
+    /// own) rather than the theme's.
+    pub(super) fn caret_in_text_color(&self) -> bool {
+        self.face.is_some()
     }
 
     /// What the empty field shows.
@@ -564,9 +599,17 @@ impl Render for TextInput {
         )
         .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
         .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-        .font_family(self.kind.font())
-        .line_height(px(self.kind.line_height()))
-        .text_size(px(self.kind.size()))
+        .map(|root| match &self.face {
+            Some(face) => root
+                .font_family(face.family.clone())
+                .line_height(px(face.line_height))
+                .text_size(px(face.size))
+                .font_weight(face.weight),
+            None => root
+                .font_family(self.kind.font())
+                .line_height(px(self.kind.line_height()))
+                .text_size(px(self.kind.size())),
+        })
         .child(TextElement { input: cx.entity() })
     }
 }
