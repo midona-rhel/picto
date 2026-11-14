@@ -80,12 +80,13 @@ fn stepper(
     cx: &mut App,
 ) -> AnyElement {
     let theme = theme::theme(cx);
-    let hover = window.use_keyed_state(ElementId::from((id, state.entity_id())), cx, |_, _| {
-        motion::Fade::default()
-    });
-    if hover.read(cx).animating() {
-        window.request_animation_frame();
-    }
+    let (hover, set_hover) = motion::hover_fade(
+        ElementId::from((id, state.entity_id())),
+        motion::STEPPER,
+        motion::EASE,
+        window,
+        cx,
+    );
     let arrow = div()
         .id(id)
         .flex_1()
@@ -113,7 +114,7 @@ fn stepper(
     let opacity = if ring.is_some() {
         1.
     } else {
-        0.5 + 0.5 * hover.read(cx).value_with(motion::EASE)
+        0.5 + 0.5 * hover
     };
     let step = {
         let state = state.clone();
@@ -124,12 +125,7 @@ fn stepper(
     arrow
         .opacity(opacity)
         .cursor_pointer()
-        .on_hover(move |hovered, _, cx| {
-            hover.update(cx, |hover, cx| {
-                hover.set(*hovered, motion::STEPPER);
-                cx.notify();
-            })
-        })
+        .on_hover(set_hover)
         // The field keeps the keyboard; the arrow only steps.
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, _, cx| step_by(&state, delta, cx))

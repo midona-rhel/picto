@@ -204,19 +204,20 @@ impl SettingsWindow {
     ) -> impl IntoElement {
         let theme = theme::theme(cx);
         let panel = &PANELS[index];
-        let hover = window.use_keyed_state(("settings-nav-hover", index), cx, |_, _| {
-            motion::Fade::default()
-        });
-        if hover.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (hover, set_hover) = motion::hover_fade(
+            ("settings-nav-hover", index),
+            motion::ROW_HOVER,
+            motion::EASE,
+            window,
+            cx,
+        );
         let fill = if active {
             theme.surface_active()
         } else {
             theme::blend(
                 gpui::transparent_black().into(),
                 theme.surface_hover(),
-                hover.read(cx).value_with(motion::EASE),
+                hover,
             )
         };
         let id = ElementId::from(("settings-nav", index));
@@ -237,12 +238,7 @@ impl SettingsWindow {
             .cursor_pointer()
             .child(ui::icon(nav_icon(panel.icon), 18., theme.text()))
             .child(panel.label)
-            .on_hover(move |hovered, _, cx| {
-                hover.update(cx, |hover, cx| {
-                    hover.set(*hovered, motion::ROW_HOVER);
-                    cx.notify();
-                })
-            })
+            .on_hover(set_hover)
             .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
         // A `<button>`: Enter and Space choose it. It draws no ring.
         focus.attach(

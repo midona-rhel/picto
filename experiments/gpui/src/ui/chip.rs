@@ -97,11 +97,13 @@ impl Chip {
 impl RenderOnce for Chip {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let fade = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::default());
-        let hover = fade.read(cx).value();
-        if fade.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (hover, set_hover) = motion::hover_fade(
+            self.id.clone(),
+            motion::NORMAL,
+            motion::EASE_DEFAULT,
+            window,
+            cx,
+        );
         // The label is cut at 120px with an ellipsis. It is cut here rather
         // than by a truncating element, which would be measured at the full
         // row width and put every chip on a line of its own.
@@ -127,12 +129,7 @@ impl RenderOnce for Chip {
             .text(theme::TEXT_SM)
             .whitespace_nowrap()
             .cursor_pointer()
-            .on_hover(move |hovered, _, cx| {
-                fade.update(cx, |fade, cx| {
-                    fade.set(*hovered, motion::NORMAL);
-                    cx.notify();
-                })
-            })
+            .on_hover(set_hover)
             .children(
                 self.namespace
                     .map(|namespace| div().child(format!("{namespace}:"))),

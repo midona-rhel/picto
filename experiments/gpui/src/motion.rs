@@ -356,6 +356,37 @@ impl Fade {
     }
 }
 
+/// A hover highlight kept between frames under `id`, moving over
+/// `duration` on `curve`: its strength now (0 at rest, 1 hovered), and the
+/// handler to give the element's `on_hover`. While it moves it asks for the
+/// next frame, so no caller can forget to.
+pub fn hover_fade(
+    id: impl Into<gpui::ElementId>,
+    duration: Duration,
+    curve: CubicBezier,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> (
+    f32,
+    impl Fn(&bool, &mut gpui::Window, &mut gpui::App) + 'static,
+) {
+    let fade = window.use_keyed_state(id, cx, |_, _| Fade::default());
+    let (value, animating) = {
+        let fade = fade.read(cx);
+        (fade.value_with(curve), fade.animating())
+    };
+    if animating {
+        window.request_animation_frame();
+    }
+    let set = move |hovered: &bool, _: &mut gpui::Window, cx: &mut gpui::App| {
+        fade.update(cx, |fade, cx| {
+            fade.set(*hovered, duration);
+            cx.notify();
+        })
+    };
+    (value, set)
+}
+
 /// Two-state values that move as CSS transitions do: toward the new state on
 /// the default curve, starting from wherever the previous move had reached.
 /// Used for hover highlights and for sliding the rails in and out.

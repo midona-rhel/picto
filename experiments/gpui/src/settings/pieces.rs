@@ -168,16 +168,16 @@ pub(super) fn swatch(
 ) -> impl IntoElement {
     let theme = theme::theme(cx);
     let id = ElementId::Name(format!("theme-swatch-{index}").into());
-    let hover = window.use_keyed_state(id.clone(), cx, |_, _| motion::Fade::default());
+    let (lit, set_hover) =
+        motion::hover_fade(id.clone(), motion::ROW_HOVER, motion::EASE, window, cx);
     let tip = window.use_keyed_state(
         ElementId::Name(format!("theme-swatch-tip-{index}").into()),
         cx,
         |_, _| ui::tooltip::Hover::default(),
     );
-    if hover.read(cx).animating() || tip.read(cx).animating() {
+    if tip.read(cx).animating() {
         window.request_animation_frame();
     }
-    let lit = hover.read(cx).value_with(motion::EASE);
     let outline = if active {
         theme.text()
     } else {
@@ -230,11 +230,8 @@ pub(super) fn swatch(
                 .border_color(theme.border_secondary()),
         )
         .child(ring)
-        .on_hover(move |hovered, _, cx| {
-            hover.update(cx, |hover, cx| {
-                hover.set(*hovered, motion::ROW_HOVER);
-                cx.notify();
-            });
+        .on_hover(move |hovered, window, cx| {
+            set_hover(hovered, window, cx);
             tip.update(cx, |tip, cx| tip.set_now(*hovered, cx));
         })
         .on_click(move |_, window, cx| on_click(window, cx))

@@ -59,11 +59,13 @@ impl ActionRow {
 impl RenderOnce for ActionRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let fade = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::default());
-        let hover = fade.read(cx).value();
-        if fade.read(cx).animating() {
-            window.request_animation_frame();
-        }
+        let (hover, set_hover) = motion::hover_fade(
+            self.id.clone(),
+            motion::BUTTON_HOVER,
+            motion::EASE_DEFAULT,
+            window,
+            cx,
+        );
         let row = div()
             .id(self.id)
             .w_full()
@@ -92,12 +94,7 @@ impl RenderOnce for ActionRow {
             hover,
         ))
         .cursor_pointer()
-        .on_hover(move |hovered, _, cx| {
-            fade.update(cx, |fade, cx| {
-                fade.set(*hovered, motion::BUTTON_HOVER);
-                cx.notify();
-            })
-        })
+        .on_hover(set_hover)
         .child(super::icon(self.icon, self.glyph, theme.text()).opacity(0.8 + 0.2 * hover))
         .child(self.label)
     }

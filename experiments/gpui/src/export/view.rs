@@ -112,7 +112,7 @@ impl Exports {
                 theme,
                 format!("Quality — {}%", convert.quality),
                 ui::slider("export-quality", convert.quality as f64, 1., 100., 1.)
-                    .dialog()
+                    .look(ui::slider::Look::Dialog)
                     .on_change(move |value, cx| {
                         let _ = this.update(cx, |exports, cx| exports.set_quality(value, cx));
                     }),

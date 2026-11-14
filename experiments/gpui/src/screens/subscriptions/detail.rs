@@ -750,10 +750,11 @@ impl SubscriptionsScreen {
                     .items_center()
                     .justify_center()
                     .child(
-                        ui::tabs(
+                        ui::segmented::segmented(
                             "subscription-tabs",
-                            TABS.iter().map(|tab| SharedString::from(*tab)).collect(),
-                            self.tab,
+                            ui::segmented::Look::Tabs,
+                            TABS.iter().map(|tab| ui::segmented::tab(*tab)).collect(),
+                            Some(self.tab),
                         )
                         .on_select({
                             let view = cx.entity().downgrade();

@@ -192,29 +192,16 @@ impl Render for Zoom {
         let pointer = canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
-                let (zoom, held) = (entity.clone(), dragging.clone());
-                window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble
-                        && event.button == MouseButton::Left
-                        && bounds.contains(&event.position)
-                    {
-                        held.set(true);
-                        let _ = zoom.update(cx, |zoom, cx| zoom.at(event.position.x, bounds, cx));
-                        cx.stop_propagation();
-                    }
-                });
-                let (zoom, held) = (entity.clone(), dragging.clone());
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture && held.get() {
-                        let _ = zoom.update(cx, |zoom, cx| zoom.at(event.position.x, bounds, cx));
-                    }
-                });
-                let held = dragging.clone();
-                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, _| {
-                    if phase == DispatchPhase::Capture {
-                        held.set(false);
-                    }
-                });
+                let zoom = entity.clone();
+                super::track_drag(
+                    bounds,
+                    dragging.clone(),
+                    move |at, _, cx| {
+                        let _ = zoom.update(cx, |zoom, cx| zoom.at(at.x, bounds, cx));
+                    },
+                    |_| {},
+                    window,
+                );
             },
         )
         .size_full();

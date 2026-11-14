@@ -166,14 +166,13 @@ impl EmptyStateAction {
 impl RenderOnce for EmptyStateAction {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let hover = window.use_keyed_state(self.id.clone(), cx, |_, _| motion::Fade::default());
-        let (value, animating) = {
-            let fade = hover.read(cx);
-            (fade.value_with(motion::EASE_STANDARD), fade.animating())
-        };
-        if animating {
-            window.request_animation_frame();
-        }
+        let (value, set_hover) = motion::hover_fade(
+            self.id.clone(),
+            motion::EMPTY_ACTION_HOVER,
+            motion::EASE_STANDARD,
+            window,
+            cx,
+        );
         let mut button = div()
             .id(self.id)
             .occlude()
@@ -200,12 +199,7 @@ impl RenderOnce for EmptyStateAction {
         if self.disabled {
             return button.opacity(0.35);
         }
-        button = button.cursor_pointer().on_hover(move |hovered, _, cx| {
-            hover.update(cx, |fade, cx| {
-                fade.set(*hovered, motion::EMPTY_ACTION_HOVER);
-                cx.notify();
-            })
-        });
+        button = button.cursor_pointer().on_hover(set_hover);
         if let Some(handler) = self.on_click {
             button = button.on_click(handler);
         }

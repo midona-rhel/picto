@@ -40,7 +40,6 @@ pub mod sidebar_row;
 pub mod slider;
 mod small_button;
 pub mod status_badge;
-mod tabs;
 pub mod tag_token_input;
 pub mod text_input;
 mod toggle;
@@ -71,7 +70,6 @@ pub use sidebar_row::sidebar_row;
 pub use slider::slider;
 pub use small_button::small_button;
 pub use status_badge::status_badge;
-pub use tabs::tabs;
 pub use toggle::toggle;
 pub use tooltip::tip;
 pub use tracked::tracked;
@@ -110,6 +108,43 @@ pub fn shape_line(
 /// How wide one line of `text` is in `font` at `size`.
 pub fn text_width(text: &str, font: Font, size: f32, window: &Window) -> f32 {
     f32::from(shape_line(text.to_owned(), font, size, black(), window).width)
+}
+
+/// The press-then-drag gesture along a track at `bounds`, set up from a
+/// `canvas`'s paint: a left press on the track holds it, reports the point
+/// and goes no further; while held, every move anywhere in the window
+/// reports its point; the release lets go and, if it was held, calls
+/// `released`.
+pub fn track_drag(
+    bounds: Bounds<Pixels>,
+    held: std::rc::Rc<std::cell::Cell<bool>>,
+    on_point: impl Fn(Point<Pixels>, &mut Window, &mut App) + 'static,
+    released: impl Fn(&mut App) + 'static,
+    window: &mut Window,
+) {
+    let on_point = std::rc::Rc::new(on_point);
+    let (down, pressed) = (held.clone(), on_point.clone());
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+        if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && bounds.contains(&event.position)
+        {
+            down.set(true);
+            pressed(event.position, window, cx);
+            cx.stop_propagation();
+        }
+    });
+    let moving = held.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase == DispatchPhase::Capture && moving.get() {
+            on_point(event.position, window, cx);
+        }
+    });
+    window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Capture && held.replace(false) {
+            released(cx);
+        }
+    });
 }
 
 /// A titlebar strip that moves the window, as `data-window-drag-region` does
