@@ -7,7 +7,6 @@ use crate::imports::{self, plan::Destination};
 use crate::keymap::{ImportFiles, ImportFolder, PasteImport};
 use crate::theme;
 use gpui::*;
-use picto_library::query::ItemScope;
 use std::path::PathBuf;
 
 /// Which import a menu row or key asks for.
@@ -19,17 +18,6 @@ pub(crate) enum Import {
 }
 
 impl Shell {
-    /// The grid's destination, which an import from it goes to.
-    pub(super) fn grid_destination(&self, cx: &App) -> Destination {
-        let session = self.session.read(cx);
-        session
-            .nav
-            .get(session.displayed)
-            .map_or_else(Destination::default, |entry| {
-                Destination::for_scope(&entry.scope)
-            })
-    }
-
     /// Where files dropped now would go: nowhere while a viewer, Quick
     /// Look or a screen has the window, or in a media-matches destination.
     fn drop_destination(&self, cx: &App) -> Option<Destination> {
@@ -37,16 +25,13 @@ impl Shell {
         if session.viewer || session.screen().is_some() || self.quick_look.read(cx).is_open() {
             return None;
         }
-        let entry = session.nav.get(session.displayed)?;
-        if matches!(entry.scope, ItemScope::MediaMatches { .. }) {
-            return None;
-        }
-        Some(Destination::for_scope(&entry.scope))
+        let grid = self.grid_scope(cx);
+        grid.takes_drops().then(|| grid.import_destination())
     }
 
     /// Starts an import into the grid's destination.
     pub(crate) fn import(&mut self, kind: Import, window: &mut Window, cx: &mut Context<Self>) {
-        let destination = self.grid_destination(cx);
+        let destination = self.grid_scope(cx).import_destination();
         self.imports.update(cx, |imports, cx| match kind {
             Import::Files => imports.choose_files(destination, window, cx),
             Import::Folder => imports.choose_folder(destination, window, cx),
@@ -186,17 +171,7 @@ impl Shell {
             }),
         )
         .on_action(cx.listener(|this, _: &PasteImport, window, cx| {
-            let session = this.session.read(cx);
-            let pastes = session.nav.get(session.displayed).is_some_and(|entry| {
-                !matches!(
-                    entry.scope,
-                    ItemScope::Trash
-                        | ItemScope::SmartFolder { .. }
-                        | ItemScope::RecentlyViewed
-                        | ItemScope::MediaMatches { .. }
-                )
-            });
-            if pastes {
+            if this.grid_scope(cx).imports() {
                 this.import(Import::Paste, window, cx);
             } else {
                 cx.propagate();

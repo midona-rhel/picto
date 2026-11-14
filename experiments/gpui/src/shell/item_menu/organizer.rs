@@ -153,19 +153,13 @@ impl Organizer {
             notes: (!notes.is_empty()).then_some(notes),
             modified_at_ms: crate::now_ms(),
         };
-        let answer = self.session.update(cx, |session, cx| {
-            session.edit_reporting(
-                Report::announce("collections.organize"),
-                move |library| library.organize_into_collection(&request),
-                Reread::RESULTS,
-                cx,
-            )
-        });
-        cx.spawn(async move |this, cx| {
-            let Ok(result) = answer.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
+        crate::session::edit_then(
+            &self.session,
+            Report::announce("collections.organize"),
+            Reread::RESULTS,
+            move |library| library.organize_into_collection(&request),
+            cx,
+            |this, result, cx| {
                 match result {
                     // TODO: select the new group once the results hold it
                     // (`onComplete`), as production does.
@@ -176,9 +170,8 @@ impl Organizer {
                     }
                 }
                 cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
         cx.notify();
     }
 

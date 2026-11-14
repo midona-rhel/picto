@@ -111,9 +111,11 @@ impl SettingsWindow {
                             .child(row(
                                 theme,
                                 "Software updates",
-                                // TODO: check the release feed.
+                                // TODO: check the release feed; disabled until
+                                // then, as Check for Updates is.
                                 ui::action_button("about-check-updates", Look::Settings)
-                                    .label("Check Now"),
+                                    .label("Check Now")
+                                    .disabled(true),
                             ))
                             .child(separator(theme))
                             .child(row(theme, "License", value(theme, "MIT"))),
