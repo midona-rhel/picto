@@ -45,11 +45,30 @@ pub enum DragEvent {
     Moved,
     /// The button came up; whoever is under the pointer takes them.
     Dropped(ItemDrag),
+    /// The drag ended without a drop: it left the window and the system
+    /// carries the files on (`cancelDrag` after `startNativeDrag`).
+    Cancelled,
 }
+
+/// How long files dragged out of the window are not taken back as an import
+/// when they come over it again (`startNativeDrag`'s 3 s
+/// `internalDragOrigin`).
+pub const OUT_GUARD: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Drags {
     pub items: Option<ItemDrag>,
+    /// When the grid last handed its items to the system as files.
+    pub out_since: Option<std::time::Instant>,
+}
+
+impl Drags {
+    /// Whether files over the window are the grid's own, dragged out just
+    /// now (`isInternalDragOrigin`), which a drop must not import again.
+    pub fn dragging_out(&self) -> bool {
+        self.out_since
+            .is_some_and(|since| since.elapsed() < OUT_GUARD)
+    }
 }
 
 impl EventEmitter<DragEvent> for Drags {}
@@ -65,6 +84,15 @@ pub fn model(cx: &mut App) -> Entity<Drags> {
         cx.set_global(DragsGlobal(drags));
     }
     cx.global::<DragsGlobal>().0.clone()
+}
+
+/// Whether the pointer has left the window's viewport, where the system
+/// takes a drag over (`clientX <= 0 || … >= innerWidth`).
+pub fn left_window(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
+    position.x <= px(0.)
+        || position.y <= px(0.)
+        || position.x >= viewport.width
+        || position.y >= viewport.height
 }
 
 /// Whether the pointer has gone far enough from the press to drag.
@@ -137,8 +165,18 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
 
 #[cfg(test)]
 mod tests {
-    use super::past_threshold;
-    use gpui::{point, px};
+    use super::{left_window, past_threshold};
+    use gpui::{point, px, size};
+
+    #[test]
+    fn a_drag_leaves_the_window_at_its_edges() {
+        let viewport = size(px(1213.), px(865.));
+        assert!(!left_window(point(px(600.), px(400.)), viewport));
+        assert!(left_window(point(px(0.), px(400.)), viewport));
+        assert!(left_window(point(px(600.), px(-3.)), viewport));
+        assert!(left_window(point(px(1213.), px(400.)), viewport));
+        assert!(left_window(point(px(600.), px(900.)), viewport));
+    }
 
     #[test]
     fn a_press_drags_only_after_five_pixels() {

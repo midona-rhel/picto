@@ -165,6 +165,19 @@ struct Focused {
 /// The height per item the grid measured for a layout geometry (width,
 /// zoom, spacing, mode, text rows), which the scrollable height of a
 /// destination is estimated from.
+/// A file's thumbnail in a library's `blobs` folder, under its content
+/// hash, for work that runs away from the session.
+pub fn thumbnail_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
+    if hash.len() < 4 {
+        return PathBuf::new();
+    }
+    blobs
+        .join("t")
+        .join(&hash[..2])
+        .join(&hash[2..4])
+        .join(format!("{hash}.jpg"))
+}
+
 pub type Density = ((u32, u32, u32, crate::grid::layout::ViewMode, u32), f32);
 
 pub struct Session {
@@ -251,6 +264,12 @@ pub struct Session {
     /// the order. Edits address query-wide selections through the query
     /// (`target_for`), as production's do.
     pub selection: Selection,
+    /// The subfolder tiles selected in the grid (`folderNodeIds`), by node
+    /// id (`folder:5`). Selecting items clears them, and the other way round.
+    pub folder_selection: Vec<String>,
+    /// Items to select once the destination's results are read afresh: the
+    /// items a reorder drag put back, as production keeps them selected.
+    pub reselect: Option<Vec<RootId>>,
     /// The query the shown results were read with.
     ran: Option<RootQuery>,
     /// The selected item the inspector and viewer show: the one last chosen.
@@ -400,6 +419,8 @@ impl Session {
             prefs_scope: None,
             tile: 200.,
             selection: Selection::default(),
+            folder_selection: Vec::new(),
+            reselect: None,
             focus: None,
             anchor: None,
             details: None,
@@ -486,14 +507,7 @@ impl Session {
     }
 
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
-        if hash.len() < 4 {
-            return PathBuf::new();
-        }
-        self.blobs
-            .join("t")
-            .join(&hash[..2])
-            .join(&hash[2..4])
-            .join(format!("{hash}.jpg"))
+        thumbnail_in(&self.blobs, hash)
     }
 
     pub fn selected_item(&self) -> Option<&RootSummary> {
@@ -1300,6 +1314,18 @@ impl Session {
         self.restore_scroll = None;
         self.restore_window_top = None;
         self.forget_selection();
+        if let Some(ids) = self.reselect.take() {
+            let ordinals = self
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| ids.contains(&item.root_id))
+                .map(|(index, _)| self.start + index)
+                .collect::<std::collections::BTreeSet<_>>();
+            if !ordinals.is_empty() {
+                self.set_selection(ordinals, false, cx);
+            }
+        }
         crate::stats::results_opened(self.total);
         self.displayed = self.scope;
         if matches!(self.transition, Transition::Waiting) {
@@ -1709,6 +1735,7 @@ impl Session {
 
     fn forget_selection(&mut self) {
         self.selection = Selection::default();
+        self.folder_selection.clear();
         self.focus = None;
         self.anchor = None;
         self.member = 0;
@@ -1720,6 +1747,7 @@ impl Session {
     /// choosing the item already shown asks for nothing.
     fn focus_on(&mut self, ordinal: Option<usize>, cx: &mut Context<Self>) {
         self.demo = None;
+        self.folder_selection.clear();
         let showing = self.selected_details().map(|details| details.root.root_id);
         self.focus = ordinal.and_then(|ordinal| {
             Some(Focused {
@@ -1874,13 +1902,53 @@ impl Session {
         self.focus_on(focus, cx);
     }
 
+    /// Selects these subfolder tiles alone (`replace_folders`), or adds or
+    /// removes one when `toggle` (`toggle_folder`, a command-click, which
+    /// starts afresh from a selection of items). Items are deselected.
+    pub fn select_folders(&mut self, nodes: Vec<String>, toggle: bool, cx: &mut Context<Self>) {
+        let mut chosen = if toggle && self.selection.is_empty() {
+            std::mem::take(&mut self.folder_selection)
+        } else {
+            Vec::new()
+        };
+        if toggle {
+            for node in nodes {
+                match chosen.iter().position(|id| *id == node) {
+                    Some(at) => {
+                        chosen.remove(at);
+                    }
+                    None => chosen.push(node),
+                }
+            }
+        } else {
+            chosen = nodes;
+        }
+        self.selection = Selection::default();
+        self.anchor = None;
+        self.focus = None;
+        self.member = 0;
+        self.details = None;
+        self.demo = None;
+        self.folder_selection = chosen;
+        cx.emit(Change::Selection);
+    }
+
+    /// The one subfolder tile selected with no items, which the inspector
+    /// describes (`selectedSubfolderNodeIdAtom`).
+    pub fn selected_folder(&self) -> Option<&str> {
+        match self.folder_selection.as_slice() {
+            [node] if self.selection.is_empty() => Some(node),
+            _ => None,
+        }
+    }
+
     /// Whether the search field narrows the results (three characters or more).
     pub fn searching(&self) -> bool {
         backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        if !self.selection.is_empty() || self.focus.is_some() {
+        if !self.selection.is_empty() || self.focus.is_some() || !self.folder_selection.is_empty() {
             self.selection = Selection::default();
             self.anchor = None;
             self.focus_on(None, cx);

@@ -187,21 +187,7 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
     }
     entries.extend([
         menu::Entry::Separator,
-        menu::submenu(
-            "Sort Folders",
-            vec![
-                menu::item("sort-tree", "This Level A–Z").value("az").into(),
-                menu::item("sort-tree", "This Level Z–A").value("za").into(),
-                menu::item("sort-tree", "This Level and Descendants A–Z")
-                    .value("az-all")
-                    .into(),
-                menu::item("sort-tree", "This Level and Descendants Z–A")
-                    .value("za-all")
-                    .into(),
-            ],
-        )
-        .icon("menu-sort")
-        .into(),
+        sort_folders(),
         content_sort(),
         expand_row("Folder", node.expanded, node.has_children),
         expand_all_row("Folders", node.any_expanded, node.any_expandable),
@@ -217,6 +203,122 @@ fn folder_menu(node: NodeMenu, cx: &App) -> Vec<menu::Entry> {
             .into(),
     ]);
     entries
+}
+
+/// "Sort Folders": a folder's children, or its whole tree, by name.
+fn sort_folders() -> menu::Entry {
+    menu::submenu(
+        "Sort Folders",
+        vec![
+            menu::item("sort-tree", "This Level A–Z").value("az").into(),
+            menu::item("sort-tree", "This Level Z–A").value("za").into(),
+            menu::item("sort-tree", "This Level and Descendants A–Z")
+                .value("az-all")
+                .into(),
+            menu::item("sort-tree", "This Level and Descendants Z–A")
+                .value("za-all")
+                .into(),
+        ],
+    )
+    .icon("menu-sort")
+    .into()
+}
+
+/// `buildFolderContextMenu`: a subfolder tile's menu in the grid, the folder
+/// operations every surface but the sidebar shows.
+fn tile_menu(
+    quick: bool,
+    watched: bool,
+    color: Option<&str>,
+    picker: AnyView,
+    cx: &App,
+) -> Vec<menu::Entry> {
+    let mut entries = vec![
+        menu::item("open", "Open Folder")
+            .icon("menu-folder-open")
+            .into(),
+        menu::item("new-subfolder", "New Subfolder")
+            .icon("menu-new-subfolder")
+            .into(),
+        menu::Entry::Separator,
+        quick_access_row(quick),
+        menu::item("rename", "Rename").icon("menu-rename").into(),
+        menu::item("move-to", "Move to...")
+            .icon("menu-folder-open")
+            .into(),
+        menu::item("duplicate", "Duplicate")
+            .icon("menu-copy")
+            .into(),
+        menu::item("auto-tags", "Set Auto Tags...")
+            .icon("menu-auto-tags")
+            .into(),
+        menu::Entry::Separator,
+        menu::item("import-here", "Import Folder Here...")
+            .icon("menu-folder-plus")
+            .disabled(crate::imports::blocked(cx).is_some())
+            .into(),
+        menu::item("attach-watch", "Attach Watched Folder...")
+            .icon("menu-watch-folder")
+            .into(),
+    ];
+    if watched {
+        entries.push(
+            menu::item("remove-watch", "Remove Watched Folder")
+                .icon("menu-watch-folder")
+                .into(),
+        );
+    }
+    entries.extend([
+        menu::Entry::Separator,
+        sort_folders(),
+        content_sort(),
+        menu::Entry::Separator,
+        change_icon(picker),
+        ui::color_picker::menu_row("color", color).into(),
+        menu::Entry::Separator,
+        menu::item("export-as", "Export to Computer...")
+            .icon("menu-upload")
+            .into(),
+        menu::item("export-pack", "Export as Picto Pack...")
+            .icon("menu-upload")
+            .into(),
+        menu::Entry::Separator,
+        menu::item("delete", "Delete")
+            .icon("menu-trash")
+            .danger(true)
+            .into(),
+    ]);
+    entries
+}
+
+/// `buildBulkFolderContextMenu`: several subfolder tiles selected.
+fn tile_bulk_menu(count: usize, all_quick: bool) -> Vec<menu::Entry> {
+    vec![
+        if all_quick {
+            menu::item("quick-access-remove", "Remove from Quick Access")
+                .icon("menu-star-off")
+                .into()
+        } else {
+            menu::item("quick-access-add", "Add to Quick Access")
+                .icon("menu-star")
+                .into()
+        },
+        menu::item("duplicate", format!("Duplicate {count} Folders"))
+            .icon("menu-copy")
+            .into(),
+        menu::item("move-to", "Move to...")
+            .icon("menu-folder-open")
+            .into(),
+        menu::item("auto-tags", "Set Auto Tags...")
+            .icon("menu-auto-tags")
+            .into(),
+        content_sort(),
+        menu::Entry::Separator,
+        menu::item("delete", format!("Delete {count} Folders"))
+            .icon("menu-trash")
+            .danger(true)
+            .into(),
+    ]
 }
 
 /// A smart folder's "Move to..." submenu: Top Level, then every smart folder
@@ -585,6 +687,52 @@ impl Sidebar {
             Section::SmartFolders => smart_folder_menu(entry.group, details),
         };
         self.open_menu(Target::Node(node), menu, position, window, cx);
+    }
+
+    /// A subfolder tile's menu (`onFolderContextMenu`), or the menu of the
+    /// tiles selected with it. The grid that asked does its renames.
+    pub fn tile_menu(
+        &mut self,
+        node: String,
+        selected: Vec<String>,
+        position: Point<Pixels>,
+        grid: WeakEntity<crate::grid::GridView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tile_grid = Some(grid);
+        let quick = self.quick_access(cx);
+        let folders = if selected.contains(&node) {
+            selected
+        } else {
+            vec![node.clone()]
+        };
+        if folders.len() > 1 {
+            let all_quick = folders.iter().all(|id| quick.contains(id));
+            let entries = tile_bulk_menu(folders.len(), all_quick);
+            self.open_menu(Target::Tiles(folders), entries, position, window, cx);
+            return;
+        }
+        let Some(entry) = self
+            .session
+            .read(cx)
+            .nav
+            .iter()
+            .find(|entry| entry.id() == node)
+            .cloned()
+        else {
+            return;
+        };
+        let picker = self.icon_picker(vec![node.clone()], entry.icon.clone(), cx);
+        let color = entry.tint.map(|tint| format!("#{tint:06X}"));
+        let entries = tile_menu(
+            quick.contains(&node),
+            entry.watched,
+            color.as_deref(),
+            picker,
+            cx,
+        );
+        self.open_menu(Target::Tile(node), entries, position, window, cx);
     }
 
     /// The section header's menu, and the Smart Folders add button's.

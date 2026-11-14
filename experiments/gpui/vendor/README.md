@@ -43,6 +43,11 @@ does not need: lens, dispersion, tint and rim light).
   not show (or blur in) its own shadow, as CSS never draws a `box-shadow`
   under its element. `Window::is_dirty` (test support only), so the
   off-screen checks can draw only the frames a real window would.
+  `Window::start_platform_drag`, which hands files to the platform's native
+  drag session (the published `start_external_drag` of the macOS and Wayland
+  windows) for a view that follows the pointer itself: the grid's item drag
+  leaving the window. GPUI otherwise does this only for drags started with
+  `on_drag` and `external_drag_payload`.
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
@@ -563,6 +568,23 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
      /// be called after the element's background so the shadow layers on top of the fill.
      /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
+@@ -6037,6 +6137,16 @@
+         }
+     }
+ 
++    /// Hands `payload` to the platform as a native drag session continuing
++    /// the left-button drag in progress, for a view that follows the pointer
++    /// itself rather than through [`Interactivity::on_drag`] (whose drags
++    /// are handed over on their own when they leave the window). Returns
++    /// whether the platform took it; one without native drags declines.
++    pub fn start_platform_drag(&mut self, payload: &crate::ExternalDragPayload) -> bool {
++        self.platform_window.can_start_external_drag()
++            && self.platform_window.start_external_drag(payload)
++    }
++
+     fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
+         let PlatformInput::MouseMove(mouse_move) = event else {
+             return;
 diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/src/metal_renderer.rs
 --- a/gpui-pre-apple/src/metal_renderer.rs	2006-07-24 03:21:28
 +++ b/gpui-pre-apple/src/metal_renderer.rs	2026-11-13 20:30:54

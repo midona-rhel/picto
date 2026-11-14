@@ -300,6 +300,10 @@ impl Inspector {
                         }
                         this.sync_item(false, cx);
                         this.selection_changed(cx);
+                        // A subfolder tile chosen or let go in the grid.
+                        if !held {
+                            this.refresh_scope(cx);
+                        }
                         cx.notify();
                     }
                     Change::Details => {
@@ -313,6 +317,9 @@ impl Inspector {
                         cx.notify();
                     }
                     Change::Navigation if !held => {
+                        // A folder changed: what a selected subfolder holds
+                        // is read again.
+                        this.forget_holdings(cx);
                         this.refresh_scope(cx);
                         cx.notify();
                     }
