@@ -478,6 +478,10 @@ impl GroupReader {
                 let mut surface = MediaSurface::default();
                 let mut options = super::options(cx, false, true);
                 options.member = true;
+                // `GroupImage` and `GroupDeferredRenderer` follow neither
+                // preview setting: no checkerboard, smooth scaling.
+                options.transparency_grid = false;
+                options.pixelated = false;
                 surface.set_options(options, cx);
                 media.open(&mut surface, cx);
                 surface

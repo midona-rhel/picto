@@ -82,9 +82,14 @@ pub fn native_video(mime: &str) -> bool {
 /// Opens a video with the platform's player when it takes the container,
 /// else through `ffmpeg`.
 pub fn open_video(path: &Path, mime: &str) -> Result<Box<dyn Backend>, String> {
+    // AVFoundation can refuse at once (off the main thread, as in the
+    // off-screen checks); `ffmpeg` then plays the file, as it does when
+    // AVFoundation turns the file down later.
     #[cfg(target_os = "macos")]
-    if native_video(mime) {
-        return Ok(Box::new(super::avf::AvPlayer::open(path)?));
+    if native_video(mime)
+        && let Ok(player) = super::avf::AvPlayer::open(path)
+    {
+        return Ok(Box::new(player));
     }
     let _ = mime;
     open_video_fallback(path)

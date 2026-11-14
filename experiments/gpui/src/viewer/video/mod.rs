@@ -46,9 +46,166 @@ actions!(
         ToggleLoop,
         RateIncrease,
         RateDecrease,
-        RateReset
+        RateReset,
+        ToggleFullscreen,
+        ExitFullscreen
     ]
 );
+
+/// The key context of the player while it has its window to itself.
+const FULLSCREEN_CONTEXT: &str = "PlayerFullscreen";
+
+/// Escape leaves the player's fullscreen, as the browser's own key does,
+/// before anything else in the window sees it.
+pub fn bind(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        ExitFullscreen,
+        Some(FULLSCREEN_CONTEXT),
+    )]);
+}
+
+/// `requestFullscreen` on the player's element: the window goes full screen
+/// and shows the player alone, its controls and keys still its own.
+struct Fullscreen {
+    window: AnyWindowHandle,
+    player: WeakEntity<VideoPlayer>,
+    focus: FocusHandle,
+    /// What had the keyboard before, to give it back.
+    return_focus: Option<FocusHandle>,
+    /// The window was already full screen (View > Enter Full Screen), and
+    /// stays so afterwards.
+    was_full_screen: bool,
+    /// The window has been seen full screen since, so its leaving full
+    /// screen by other means (the green button) ends this too.
+    seen_full_screen: bool,
+    /// The player left its host (another item opened): this ends at the
+    /// next frame, as removing the fullscreen element does.
+    released: bool,
+}
+
+#[derive(Default)]
+struct FullscreenState(Option<Fullscreen>);
+
+impl Global for FullscreenState {}
+
+/// Whether `player` is the one shown over its whole window.
+pub fn is_fullscreen(player: &Entity<VideoPlayer>, cx: &App) -> bool {
+    cx.try_global::<FullscreenState>()
+        .and_then(|state| state.0.as_ref())
+        .is_some_and(|fullscreen| !fullscreen.released && fullscreen.player == player.downgrade())
+}
+
+/// The player's fullscreen button, F and a double-click: shows a video's
+/// player alone over its window, or goes back. Audio has no fullscreen.
+pub fn toggle_fullscreen(player: &Entity<VideoPlayer>, window: &mut Window, cx: &mut App) {
+    if is_fullscreen(player, cx) {
+        exit_fullscreen(window, cx);
+    } else {
+        enter_fullscreen(player.downgrade(), window, cx);
+    }
+}
+
+fn enter_fullscreen(player: WeakEntity<VideoPlayer>, window: &mut Window, cx: &mut App) {
+    // Another player still holding a window gives it back first.
+    if cx
+        .try_global::<FullscreenState>()
+        .is_some_and(|state| state.0.is_some())
+    {
+        exit_fullscreen(window, cx);
+    }
+    let was_full_screen = window.is_fullscreen();
+    let focus = cx.focus_handle();
+    let return_focus = window.focused(cx);
+    cx.set_global(FullscreenState(Some(Fullscreen {
+        window: window.window_handle(),
+        player,
+        focus: focus.clone(),
+        return_focus,
+        was_full_screen,
+        seen_full_screen: was_full_screen,
+        released: false,
+    })));
+    if !was_full_screen {
+        window.toggle_fullscreen();
+    }
+    window.focus(&focus, cx);
+    window.refresh();
+}
+
+/// Leaves the player's fullscreen: the window leaves full screen unless it
+/// was full screen before, and the keyboard goes back where it was.
+pub fn exit_fullscreen(window: &mut Window, cx: &mut App) {
+    let Some(fullscreen) = cx.default_global::<FullscreenState>().0.take() else {
+        return;
+    };
+    let restore = move |window: &mut Window, cx: &mut App| {
+        if !fullscreen.was_full_screen && window.is_fullscreen() {
+            window.toggle_fullscreen();
+        }
+        if let Some(focus) = &fullscreen.return_focus {
+            window.focus(focus, cx);
+        }
+        window.refresh();
+    };
+    // The window being drawn or handling input cannot be updated from
+    // inside itself.
+    if window.window_handle() == fullscreen.window {
+        restore(window, cx);
+    } else {
+        let handle = fullscreen.window;
+        let _ = handle.update(cx, |_, window, cx| restore(window, cx));
+    }
+}
+
+/// Ends `player`'s fullscreen at the next frame: its host let it go.
+pub fn release_fullscreen(player: &Entity<VideoPlayer>, cx: &mut App) {
+    if let Some(fullscreen) = cx.default_global::<FullscreenState>().0.as_mut()
+        && fullscreen.player == player.downgrade()
+    {
+        fullscreen.released = true;
+    }
+}
+
+/// The player over the whole of `window` while it is fullscreen there: on
+/// black, as the fullscreen element shows. Hosts put it last in their root.
+pub fn fullscreen_layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    let handle = window.window_handle();
+    let full_screen = window.is_fullscreen();
+    let state = cx.default_global::<FullscreenState>();
+    let fullscreen = state
+        .0
+        .as_mut()
+        .filter(|fullscreen| fullscreen.window == handle)?;
+    fullscreen.seen_full_screen |= full_screen;
+    let player = fullscreen.player.upgrade();
+    let ended =
+        fullscreen.released || player.is_none() || (fullscreen.seen_full_screen && !full_screen);
+    if ended {
+        window.defer(cx, exit_fullscreen);
+        return None;
+    }
+    let player = player?;
+    let focus = fullscreen.focus.clone();
+    let weak = player.downgrade();
+    let player_for_exit = weak.clone();
+    let layer = div()
+        .id("media-fullscreen-layer")
+        .absolute()
+        .inset_0()
+        .occlude()
+        .bg(rgba(theme::MEDIA_BACKGROUND))
+        .track_focus(&focus)
+        .key_context(key_context(FULLSCREEN_CONTEXT, true))
+        .on_action(move |_: &ExitFullscreen, window, cx| {
+            if let Some(player) = player_for_exit.upgrade() {
+                player.update(cx, |player, cx| player.reveal(cx));
+            }
+            exit_fullscreen(window, cx)
+        })
+        .child(player);
+    Some(on_actions(layer, move |_| weak.upgrade()).into_any_element())
+}
 
 /// Whether a media type plays in this player, and as what.
 pub fn kind_of(mime: &str) -> Option<Kind> {
@@ -116,7 +273,20 @@ pub fn on_actions<E: InteractiveElement>(
     let element = forward::<RateDecrease, _>(element, player.clone(), |p, _| {
         p.set_rate(model::cycle_rate(p.playback.rate, -1))
     });
-    forward::<RateReset, _>(element, player, |p, _| p.set_rate(1.))
+    let element = forward::<RateReset, _>(element, player.clone(), |p, _| p.set_rate(1.));
+    element.on_action(move |_: &ToggleFullscreen, window, cx| {
+        let Some(player) = player(cx) else {
+            return;
+        };
+        if player.read(cx).kind == Kind::Audio {
+            // The player does not take F for audio; the viewer's own
+            // binding of the key gets it.
+            cx.propagate();
+            return;
+        }
+        player.update(cx, |player, cx| player.reveal(cx));
+        toggle_fullscreen(&player, window, cx);
+    })
 }
 
 /// `reportPlaybackFailure`: one diagnostic line in production's shape.
@@ -431,15 +601,6 @@ impl VideoPlayer {
         if let Some(backend) = &mut self.backend {
             backend.set_rate(rate);
         }
-    }
-
-    fn toggle_fullscreen(&mut self) {
-        if self.kind == Kind::Audio {
-            return;
-        }
-        // TODO: fullscreen the player alone (`requestFullscreen` on the
-        // player's element): the shell has to give the pane the whole
-        // window and the window go full screen.
     }
 
     /// `VolumeHUD`: shown for 800 ms after a volume key.
@@ -911,7 +1072,10 @@ impl VideoPlayer {
                     18.,
                     ui::tip("Fullscreen").shortcut("video.fullscreen", cx),
                 )
-                .on_click(cx.listener(|this, _, _, _| this.toggle_fullscreen())),
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.reveal(cx);
+                    toggle_fullscreen(&cx.entity(), window, cx);
+                })),
             );
         }
         controls::controls_bar(shown, visible)
@@ -951,7 +1115,9 @@ impl VideoPlayer {
                         .child(
                             div()
                                 .font_family(theme::FONT_MONO)
-                                .text(theme::TEXT_XL)
+                                .text_size(px(theme::TEXT_XL))
+                                // The player's inherited `line-height`.
+                                .line_height(px(theme::TEXT_XL * theme::LINE_HEIGHT_INHERITED))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(format!("{}%", (effective * 100.).round() as i32)),
                         ),
@@ -1054,9 +1220,14 @@ impl Render for VideoPlayer {
             })
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
             .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.reveal(cx)))
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.toggle_play(cx);
                 this.reveal(cx);
+                // `onDoubleClick`: the second press of a double-click also
+                // fullscreens a video (both presses have toggled playing).
+                if video && event.click_count() == 2 {
+                    toggle_fullscreen(&cx.entity(), window, cx);
+                }
             }));
         if video {
             root = root.cursor_pointer().children(self.picture());

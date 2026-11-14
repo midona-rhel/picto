@@ -1108,6 +1108,8 @@ impl Render for Shell {
         root = root.child(tag_picker).child(folder_picker);
         // The notifications, over every layer (`--layer-notification`).
         root = root.child(self.notifications.clone());
+        // A video player that has the window to itself, over everything.
+        root = root.children(crate::viewer::video::fullscreen_layer(window, cx));
         // `.shellMac::after`: the window's rim, over everything.
         root = root.child(ui::window_chrome::rim(cx));
         // The frame meter, when debugging: last, so that it ends the frame.

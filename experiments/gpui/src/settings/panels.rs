@@ -390,8 +390,6 @@ impl SettingsWindow {
         let model = &self.model;
         let draft = &model.read(cx).draft;
         let app = &draft.app;
-        // TODO: "Pixelated" image scaling: the viewer samples images linearly
-        // only (see `viewer::options`). The transparency grid is applied.
         vec![
             block()
                 .child(

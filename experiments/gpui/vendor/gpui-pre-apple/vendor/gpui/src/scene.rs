@@ -748,7 +748,10 @@ impl From<SubpixelSprite> for Primitive {
 #[expect(missing_docs)]
 pub struct PolychromeSprite {
     pub order: DrawOrder,
-    pub pad: u32,
+    /// Sampled nearest-neighbour (CSS `image-rendering: pixelated`) rather
+    /// than linearly. Takes the place of the struct's former padding word,
+    /// so the layout the shaders read is unchanged.
+    pub nearest: PaddedBool32,
     pub tile: AtlasTile,
     pub grayscale: PaddedBool32,
     pub opacity: f32,

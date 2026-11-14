@@ -1090,7 +1090,7 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   3×), loop, the volume slider over the mute button (shown on hover, gone
   300 ms after), and the volume display the arrow keys bring up for 800 ms.
   A click on the picture plays or pauses. The Video shortcuts of the
-  registry (K, J, L, ↑, ↓, M, O, ], [ and `\`, or their EU preset and edited
+  registry (K, J, L, ↑, ↓, M, O, ], [, `\` and F, or their EU preset and edited
   keys) work while the media view, Quick Look or a detail window shows the
   player, as `keymap::Scope::Media`. As `MediaView` has it, video starts with the
   Preview settings' autoplay and loop and muted, audio plays at once, loops
@@ -1228,8 +1228,10 @@ element (`shell/rails.rs`).
   row's sticky position and the 60 ms row highlight transitions.
 - Settings: only the settings listed under Implemented change the app; the
   others change the settings model and are saved, with a `TODO` where they
-  belong: language and image scaling ("Pixelated" needs nearest-neighbour
-  sampling in the vendored renderers). Zoom Level is saved and not applied,
+  belong: language. Image scaling "Pixelated" draws the viewer's, Quick
+  Look's and the detail window's images nearest-neighbour (not a
+  collection's members or the navigator, as in production; see
+  `vendor/README.md`). Zoom Level is saved and not applied,
   as in production. The grid's
   mouse wheel (scroll or zoom) and the transparency grid are applied.
   Update checks, cloud sync, pause, snapshots, restore points and retention
@@ -1336,9 +1338,12 @@ element (`shell/rails.rs`).
   its page footer. Not used with a pointer yet: the other document viewers,
   the font viewer and Flash's controls; hover states, tooltips, scrolling,
   the volume drag and the controls' fade are unverified.
-- Media player: Fullscreen (the button, F and production's double-click)
-  is drawn with its tooltip but does nothing yet (`TODO`), since the shell
-  cannot yet give the pane the whole window. The rate menu is production's
+- Media player: Fullscreen (the button, F and a double-click on the
+  picture) shows the video's player alone over its window, which goes full
+  screen through GPUI's window API (all platforms); Escape, F, the button or
+  a double-click go back, as does leaving full screen another way or the
+  item closing. A window already full screen stays so. Off-screen pictures
+  only: the macOS full-screen transition itself has not been seen. The rate menu is production's
   own small black list (`.rateMenu`), not the shared context menu. The
   frame steps exist as actions without keys, as in production. The volume display fades in but cannot grow
   from 90%. The visualizer's reflection blurs the spectrum's bars (drawn as
@@ -1448,7 +1453,7 @@ element (`shell/rails.rs`).
 - Shortcuts not performed yet, bound to nothing and listed with their
   reasons in `keymap::NOT_YET`: Add to Last Folder, Auto-Tag, Copy Tags
   and Paste Tags, the layout and tile-label keys,
-  Toggle Logs and the player's fullscreen key; production's deferred ids
+  Toggle Logs; production's deferred ids
   are not bound either. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
