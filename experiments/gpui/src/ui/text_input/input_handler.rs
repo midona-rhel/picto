@@ -44,6 +44,10 @@ impl EntityInputHandler for TextInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        // A password field's text is not handed to the system.
+        if self.is_masked() {
+            return None;
+        }
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
         Some(self.content[range].to_string())
@@ -154,13 +158,14 @@ impl EntityInputHandler for TextInput {
             ));
         }
         let last_layout = self.last_layout.as_ref()?;
+        let (start, end) = (self.drawn_offset(range.start), self.drawn_offset(range.end));
         Some(Bounds::from_corners(
             point(
-                bounds.left() + last_layout.x_for_index(range.start) - self.scroll,
+                bounds.left() + last_layout.x_for_index(start) - self.scroll,
                 bounds.top(),
             ),
             point(
-                bounds.left() + last_layout.x_for_index(range.end) - self.scroll,
+                bounds.left() + last_layout.x_for_index(end) - self.scroll,
                 bounds.bottom(),
             ),
         ))
@@ -183,7 +188,8 @@ impl EntityInputHandler for TextInput {
         // index inside the content counts.
         let utf8_index = last_layout
             .index_for_x(point.x - bounds.left() + self.scroll)
-            .filter(|index| *index <= self.content.len())?;
+            .filter(|index| *index <= self.drawn().len())
+            .map(|index| self.content_offset(index))?;
         Some(self.offset_to_utf16(utf8_index))
     }
 }

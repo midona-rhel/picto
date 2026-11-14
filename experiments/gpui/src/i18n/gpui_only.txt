@@ -129,3 +129,4 @@ Sign in with your E-Hentai account. Picto verifies ExHentai access before saving
 Waiting for the site…
 Sync now, Pause and Create snapshot are not available in this version.
 Recovery snapshots are not listed in this version.
+Login saved for this session; it is not kept after the app quits.

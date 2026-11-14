@@ -32,15 +32,15 @@ pub enum Effect {
     /// [`Machine::completed`].
     Complete(String),
     /// Saves the credential through `auth.credentials.set` and reports
-    /// [`Machine::persisted`].
-    Persist(Credential),
-    /// Closes the window, discarding its storage when `clear_storage`.
-    CloseWindow {
-        clear_storage: bool,
-    },
-    /// Opens OnlyFans in a browser of the user's outside the app and
-    /// reports [`Machine::external_launched`].
-    LaunchExternal,
+    /// [`Machine::persisted`] with the session it was asked for.
+    Persist { credential: Credential, session: u64 },
+    /// Closes the window. Its storage goes with it: every sign-in window
+    /// has storage of its own.
+    CloseWindow,
+    /// Opens OnlyFans in a browser of the user's outside the app, reports
+    /// [`Machine::external_launched`], and then [`Machine::external_finished`]
+    /// with the session it was asked for.
+    LaunchExternal { session: u64 },
     /// Ends that browser's login.
     CloseExternal,
 }
@@ -56,6 +56,10 @@ pub struct Machine {
     completed: bool,
     /// What the Accounts window says once the credential is saved.
     pending_message: String,
+    /// Counts sessions: each start, cancel and pasted session is a new
+    /// one, and a late answer for an earlier one changes nothing
+    /// (production's `externalAuth !== session`).
+    session: u64,
 }
 
 impl Default for Machine {
@@ -75,6 +79,7 @@ impl Machine {
             finishing: false,
             completed: false,
             pending_message: String::new(),
+            session: 0,
         }
     }
 
@@ -115,7 +120,9 @@ impl Machine {
                 current_url: site.login_url.clone(),
                 message: Some("Opening OnlyFans in an external browser…".into()),
             });
-            effects.push(Effect::LaunchExternal);
+            effects.push(Effect::LaunchExternal {
+                session: self.session,
+            });
             return Ok(effects);
         }
         let size = site.window;
@@ -192,6 +199,31 @@ impl Machine {
         }
         self.patch(Some(Status::Active), None, Some(url.to_owned()));
         self.inspect()
+    }
+
+    /// `did-fail-load` for the main frame: the window is shown, and the
+    /// Accounts window told why. Nothing is saved; the next look at the page
+    /// says what it shows, as production's does.
+    pub fn load_failed(&mut self, url: &str, description: &str) -> Vec<Effect> {
+        let Some(adapter) = self.adapter.clone().filter(|_| self.window_open) else {
+            return Vec::new();
+        };
+        let why = if description.trim().is_empty() {
+            "error"
+        } else {
+            description.trim()
+        };
+        let url = if url.is_empty() {
+            self.state.current_url.clone()
+        } else {
+            Some(url.to_owned())
+        };
+        self.patch(
+            Some(Status::Error),
+            Some(format!("{} could not load ({why}).", adapter.site().label)),
+            url,
+        );
+        vec![Effect::Show]
     }
 
     /// `page-title-updated`.
@@ -299,20 +331,26 @@ impl Machine {
             None,
         );
         match outcome.credential {
-            Some(credential) if !outcome.already_persisted => vec![Effect::Persist(credential)],
-            _ => self.persisted(Ok(())),
+            Some(credential) if !outcome.already_persisted => vec![Effect::Persist {
+                credential,
+                session: self.session,
+            }],
+            _ => self.persisted(self.session, Ok(())),
         }
     }
 
     /// Whether `auth.credentials.set` saved the credential.
-    pub fn persisted(&mut self, saved: Result<(), String>) -> Vec<Effect> {
+    pub fn persisted(&mut self, session: u64, saved: Result<(), String>) -> Vec<Effect> {
+        if session != self.session {
+            return Vec::new();
+        }
         self.finishing = false;
         match saved {
             Ok(()) => {
                 self.completed = true;
                 let message = std::mem::take(&mut self.pending_message);
                 self.patch(Some(Status::Completed), Some(message), None);
-                self.close_effects(true)
+                self.close_effects()
             }
             Err(error) => {
                 self.patch(Some(Status::Error), Some(error), None);
@@ -354,8 +392,12 @@ impl Machine {
     }
 
     /// What the outside browser's login captured, or why it ended.
-    pub fn external_finished(&mut self, credential: Result<Credential, String>) -> Vec<Effect> {
-        if !self.external || self.completed {
+    pub fn external_finished(
+        &mut self,
+        session: u64,
+        credential: Result<Credential, String>,
+    ) -> Vec<Effect> {
+        if session != self.session || !self.external || self.completed {
             return Vec::new();
         }
         match credential {
@@ -371,13 +413,18 @@ impl Machine {
         }
     }
 
-    /// `saveManualOnlyFansCredential`: a session the user pasted.
+    /// `saveManualOnlyFansCredential`: a session the user pasted. What was
+    /// under way is cancelled first, as production's does, so its effects
+    /// are handed back also when the pasted session is refused.
     pub fn save_manual_onlyfans(
         &mut self,
         input: &super::onlyfans::ManualInput,
-    ) -> Result<Vec<Effect>, String> {
+    ) -> (Vec<Effect>, Result<(), String>) {
         let mut effects = self.cancel();
-        let credential = super::onlyfans::manual_credential(input)?;
+        let credential = match super::onlyfans::manual_credential(input) {
+            Ok(credential) => credential,
+            Err(error) => return (effects, Err(error)),
+        };
         self.completed = false;
         self.finishing = false;
         self.emit(AuthState {
@@ -392,12 +439,13 @@ impl Machine {
             message: Some("OnlyFans session saved.".into()),
             ..Outcome::default()
         }));
-        Ok(effects)
+        (effects, Ok(()))
     }
 
     /// `cancelAuthSession`: closes whatever is open and forgets it.
     pub fn cancel(&mut self) -> Vec<Effect> {
-        let effects = self.close_effects(false);
+        let effects = self.close_effects();
+        self.session += 1;
         self.completed = false;
         self.finishing = false;
         self.emit(AuthState::idle());
@@ -405,7 +453,7 @@ impl Machine {
     }
 
     /// `closePopup`.
-    fn close_effects(&mut self, clear_storage: bool) -> Vec<Effect> {
+    fn close_effects(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
         if self.external {
             self.external = false;
@@ -413,7 +461,7 @@ impl Machine {
         }
         if self.window_open {
             self.window_open = false;
-            effects.push(Effect::CloseWindow { clear_storage });
+            effects.push(Effect::CloseWindow);
         }
         self.adapter = None;
         self.inspecting = false;

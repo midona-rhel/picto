@@ -68,6 +68,7 @@ pub struct Select {
     /// known by the choice it shows.
     name: Option<SharedString>,
     on_change: Option<ChangeHandler>,
+    disabled: bool,
 }
 
 pub fn select(
@@ -82,6 +83,7 @@ pub fn select(
         width: None,
         name: None,
         on_change: None,
+        disabled: false,
     }
 }
 
@@ -100,6 +102,12 @@ impl Select {
         handler: impl Fn(&'static str, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_change = Some(Box::new(handler));
+        self
+    }
+    /// A disabled select (`<select disabled>`): faded to 35%, it takes no
+    /// pointer or keys, and a menu it had open closes.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 }
@@ -263,7 +271,6 @@ impl RenderOnce for Select {
             .text(theme::TEXT_MD)
             .line_height(px(24.))
             .whitespace_nowrap()
-            .cursor_pointer()
             .children(glyph(
                 current.and_then(|at| self.choices[at].icon),
                 theme.text(),
@@ -298,14 +305,6 @@ impl RenderOnce for Select {
                 )
                 .absolute()
                 .inset_0()
-            })
-            .on_click(move |_, _, cx| {
-                cx.stop_propagation();
-                toggle_state.update(cx, |state, cx| {
-                    state.open = !state.open;
-                    state.highlighted = current;
-                    cx.notify();
-                });
             });
         if let Some(width) = self.width {
             button = button.w(px(width));
@@ -313,6 +312,25 @@ impl RenderOnce for Select {
         if let Some(name) = self.name.clone() {
             button = button.aria_label(name);
         }
+        if self.disabled {
+            if open {
+                state.update(cx, |state, cx| {
+                    state.open = false;
+                    cx.notify();
+                });
+            }
+            return div()
+                .flex()
+                .child(button.aria_disabled(true).opacity(0.35));
+        }
+        button = button.cursor_pointer().on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            toggle_state.update(cx, |state, cx| {
+                state.open = !state.open;
+                state.highlighted = current;
+                cx.notify();
+            });
+        });
         let handler = self.on_change.map(Rc::new);
         button = keys(
             button,

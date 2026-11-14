@@ -49,6 +49,15 @@ pub enum Event {
     Callback(String),
     /// A page asked for a new window; it opens in this one instead.
     OpenHere(String),
+    /// The window's own page could not be loaded (`did-fail-load` for the
+    /// main frame): the address and the system's description of why. A
+    /// load stopped by a newer one, or refused by the window, is not one.
+    Failed { url: String, description: String },
+    /// The web view could not be made after its window opened (no
+    /// WebView2 Runtime); the window is of no use and is closed. On Linux
+    /// the web view is made with its window, and `open` says so instead.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Unavailable(String),
     /// The user closed the window.
     Closed,
 }
@@ -89,11 +98,7 @@ impl LoginWindow {
     }
 
     pub fn load(&self, url: &str) {
-        self.inner.with_view(|view| {
-            if let Err(error) = view.load_url(url) {
-                eprintln!("picto: the sign-in window could not open a page: {error}");
-            }
-        });
+        self.inner.load(url);
     }
 
     /// The page's address now.
@@ -155,6 +160,49 @@ impl LoginWindow {
     pub fn close(self, cx: &mut App) {
         self.inner.close(cx);
     }
+
+    /// Asks the window to close as its close button does, for the checks
+    /// (`logins::check`).
+    #[cfg(debug_assertions)]
+    pub fn close_as_user(&self, cx: &mut App) {
+        self.inner.close_as_user(cx);
+    }
+
+    /// Saves a PNG picture of the window as it is on the screen, for the
+    /// checks.
+    #[cfg(debug_assertions)]
+    pub fn capture(&self, path: &std::path::Path, cx: &mut App) -> Result<(), String> {
+        self.inner.capture(path, cx)
+    }
+
+    /// How many sign-in windows the system has open now, for the checks.
+    #[cfg(debug_assertions)]
+    pub fn open_count() -> usize {
+        OPEN.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The sign-in windows the system has open.
+static OPEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A platform window was made.
+fn opened() {
+    OPEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// A platform window went.
+fn closed() {
+    let _ = OPEN.fetch_update(
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+        |open| open.checked_sub(1),
+    );
+}
+
+fn load_into(view: &wry::WebView, url: &str) {
+    if let Err(error) = view.load_url(url) {
+        eprintln!("picto: the sign-in window could not open a page: {error}");
+    }
 }
 
 /// The web view every platform opens: the login page, nothing allowed
@@ -169,7 +217,10 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         .with_incognito(true)
         .with_visible(true)
         .with_background_color((255, 255, 255, 255))
-        .with_clipboard(true)
+        // No page script reads or writes the clipboard (WebKitGTK's
+        // `javascript-can-access-clipboard`); the user's own copy and
+        // paste in the page's fields are the web view's editing.
+        .with_clipboard(false)
         .with_navigation_handler(move |url| {
             if intercept(&url) {
                 let _ = events.unbounded_send(Event::Callback(url));

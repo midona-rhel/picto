@@ -1,13 +1,15 @@
 //! Windows: the sign-in web view's cookies, from WebView2's cookie manager,
 //! handed back when it answers through the thread's messages rather than
-//! by running them until it does (which would re-enter GPUI); and the
-//! removal of the web view's user data folder once its browser process has
-//! let go of it.
+//! by running them until it does (which would re-enter GPUI); its
+//! main-frame load failures, from a `NavigationCompleted` handler of its
+//! own beside `wry`'s; and the removal of the web view's user data folder
+//! once its browser process has let go of it.
+use super::Event;
 use crate::logins::cookies::Cookie;
-use futures::channel::oneshot;
+use futures::channel::{mpsc, oneshot};
 use std::cell::RefCell;
-use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2_2, ICoreWebView2Cookie};
-use webview2_com::{GetCookiesCompletedHandler, take_pwstr};
+use webview2_com::Microsoft::Web::WebView2::Win32::*;
+use webview2_com::{GetCookiesCompletedHandler, NavigationCompletedEventHandler, take_pwstr};
 use windows::core::{BOOL, HSTRING, Interface as _, PWSTR};
 use wry::WebViewExtWindows as _;
 
@@ -97,4 +99,213 @@ pub fn remove_later(data: tempfile::TempDir) {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     });
+}
+
+/// Reports a main-frame load that did not complete as [`Event::Failed`]:
+/// one with no answer from the server (a page the server answered, a 404,
+/// loads as Electron loads it), and not one stopped by a newer one or
+/// refused by the window (`OPERATION_CANCELED`, Electron's `ERR_ABORTED`).
+pub fn watch_failures(view: &wry::WebView, events: mpsc::UnboundedSender<Event>) {
+    let handler = NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
+        let Some(args) = args else {
+            return Ok(());
+        };
+        let mut success = BOOL::default();
+        let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
+        // SAFETY: the arguments are WebView2's, valid for the call; each
+        // getter writes a BOOL or a status.
+        unsafe {
+            args.IsSuccess(&mut success)?;
+            args.WebErrorStatus(&mut status)?;
+        }
+        if success.as_bool() || status == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED {
+            return Ok(());
+        }
+        if let Ok(args) = args.cast::<ICoreWebView2NavigationCompletedEventArgs2>() {
+            let mut code = 0;
+            // SAFETY: as above; the getter writes the HTTP status, 0 when
+            // there was no answer.
+            if unsafe { args.HttpStatusCode(&mut code) }.is_ok() && code != 0 {
+                return Ok(());
+            }
+        }
+        let url = sender
+            .and_then(|webview| {
+                let mut source = PWSTR::null();
+                // SAFETY: `Source` writes a string WebView2 allocated, which
+                // `take_pwstr` takes and frees.
+                unsafe { webview.Source(&mut source) }.ok()?;
+                Some(take_pwstr(source))
+            })
+            .unwrap_or_default();
+        let _ = events.unbounded_send(Event::Failed {
+            url,
+            description: status_name(status).to_owned(),
+        });
+        Ok(())
+    }));
+    let mut token = 0;
+    // SAFETY: the handler is WebView2's to call on this thread for as long
+    // as the web view lives; the token is not needed, as the handler goes
+    // with the web view.
+    if let Err(error) = unsafe { view.webview().add_NavigationCompleted(&handler, &mut token) } {
+        eprintln!("picto: the sign-in window cannot report pages that fail to load: {error}");
+    }
+}
+
+/// WebView2's name for why a page did not load.
+fn status_name(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> &'static str {
+    match status {
+        COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT => {
+            "CERTIFICATE_COMMON_NAME_IS_INCORRECT"
+        }
+        COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_EXPIRED => "CERTIFICATE_EXPIRED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_CLIENT_CERTIFICATE_CONTAINS_ERRORS => {
+            "CLIENT_CERTIFICATE_CONTAINS_ERRORS"
+        }
+        COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_REVOKED => "CERTIFICATE_REVOKED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID => "CERTIFICATE_IS_INVALID",
+        COREWEBVIEW2_WEB_ERROR_STATUS_SERVER_UNREACHABLE => "SERVER_UNREACHABLE",
+        COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT => "TIMEOUT",
+        COREWEBVIEW2_WEB_ERROR_STATUS_ERROR_HTTP_INVALID_SERVER_RESPONSE => {
+            "HTTP_INVALID_SERVER_RESPONSE"
+        }
+        COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED => "CONNECTION_ABORTED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_RESET => "CONNECTION_RESET",
+        COREWEBVIEW2_WEB_ERROR_STATUS_DISCONNECTED => "DISCONNECTED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT => "CANNOT_CONNECT",
+        COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED => "HOST_NAME_NOT_RESOLVED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_REDIRECT_FAILED => "REDIRECT_FAILED",
+        COREWEBVIEW2_WEB_ERROR_STATUS_UNEXPECTED_ERROR => "UNEXPECTED_ERROR",
+        COREWEBVIEW2_WEB_ERROR_STATUS_VALID_AUTHENTICATION_CREDENTIALS_REQUIRED => {
+            "VALID_AUTHENTICATION_CREDENTIALS_REQUIRED"
+        }
+        COREWEBVIEW2_WEB_ERROR_STATUS_VALID_PROXY_AUTHENTICATION_REQUIRED => {
+            "VALID_PROXY_AUTHENTICATION_REQUIRED"
+        }
+        _ => "UNKNOWN",
+    }
+}
+
+/// Saves a picture of the window as it is on the screen: the screen's
+/// pixels inside the window's rectangle, which hold WebView2's own window
+/// as the system composed it.
+#[cfg(debug_assertions)]
+pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), String> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct BitmapInfo {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_pels_per_meter: i32,
+        y_pels_per_meter: i32,
+        clr_used: u32,
+        clr_important: u32,
+        colors: [u32; 1],
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetWindowRect(window: isize, rect: *mut Rect) -> i32;
+        fn GetDC(window: isize) -> isize;
+        fn ReleaseDC(window: isize, dc: isize) -> i32;
+    }
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateCompatibleDC(dc: isize) -> isize;
+        fn CreateCompatibleBitmap(dc: isize, width: i32, height: i32) -> isize;
+        fn SelectObject(dc: isize, object: isize) -> isize;
+        fn BitBlt(
+            to: isize,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            from: isize,
+            from_x: i32,
+            from_y: i32,
+            operation: u32,
+        ) -> i32;
+        fn GetDIBits(
+            dc: isize,
+            bitmap: isize,
+            start: u32,
+            lines: u32,
+            bits: *mut c_void,
+            info: *mut BitmapInfo,
+            usage: u32,
+        ) -> i32;
+        fn DeleteObject(object: isize) -> i32;
+        fn DeleteDC(dc: isize) -> i32;
+    }
+    /// `SRCCOPY | CAPTUREBLT`.
+    const COPY: u32 = 0x00CC_0020 | 0x4000_0000;
+    let hwnd = crate::platform::windows::hwnd(window).ok_or("The sign-in window has no handle.")?;
+    let mut rect = Rect::default();
+    // SAFETY: `hwnd` is the live window; the rectangle is written in full.
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return Err("The sign-in window has no rectangle.".into());
+    }
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if width <= 0 || height <= 0 {
+        return Err("The sign-in window has no size.".into());
+    }
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    // SAFETY: the screen's device context, a memory one and a bitmap of the
+    // window's size are made, used and released here; `GetDIBits` writes
+    // `height` top-down rows of `width` 32-bit pixels into `pixels`, which
+    // holds exactly that.
+    let copied = unsafe {
+        let screen = GetDC(0);
+        let memory = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, width, height);
+        let previous = SelectObject(memory, bitmap);
+        let blitted = BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, COPY);
+        SelectObject(memory, previous);
+        let mut info = BitmapInfo {
+            size: (std::mem::size_of::<BitmapInfo>() - 4) as u32,
+            width,
+            height: -height,
+            planes: 1,
+            bit_count: 32,
+            ..BitmapInfo::default()
+        };
+        let lines = GetDIBits(
+            memory,
+            bitmap,
+            0,
+            height as u32,
+            pixels.as_mut_ptr().cast(),
+            &mut info,
+            0,
+        );
+        DeleteObject(bitmap);
+        DeleteDC(memory);
+        ReleaseDC(0, screen);
+        blitted != 0 && lines == height
+    };
+    if !copied {
+        return Err("The screen could not be read.".into());
+    }
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+        pixel[3] = 255;
+    }
+    image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+        .ok_or("The picture has the wrong size.")?
+        .save(path)
+        .map_err(|error| error.to_string())
 }

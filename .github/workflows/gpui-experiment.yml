@@ -85,7 +85,10 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers \
+            xvfb \
+            xauth \
+            dbus
 
       - name: Build
         run: cargo build --locked
@@ -115,6 +118,7 @@ jobs:
           # links (libwebgpu_dawn.so on Linux) on the loader's path.
           copy="$(cargo run --locked -q -- --make-copy "$(native "$library")" | tail -n 1)"
           echo "copy: $copy"
+          echo "PICTO_CI_COPY=$copy" >> "$GITHUB_ENV"
           out="$(unix "$RUNNER_TEMP")/pictures"
           mkdir -p "$out"
           PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
@@ -129,4 +133,77 @@ jobs:
         with:
           name: pictures-${{ matrix.platform }}
           path: ${{ runner.temp }}/pictures
+          if-no-files-found: warn
+
+      # The sign-in window runs on the system's web view: WebView2 needs its
+      # runtime, which a Windows image may not have; the Evergreen
+      # bootstrapper installs it from Microsoft when it is missing.
+      - name: WebView2 Runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $id = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          function Installed {
+            foreach ($key in @("HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$id",
+                               "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$id",
+                               "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$id")) {
+              if (Test-Path $key) {
+                $version = (Get-ItemProperty $key).pv
+                if ($version -and $version -ne '0.0.0.0') { return $version }
+              }
+            }
+            return $null
+          }
+          $version = Installed
+          if (-not $version) {
+            $setup = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $setup
+            Start-Process -FilePath $setup -ArgumentList '/silent', '/install' -Wait
+            $version = Installed
+          }
+          if (-not $version) { throw 'The WebView2 Runtime is not installed.' }
+          "WebView2 Runtime $version"
+
+      # The sign-in window opened for real in the app on the copy above, on
+      # the system's web view (WebKitGTK in a GTK window on a virtual X
+      # display on Linux, WebView2 on Windows), against a login the app
+      # serves itself on the loopback (`src/logins/check.rs`): a page that
+      # cannot load, Cancel, the window closed, and a sign-in whose cookie is
+      # saved through `auth.credentials.set`, read back and removed. No site
+      # is contacted, nothing runs or downloads, and logins stay in the
+      # process.
+      - name: Sign-in window
+        shell: bash
+        run: |
+          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          out="$(unix "$RUNNER_TEMP")/login-check"
+          mkdir -p "$out/state" "$out/data"
+          export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_HOLD_DOWNLOADS=1 PICTO_GPUI_SILENT=1
+          export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+          export PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:47613
+          export PICTO_GPUI_LOGIN_CHECK="$(native "$out")"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            # A virtual display has no GPU buffers to share with WebKit's
+            # renderer.
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
+          else
+            run=()
+          fi
+          status=0
+          timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+          echo "app ended with $status"
+          grep -i "login check\|panic\|sign-in window" "$out/app.log" || true
+          test -f "$out/login-check.log"
+          grep -qx 'result: pass' "$out/login-check.log"
+
+      - name: Upload sign-in window check
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: login-check-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/login-check/*.log
+            ${{ runner.temp }}/login-check/*.png
           if-no-files-found: warn

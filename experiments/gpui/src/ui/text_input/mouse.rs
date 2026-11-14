@@ -19,6 +19,8 @@ impl TextInput {
     fn unit_at(&self, granularity: Granularity, at: usize) -> Range<usize> {
         match granularity {
             Granularity::Character => at..at,
+            // A password field's words cannot be seen: all of it.
+            Granularity::Word if self.masked => 0..self.content.len(),
             Granularity::Word => editing::word_at(
                 &self.content,
                 at,

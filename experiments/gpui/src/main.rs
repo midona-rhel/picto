@@ -450,6 +450,9 @@ fn run(
         // Input playback is a debug build's only (`seams.rs`).
         #[cfg(debug_assertions)]
         pointer::start(window.into(), cx);
+        // The sign-in window's check, a debug build's only (`seams.rs`).
+        #[cfg(debug_assertions)]
+        logins::check::start(cx);
         // Opened as production's `drainAssociatedFiles` opens them, once
         // the window is up.
         cx.spawn(async move |cx| {

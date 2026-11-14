@@ -99,6 +99,17 @@ pub fn login_origin() -> Option<String> {
     (url.scheme() == "http" && loopback).then(|| url.origin().ascii_serialization())
 }
 
+/// `PICTO_GPUI_LOGIN_CHECK=<folder>`: with `PICTO_GPUI_LOGIN_ORIGIN`, the
+/// app signs in to a login it serves itself at that origin, in the
+/// system's sign-in window, writes what happened and pictures of the
+/// window to the folder, and quits (`logins::check`).
+#[cfg(debug_assertions)]
+pub fn login_check() -> Option<PathBuf> {
+    seam!("PICTO_GPUI_LOGIN_CHECK")
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+}
+
 /// `PICTO_GPUI_SILENT`: every player and Flash movie starts muted.
 pub fn silent() -> bool {
     seam!("PICTO_GPUI_SILENT").is_some()
@@ -115,7 +126,7 @@ pub fn app_data() -> Option<PathBuf> {
 
 /// Every variable above, which drive, observe or redirect the app.
 #[cfg(debug_assertions)]
-const ALL: [&str; 11] = [
+const ALL: [&str; 13] = [
     "PICTO_GPUI_POINTER",
     "PICTO_GPUI_BACKGROUND",
     "PICTO_GPUI_WINDOW",
@@ -127,6 +138,8 @@ const ALL: [&str; 11] = [
     "PICTO_GPUI_SILENT",
     "PICTO_GPUI_APP_DATA",
     "PICTO_GPUI_HOLD_DOWNLOADS",
+    "PICTO_GPUI_LOGIN_ORIGIN",
+    "PICTO_GPUI_LOGIN_CHECK",
 ];
 
 /// The automation seam active in this process, if any: one of the

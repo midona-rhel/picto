@@ -139,7 +139,10 @@ impl TextInput {
             return (self.content.len(), false);
         }
         let x = position.x - bounds.left() + self.scroll;
-        (self.clamp(line.closest_index_for_x(x)), false)
+        (
+            self.clamp(self.content_offset(line.closest_index_for_x(x))),
+            false,
+        )
     }
 
     /// The character under a point, which a double-click selects the word
@@ -172,7 +175,10 @@ impl TextInput {
             return 0;
         };
         let x = position.x - bounds.left() + self.scroll;
-        self.clamp(line.index_for_x(x).unwrap_or(self.content.len()))
+        self.clamp(
+            line.index_for_x(x)
+                .map_or(self.content.len(), |index| self.content_offset(index)),
+        )
     }
 }
 
@@ -470,11 +476,17 @@ impl Element for TextElement {
             return self.prepaint_wrapped(bounds, window, cx);
         }
         let input = self.input.read(cx);
-        let content = input.content.clone();
-        let selected_range = input.selected_range.clone();
-        let cursor = input.cursor_offset();
+        // A password field's bullets, with the caret and selection at
+        // their offsets.
+        let content = input.drawn();
+        let selected_range =
+            input.drawn_offset(input.selected_range.start)..input.drawn_offset(input.selected_range.end);
+        let cursor = input.drawn_offset(input.cursor_offset());
         let focused = input.focus_handle.is_focused(window);
-        let marked_range = input.marked_range.clone();
+        let marked_range = input
+            .marked_range
+            .clone()
+            .map(|range| input.drawn_offset(range.start)..input.drawn_offset(range.end));
         // Shown in the language of the moment, as production's
         // `translateMessage` recovers a placeholder made in another one.
         let placeholder = crate::i18n::t_shared(input.placeholder.clone());

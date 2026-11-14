@@ -15,6 +15,9 @@ pub struct Cookie {
 }
 
 /// The cookies of `all` that a request to `url` carries, in their order.
+/// macOS needs it, as its store hands over every cookie; WebView2 and
+/// WebKitGTK answer for an address themselves.
+#[cfg(any(target_os = "macos", test))]
 pub fn sent_to(all: &[Cookie], url: &str) -> Vec<Cookie> {
     let Ok(url) = url::Url::parse(url) else {
         return Vec::new();
@@ -43,6 +46,7 @@ pub fn sent_to(all: &[Cookie], url: &str) -> Vec<Cookie> {
 }
 
 /// RFC 6265 §5.1.4: the request's path is the cookie's or below it.
+#[cfg(any(target_os = "macos", test))]
 fn path_matches(cookie: &str, request: &str) -> bool {
     let cookie = if cookie.is_empty() { "/" } else { cookie };
     request == cookie

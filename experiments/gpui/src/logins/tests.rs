@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 
 /// Plays a login the way the driver does: each effect performed against a
 /// recorded page and recorded services; what was persisted, loaded, shown
-/// and hidden written down.
+/// and hidden written down. With `holding`, the effects whose answers come
+/// later in the app (a save, an outside browser) are kept in `held`
+/// instead, so a test answers them when it chooses, after other events.
 #[derive(Default)]
 struct Harness {
     machine: Machine,
@@ -22,10 +24,14 @@ struct Harness {
     persisted: Vec<Credential>,
     loaded: Vec<String>,
     opened: Vec<Effect>,
-    closed: Vec<bool>,
+    closed: usize,
     shown: usize,
     hidden: usize,
     polling: bool,
+    holding: bool,
+    held: Vec<Effect>,
+    launched: usize,
+    external_closed: usize,
 }
 
 impl Harness {
@@ -82,15 +88,29 @@ impl Harness {
                     let outcome = block_on(adapter.complete(&url, &self.page, &self.services));
                     self.machine.completed(outcome)
                 }
-                Effect::Persist(credential) => {
-                    self.persisted.push(credential);
-                    self.machine.persisted(Ok(()))
-                }
-                Effect::CloseWindow { clear_storage } => {
-                    self.closed.push(clear_storage);
+                Effect::Persist { .. } | Effect::LaunchExternal { .. } if self.holding => {
+                    self.held.push(effect);
                     Vec::new()
                 }
-                Effect::LaunchExternal | Effect::CloseExternal => Vec::new(),
+                Effect::Persist {
+                    credential,
+                    session,
+                } => {
+                    self.persisted.push(credential);
+                    self.machine.persisted(session, Ok(()))
+                }
+                Effect::CloseWindow => {
+                    self.closed += 1;
+                    Vec::new()
+                }
+                Effect::LaunchExternal { .. } => {
+                    self.launched += 1;
+                    self.machine.external_launched(Ok(()))
+                }
+                Effect::CloseExternal => {
+                    self.external_closed += 1;
+                    Vec::new()
+                }
             };
             self.run(next);
         }
@@ -205,8 +225,8 @@ fn a_captured_login_is_saved_and_the_state_holds_no_secret() {
         harness.state().message.as_deref(),
         Some("Danbooru session captured.")
     );
-    // The window closes with its storage discarded.
-    assert_eq!(harness.closed, [true]);
+    // The window closes, and its storage with it.
+    assert_eq!(harness.closed, 1);
     let state = format!("{:?}", harness.state());
     assert!(!state.contains("secret"));
 }
@@ -335,7 +355,7 @@ fn a_login_cancels_to_idle_and_closes_its_window_keeping_nothing() {
     let effects = harness.machine.cancel();
     harness.run(effects);
     assert_eq!(*harness.state(), AuthState::idle());
-    assert_eq!(harness.closed, [false]);
+    assert_eq!(harness.closed, 1);
     // Events from the closed window change nothing.
     assert!(
         harness
@@ -374,6 +394,33 @@ fn a_window_the_system_cannot_open_ends_the_login_with_why() {
     assert!(harness.machine.tick().is_empty());
 }
 
+// 'reports main-frame load failures without completing authentication'
+#[test]
+fn a_page_that_fails_to_load_is_reported_and_nothing_is_saved() {
+    let mut harness = Harness::default();
+    harness.start("patreon", None).unwrap();
+    let shown = harness.shown;
+    let effects = harness
+        .machine
+        .load_failed("https://www.patreon.com/login", "NAME_NOT_RESOLVED");
+    harness.run(effects);
+    assert_eq!(harness.state().status, Status::Error);
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Patreon could not load (NAME_NOT_RESOLVED).")
+    );
+    assert_eq!(
+        harness.state().current_url.as_deref(),
+        Some("https://www.patreon.com/login")
+    );
+    assert_eq!(harness.shown, shown + 1);
+    assert!(harness.persisted.is_empty());
+    // A closed window's late report changes nothing.
+    harness.machine.window_closed();
+    assert!(harness.machine.load_failed("https://www.patreon.com/", "TIMEOUT").is_empty());
+    assert_eq!(harness.state().status, Status::Cancelled);
+}
+
 #[test]
 fn a_look_already_under_way_is_not_started_twice() {
     let mut harness = Harness::default();
@@ -409,12 +456,14 @@ fn a_credential_the_application_refuses_is_an_error() {
         message: Some("Patreon session captured.".into()),
         ..Outcome::default()
     }));
-    assert!(matches!(effects[0], Effect::Persist(_)));
+    let Effect::Persist { session, .. } = effects[0] else {
+        panic!("{effects:?}");
+    };
     assert_eq!(
         machine.state().message.as_deref(),
         Some("Saving login securely…")
     );
-    machine.persisted(Err("Captured cookies credential is empty".into()));
+    machine.persisted(session, Err("Captured cookies credential is empty".into()));
     assert_eq!(machine.state().status, Status::Error);
     assert_eq!(
         machine.state().message.as_deref(),
@@ -428,7 +477,9 @@ fn a_credential_the_application_refuses_is_an_error() {
 fn onlyfans_signs_in_in_a_browser_outside_the_app() {
     let mut machine = Machine::new();
     let effects = machine.start("onlyfans", None).unwrap();
-    assert_eq!(effects, [Effect::LaunchExternal]);
+    let [Effect::LaunchExternal { session }] = effects[..] else {
+        panic!("{effects:?}");
+    };
     assert_eq!(
         machine.state().message.as_deref(),
         Some("Opening OnlyFans in an external browser…")
@@ -445,9 +496,15 @@ fn onlyfans_signs_in_in_a_browser_outside_the_app() {
         cookies: Some(BTreeMap::from([("sess".into(), "session".into())])),
         ..Credential::default()
     };
-    let effects = machine.external_finished(Ok(credential.clone()));
-    assert_eq!(effects, [Effect::Persist(credential)]);
-    let effects = machine.persisted(Ok(()));
+    let effects = machine.external_finished(session, Ok(credential.clone()));
+    assert_eq!(
+        effects,
+        [Effect::Persist {
+            credential,
+            session
+        }]
+    );
+    let effects = machine.persisted(session, Ok(()));
     assert_eq!(effects, [Effect::CloseExternal]);
     assert_eq!(machine.state().status, Status::Completed);
     assert_eq!(
@@ -467,21 +524,25 @@ fn onlyfans_signs_in_in_a_browser_outside_the_app() {
 #[test]
 fn a_pasted_onlyfans_session_is_saved() {
     let mut machine = Machine::new();
-    let effects = machine
-        .save_manual_onlyfans(&ManualInput {
-            cookie: "analytics=ignored; sess=session; auth_id=42; auth_uid=42".into(),
-            user_agent: "Chrome browser".into(),
-            x_bc: "signature".into(),
-        })
-        .unwrap();
-    assert!(
-        matches!(&effects[0], Effect::Persist(credential) if credential.site_category == "onlyfans")
-    );
+    let (effects, saved) = machine.save_manual_onlyfans(&ManualInput {
+        cookie: "analytics=ignored; sess=session; auth_id=42; auth_uid=42".into(),
+        user_agent: "Chrome browser".into(),
+        x_bc: "signature".into(),
+    });
+    assert_eq!(saved, Ok(()));
+    let Effect::Persist {
+        credential,
+        session,
+    } = &effects[0]
+    else {
+        panic!("{effects:?}");
+    };
+    assert_eq!(credential.site_category, "onlyfans");
     assert_eq!(
         machine.state().message.as_deref(),
         Some("Saving login securely…")
     );
-    machine.persisted(Ok(()));
+    machine.persisted(*session, Ok(()));
     assert_eq!(machine.state().status, Status::Completed);
     assert_eq!(
         machine.state().message.as_deref(),
@@ -489,9 +550,89 @@ fn a_pasted_onlyfans_session_is_saved() {
     );
     let mut refused = Machine::new();
     assert_eq!(
-        refused
-            .save_manual_onlyfans(&ManualInput::default())
-            .unwrap_err(),
-        "OnlyFans Cookie is missing sess and auth_id."
+        refused.save_manual_onlyfans(&ManualInput::default()).1,
+        Err("OnlyFans Cookie is missing sess and auth_id.".to_owned())
     );
+}
+
+// 'cancels any active session before saving a manual session': also when
+// the pasted session is refused, the browser login under way is closed.
+#[test]
+fn a_refused_pasted_session_still_ends_the_login_under_way() {
+    let mut harness = Harness::default();
+    harness.start("onlyfans", None).unwrap();
+    assert_eq!(harness.launched, 1);
+    let (effects, saved) = harness
+        .machine
+        .save_manual_onlyfans(&ManualInput::default());
+    assert!(saved.is_err());
+    harness.run(effects);
+    assert_eq!(harness.external_closed, 1);
+    assert_eq!(*harness.state(), AuthState::idle());
+}
+
+// `externalAuth !== session`: a cancelled browser's ending is not the
+// next login's.
+#[test]
+fn a_cancelled_browser_logins_ending_is_not_applied_to_the_next() {
+    let mut harness = Harness {
+        holding: true,
+        ..Harness::default()
+    };
+    harness.start("onlyfans", None).unwrap();
+    let first = harness.held.remove(0);
+    let effects = harness.machine.cancel();
+    harness.run(effects);
+    harness.start("onlyfans", None).unwrap();
+    let Effect::LaunchExternal { session: first } = first else {
+        panic!("{first:?}");
+    };
+    let effects = harness.machine.external_finished(
+        first,
+        Err("OnlyFans login was closed before authentication completed.".into()),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(harness.state().status, Status::Starting);
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Opening OnlyFans in an external browser…")
+    );
+}
+
+// A save that answers after its login was cancelled and another started
+// leaves the new one alone.
+#[test]
+fn a_late_save_does_not_complete_the_next_login() {
+    let page = FakePage::at("https://danbooru.donmai.us/session/new")
+        .with_cookies(&[("_session", "secret")])
+        .answering("logoutPattern", json!(true));
+    let mut harness = Harness {
+        holding: true,
+        ..Harness::with_page(page)
+    };
+    harness.start("danbooru", None).unwrap();
+    harness.finish_load();
+    let Some(Effect::Persist { session, .. }) = harness.held.pop() else {
+        panic!("no save asked for");
+    };
+    let effects = harness.machine.cancel();
+    harness.run(effects);
+    harness.start("patreon", None).unwrap();
+    let closed = harness.closed;
+    let effects = harness.machine.persisted(session, Ok(()));
+    harness.run(effects);
+    assert_eq!(harness.closed, closed);
+    assert_eq!(harness.state().site_category.as_deref(), Some("patreon"));
+    assert_ne!(harness.state().status, Status::Completed);
+}
+
+#[test]
+fn page_logins_are_looked_at_and_oauth_logins_wait_for_their_callback() {
+    let mut page_login = Harness::default();
+    page_login.start("patreon", None).unwrap();
+    assert!(page_login.polling);
+    let mut oauth = Harness::default();
+    oauth.start("deviantart", None).unwrap();
+    assert!(!oauth.polling);
+    assert_eq!(oauth.machine.tick(), []);
 }

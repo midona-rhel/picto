@@ -13,7 +13,9 @@ use crate::session::Session;
 use crate::theme::{self, Text as _};
 use crate::ui::{
     self,
+    action_button::{ActionButton, Look as ButtonLook},
     field::Look,
+    status_badge::Tone,
     text_input::{Kind, TextInput},
 };
 use gpui::{prelude::FluentBuilder as _, *};
@@ -49,16 +51,9 @@ pub struct AuthIssue {
     pub last_seen_at: String,
 }
 
-/// `getAuthAccountStatus`'s tone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tone {
-    Success,
-    Attention,
-    Idle,
-}
-
 impl Account {
-    /// `getAuthAccountStatus`: signed in, needing attention, or not.
+    /// `getAuthAccountStatus`: signed in, needing attention, or not, with
+    /// its tone.
     pub fn status(&self) -> (&'static str, Tone) {
         let health = self
             .health
@@ -204,9 +199,11 @@ impl Accounts {
     ) -> Self {
         let logins = Logins::global(&session, cx);
         let field = |cx: &mut Context<Self>| cx.new(|cx| TextInput::new(Kind::Form, cx));
-        let cookie = field(cx);
+        // Production's Cookie and X-BC are password fields.
+        let secret = |cx: &mut Context<Self>| cx.new(|cx| TextInput::new(Kind::Form, cx).masked());
+        let cookie = secret(cx);
         let user_agent = field(cx);
-        let x_bc = field(cx);
+        let x_bc = secret(cx);
         let subscriptions = vec![
             cx.observe(&logins, |this, _, cx| this.login_changed(cx)),
             cx.observe(&cookie, |_, _, cx| cx.notify()),
@@ -231,7 +228,14 @@ impl Accounts {
             finishing: false,
             _subscriptions: subscriptions,
         };
-        accounts.refresh(|_, _| {}, cx);
+        // A login that completed while the dialog was closed is taken in
+        // now, as production's dialog does when it reads the session's
+        // state on opening.
+        if accounts.logins.read(cx).state().status == Status::Completed {
+            accounts.login_changed(cx);
+        } else {
+            accounts.refresh(|_, _| {}, cx);
+        }
         accounts
     }
 
@@ -359,7 +363,13 @@ impl Accounts {
             self.refresh(
                 |this, cx| {
                     this.logins.update(cx, |logins, cx| logins.cancel(cx));
-                    this.message = Some(t("Login saved in the system credential store.").into());
+                    // Production keeps logins in the system's credential
+                    // store; this app keeps them for the session only
+                    // (`logins::keep_credentials_in_process`).
+                    this.message = Some(
+                        en("Login saved for this session; it is not kept after the app quits.")
+                            .into(),
+                    );
                     this.finishing = false;
                 },
                 cx,
@@ -510,109 +520,34 @@ fn mark(size: f32, glyph: f32, radius: f32, cx: &App) -> Div {
         .child(ui::icon("world", glyph, theme.text_tertiary()))
 }
 
-/// The tone's colour (`--account-status-color`).
-fn tone_color(tone: Tone, cx: &App) -> Rgba {
+/// A service's dot in the list (`.accountDot`).
+fn dot_color(tone: Tone, cx: &App) -> Rgba {
     match tone {
         Tone::Success => rgb(theme::SUCCESS),
         Tone::Attention => rgb(theme::DANGER),
-        Tone::Idle => theme::theme(cx).text_tertiary(),
+        _ => theme::theme(cx).text_disabled(),
     }
 }
 
-/// `color-mix(in srgb, a share%, b)`.
-fn mix(a: Rgba, share: f32, b: Rgba) -> Rgba {
-    let other = 1. - share;
-    Rgba {
-        r: a.r * share + b.r * other,
-        g: a.g * share + b.g * other,
-        b: a.b * share + b.b * other,
-        a: a.a * share + b.a * other,
-    }
-}
-
-/// `color-mix(in srgb, a share%, transparent)`.
-fn faded(color: Rgba, share: f32) -> Rgba {
-    Rgba {
-        a: color.a * share,
-        ..color
-    }
-}
-
-/// `.buttonPrimary`, `.buttonSecondary` and `.buttonDanger`.
-#[derive(Clone, Copy, PartialEq)]
-enum Button {
-    Primary,
-    Secondary,
-    Danger,
-}
-
-/// One of the dialog's own buttons: 30px, a 1px border, 6px corners.
+/// `.buttonPrimary`, `.buttonSecondary` and `.buttonDanger`: the shared
+/// action button at the dialog's 30px with 13px sides.
 fn button(
     id: &'static str,
     label: impl Into<SharedString>,
-    look: Button,
+    look: ButtonLook,
     disabled: bool,
-    window: &mut Window,
     cx: &mut Context<Accounts>,
     press: fn(&mut Accounts, &mut Context<Accounts>),
-) -> AnyElement {
-    let theme = theme::theme(cx);
-    let label = label.into();
-    let danger = rgba(0xff475714);
-    let (fill, border, text, hover) = match look {
-        Button::Primary => (
-            theme.primary(),
-            theme.primary(),
-            theme.on_primary(),
-            faded(theme.primary(), 0.6),
-        ),
-        Button::Secondary => (
-            theme.surface_hover(),
-            theme.border(),
-            theme.text(),
-            theme.surface_active(),
-        ),
-        Button::Danger => (
-            Rgba { a: 0.08, ..danger },
-            Rgba { a: 0.35, ..danger },
-            rgb(theme::DANGER_TEXT),
-            Rgba { a: 0.15, ..danger },
-        ),
-    };
-    let element = div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(label.clone())
-        .when(disabled, |button| button.aria_disabled(true))
-        .relative()
-        .h(px(30.))
-        .px(px(13.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(theme::RADIUS_MD))
-        .border_1()
-        .border_color(border)
-        .bg(fill)
-        .text_color(text)
-        .whitespace_nowrap()
-        .when(look == Button::Danger, |button| button.ml_auto())
-        .when(disabled, |button| button.opacity(0.35))
-        .when(!disabled, |button| {
-            button.cursor_pointer().hover(move |style| style.bg(hover))
-        })
-        .child(label);
-    if disabled {
-        return element.into_any_element();
-    }
-    let id = ElementId::from(id);
+) -> ActionButton {
     let view = cx.entity().downgrade();
-    let pressed = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-        let _ = view.update(cx, |this, cx| press(this, cx));
-    };
-    let element = element.on_click(pressed.clone());
-    ui::focus::button(element, &id, window, cx, pressed).into_any_element()
+    ui::action_button(id, look)
+        .label(label)
+        .height(30.)
+        .padding(13.)
+        .disabled(disabled)
+        .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |this, cx| press(this, cx));
+        })
 }
 
 impl Render for Accounts {
@@ -676,10 +611,7 @@ impl Accounts {
                         .mr(px(1.))
                         .flex_none()
                         .rounded_full()
-                        .bg(match tone {
-                            Tone::Idle => theme.text_disabled(),
-                            tone => tone_color(tone, cx),
-                        }),
+                        .bg(dot_color(tone, cx)),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| this.select(site, cx)))
         });
@@ -797,7 +729,6 @@ impl Accounts {
             concrete
         };
         let (state_label, tone) = account.status();
-        let color = tone_color(tone, cx);
 
         let header = div()
             .h(px(76.))
@@ -830,23 +761,12 @@ impl Accounts {
                     ),
             )
             .child(
-                div().w(px(96.)).flex_none().flex().justify_end().child(
-                    div()
-                        .max_w(px(112.))
-                        .h(px(theme::CONTROL_SM))
-                        .px(px(8.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(theme::RADIUS_MD))
-                        .border_1()
-                        .border_color(faded(color, 0.25))
-                        .bg(faded(color, 0.10))
-                        .text_color(mix(color, 0.45, theme.text()))
-                        .text(theme::TEXT_SM)
-                        .truncate()
-                        .child(state_label.to_uppercase()),
-                ),
+                div()
+                    .w(px(96.))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .child(ui::status_badge::status_badge("accounts-state", tone, state_label).large()),
             );
 
         // `.detailBody`'s columns, `minmax(300px, 1fr)` and
@@ -863,7 +783,7 @@ impl Accounts {
             .p(px(12.))
             .flex()
             .gap(px(10.))
-            .child(self.account_panel(&account, session_active, &notice, first, window, cx))
+            .child(self.account_panel(&account, session_active, &notice, first, cx))
             .child(
                 div()
                     .w(px(second))
@@ -895,7 +815,6 @@ impl Accounts {
         session_active: bool,
         notice: &str,
         width: f32,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = theme::theme(cx);
@@ -944,9 +863,8 @@ impl Accounts {
                 } else {
                     t("Log In")
                 },
-                Button::Primary,
+                ButtonLook::Primary,
                 busy || session_active,
-                window,
                 cx,
                 |this, cx| this.start_login(cx),
             ));
@@ -954,23 +872,21 @@ impl Accounts {
             actions = actions.child(button(
                 "accounts-cancel",
                 t("Cancel"),
-                Button::Secondary,
+                ButtonLook::Settings,
                 busy,
-                window,
                 cx,
                 |this, cx| this.cancel_login(cx),
             ));
         }
         if has_credential {
-            actions = actions.child(button(
+            actions = actions.child(div().ml_auto().child(button(
                 "accounts-remove",
                 t("Remove"),
-                Button::Danger,
+                ButtonLook::Danger,
                 busy,
-                window,
                 cx,
                 |this, cx| this.remove(cx),
-            ));
+            )));
         }
         let view = cx.entity().downgrade();
         let subscribestar = (account.site.id == "subscribestar").then(|| {
@@ -995,6 +911,9 @@ impl Accounts {
                                     .map(|host| ui::choice(host, *host))
                                     .collect(),
                             )
+                            // Not while a login runs (`disabled={busy ||
+                            // sessionActive}`).
+                            .disabled(busy || session_active)
                             .on_change(move |host, _, cx| {
                                 let _ = view.update(cx, |this, cx| {
                                     if let Some(host) =
@@ -1068,9 +987,8 @@ impl Accounts {
                         .child(div().flex().justify_end().child(button(
                             "accounts-save-session",
                             t("Save Session"),
-                            Button::Secondary,
+                            ButtonLook::Settings,
                             busy || !filled,
-                            window,
                             cx,
                             |this, cx| this.save_manual(cx),
                         ))),
