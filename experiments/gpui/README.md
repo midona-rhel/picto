@@ -799,6 +799,9 @@ re-checked by reading the code; the rest were checked against it.
 - Word and PowerPoint files are not viewed: they keep their embedded
   thumbnail and open in the default application.
 - Organize › Tags opens the Tags screen; production's row does nothing.
+- On "Find Items with This Media" the inspector shows the destination's
+  covers, item count and size; production shows its empty, unavailable
+  layout there.
 - Copy in the application menu, outside a text field, copies the selection's
   files as ⌘C does; production's row, chosen with the pointer, copies nothing.
 - Failures production leaves silent are reported: a failed Copy, Regenerate
