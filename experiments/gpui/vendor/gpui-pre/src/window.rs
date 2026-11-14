@@ -1266,7 +1266,13 @@ pub struct Window {
     mouse_hit_test: HitTest,
     modifiers: Modifiers,
     capslock: Capslock,
+    /// The display's scale factor times [`Self::ui_zoom`]: what layout
+    /// pixels are multiplied by to reach device pixels.
     scale_factor: f32,
+    /// The interface zoom this window was last laid out at
+    /// ([`App::set_ui_zoom`]). `viewport_size` and `mouse_position` are in
+    /// zoomed points: the platform's divided by it.
+    ui_zoom: f32,
     pub(crate) bounds_observers: SingleSubscriberSet<AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SingleSubscriberSet<AnyObserver>,
@@ -1732,11 +1738,12 @@ impl Window {
 
         let display_id = platform_window.display().map(|display| display.id());
         let sprite_atlas = platform_window.sprite_atlas();
-        let mouse_position = platform_window.mouse_position();
+        let ui_zoom = cx.ui_zoom.get();
+        let mouse_position = platform_window.mouse_position() / ui_zoom;
         let modifiers = platform_window.modifiers();
         let capslock = platform_window.capslock();
-        let content_size = platform_window.content_size();
-        let scale_factor = platform_window.scale_factor();
+        let content_size = zoomed_size(platform_window.content_size(), ui_zoom);
+        let scale_factor = platform_window.scale_factor() * ui_zoom;
         let appearance = platform_window.appearance();
         let text_system = Rc::new(WindowTextSystem::new(cx.text_system().clone()));
         let invalidator = WindowInvalidator::new(handle.window_id());
@@ -2269,7 +2276,9 @@ impl Window {
             let mut cx = cx.to_async();
             Box::new(move |event| {
                 handle
-                    .update(&mut cx, |_, window, cx| window.dispatch_event(event, cx))
+                    .update(&mut cx, |_, window, cx| {
+                        window.dispatch_platform_input(event, cx)
+                    })
                     .with_context(|| {
                         format!("dispatching input for window {:?}", handle.window_id())
                     })
@@ -2417,6 +2426,7 @@ impl Window {
             modifiers,
             capslock,
             scale_factor,
+            ui_zoom,
             bounds_observers: SingleSubscriberSet::new(),
             appearance,
             appearance_observers: SingleSubscriberSet::new(),
@@ -2758,7 +2768,14 @@ impl Window {
     /// - `Some(&[])` is an empty region, so the window receives no pointer or touch input.
     /// - `None` resets the region to the default, so the whole window receives input again.
     pub fn set_input_region(&self, region: Option<&[Bounds<Pixels>]>) {
-        self.platform_window.set_input_region(region);
+        let zoom = self.ui_zoom;
+        let zoomed: Option<Vec<Bounds<Pixels>>> = region.map(|rects| {
+            rects
+                .iter()
+                .map(|rect| zoomed_out_bounds(*rect, zoom))
+                .collect()
+        });
+        self.platform_window.set_input_region(zoomed.as_deref());
     }
 
     /// Return the `WindowBounds` to indicate that how a window should be opened
@@ -3036,9 +3053,9 @@ impl Window {
     /// the platform window, then notifies observers. Normally called automatically
     /// by the platform's resize callback, but exposed publicly for test infrastructure.
     pub fn bounds_changed(&mut self, cx: &mut App) {
-        self.scale_factor = self.platform_window.scale_factor();
-        self.viewport_size = self.platform_window.content_size();
-        self.mouse_position = self.platform_window.mouse_position();
+        self.scale_factor = self.platform_window.scale_factor() * self.ui_zoom;
+        self.viewport_size = zoomed_size(self.platform_window.content_size(), self.ui_zoom);
+        self.mouse_position = self.platform_window.mouse_position() / self.ui_zoom;
 
         self.refresh();
 
@@ -3201,7 +3218,11 @@ impl Window {
     /// During drawing this is a consistent frame snapshot. Outside drawing it
     /// reflects the latest platform sample, not a synchronous geometry query.
     pub fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
-        self.platform_window.visual_viewport_bounds()
+        let bounds = self.platform_window.visual_viewport_bounds();
+        Bounds::new(
+            bounds.origin / self.ui_zoom,
+            zoomed_size(bounds.size, self.ui_zoom),
+        )
     }
 
     /// Returns a conservative rectangle avoiding platform-known obscured content.
@@ -3262,7 +3283,8 @@ impl Window {
 
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
     pub fn show_window_menu(&self, position: Point<Pixels>) {
-        self.platform_window.show_window_menu(position)
+        self.platform_window
+            .show_window_menu(position * self.ui_zoom)
     }
 
     /// Handle window movement for Linux and macOS.
@@ -3276,12 +3298,14 @@ impl Window {
     /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
-        self.platform_window.set_client_inset(inset);
+        self.platform_window.set_client_inset(inset * self.ui_zoom);
     }
 
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
-        self.platform_window.set_client_corner_radii(radii);
+        let zoom = self.ui_zoom;
+        self.platform_window
+            .set_client_corner_radii(radii.map(|radius| *radius * zoom));
     }
 
     /// Returns the client_inset value by [`Self::set_client_inset`].
@@ -3366,7 +3390,29 @@ impl Window {
     /// Overrides the display scale factor for tests.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_scale_factor(&mut self, scale_factor: f32) {
-        self.scale_factor = scale_factor;
+        self.scale_factor = scale_factor * self.ui_zoom;
+        self.refresh();
+    }
+
+    /// The interface zoom this window is laid out at ([`App::set_ui_zoom`]):
+    /// a point of the window's content is this many screen points.
+    pub fn ui_zoom(&self) -> f32 {
+        self.ui_zoom
+    }
+
+    /// Takes the application's interface zoom if it changed: the viewport,
+    /// scale factor and pointer position follow, and the whole window is
+    /// laid out again.
+    fn apply_ui_zoom(&mut self, cx: &App) {
+        let zoom = cx.ui_zoom.get();
+        if zoom == self.ui_zoom {
+            return;
+        }
+        let device_scale = self.scale_factor / self.ui_zoom;
+        self.mouse_position = self.mouse_position * (self.ui_zoom / zoom);
+        self.ui_zoom = zoom;
+        self.scale_factor = device_scale * zoom;
+        self.viewport_size = zoomed_size(self.platform_window.content_size(), zoom);
         self.refresh();
     }
 
@@ -3707,6 +3753,7 @@ impl Window {
         if self.platform_window.prepare_frame() {
             self.refresh();
         }
+        self.apply_ui_zoom(cx);
         self.invalidate_entities();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
@@ -5986,7 +6033,23 @@ impl Window {
             .unwrap_or_else(|| action.name().to_string())
     }
 
-    /// Dispatch a mouse, keyboard, or touch event on the window.
+    /// Dispatch an event as the system reports it, with positions in the
+    /// window's screen points: they are divided by the interface zoom
+    /// ([`App::set_ui_zoom`]) to the points the window is laid out in, then
+    /// the event goes to [`Self::dispatch_event`]. The platform's input
+    /// callback comes here; so should anything that plays input as though
+    /// from the system.
+    pub fn dispatch_platform_input(
+        &mut self,
+        event: PlatformInput,
+        cx: &mut App,
+    ) -> DispatchEventResult {
+        let event = input_in_zoomed_points(event, self.ui_zoom);
+        self.dispatch_event(event, cx)
+    }
+
+    /// Dispatch a mouse, keyboard, or touch event on the window, with
+    /// positions in the points the window is laid out in.
     #[profiling::function]
     pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
         #[cfg(feature = "profiler")]
@@ -7081,7 +7144,9 @@ impl Window {
         self.on_next_frame(|window, cx| {
             if let Some(mut input_handler) = window.platform_window.take_input_handler() {
                 if let Some(bounds) = input_handler.selected_bounds(window, cx) {
-                    window.platform_window.update_ime_position(bounds);
+                    window
+                        .platform_window
+                        .update_ime_position(zoomed_out_bounds(bounds, window.ui_zoom));
                 }
                 window.platform_window.set_input_handler(input_handler);
             }
@@ -8295,6 +8360,104 @@ fn with_element_arena_erased(callback: &mut dyn FnMut(&mut Arena)) -> Result<(),
         Ok(())
     } else {
         ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
+    }
+}
+
+/// A size the platform reports in screen points, in the points a window
+/// zoomed by `zoom` is laid out in.
+fn zoomed_size(size: Size<Pixels>, zoom: f32) -> Size<Pixels> {
+    if zoom == 1.0 {
+        return size;
+    }
+    Size {
+        width: size.width / zoom,
+        height: size.height / zoom,
+    }
+}
+
+/// Bounds in a window zoomed by `zoom`, in the window's screen points.
+pub(crate) fn zoomed_out_bounds(bounds: Bounds<Pixels>, zoom: f32) -> Bounds<Pixels> {
+    if zoom == 1.0 {
+        return bounds;
+    }
+    Bounds::new(bounds.origin * zoom, bounds.size.map(|length| length * zoom))
+}
+
+/// An event with positions in a window's screen points, with them (and a
+/// precise scroll's distance) in the points a window zoomed by `zoom` is
+/// laid out in.
+fn input_in_zoomed_points(event: PlatformInput, zoom: f32) -> PlatformInput {
+    if zoom == 1.0 {
+        return event;
+    }
+    let at = |position: Point<Pixels>| position / zoom;
+    match event {
+        PlatformInput::MouseDown(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::MouseDown(event)
+        }
+        PlatformInput::MouseUp(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::MouseUp(event)
+        }
+        PlatformInput::MousePressure(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::MousePressure(event)
+        }
+        PlatformInput::MouseMove(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::MouseMove(event)
+        }
+        PlatformInput::MouseExited(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::MouseExited(event)
+        }
+        PlatformInput::Scroll(mut event) => {
+            event.position = at(event.position);
+            if let crate::ScrollDelta::Pixels(delta) = event.delta {
+                event.delta = crate::ScrollDelta::Pixels(at(delta));
+            }
+            PlatformInput::Scroll(event)
+        }
+        PlatformInput::Pinch(mut event) => {
+            event.position = at(event.position);
+            PlatformInput::Pinch(event)
+        }
+        PlatformInput::LongPress(mut event) => {
+            event.start_position = at(event.start_position);
+            event.position = at(event.position);
+            PlatformInput::LongPress(event)
+        }
+        PlatformInput::TouchDrag(mut event) => {
+            event.start_position = at(event.start_position);
+            event.position = at(event.position);
+            PlatformInput::TouchDrag(event)
+        }
+        PlatformInput::BackGesture(mut event) => {
+            event.start_position = at(event.start_position);
+            PlatformInput::BackGesture(event)
+        }
+        PlatformInput::FileDrop(event) => PlatformInput::FileDrop(match event {
+            FileDropEvent::Entered { position, paths } => FileDropEvent::Entered {
+                position: at(position),
+                paths,
+            },
+            FileDropEvent::Pending { position } => FileDropEvent::Pending {
+                position: at(position),
+            },
+            FileDropEvent::Submit { position } => FileDropEvent::Submit {
+                position: at(position),
+            },
+            other => other,
+        }),
+        PlatformInput::Touch(mut event) => {
+            event.position = at(event.position);
+            event.predicted_position = event.predicted_position.map(at);
+            PlatformInput::Touch(event)
+        }
+        event @ (PlatformInput::KeyDown(_)
+        | PlatformInput::KeyUp(_)
+        | PlatformInput::ModifiersChanged(_)) => event,
     }
 }
 

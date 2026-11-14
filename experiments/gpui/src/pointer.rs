@@ -22,9 +22,11 @@
 //! `window <n>` sends the lines after it to the app's nth window (0 is the
 //! main one, the others in the order they opened, as the off-screen tool
 //! counts them); when that window closes they go to the main one again.
-//! Coordinates are window points. A fourth number is the click count for
+//! Coordinates are window points (the system's, which a zoomed window
+//! divides by its interface zoom). A fourth number is the click count for
 //! `down` and `up`, and the distance in points for `scroll`. `key` takes a
-//! keystroke as GPUI writes them and `type` the text to enter in the focused
+//! keystroke as GPUI writes them (`secondary-` is Command on macOS and
+//! Control elsewhere, so one script serves every platform) and `type` the text to enter in the focused
 //! field. `dragfiles` brings files from the system over the window at a
 //! point, as a drag from Finder does (the platform's file-drop entered and
 //! pending events), `drop` also lets them go there (submit, then exited),
@@ -51,12 +53,14 @@ impl Line {
     /// Gives the line to the window as though it came from the system.
     pub fn deliver(self, window: &mut Window, cx: &mut App) {
         match self {
+            // Positions are the window's screen points, which the window
+            // divides by the interface zoom as it does the system's.
             Line::Input(event) => {
-                window.dispatch_event(event, cx);
+                window.dispatch_platform_input(event, cx);
             }
             Line::Inputs(events) => {
                 for event in events {
-                    window.dispatch_event(event, cx);
+                    window.dispatch_platform_input(event, cx);
                 }
             }
             Line::Window(_) => {}
@@ -91,7 +95,15 @@ pub fn parse(line: &str) -> Option<Line> {
     let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
     let keystroke = |text: String| Keystroke::parse(interned(text)).ok();
     match kind {
-        "key" => return Some(Line::Keys(vec![keystroke(rest.trim().to_string())?])),
+        "key" => {
+            let platform = if cfg!(target_os = "macos") {
+                "cmd-"
+            } else {
+                "ctrl-"
+            };
+            let written = rest.trim().replace("secondary-", platform);
+            return Some(Line::Keys(vec![keystroke(written)?]));
+        }
         "type" => {
             let keys = rest
                 .chars()
