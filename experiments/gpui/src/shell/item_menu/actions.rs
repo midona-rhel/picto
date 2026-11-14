@@ -254,7 +254,13 @@ impl Shell {
                         Reread::SELECTION,
                         move |library| library.add_to_folder(&selection, folder),
                         cx,
-                        |_, _, _| {},
+                        // `settleSelectionAfterMutation`.
+                        |this, added, cx| {
+                            if added.is_ok() {
+                                this.session
+                                    .update(cx, |session, cx| session.clear_selection(cx));
+                            }
+                        },
                     );
                 }
             }
