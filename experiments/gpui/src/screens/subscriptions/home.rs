@@ -3,6 +3,7 @@
 //! cover, name, status and counts.
 use super::data::{self, Cover};
 use super::{SubscriptionsScreen, format, measure};
+use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look};
 use crate::{motion, theme};
@@ -111,13 +112,11 @@ pub(super) fn empty_state(cx: &App) -> Div {
                 .text(14.)
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text())
-                .child("Subscribe to artists and tags"),
+                .child(t("Subscribe to artists and tags")),
         )
-        .child(
-            div().text(theme::TEXT_SM).child(
-                "Create a subscription and new posts will land in your library automatically.",
-            ),
-        )
+        .child(div().text(theme::TEXT_SM).child(t(
+            "Create a subscription and new posts will land in your library automatically.",
+        )))
 }
 
 impl SubscriptionsScreen {
@@ -149,7 +148,7 @@ impl SubscriptionsScreen {
                 .py(px(4.))
                 .text(theme::TEXT_MD)
                 .text_color(theme::theme(cx).text_tertiary())
-                .child("Create a subscription, then add the artists, tags, or accounts it should follow.")
+                .child(t("Create a subscription, then add the artists, tags, or accounts it should follow."))
                 .into_any_element()
         } else {
             let order = std::rc::Rc::new(order);
@@ -207,11 +206,15 @@ impl SubscriptionsScreen {
         let theme = theme::theme(cx);
         let selected = self.selected.len();
         let subtitle = if count == 0 {
-            "No subscriptions yet".to_owned()
+            t("No subscriptions yet").to_owned()
         } else if selected > 1 {
-            format!("{selected} of {count} selected")
+            crate::tf!("{value0} of {value1} selected", selected, count)
         } else {
-            format!("{count} subscription{}", if count == 1 { "" } else { "s" })
+            crate::tf!(
+                "{value0} subscription{value1}",
+                count,
+                crate::i18n::plural_s(count as i128)
+            )
         };
         let narrow = width <= 720.;
         let narrower = width <= 600.;
@@ -270,7 +273,7 @@ impl SubscriptionsScreen {
                     .gap(px(2.))
                     // `.heroTitle`: `letter-spacing: -0.01em`.
                     .child(div().overflow_hidden().child(ui::tracked(
-                        "Subscriptions",
+                        t("Subscriptions"),
                         Font {
                             weight: FontWeight::SEMIBOLD,
                             ..font(theme::FONT_UI)
@@ -300,7 +303,7 @@ impl SubscriptionsScreen {
                     .gap(px(clamp_cqi(width, 4., 0.8, 8.)))
                     .child(
                         ui::action_button("subscription-add", Look::Primary)
-                            .label("Add")
+                            .label(t("Add"))
                             .icon("plus", 14.)
                             .padding(padding)
                             .gap(gap)
@@ -310,7 +313,7 @@ impl SubscriptionsScreen {
                     // while one runs.
                     .child(
                         ui::action_button("subscription-add-gallery", Look::Standard)
-                            .label("Add Gallery")
+                            .label(t("Add Gallery"))
                             .icon("library-plus", 14.)
                             .padding(padding)
                             .gap(gap)
@@ -320,7 +323,7 @@ impl SubscriptionsScreen {
                     // TODO: the accounts window, for site logins.
                     .child(
                         ui::action_button("subscription-accounts", Look::Standard)
-                            .label("Accounts")
+                            .label(t("Accounts"))
                             .icon("shield-lock", 14.)
                             .padding(padding)
                             .gap(gap),
@@ -361,11 +364,11 @@ impl SubscriptionsScreen {
         let id = job.id;
         let acting = self.acting.contains(&id);
         let (icon, tip) = if running {
-            ("player-pause", "Pause gallery download")
+            ("player-pause", t("Pause gallery download"))
         } else if paused {
-            ("player-play", "Resume gallery download")
+            ("player-play", t("Resume gallery download"))
         } else {
-            ("refresh", "Retry gallery download")
+            ("refresh", t("Retry gallery download"))
         };
         div()
             .min_h(px(32.))
@@ -428,7 +431,7 @@ impl SubscriptionsScreen {
                     .child(
                         ui::small_button(("gallery-stop", job.id as usize), "player-stop")
                             .size(26.)
-                            .tip(ui::tip("Stop gallery download"))
+                            .tip(ui::tip(t("Stop gallery download")))
                             .disabled(acting)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.perform(vec![id], |_| super::Command::Stop, cx)

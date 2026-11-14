@@ -66,6 +66,10 @@ const CONVERTED: &[&str] = &[
     "tags.rs",
     "viewer/",
     "screens/tags/",
+    "screens/subscriptions/",
+    "ui/cover_dialog.rs",
+    "ui/status_badge.rs",
+    "ui/progress_bar.rs",
 ];
 
 /// Calls whose literal argument is drawn.

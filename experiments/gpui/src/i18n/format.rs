@@ -19,8 +19,10 @@ static SYSTEM: LazyLock<Locale> = LazyLock::new(|| {
         .unwrap_or(Locale::En)
 });
 
+/// English in tests, so that what they expect does not depend on the
+/// machine.
 pub fn system() -> Locale {
-    *SYSTEM
+    if cfg!(test) { Locale::En } else { *SYSTEM }
 }
 
 /// `count.toLocaleString()`.

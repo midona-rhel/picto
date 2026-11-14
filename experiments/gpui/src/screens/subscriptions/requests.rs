@@ -114,6 +114,7 @@ impl Source {
 pub fn add_query(subscription: i64, source: &Source) -> Request {
     request(
         "subscriptions.queries.add",
+        // i18n: a command's field
         json!({ "subscription_id": subscription, "query": source.json() }),
     )
 }
@@ -121,6 +122,7 @@ pub fn add_query(subscription: i64, source: &Source) -> Request {
 pub fn update_query(query: i64, source: &Source) -> Request {
     request(
         "subscriptions.queries.update",
+        // i18n: a command's field
         json!({ "query_id": query, "query": source.json() }),
     )
 }

@@ -4,6 +4,7 @@
 //! screen asks before deleting or resetting, and the cover
 //! (`SubscriptionCoverDialog`, in the shared `ui::cover_dialog`).
 use super::{SubscriptionsScreen, data, format, requests};
+use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::cover_dialog;
 use crate::ui::{
@@ -70,14 +71,15 @@ pub enum Confirmed {
 }
 
 /// `AddGalleryDialog`'s services.
+// i18n: translated where drawn (select choices)
 const SERVICES: [(&str, &str); 2] = [("ehentai", "E-Hentai"), ("exhentai", "ExHentai")];
 
 /// The gallery address field's example for a service.
 fn gallery_placeholder(service: &str) -> &'static str {
     if service == "exhentai" {
-        "https://exhentai.org/g/12345/67890abcde/"
+        t("https://exhentai.org/g/12345/67890abcde/")
     } else {
-        "https://e-hentai.org/g/12345/67890abcde/"
+        t("https://e-hentai.org/g/12345/67890abcde/")
     }
 }
 
@@ -161,7 +163,7 @@ impl SubscriptionsScreen {
     /// The header's Add.
     pub(super) fn open_create(&mut self, cx: &mut Context<Self>) {
         let (name, subscriptions) =
-            self.dialog_field("e.g. Favourite artists", "", Self::submit_create, cx);
+            self.dialog_field(t("e.g. Favourite artists"), "", Self::submit_create, cx);
         let first = name.read(cx).focus_handle(cx);
         self.show_dialog(
             Dialog::Create {
@@ -280,7 +282,7 @@ impl SubscriptionsScreen {
         let Some(current) = self.subscription(id).map(|entry| entry.name.clone()) else {
             return;
         };
-        let (name, subscriptions) = self.dialog_field("Name", &current, Self::submit_rename, cx);
+        let (name, subscriptions) = self.dialog_field(t("Name"), &current, Self::submit_rename, cx);
         name.update(cx, |input, cx| input.select_everything(cx));
         let first = name.read(cx).focus_handle(cx);
         self.show_dialog(
@@ -328,7 +330,7 @@ impl SubscriptionsScreen {
         let (text, mut subscriptions) =
             self.dialog_field(example, &query.text, Self::save_query, cx);
         let (display_name, more) = self.dialog_field(
-            "Shown instead of the query text",
+            t("Shown instead of the query text"),
             query.display_name.as_deref().unwrap_or_default(),
             Self::save_query,
             cx,
@@ -412,9 +414,9 @@ impl SubscriptionsScreen {
     pub(super) fn confirm_delete(&mut self, id: i64, cx: &mut Context<Self>) {
         self.ask(
             Confirmation {
-                title: "Delete Subscription".into(),
-                message: "Downloaded files stay in your library. The subscription and its queries are removed.",
-                label: "Delete",
+                title: t("Delete Subscription").into(),
+                message: en("Downloaded files stay in your library. The subscription and its queries are removed."),
+                label: t("Delete"),
                 danger: true,
                 action: Confirmed::Delete(vec![id]),
             },
@@ -427,12 +429,13 @@ impl SubscriptionsScreen {
         let total = ids.len();
         self.ask(
             Confirmation {
-                title: format!(
-                    "Delete {total} Subscription{}",
-                    if total == 1 { "" } else { "s" }
+                title: crate::tf!(
+                    "Delete {value0} Subscription{value1}",
+                    total,
+                    crate::i18n::plural_s(total as i128)
                 ),
-                message: "Downloaded files stay in your library. The selected subscriptions and their queries are removed.",
-                label: "Delete",
+                message: en("Downloaded files stay in your library. The selected subscriptions and their queries are removed."),
+                label: t("Delete"),
                 danger: true,
                 action: Confirmed::Delete(ids),
             },
@@ -443,9 +446,9 @@ impl SubscriptionsScreen {
     pub(super) fn confirm_reset(&mut self, id: i64, cx: &mut Context<Self>) {
         self.ask(
             Confirmation {
-                title: "Reset Sync History".into(),
-                message: "Picto will clear this subscription's handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again.",
-                label: "Reset",
+                title: t("Reset Sync History").into(),
+                message: en("Picto will clear this subscription's handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again."),
+                label: t("Reset"),
                 danger: false,
                 action: Confirmed::Reset(id),
             },
@@ -456,9 +459,9 @@ impl SubscriptionsScreen {
     pub(super) fn confirm_delete_query(&mut self, query: i64, cx: &mut Context<Self>) {
         self.ask(
             Confirmation {
-                title: "Delete Query".into(),
-                message: "This query stops syncing. Downloaded files stay in your library.",
-                label: "Delete",
+                title: t("Delete Query").into(),
+                message: en("This query stops syncing. Downloaded files stay in your library."),
+                label: t("Delete"),
                 danger: true,
                 action: Confirmed::DeleteQuery(query),
             },
@@ -518,23 +521,23 @@ impl SubscriptionsScreen {
         let element = match dialog {
             Dialog::Create { name, .. } => {
                 let typed = !name.read(cx).value().trim().is_empty();
-                ui::modal("subscription-create", "Add subscription", presence)
+                ui::modal("subscription-create", t("Add subscription"), presence)
                     .size(Size::Small)
                     .focus(&focus)
                     .on_close(dismiss)
                     .child(div().flex().flex_col().gap(px(12.)).child(label_row(
-                        "Name",
+                        t("Name"),
                         ui::field("subscription-create-name", name, Look::FormRow),
                         cx,
                     )))
                     .footer(
                         ui::action_button("subscription-create-cancel", ButtonLook::Standard)
-                            .label("Cancel")
+                            .label(t("Cancel"))
                             .on_click(close_now(view.clone())),
                     )
                     .footer(
                         ui::action_button("subscription-create-add", ButtonLook::Primary)
-                            .label("Add")
+                            .label(t("Add"))
                             .disabled(!typed || busy)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_create(cx))),
                     )
@@ -543,7 +546,7 @@ impl SubscriptionsScreen {
             Dialog::Gallery { service, url, .. } => {
                 let typed = !url.read(cx).value().trim().is_empty();
                 let choose = view.clone();
-                ui::modal("subscription-gallery", "Add gallery", presence)
+                ui::modal("subscription-gallery", t("Add gallery"), presence)
                     .size(Size::Small)
                     .focus(&focus)
                     .on_close(dismiss)
@@ -553,7 +556,7 @@ impl SubscriptionsScreen {
                             .flex_col()
                             .gap(px(12.))
                             .child(label_row(
-                                "Service",
+                                t("Service"),
                                 ui::select(
                                     "subscription-gallery-service",
                                     *service,
@@ -573,19 +576,19 @@ impl SubscriptionsScreen {
                                 cx,
                             ))
                             .child(label_row(
-                                "Gallery URL",
+                                t("Gallery URL"),
                                 ui::field("subscription-gallery-url", url, Look::FormRow),
                                 cx,
                             )),
                     )
                     .footer(
                         ui::action_button("subscription-gallery-cancel", ButtonLook::Standard)
-                            .label("Cancel")
+                            .label(t("Cancel"))
                             .on_click(close_now(view.clone())),
                     )
                     .footer(
                         ui::action_button("subscription-gallery-add", ButtonLook::Primary)
-                            .label("Add Gallery")
+                            .label(t("Add Gallery"))
                             .disabled(busy || gallery_running || !typed)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_gallery(cx))),
                     )
@@ -593,20 +596,20 @@ impl SubscriptionsScreen {
             }
             Dialog::Rename { name, .. } => {
                 let typed = !name.read(cx).value().trim().is_empty();
-                ui::modal("subscription-rename", "Rename Subscription", presence)
+                ui::modal("subscription-rename", t("Rename Subscription"), presence)
                     .size(Size::Small)
                     .focus(&focus)
                     .on_close(dismiss)
                     .child(ui::field("subscription-rename-name", name, Look::Modal))
                     .footer(
                         ui::action_button("subscription-rename-cancel", ButtonLook::Standard)
-                            .label("Cancel")
+                            .label(t("Cancel"))
                             .disabled(busy)
                             .on_click(close_now(view.clone())),
                     )
                     .footer(
                         ui::action_button("subscription-rename-submit", ButtonLook::Primary)
-                            .label("Rename")
+                            .label(t("Rename"))
                             .disabled(busy || !typed)
                             .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
                     )
@@ -618,14 +621,14 @@ impl SubscriptionsScreen {
                 let can_save =
                     !edit.site.is_empty() && !edit.text.read(cx).value().trim().is_empty();
                 let choose = view.clone();
-                ui::modal("subscription-edit-query", "Edit query", presence)
+                ui::modal("subscription-edit-query", t("Edit query"), presence)
                     .size(Size::Medium)
                     .focus(&focus)
                     .on_close(dismiss)
                     .child(
                         ui::form::field(
                             &theme,
-                            "Site",
+                            t("Site"),
                             div().flex().child(
                                 ui::select(
                                     "subscription-edit-site",
@@ -648,9 +651,9 @@ impl SubscriptionsScreen {
                         ui::form::field(
                             &theme,
                             if site.is_some_and(|site| site.supports_query) {
-                                "Search"
+                                t("Search")
                             } else {
-                                "Account"
+                                t("Account")
                             },
                             ui::field("subscription-edit-text", &edit.text, Look::Modal),
                         )
@@ -660,7 +663,7 @@ impl SubscriptionsScreen {
                     .child(
                         ui::form::field(
                             &theme,
-                            "Display name (optional)",
+                            t("Display name (optional)"),
                             ui::field("subscription-edit-name", &edit.display_name, Look::Modal),
                         )
                         .min_w_0()
@@ -669,7 +672,7 @@ impl SubscriptionsScreen {
                     .child(
                         ui::form::field(
                             &theme,
-                            "Notes (optional)",
+                            t("Notes (optional)"),
                             ui::field("subscription-edit-notes", &edit.notes, Look::Modal),
                         )
                         .min_w_0()
@@ -677,14 +680,14 @@ impl SubscriptionsScreen {
                     )
                     .footer(
                         ui::action_button("subscription-edit-cancel", ButtonLook::Standard)
-                            .label("Cancel")
+                            .label(t("Cancel"))
                             .on_click(close_now(view.clone())),
                     )
                     .footer(
                         // `pending`: a save on its way blocks another without
                         // dimming the button.
                         ui::action_button("subscription-edit-save", ButtonLook::Primary)
-                            .label("Save")
+                            .label(t("Save"))
                             .disabled(!can_save)
                             .on_click(cx.listener(|this, _, _, cx| this.save_query(cx))),
                     )
@@ -693,9 +696,9 @@ impl SubscriptionsScreen {
             Dialog::Details(query) => {
                 let now = chrono::Local::now();
                 let mut rows = vec![
-                    ("Source", format::site_label(&query.site_id)),
+                    (t("Source"), format::site_label(&query.site_id)),
                     (
-                        "Query",
+                        t("Query"),
                         query
                             .display_name
                             .as_deref()
@@ -704,19 +707,19 @@ impl SubscriptionsScreen {
                             .unwrap_or(&query.text)
                             .to_owned(),
                     ),
-                    ("Posts", crate::grid::format::grouped(query.posts)),
-                    ("Media", crate::grid::format::grouped(query.media)),
+                    (t("Posts"), crate::grid::format::grouped(query.posts)),
+                    (t("Media"), crate::grid::format::grouped(query.media)),
                     (
-                        "Last check",
+                        t("Last check"),
                         match format::query_last_check(query) {
                             Some(time) => format::relative_time(Some(time), now),
-                            None => "Never".to_owned(),
+                            None => t("Never").to_owned(),
                         },
                     ),
-                    ("State", format::query_state(query).to_owned()),
+                    (t("State"), format::query_state(query).to_owned()),
                 ];
                 if let Some(error) = &query.last_failure_message {
-                    rows.push(("Last error", error.clone()));
+                    rows.push((t("Last error"), error.clone()));
                 }
                 let last = rows.len() - 1;
                 let mut table = div().flex().flex_col();
@@ -745,7 +748,7 @@ impl SubscriptionsScreen {
                             ),
                     );
                 }
-                ui::modal("subscription-source-details", "Source details", presence)
+                ui::modal("subscription-source-details", t("Source details"), presence)
                     .size(Size::Small)
                     .focus(&focus)
                     .on_close(dismiss)

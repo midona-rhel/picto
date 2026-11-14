@@ -55,3 +55,11 @@ Try different search terms or clear filters
 Back to grid
 Back to group
 This font cannot be previewed.
+Downloaded files stay in your library. The selected subscriptions and their queries are removed.
+Downloaded files stay in your library. The subscription and its queries are removed.
+No images have been added yet.
+Picto will clear this subscription's handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again.
+Run interrupted
+Select one of the images downloaded that has been added to the library.
+Sign in again
+This query stops syncing. Downloaded files stay in your library.
