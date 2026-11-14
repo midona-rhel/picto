@@ -193,7 +193,8 @@ of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
 Metal and wgpu renderers, ignored by the DirectX one), drop shadows that cut
 their element out as CSS does, nearest-neighbour image sampling for the
 "Pixelated" preview setting, a native file drag the app can start itself
-(`Window::start_platform_drag`), what a drop from another application
+(`Window::start_platform_drag`, given an OLE drag source on Windows and an
+XDND source on X11), what a drop from another application
 carries besides files (`ExternalDropData`: a browser's image data, its
 addresses, HTML and text, read by each platform), and test-only hooks for the off-screen
 checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
@@ -987,7 +988,7 @@ Smaller differences by area†
 | System notification | toast through GPUI under the app's identity | freedesktop notification | same |
 | Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
 | Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
-| Drag items out of the window | not built (needs OLE `DoDragDrop` outside GPUI's event dispatch) | not built (needs an XDND source) | GPUI's native drag |
+| Drag items out of the window | OLE drag of a `CF_HDROP` data object (`DoDragDrop` run from a task after the event that started it); never run | XDND source (versions 3 to 5, `text/uri-list`, proxies followed; Escape does not cancel it); never run | GPUI's native drag |
 | Drops from a browser (in-memory image, addresses, HTML) | virtual files (`FileGroupDescriptorW`/`FileContents`), else `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
 | Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
 | Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |

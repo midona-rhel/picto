@@ -184,6 +184,45 @@ drop is delivered.
 - `src/linux/wayland/clipboard.rs`: `DataOffer::mime_types`.
 - `src/linux.rs`, `src/gpui_linux.rs`: declare and export the module.
 
+Dragging files out on Windows and X11. `Window::start_platform_drag` had a
+platform drag on macOS and Wayland only.
+
+`gpui-pre-windows`
+- `src/drag_source.rs`: a data object holding the files as `CF_HDROP`
+  (`DROPFILES`, wide names; `GetData`, `QueryGetData` and `EnumFormatEtc`
+  answer it, the rest is not implemented) and a drop source (drop when the
+  left button is up, cancel on Escape, the system's cursors). `drag` runs
+  `DoDragDrop` with copy allowed. `drop_files` is exported
+  (`drag_drop_files`) for the application's test.
+- `src/window.rs`: `can_start_external_drag` and `start_external_drag`.
+  `DoDragDrop` runs the system's drag loop until the drop, so it is run from
+  a foreground task, after the event that asked for it has been handled
+  (the application is not borrowed then, and the loop's messages reach the
+  window as from the main loop); `FileDropEvent::Ended` follows its return.
+
+`gpui-pre-linux`
+- `src/linux/x11/xdnd_source.rs`: the source side of XDND. Each motion finds
+  the `XdndAware` window under the pointer (down from the root's child under
+  it, following an `XdndProxy` that names itself; a window of this process
+  is not a target), sends `XdndLeave`/`XdndEnter` (the version the target
+  and this side share, at most 5, `text/uri-list` the one type) when it
+  changes, and `XdndPosition` with the copy action, one at a time until its
+  `XdndStatus`; the release sends `XdndDrop` to a target that accepted and
+  `XdndLeave` otherwise; `SelectionRequest`s for `XdndSelection` get
+  `TARGETS` or the files' `file:` addresses (`uri_list`, exported as
+  `xdnd_uri_list` for the application's test).
+- `src/linux/x11/client.rs`: `X11ClientState::xdnd_source`;
+  `start_xdnd_drag` takes `XdndSelection` for the window; the window's own
+  pointer motion (which its button's implicit grab keeps delivering outside
+  it) and release drive the source; `XdndStatus`, `XdndFinished` and
+  `SelectionRequest` reach it; the drag ends (selection let go,
+  `FileDropEvent::Ended` to the window) at `XdndFinished`, ten seconds after
+  a drop that got none, or at once when nothing took the drop.
+- `src/linux/x11/window.rs`: `can_start_external_drag`,
+  `start_external_drag`, and the atoms `XdndProxy` and `TARGETS`.
+- `src/linux/x11.rs`, `src/linux.rs`, `src/gpui_linux.rs`: declare and
+  export.
+
 ## Re-applying to a newer gpui-pre
 
 Copy the six new crates from `~/.cargo/registry/src/*/` over these folders,
@@ -2408,6 +2447,192 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/clipboard.rs b/gpui-pre-windows/sr
          unsafe { std::slice::from_raw_parts(self.ptr, self.size) }
      }
  }
+diff --color -ruN gpui-pre-windows-0.3.12/src/drag_source.rs b/gpui-pre-windows/src/drag_source.rs
+--- a/gpui-pre-windows/src/drag_source.rs
++++ b/gpui-pre-windows/src/drag_source.rs
+@@ -0,0 +1,182 @@
++//! Files dragged out of a window to Explorer or another application: an
++//! OLE drag of a data object that holds them as `CF_HDROP`.
++use std::mem::ManuallyDrop;
++use std::path::PathBuf;
++
++use windows::Win32::Foundation::{
++    DATA_S_SAMEFORMATETC, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS,
++    DV_E_FORMATETC, E_NOTIMPL, E_OUTOFMEMORY, GlobalFree, OLE_E_ADVISENOTSUPPORTED, S_OK,
++};
++use windows::Win32::System::Com::{
++    DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl,
++    IEnumFORMATETC, IEnumSTATDATA, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
++};
++use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
++use windows::Win32::System::Ole::{
++    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, DoDragDrop, IDropSource,
++    IDropSource_Impl,
++};
++use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
++use windows::Win32::UI::Shell::SHCreateStdEnumFmtEtc;
++use windows::core::{BOOL, HRESULT, Ref, implement};
++
++/// A `DROPFILES` header (wide names) followed by each path, nul-terminated,
++/// and a closing nul: what `CF_HDROP` holds.
++pub fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
++    // `pFiles`, `pt` (two `LONG`s), `fNC`, `fWide`.
++    let mut bytes = Vec::new();
++    bytes.extend(20u32.to_le_bytes());
++    bytes.extend([0u8; 8]);
++    bytes.extend(0u32.to_le_bytes());
++    bytes.extend(1u32.to_le_bytes());
++    for path in paths {
++        for unit in path.as_os_str().to_string_lossy().encode_utf16() {
++            bytes.extend(unit.to_le_bytes());
++        }
++        bytes.extend([0, 0]);
++    }
++    bytes.extend([0, 0]);
++    bytes
++}
++
++fn file_format() -> FORMATETC {
++    FORMATETC {
++        cfFormat: CF_HDROP.0,
++        ptd: std::ptr::null_mut(),
++        dwAspect: DVASPECT_CONTENT.0,
++        lindex: -1,
++        tymed: TYMED_HGLOBAL.0 as u32,
++    }
++}
++
++fn is_file_format(format: *const FORMATETC) -> bool {
++    // SAFETY: OLE passes a valid format or null.
++    let Some(format) = (unsafe { format.as_ref() }) else {
++        return false;
++    };
++    format.cfFormat == CF_HDROP.0
++        && format.dwAspect == DVASPECT_CONTENT.0
++        && format.tymed & TYMED_HGLOBAL.0 as u32 != 0
++}
++
++#[implement(IDataObject)]
++struct FileData(Vec<u8>);
++
++#[allow(non_snake_case)]
++impl IDataObject_Impl for FileData_Impl {
++    fn GetData(&self, format: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
++        if !is_file_format(format) {
++            return Err(DV_E_FORMATETC.into());
++        }
++        // SAFETY: the memory is allocated, filled while locked and handed to
++        // the receiver, who frees it with `ReleaseStgMedium` (no release
++        // object is given).
++        unsafe {
++            let global = GlobalAlloc(GMEM_MOVEABLE, self.0.len())?;
++            let target = GlobalLock(global);
++            if target.is_null() {
++                let _ = GlobalFree(Some(global));
++                return Err(E_OUTOFMEMORY.into());
++            }
++            std::ptr::copy_nonoverlapping(self.0.as_ptr(), target.cast::<u8>(), self.0.len());
++            let _ = GlobalUnlock(global);
++            Ok(STGMEDIUM {
++                tymed: TYMED_HGLOBAL.0 as u32,
++                u: STGMEDIUM_0 { hGlobal: global },
++                pUnkForRelease: ManuallyDrop::new(None),
++            })
++        }
++    }
++
++    fn GetDataHere(
++        &self,
++        _format: *const FORMATETC,
++        _medium: *mut STGMEDIUM,
++    ) -> windows::core::Result<()> {
++        Err(E_NOTIMPL.into())
++    }
++
++    fn QueryGetData(&self, format: *const FORMATETC) -> HRESULT {
++        if is_file_format(format) {
++            S_OK
++        } else {
++            DV_E_FORMATETC
++        }
++    }
++
++    fn GetCanonicalFormatEtc(&self, _format: *const FORMATETC, out: *mut FORMATETC) -> HRESULT {
++        // SAFETY: OLE passes a writable format or null.
++        if let Some(out) = unsafe { out.as_mut() } {
++            out.ptd = std::ptr::null_mut();
++        }
++        DATA_S_SAMEFORMATETC
++    }
++
++    fn SetData(
++        &self,
++        _format: *const FORMATETC,
++        _medium: *const STGMEDIUM,
++        _release: BOOL,
++    ) -> windows::core::Result<()> {
++        Err(E_NOTIMPL.into())
++    }
++
++    fn EnumFormatEtc(&self, direction: u32) -> windows::core::Result<IEnumFORMATETC> {
++        if direction == DATADIR_GET.0 as u32 {
++            // SAFETY: one format, copied by the enumerator.
++            unsafe { SHCreateStdEnumFmtEtc(&[file_format()]) }
++        } else {
++            Err(E_NOTIMPL.into())
++        }
++    }
++
++    fn DAdvise(
++        &self,
++        _format: *const FORMATETC,
++        _flags: u32,
++        _sink: Ref<IAdviseSink>,
++    ) -> windows::core::Result<u32> {
++        Err(OLE_E_ADVISENOTSUPPORTED.into())
++    }
++
++    fn DUnadvise(&self, _connection: u32) -> windows::core::Result<()> {
++        Err(OLE_E_ADVISENOTSUPPORTED.into())
++    }
++
++    fn EnumDAdvise(&self) -> windows::core::Result<IEnumSTATDATA> {
++        Err(OLE_E_ADVISENOTSUPPORTED.into())
++    }
++}
++
++#[implement(IDropSource)]
++struct FileSource;
++
++#[allow(non_snake_case)]
++impl IDropSource_Impl for FileSource_Impl {
++    fn QueryContinueDrag(&self, escape: BOOL, keys: MODIFIERKEYS_FLAGS) -> HRESULT {
++        if escape.as_bool() {
++            DRAGDROP_S_CANCEL
++        } else if keys.0 & MK_LBUTTON.0 == 0 {
++            DRAGDROP_S_DROP
++        } else {
++            S_OK
++        }
++    }
++
++    fn GiveFeedback(&self, _effect: DROPEFFECT) -> HRESULT {
++        DRAGDROP_S_USEDEFAULTCURSORS
++    }
++}
++
++/// Drags `paths` until they are dropped or the drag is cancelled, running
++/// the system's drag loop (it pumps the thread's messages), and returns
++/// what the target did with them.
++pub(crate) fn drag(paths: &[PathBuf]) -> DROPEFFECT {
++    let data: IDataObject = FileData(drop_files(paths)).into();
++    let source: IDropSource = FileSource.into();
++    let mut effect = DROPEFFECT_NONE;
++    // SAFETY: OLE is initialised on this thread (`OleInitialize` when the
++    // platform starts); both objects live for the call.
++    let _ = unsafe { DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect) };
++    effect
++}
 diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/src/drop_data.rs
 --- a/gpui-pre-windows/src/drop_data.rs
 +++ b/gpui-pre-windows/src/drop_data.rs
@@ -2648,10 +2873,11 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/gpui_windows.rs b/gpui-pre-windows
  mod events;
  mod keyboard;
  mod platform;
-@@ -38,6 +39,7 @@
+@@ -38,6 +39,8 @@
  pub(crate) use window::*;
  pub(crate) use wrapper::*;
  
++pub use drag_source::drop_files as drag_drop_files;
 +pub use drop_data::{file_group_names, html_fragment};
  pub use platform::WindowsPlatform;
  
@@ -2710,7 +2936,48 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
 diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/window.rs
 --- a/gpui-pre-windows/src/window.rs
 +++ b/gpui-pre-windows/src/window.rs
-@@ -1204,6 +1204,24 @@
+@@ -972,8 +972,40 @@
+ 
+     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+         self.state.callbacks.request_frame.set(Some(callback));
++    }
++
++    fn can_start_external_drag(&self) -> bool {
++        true
+     }
+ 
++    /// An OLE drag of the files. `DoDragDrop` runs the system's drag loop
++    /// until the drop, so it is run from a task of its own after the event
++    /// that asked for it has been handled, and the drag's end is reported
++    /// as `FileDropEvent::Ended` once it returns.
++    fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
++        let ExternalDragPayload::Files(paths) = payload;
++        let paths: Vec<PathBuf> = paths
++            .entries()
++            .iter()
++            .map(|(path, _)| path.clone())
++            .collect();
++        if paths.is_empty() {
++            return false;
++        }
++        let this = self.0.clone();
++        self.0
++            .executor
++            .spawn(async move {
++                crate::drag_source::drag(&paths);
++                if let Some(mut input) = this.state.callbacks.input.take() {
++                    input(PlatformInput::FileDrop(FileDropEvent::Ended));
++                    this.state.callbacks.input.set(Some(input));
++                }
++            })
++            .detach();
++        true
++    }
++
+     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
+         self.state.callbacks.input.set(Some(callback));
+     }
+@@ -1204,6 +1236,24 @@
                      paths: ExternalPaths(paths),
                  });
                  self.handle_drag_drop(input);
@@ -2735,7 +3002,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
              } else {
                  *pdweffect = DROPEFFECT_NONE;
              }
-@@ -1274,6 +1292,7 @@
+@@ -1274,6 +1324,7 @@
                  .ok()
                  .log_err();
          }
@@ -2906,12 +3173,14 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
 diff --color -ruN gpui-pre-linux-0.3.12/src/gpui_linux.rs b/gpui-pre-linux/src/gpui_linux.rs
 --- a/gpui-pre-linux/src/gpui_linux.rs
 +++ b/gpui-pre-linux/src/gpui_linux.rs
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,8 @@
  #![cfg(any(target_os = "linux", target_os = "freebsd"))]
  mod linux;
  
 +#[cfg(any(feature = "wayland", feature = "x11"))]
 +pub use linux::drop_data::{assemble as assemble_drop_data, wanted as wanted_drop_types};
++#[cfg(feature = "x11")]
++pub use linux::xdnd_uri_list;
  pub use linux::{current_platform, linux_platform};
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux.rs b/gpui-pre-linux/src/linux.rs
 --- a/gpui-pre-linux/src/linux.rs
@@ -2924,6 +3193,15 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux.rs b/gpui-pre-linux/src/linux.
  mod headless;
  mod keyboard;
  mod platform;
+@@ -26,6 +28,8 @@
+ #[cfg(feature = "wayland")]
+ pub(crate) use wayland::*;
+ #[cfg(feature = "x11")]
++pub use x11::xdnd_uri_list;
++#[cfg(feature = "x11")]
+ pub(crate) use x11::*;
+ 
+ use std::rc::Rc;
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/src/linux/drop_data.rs
 --- a/gpui-pre-linux/src/linux/drop_data.rs
 +++ b/gpui-pre-linux/src/linux/drop_data.rs
@@ -3186,6 +3464,23 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/clipboard.rs b/gpui-pr
      pub fn add_mime_type(&mut self, mime_type: String) {
          self.mime_types.push(mime_type)
      }
+diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11.rs b/gpui-pre-linux/src/linux/x11.rs
+--- a/gpui-pre-linux/src/linux/x11.rs
++++ b/gpui-pre-linux/src/linux/x11.rs
+@@ -3,6 +3,7 @@
+ mod display;
+ mod event;
+ mod window;
++mod xdnd_source;
+ mod xim_handler;
+ 
+ pub(crate) use client::*;
+@@ -10,4 +11,5 @@
+ pub(crate) use display::*;
+ pub(crate) use event::*;
+ pub(crate) use window::*;
++pub use xdnd_source::uri_list as xdnd_uri_list;
+ pub(crate) use xim_handler::*;
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux/src/linux/x11/client.rs
 --- a/gpui-pre-linux/src/linux/x11/client.rs
 +++ b/gpui-pre-linux/src/linux/x11/client.rs
@@ -3200,8 +3495,100 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
  }
  
  #[derive(Debug)]
-@@ -927,6 +931,13 @@
+@@ -239,6 +243,8 @@
+     pub(crate) clipboard: Clipboard,
+     pub(crate) clipboard_item: Option<ClipboardItem>,
+     pub(crate) xdnd_state: Xdnd,
++    /// Files being dragged out of one of this process's windows.
++    pub(crate) xdnd_source: Option<super::xdnd_source::XdndSource>,
+ }
  
+ #[derive(Clone)]
+@@ -554,6 +560,7 @@
+                 clipboard,
+                 clipboard_item: None,
+                 xdnd_state: Xdnd::default(),
++                xdnd_source: None,
+             })
+         })));
+         // From here on, `Drop` removes whatever was registered if a later step fails.
+@@ -879,6 +886,52 @@
+             .map(|window_reference| window_reference.window.clone())
+     }
+ 
++    /// Starts dragging `paths` out of `window`, which takes
++    /// `XdndSelection`; a drag still under way is left first.
++    pub(crate) fn start_xdnd_drag(&self, window: xproto::Window, paths: &[PathBuf]) -> bool {
++        self.end_xdnd_drag();
++        let mut state = self.0.borrow_mut();
++        let owned = check_reply(
++            || "Failed to own XdndSelection",
++            state.xcb_connection.set_selection_owner(
++                window,
++                state.atoms.XdndSelection,
++                x11rb::CURRENT_TIME,
++            ),
++        )
++        .log_err()
++        .is_some();
++        if !owned {
++            return false;
++        }
++        state.xdnd_source = Some(super::xdnd_source::XdndSource::new(window, paths));
++        xcb_flush(&state.xcb_connection);
++        true
++    }
++
++    /// Ends the drag out, if there is one: the selection is let go and the
++    /// window it started in is told (`FileDropEvent::Ended`).
++    fn end_xdnd_drag(&self) {
++        let mut state = self.0.borrow_mut();
++        let Some(source) = state.xdnd_source.take() else {
++            return;
++        };
++        check_reply(
++            || "Failed to let XdndSelection go",
++            state.xcb_connection.set_selection_owner(
++                x11rb::NONE,
++                state.atoms.XdndSelection,
++                x11rb::CURRENT_TIME,
++            ),
++        )
++        .log_err();
++        xcb_flush(&state.xcb_connection);
++        drop(state);
++        if let Some(window) = self.get_window(source.window) {
++            window.handle_input(PlatformInput::FileDrop(FileDropEvent::Ended));
++        }
++    }
++
+     fn handle_event(&self, event: Event) -> Option<()> {
+         match event {
+             Event::UnmapNotify(event) => {
+@@ -925,8 +978,35 @@
+                         })
+                 }
+ 
++                if event.type_ == state.atoms.XdndStatus {
++                    // A target answering this process's drag out.
++                    let data = event.data.as_data32();
++                    let state = &mut *state;
++                    if let Some(source) = state.xdnd_source.as_mut() {
++                        source.status(&state.xcb_connection, &state.atoms, data);
++                    }
++                    return Some(());
++                }
++                if event.type_ == state.atoms.XdndFinished {
++                    let finished = state
++                        .xdnd_source
++                        .as_ref()
++                        .is_some_and(|source| source.is_finished_by(event.data.as_data32()));
++                    drop(state);
++                    if finished {
++                        self.end_xdnd_drag();
++                    }
++                    return Some(());
++                }
                  if event.type_ == state.atoms.XdndEnter {
                      state.xdnd_state.other_window = atom;
 +                    state.xdnd_state.offered = xdnd_offered_types(
@@ -3214,11 +3601,10 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      if (arg1 & 0x1) == 0x1 {
                          state.xdnd_state.drag_type = xdnd_get_supported_atom(
                              &state.xcb_connection,
-@@ -955,6 +966,28 @@
-                     ) {
+@@ -956,6 +1036,28 @@
                          state.xdnd_state.position =
                              Point::new(px(pos.win_x as f32), px(pos.win_y as f32));
-+                    }
+                     }
 +                    if !state.xdnd_state.retrieved
 +                        && state.xdnd_state.drag_type == 0
 +                        && crate::linux::drop_data::takes(&state.xdnd_state.offered)
@@ -3240,10 +3626,11 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
 +                        drop(state);
 +                        window.handle_input(input);
 +                        return Some(());
-                     }
++                    }
                      if !state.xdnd_state.retrieved {
                          check_reply(
-@@ -981,6 +1014,19 @@
+                             || "Failed to convert selection for drag and drop",
+@@ -981,6 +1083,19 @@
                      window
                          .handle_input(PlatformInput::FileDrop(FileDropEvent::Pending { position }));
                  } else if event.type_ == state.atoms.XdndDrop {
@@ -3263,7 +3650,23 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      xdnd_send_finished(
                          &state.xcb_connection,
                          &state.atoms,
-@@ -1024,13 +1070,16 @@
+@@ -994,6 +1109,15 @@
+                     self.0.borrow_mut().xdnd_state = Xdnd::default();
+                 }
+             }
++            Event::SelectionRequest(event) => {
++                // A drop target asking for the files dragged out.
++                let state = self.0.borrow();
++                if event.selection == state.atoms.XdndSelection
++                    && let Some(source) = state.xdnd_source.as_ref()
++                {
++                    source.answer(&state.xcb_connection, &state.atoms, &event);
++                }
++            }
+             Event::SelectionNotify(event) => {
+                 let window = self.get_window(event.requestor)?;
+                 let state = self.0.borrow_mut();
+@@ -1024,13 +1148,16 @@
                              }
                          })
                          .collect();
@@ -3281,7 +3684,82 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  }
              }
              Event::ConfigureNotify(event) => {
-@@ -2408,6 +2457,39 @@
+@@ -1309,6 +1436,47 @@
+             }
+             Event::XinputButtonRelease(event) => {
+                 let window = self.get_window(event.event)?;
++                // The release of a drag out: a drop on a target that took
++                // it (the drag ends at its `XdndFinished`, or after a
++                // while), else the drag's end.
++                let dragging_out = {
++                    let state = &mut *self.0.borrow_mut();
++                    match state.xdnd_source.as_mut() {
++                        Some(source) if source.window == event.event && !source.dropped => {
++                            Some(source.release(&state.xcb_connection, &state.atoms, event.time))
++                        }
++                        _ => None,
++                    }
++                };
++                match dragging_out {
++                    Some(true) => {
++                        let this = X11ClientStatePtr(Rc::downgrade(&self.0));
++                        let window_id = event.event;
++                        self.0
++                            .borrow()
++                            .loop_handle
++                            .insert_source(
++                                calloop::timer::Timer::from_duration(Duration::from_secs(10)),
++                                move |_, (), _| {
++                                    if let Some(client) = this.get_client() {
++                                        let stale =
++                                            client.0.borrow().xdnd_source.as_ref().is_some_and(
++                                                |source| {
++                                                    source.window == window_id && source.dropped
++                                                },
++                                            );
++                                        if stale {
++                                            client.end_xdnd_drag();
++                                        }
++                                    }
++                                    calloop::timer::TimeoutAction::Drop
++                                },
++                            )
++                            .log_err();
++                    }
++                    Some(false) => self.end_xdnd_drag(),
++                    None => {}
++                }
+                 let mut state = self.0.borrow_mut();
+                 let modifiers = modifiers_from_xinput_info(event.mods);
+                 state.modifiers = modifiers;
+@@ -1334,6 +1502,26 @@
+             }
+             Event::XinputMotion(event) => {
+                 let window = self.get_window(event.event)?;
++                {
++                    // A drag out follows the pointer outside the window.
++                    let state = &mut *self.0.borrow_mut();
++                    if let Some(source) = state.xdnd_source.as_mut()
++                        && source.window == event.event
++                    {
++                        let windows = &state.windows;
++                        source.motion(
++                            &state.xcb_connection,
++                            &state.atoms,
++                            event.root,
++                            (
++                                (event.root_x >> 16) as i16,
++                                (event.root_y >> 16) as i16,
++                                event.time,
++                            ),
++                            |window| windows.contains_key(&window),
++                        );
++                    }
++                }
+                 let mut state = self.0.borrow_mut();
+                 state.restore_cursor_after_hide();
+                 if window.is_blocked() {
+@@ -2408,6 +2596,39 @@
      0
  }
  
@@ -3401,4 +3879,384 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-li
      }
  
      pub(crate) fn set_text(
+diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux/src/linux/x11/window.rs
+--- a/gpui-pre-linux/src/linux/x11/window.rs
++++ b/gpui-pre-linux/src/linux/x11/window.rs
+@@ -3,12 +3,12 @@
+ 
+ use crate::linux::X11ClientStatePtr;
+ use gpui::{
+-    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
+-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
+-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+-    WindowDecorations, WindowKind, WindowParams, WindowVisibility, popup::PopupNotSupportedError,
+-    px,
++    AnyWindowHandle, Bounds, Decorations, DevicePixels, ExternalDragPayload, ForegroundExecutor,
++    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
++    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
++    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
++    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams, WindowVisibility,
++    popup::PopupNotSupportedError, px,
+ };
+ use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
+ 
+@@ -30,7 +30,8 @@
+ };
+ 
+ use std::{
+-    cell::RefCell, ffi::c_void, fmt::Display, num::NonZeroU32, ptr::NonNull, rc::Rc, sync::Arc,
++    cell::RefCell, ffi::c_void, fmt::Display, num::NonZeroU32, path::PathBuf, ptr::NonNull, rc::Rc,
++    sync::Arc,
+ };
+ 
+ use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
+@@ -48,6 +49,8 @@
+         XdndFinished,
+         XdndTypeList,
+         XdndActionCopy,
++        XdndProxy,
++        TARGETS,
+         TextUriList: b"text/uri-list",
+         UTF8_STRING,
+         TEXT,
+@@ -1827,8 +1830,27 @@
+             ),
+         )
+         .log_err();
++    }
++
++    fn can_start_external_drag(&self) -> bool {
++        true
+     }
+ 
++    /// An XDND drag of the files, from this window (`xdnd_source.rs`).
++    fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
++        let ExternalDragPayload::Files(paths) = payload;
++        let paths: Vec<PathBuf> = paths
++            .entries()
++            .iter()
++            .map(|(path, _)| path.clone())
++            .collect();
++        if paths.is_empty() {
++            return false;
++        }
++        let client = self.0.state.borrow().client.get_client();
++        client.is_some_and(|client| client.start_xdnd_drag(self.0.x_window, &paths))
++    }
++
+     fn start_window_move(&self) {
+         const MOVERESIZE_MOVE: u32 = 8;
+         self.send_moveresize(MOVERESIZE_MOVE).log_err();
+diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/xdnd_source.rs b/gpui-pre-linux/src/linux/x11/xdnd_source.rs
+--- a/gpui-pre-linux/src/linux/x11/xdnd_source.rs
++++ b/gpui-pre-linux/src/linux/x11/xdnd_source.rs
+@@ -0,0 +1,307 @@
++//! Files dragged out of a window to another application: the source side of
++//! XDND (version 3 to 5). The window that started the drag owns
++//! `XdndSelection` and, through the implicit grab of its button press, keeps
++//! receiving the pointer's motion and release wherever the pointer is. Each
++//! motion finds the XDND-aware window under the pointer and speaks to it
++//! (`XdndEnter`, `XdndPosition`, `XdndLeave`); the release drops on a target
++//! that accepted, which then asks for `text/uri-list` and answers
++//! `XdndFinished`.
++use std::path::PathBuf;
++
++use gpui_util::ResultExt as _;
++use x11rb::{
++    connection::Connection as _,
++    protocol::xproto::{
++        self, AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt as _, EventMask,
++        PropMode, SelectionNotifyEvent, SelectionRequestEvent,
++    },
++    wrapper::ConnectionExt as _,
++    xcb_ffi::XCBConnection,
++};
++
++use super::XcbAtoms;
++
++/// The highest XDND version spoken.
++const VERSION: u32 = 5;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct Target {
++    /// The XDND-aware window under the pointer.
++    window: xproto::Window,
++    /// Where its messages go: the window, or the proxy it names.
++    deliver_to: xproto::Window,
++    version: u32,
++}
++
++pub(crate) struct XdndSource {
++    /// The window the drag started in, which owns `XdndSelection`.
++    pub(crate) window: xproto::Window,
++    uri_list: Vec<u8>,
++    target: Option<Target>,
++    /// A position was sent and its status has not arrived.
++    waiting: bool,
++    /// The latest position while one is waiting.
++    pending: Option<(i16, i16, u32)>,
++    accepted: bool,
++    /// The drop was sent; the target's `XdndFinished` ends the drag.
++    pub(crate) dropped: bool,
++}
++
++/// `text/uri-list` for `paths`: one `file:` address per line, each line
++/// ended by CR LF.
++pub fn uri_list(paths: &[PathBuf]) -> Vec<u8> {
++    let mut list = String::new();
++    for path in paths {
++        if let Ok(url) = url::Url::from_file_path(path) {
++            list.push_str(url.as_str());
++            list.push_str("\r\n");
++        }
++    }
++    list.into_bytes()
++}
++
++fn send(connection: &XCBConnection, target: Target, kind: xproto::Atom, data: [u32; 5]) {
++    let message = ClientMessageEvent {
++        format: 32,
++        window: target.window,
++        type_: kind,
++        data: ClientMessageData::from(data),
++        sequence: 0,
++        response_type: xproto::CLIENT_MESSAGE_EVENT,
++    };
++    connection
++        .send_event(false, target.deliver_to, EventMask::NO_EVENT, message)
++        .log_err();
++}
++
++fn property32(
++    connection: &XCBConnection,
++    window: xproto::Window,
++    property: xproto::Atom,
++    kind: impl Into<xproto::Atom>,
++) -> Option<u32> {
++    connection
++        .get_property(false, window, property, kind, 0, 1)
++        .ok()?
++        .reply()
++        .ok()?
++        .value32()?
++        .next()
++}
++
++/// The XDND-aware window at root point (`x`, `y`): the first window, going
++/// down from the root's child under the point, that has `XdndAware`, with
++/// the proxy it names when that proxy names itself.
++fn find_target(
++    connection: &XCBConnection,
++    atoms: &XcbAtoms,
++    root: xproto::Window,
++    x: i16,
++    y: i16,
++) -> Option<Target> {
++    let mut parent = root;
++    for _ in 0..16 {
++        let child = connection
++            .translate_coordinates(root, parent, x, y)
++            .ok()?
++            .reply()
++            .ok()?
++            .child;
++        if child == x11rb::NONE {
++            return None;
++        }
++        if let Some(version) = property32(connection, child, atoms.XdndAware, AtomEnum::ATOM) {
++            if version < 3 {
++                return None;
++            }
++            let deliver_to = property32(connection, child, atoms.XdndProxy, AtomEnum::WINDOW)
++                .filter(|proxy| {
++                    property32(connection, *proxy, atoms.XdndProxy, AtomEnum::WINDOW)
++                        == Some(*proxy)
++                })
++                .unwrap_or(child);
++            return Some(Target {
++                window: child,
++                deliver_to,
++                version: version.min(VERSION),
++            });
++        }
++        parent = child;
++    }
++    None
++}
++
++impl XdndSource {
++    pub(crate) fn new(window: xproto::Window, paths: &[PathBuf]) -> Self {
++        Self {
++            window,
++            uri_list: uri_list(paths),
++            target: None,
++            waiting: false,
++            pending: None,
++            accepted: false,
++            dropped: false,
++        }
++    }
++
++    fn position(&mut self, connection: &XCBConnection, atoms: &XcbAtoms, at: (i16, i16, u32)) {
++        let Some(target) = self.target else {
++            return;
++        };
++        let (x, y, time) = at;
++        let point = ((x as u16 as u32) << 16) | y as u16 as u32;
++        send(
++            connection,
++            target,
++            atoms.XdndPosition,
++            [self.window, 0, point, time, atoms.XdndActionCopy],
++        );
++        self.waiting = true;
++    }
++
++    /// The pointer moved to root point (`x`, `y`). A window `own` says is
++    /// this process's is not a target: the app takes its own items back
++    /// itself.
++    pub(crate) fn motion(
++        &mut self,
++        connection: &XCBConnection,
++        atoms: &XcbAtoms,
++        root: xproto::Window,
++        at: (i16, i16, u32),
++        own: impl Fn(xproto::Window) -> bool,
++    ) {
++        if self.dropped {
++            return;
++        }
++        let target =
++            find_target(connection, atoms, root, at.0, at.1).filter(|target| !own(target.window));
++        if target.map(|target| target.window) != self.target.map(|target| target.window) {
++            if let Some(old) = self.target {
++                send(connection, old, atoms.XdndLeave, [self.window, 0, 0, 0, 0]);
++            }
++            self.target = target;
++            self.accepted = false;
++            self.waiting = false;
++            self.pending = None;
++            if let Some(new) = target {
++                send(
++                    connection,
++                    new,
++                    atoms.XdndEnter,
++                    [self.window, new.version << 24, atoms.TextUriList, 0, 0],
++                );
++            }
++        }
++        if self.target.is_some() {
++            if self.waiting {
++                self.pending = Some(at);
++            } else {
++                self.position(connection, atoms, at);
++            }
++        }
++        connection.flush().log_err();
++    }
++
++    /// The target's `XdndStatus`: whether it would take the drop.
++    pub(crate) fn status(&mut self, connection: &XCBConnection, atoms: &XcbAtoms, data: [u32; 5]) {
++        if self.target.is_none_or(|target| target.window != data[0]) {
++            return;
++        }
++        self.accepted = data[1] & 1 == 1;
++        self.waiting = false;
++        if let Some(at) = self.pending.take() {
++            self.position(connection, atoms, at);
++            connection.flush().log_err();
++        }
++    }
++
++    /// The button was let go: a target that accepted gets the drop (and
++    /// `true` is returned until its `XdndFinished`); any other is left.
++    pub(crate) fn release(
++        &mut self,
++        connection: &XCBConnection,
++        atoms: &XcbAtoms,
++        time: u32,
++    ) -> bool {
++        let dropped = match self.target {
++            Some(target) if self.accepted => {
++                send(
++                    connection,
++                    target,
++                    atoms.XdndDrop,
++                    [self.window, 0, time, 0, 0],
++                );
++                true
++            }
++            Some(target) => {
++                send(
++                    connection,
++                    target,
++                    atoms.XdndLeave,
++                    [self.window, 0, 0, 0, 0],
++                );
++                false
++            }
++            None => false,
++        };
++        self.dropped = dropped;
++        connection.flush().log_err();
++        dropped
++    }
++
++    /// Whether `data` is the `XdndFinished` of the target dropped on.
++    pub(crate) fn is_finished_by(&self, data: [u32; 5]) -> bool {
++        self.dropped && self.target.is_some_and(|target| target.window == data[0])
++    }
++
++    /// Answers a request for `XdndSelection`: its targets, or the files as
++    /// `text/uri-list`; anything else is refused.
++    pub(crate) fn answer(
++        &self,
++        connection: &XCBConnection,
++        atoms: &XcbAtoms,
++        request: &SelectionRequestEvent,
++    ) {
++        let property = if request.property == x11rb::NONE {
++            request.target
++        } else {
++            request.property
++        };
++        let written = if request.target == atoms.TARGETS {
++            connection
++                .change_property32(
++                    PropMode::REPLACE,
++                    request.requestor,
++                    property,
++                    AtomEnum::ATOM,
++                    &[atoms.TARGETS, atoms.TextUriList],
++                )
++                .is_ok()
++        } else if request.target == atoms.TextUriList {
++            connection
++                .change_property8(
++                    PropMode::REPLACE,
++                    request.requestor,
++                    property,
++                    atoms.TextUriList,
++                    &self.uri_list,
++                )
++                .is_ok()
++        } else {
++            false
++        };
++        let notify = SelectionNotifyEvent {
++            response_type: xproto::SELECTION_NOTIFY_EVENT,
++            sequence: 0,
++            time: request.time,
++            requestor: request.requestor,
++            selection: request.selection,
++            target: request.target,
++            property: if written { property } else { x11rb::NONE },
++        };
++        connection
++            .send_event(false, request.requestor, EventMask::NO_EVENT, notify)
++            .log_err();
++        connection.flush().log_err();
++    }
++}
 ```

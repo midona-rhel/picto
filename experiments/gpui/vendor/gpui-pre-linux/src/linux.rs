@@ -28,6 +28,8 @@ pub(crate) use text_system::*;
 #[cfg(feature = "wayland")]
 pub(crate) use wayland::*;
 #[cfg(feature = "x11")]
+pub use x11::xdnd_uri_list;
+#[cfg(feature = "x11")]
 pub(crate) use x11::*;
 
 use std::rc::Rc;

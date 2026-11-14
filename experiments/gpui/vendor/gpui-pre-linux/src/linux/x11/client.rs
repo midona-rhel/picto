@@ -243,6 +243,8 @@ pub struct X11ClientState {
     pub(crate) clipboard: Clipboard,
     pub(crate) clipboard_item: Option<ClipboardItem>,
     pub(crate) xdnd_state: Xdnd,
+    /// Files being dragged out of one of this process's windows.
+    pub(crate) xdnd_source: Option<super::xdnd_source::XdndSource>,
 }
 
 #[derive(Clone)]
@@ -558,6 +560,7 @@ impl X11Connection {
                 clipboard,
                 clipboard_item: None,
                 xdnd_state: Xdnd::default(),
+                xdnd_source: None,
             })
         })));
         // From here on, `Drop` removes whatever was registered if a later step fails.
@@ -883,6 +886,52 @@ impl X11Client {
             .map(|window_reference| window_reference.window.clone())
     }
 
+    /// Starts dragging `paths` out of `window`, which takes
+    /// `XdndSelection`; a drag still under way is left first.
+    pub(crate) fn start_xdnd_drag(&self, window: xproto::Window, paths: &[PathBuf]) -> bool {
+        self.end_xdnd_drag();
+        let mut state = self.0.borrow_mut();
+        let owned = check_reply(
+            || "Failed to own XdndSelection",
+            state.xcb_connection.set_selection_owner(
+                window,
+                state.atoms.XdndSelection,
+                x11rb::CURRENT_TIME,
+            ),
+        )
+        .log_err()
+        .is_some();
+        if !owned {
+            return false;
+        }
+        state.xdnd_source = Some(super::xdnd_source::XdndSource::new(window, paths));
+        xcb_flush(&state.xcb_connection);
+        true
+    }
+
+    /// Ends the drag out, if there is one: the selection is let go and the
+    /// window it started in is told (`FileDropEvent::Ended`).
+    fn end_xdnd_drag(&self) {
+        let mut state = self.0.borrow_mut();
+        let Some(source) = state.xdnd_source.take() else {
+            return;
+        };
+        check_reply(
+            || "Failed to let XdndSelection go",
+            state.xcb_connection.set_selection_owner(
+                x11rb::NONE,
+                state.atoms.XdndSelection,
+                x11rb::CURRENT_TIME,
+            ),
+        )
+        .log_err();
+        xcb_flush(&state.xcb_connection);
+        drop(state);
+        if let Some(window) = self.get_window(source.window) {
+            window.handle_input(PlatformInput::FileDrop(FileDropEvent::Ended));
+        }
+    }
+
     fn handle_event(&self, event: Event) -> Option<()> {
         match event {
             Event::UnmapNotify(event) => {
@@ -929,6 +978,26 @@ impl X11Client {
                         })
                 }
 
+                if event.type_ == state.atoms.XdndStatus {
+                    // A target answering this process's drag out.
+                    let data = event.data.as_data32();
+                    let state = &mut *state;
+                    if let Some(source) = state.xdnd_source.as_mut() {
+                        source.status(&state.xcb_connection, &state.atoms, data);
+                    }
+                    return Some(());
+                }
+                if event.type_ == state.atoms.XdndFinished {
+                    let finished = state
+                        .xdnd_source
+                        .as_ref()
+                        .is_some_and(|source| source.is_finished_by(event.data.as_data32()));
+                    drop(state);
+                    if finished {
+                        self.end_xdnd_drag();
+                    }
+                    return Some(());
+                }
                 if event.type_ == state.atoms.XdndEnter {
                     state.xdnd_state.other_window = atom;
                     state.xdnd_state.offered = xdnd_offered_types(
@@ -1038,6 +1107,15 @@ impl X11Client {
                     window
                         .handle_input(PlatformInput::FileDrop(FileDropEvent::Submit { position }));
                     self.0.borrow_mut().xdnd_state = Xdnd::default();
+                }
+            }
+            Event::SelectionRequest(event) => {
+                // A drop target asking for the files dragged out.
+                let state = self.0.borrow();
+                if event.selection == state.atoms.XdndSelection
+                    && let Some(source) = state.xdnd_source.as_ref()
+                {
+                    source.answer(&state.xcb_connection, &state.atoms, &event);
                 }
             }
             Event::SelectionNotify(event) => {
@@ -1358,6 +1436,47 @@ impl X11Client {
             }
             Event::XinputButtonRelease(event) => {
                 let window = self.get_window(event.event)?;
+                // The release of a drag out: a drop on a target that took
+                // it (the drag ends at its `XdndFinished`, or after a
+                // while), else the drag's end.
+                let dragging_out = {
+                    let state = &mut *self.0.borrow_mut();
+                    match state.xdnd_source.as_mut() {
+                        Some(source) if source.window == event.event && !source.dropped => {
+                            Some(source.release(&state.xcb_connection, &state.atoms, event.time))
+                        }
+                        _ => None,
+                    }
+                };
+                match dragging_out {
+                    Some(true) => {
+                        let this = X11ClientStatePtr(Rc::downgrade(&self.0));
+                        let window_id = event.event;
+                        self.0
+                            .borrow()
+                            .loop_handle
+                            .insert_source(
+                                calloop::timer::Timer::from_duration(Duration::from_secs(10)),
+                                move |_, (), _| {
+                                    if let Some(client) = this.get_client() {
+                                        let stale =
+                                            client.0.borrow().xdnd_source.as_ref().is_some_and(
+                                                |source| {
+                                                    source.window == window_id && source.dropped
+                                                },
+                                            );
+                                        if stale {
+                                            client.end_xdnd_drag();
+                                        }
+                                    }
+                                    calloop::timer::TimeoutAction::Drop
+                                },
+                            )
+                            .log_err();
+                    }
+                    Some(false) => self.end_xdnd_drag(),
+                    None => {}
+                }
                 let mut state = self.0.borrow_mut();
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
@@ -1383,6 +1502,26 @@ impl X11Client {
             }
             Event::XinputMotion(event) => {
                 let window = self.get_window(event.event)?;
+                {
+                    // A drag out follows the pointer outside the window.
+                    let state = &mut *self.0.borrow_mut();
+                    if let Some(source) = state.xdnd_source.as_mut()
+                        && source.window == event.event
+                    {
+                        let windows = &state.windows;
+                        source.motion(
+                            &state.xcb_connection,
+                            &state.atoms,
+                            event.root,
+                            (
+                                (event.root_x >> 16) as i16,
+                                (event.root_y >> 16) as i16,
+                                event.time,
+                            ),
+                            |window| windows.contains_key(&window),
+                        );
+                    }
+                }
                 let mut state = self.0.borrow_mut();
                 state.restore_cursor_after_hide();
                 if window.is_blocked() {

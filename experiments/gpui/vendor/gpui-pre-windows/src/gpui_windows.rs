@@ -39,6 +39,7 @@ pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
+pub use drag_source::drop_files as drag_drop_files;
 pub use drop_data::{file_group_names, html_fragment};
 pub use platform::WindowsPlatform;
 

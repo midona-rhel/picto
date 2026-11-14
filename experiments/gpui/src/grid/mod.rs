@@ -500,13 +500,17 @@ impl GridView {
         self.drag_out_waiting = false;
         self.reorder = None;
         self.subfolders.drop = None;
-        // TODO: Windows and X11 have no native file drag in GPUI yet; there
-        // the grid's drag simply ends at the window's edge.
-        // Only the copy's own files leave the window.
+        // Only the copy's own files leave the window, by the paths the
+        // system shows (no `\\?\` prefix on Windows). The vendored GPUI
+        // drags them natively on every platform: AppKit, OLE, XDND and
+        // Wayland.
         let files = if files.is_empty() {
             files
         } else {
             crate::desktop::drag_out(&files, cx)
+                .iter()
+                .map(|path| crate::desktop::system_path(path))
+                .collect()
         };
         let payload = ExternalDragPayload::Files(FileDragPaths::new(
             files.into_iter().map(|path| (path, false)),

@@ -3,6 +3,7 @@ mod clipboard;
 mod display;
 mod event;
 mod window;
+mod xdnd_source;
 mod xim_handler;
 
 pub(crate) use client::*;
@@ -10,4 +11,5 @@ pub(crate) use clipboard::wait_for_clipboard_handovers;
 pub(crate) use display::*;
 pub(crate) use event::*;
 pub(crate) use window::*;
+pub use xdnd_source::uri_list as xdnd_uri_list;
 pub(crate) use xim_handler::*;

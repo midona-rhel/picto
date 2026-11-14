@@ -3,12 +3,12 @@ use x11rb::connection::RequestConnection;
 
 use crate::linux::X11ClientStatePtr;
 use gpui::{
-    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowKind, WindowParams, WindowVisibility, popup::PopupNotSupportedError,
-    px,
+    AnyWindowHandle, Bounds, Decorations, DevicePixels, ExternalDragPayload, ForegroundExecutor,
+    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams, WindowVisibility,
+    popup::PopupNotSupportedError, px,
 };
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
 
@@ -30,7 +30,8 @@ use x11rb::{
 };
 
 use std::{
-    cell::RefCell, ffi::c_void, fmt::Display, num::NonZeroU32, ptr::NonNull, rc::Rc, sync::Arc,
+    cell::RefCell, ffi::c_void, fmt::Display, num::NonZeroU32, path::PathBuf, ptr::NonNull, rc::Rc,
+    sync::Arc,
 };
 
 use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
@@ -48,6 +49,8 @@ x11rb::atom_manager! {
         XdndFinished,
         XdndTypeList,
         XdndActionCopy,
+        XdndProxy,
+        TARGETS,
         TextUriList: b"text/uri-list",
         UTF8_STRING,
         TEXT,
@@ -1827,6 +1830,25 @@ impl PlatformWindow for X11Window {
             ),
         )
         .log_err();
+    }
+
+    fn can_start_external_drag(&self) -> bool {
+        true
+    }
+
+    /// An XDND drag of the files, from this window (`xdnd_source.rs`).
+    fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
+        let ExternalDragPayload::Files(paths) = payload;
+        let paths: Vec<PathBuf> = paths
+            .entries()
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        let client = self.0.state.borrow().client.get_client();
+        client.is_some_and(|client| client.start_xdnd_drag(self.0.x_window, &paths))
     }
 
     fn start_window_move(&self) {
