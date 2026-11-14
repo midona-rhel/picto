@@ -94,7 +94,9 @@ fn prepare(cx: &mut App) {
     screens::subscriptions::bind(cx);
     ui::popover::bind(cx);
     ui::focus::bind(cx);
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+    if let Some(keys) = app_menu::Platform::CURRENT.quit_keys() {
+        keymap::bind_written(keys, Box::new(Quit), None, cx);
+    }
     app_menu::bind(cx);
     imports::bind(cx);
     viewer::document::bind(cx);

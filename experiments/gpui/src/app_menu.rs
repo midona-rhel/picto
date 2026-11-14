@@ -109,6 +109,34 @@ pub struct SetRating {
     pub stars: u8,
 }
 
+/// The system the menu is built for: production's template differs on
+/// macOS (`isMac`) and, in a few role rows, between Windows and Linux.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl Platform {
+    pub const CURRENT: Platform = if cfg!(target_os = "macos") {
+        Platform::Mac
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
+    } else {
+        Platform::Linux
+    };
+
+    /// Quit's keys, as Electron's `quit` role has them: ⌘Q on the Mac,
+    /// Ctrl+Q on Linux, and none on Windows, where Alt+F4 is the system's.
+    pub fn quit_keys(self) -> Option<&'static str> {
+        match self {
+            Platform::Mac | Platform::Linux => Some("Mod+Q"),
+            Platform::Windows => None,
+        }
+    }
+}
+
 /// The destination's kind (`gridScopeAtom`'s `kind`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScopeKind {
@@ -1448,6 +1476,14 @@ mod tests {
 
     /// The rows this app cannot perform yet: they have no handler, so
     /// AppKit shows them disabled.
+    #[test]
+    fn quit_takes_the_keys_electrons_quit_role_has() {
+        use super::Platform;
+        assert_eq!(Platform::Mac.quit_keys(), Some("Mod+Q"));
+        assert_eq!(Platform::Linux.quit_keys(), Some("Mod+Q"));
+        assert_eq!(Platform::Windows.quit_keys(), None);
+    }
+
     #[test]
     fn unbuilt_rows_are_the_known_ones() {
         let context = MenuContext {

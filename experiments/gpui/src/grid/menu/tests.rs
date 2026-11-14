@@ -12,7 +12,7 @@ const REVEAL: &str = if cfg!(target_os = "macos") {
 } else {
     "Show in Explorer"
 };
-use crate::settings::registry;
+use crate::settings::registry::{self, display};
 use picto_library::ContentSortField;
 
 /// `shortcutHint` with the default bindings: none for a deferred shortcut.
@@ -112,7 +112,7 @@ fn folder_removal_takes_the_delete_shortcut_from_trash() {
     let rows = tile(&d);
     let remove = find(&rows, "Remove from Folder").unwrap();
     assert_eq!(remove.shortcut, shortcut("file.removeFromFolder"));
-    assert_eq!(remove.shortcut.as_deref(), Some("⌘⌫"));
+    assert_eq!(remove.shortcut, Some(display("Mod+Backspace").into()));
     assert_eq!(remove.action, Action::RemoveFromFolder);
     assert_eq!(find(&rows, "Move to Trash").unwrap().shortcut, None);
     for scope in [ScopeKind::System, ScopeKind::SmartFolder] {
@@ -783,12 +783,22 @@ fn one_picture_in_all_has_every_row_in_order() {
             .unwrap_or_default()
     })
     .collect();
-    assert_eq!(
-        shortcuts,
-        [
-            "⇧↩", "⌘↩", "⌘O", "⌘⌥G", "⌘⇧J", "⌃R", "⌘C", "⌘⌥C", "⌘⇧A", "⌘⌫"
-        ]
-    );
+    let written: Vec<String> = [
+        "Shift+Enter",
+        "Mod+Enter",
+        "Mod+O",
+        "Mod+Alt+G",
+        "Mod+Shift+J",
+        "Ctrl+R",
+        "Mod+C",
+        "Mod+Alt+C",
+        "Mod+Shift+A",
+        "Mod+Backspace",
+    ]
+    .into_iter()
+    .map(display)
+    .collect();
+    assert_eq!(shortcuts, written);
     // Paste Tags waits for something copied.
     assert!(find(&rows, "Paste Tags").unwrap().disabled);
     assert!(
@@ -816,10 +826,10 @@ fn trash_restores_and_deletes_several_items() {
     );
     let delete = find(&rows, "Delete 3 Permanently").unwrap();
     assert!(delete.danger);
-    assert_eq!(delete.shortcut.as_deref(), Some("⌘⌫"));
+    assert_eq!(delete.shortcut, Some(display("Mod+Backspace").into()));
     assert_eq!(
-        find(&rows, "Restore 3 Items").unwrap().shortcut.as_deref(),
-        Some("⌘⇧⌫")
+        find(&rows, "Restore 3 Items").unwrap().shortcut,
+        Some(display("Mod+Shift+Backspace").into())
     );
     // Without the delete wired, the row stays and is disabled.
     d.handlers.permanent_delete = false;

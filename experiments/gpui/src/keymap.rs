@@ -339,6 +339,22 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ),
 ];
 
+/// Binds keys written as the registry writes them (`Mod+Q`), spelled for
+/// this platform, to `action` under `context`: for the few bindings outside
+/// the registry whose keys still differ by platform.
+pub fn bind_written(keys: &str, action: Box<dyn Action>, context: Option<&str>, cx: &mut App) {
+    let Some(written) = keystroke(keys) else {
+        return;
+    };
+    let predicate = context.map(|source| {
+        Rc::new(KeyBindingContextPredicate::parse(source).expect("key binding context"))
+    });
+    match KeyBinding::load(&written, action, predicate, false, None, cx) {
+        Ok(binding) => cx.bind_keys([binding]),
+        Err(error) => eprintln!("keys {keys}: {error}"),
+    }
+}
+
 /// A registry key string (`Mod+Shift+Backspace`) as a GPUI keystroke
 /// (`cmd-shift-backspace`), or `None` for an empty slot or a key GPUI has no
 /// name for. `Mod` is Command on the Mac and Control elsewhere, as

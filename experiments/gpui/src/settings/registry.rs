@@ -413,8 +413,27 @@ pub fn conflict(
         .map(|other| other.label)
 }
 
-/// `formatKeysAsArray` with the Mac's symbols.
+/// `formatKeysAsArray`: each key of a shortcut as this platform writes it,
+/// the Mac's symbols on macOS and words elsewhere.
 pub fn parts(keys: &str) -> Vec<String> {
+    parts_on(keys, cfg!(target_os = "macos"))
+}
+
+/// `formatKeysDisplay`: the Mac's symbols run together (`⌘⇧S`); elsewhere
+/// the words joined by `+` (`Ctrl+Shift+S`).
+pub fn display(keys: &str) -> String {
+    display_on(keys, cfg!(target_os = "macos"))
+}
+
+/// [`display`] as macOS (`mac`) or Windows and Linux write it.
+pub fn display_on(keys: &str, mac: bool) -> String {
+    parts_on(keys, mac).join(if mac { "" } else { "+" })
+}
+
+/// [`parts`] as macOS (`mac`, `MAC_SYMBOLS`) or Windows and Linux
+/// (`WIN_LABELS`) write them. Only `Mod` changes name elsewhere: `Shift`,
+/// `Alt` and `Ctrl` are written as they are.
+pub fn parts_on(keys: &str, mac: bool) -> Vec<String> {
     if keys == "+" {
         return vec!["+".into()];
     }
@@ -428,34 +447,51 @@ pub fn parts(keys: &str) -> Vec<String> {
     }
     parts
         .into_iter()
-        .map(|part| {
-            match part {
-                "Mod" => "⌘",
-                "Shift" => "⇧",
-                "Alt" => "⌥",
-                "Ctrl" => "⌃",
-                "ArrowLeft" => "←",
-                "ArrowRight" => "→",
-                "ArrowUp" => "↑",
-                "ArrowDown" => "↓",
-                "Enter" => "↩",
-                "Escape" => "Esc",
-                "Backspace" => "⌫",
-                "Delete" => "⌦",
-                "Space" => "␣",
-                "Tab" => "⇥",
-                "PageUp" => "PgUp",
-                "PageDown" => "PgDn",
-                other => other,
-            }
-            .to_owned()
-        })
+        .map(|part| if mac { mac_symbol(part) } else { label(part) }.to_owned())
         .collect()
 }
 
-/// `formatKeysDisplay` on the Mac: the symbols run together.
-pub fn display(keys: &str) -> String {
-    parts(keys).concat()
+/// `MAC_SYMBOLS`.
+fn mac_symbol(part: &str) -> &str {
+    match part {
+        "Mod" => "⌘",
+        "Shift" => "⇧",
+        "Alt" => "⌥",
+        "Ctrl" => "⌃",
+        "ArrowLeft" => "←",
+        "ArrowRight" => "→",
+        "ArrowUp" => "↑",
+        "ArrowDown" => "↓",
+        "Enter" => "↩",
+        "Escape" => "Esc",
+        "Backspace" => "⌫",
+        "Delete" => "⌦",
+        "Space" => "␣",
+        "Tab" => "⇥",
+        "PageUp" => "PgUp",
+        "PageDown" => "PgDn",
+        other => other,
+    }
+}
+
+/// `WIN_LABELS`.
+fn label(part: &str) -> &str {
+    match part {
+        "Mod" => "Ctrl",
+        "ArrowLeft" => "←",
+        "ArrowRight" => "→",
+        "ArrowUp" => "↑",
+        "ArrowDown" => "↓",
+        "Backspace" => "Backspace",
+        "Delete" => "Del",
+        "Escape" => "Esc",
+        "Enter" => "Enter",
+        "Space" => "Space",
+        "Tab" => "Tab",
+        "PageUp" => "PgUp",
+        "PageDown" => "PgDn",
+        other => other,
+    }
 }
 
 /// `eventToShortcutString`: a pressed key as the registry writes it, or
@@ -560,12 +596,37 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_written_with_mac_symbols() {
-        assert_eq!(display("Mod+Shift+Backspace"), "⌘⇧⌫");
-        assert_eq!(display("Alt+ArrowLeft"), "⌥←");
-        assert_eq!(display("+"), "+");
-        assert_eq!(display("Mod++"), "⌘+");
-        assert_eq!(display("Mod+,"), "⌘,");
+    fn keys_are_written_with_mac_symbols_on_macos() {
+        let mac = |keys| display_on(keys, true);
+        assert_eq!(mac("Mod+Shift+Backspace"), "⌘⇧⌫");
+        assert_eq!(mac("Alt+ArrowLeft"), "⌥←");
+        assert_eq!(mac("+"), "+");
+        assert_eq!(mac("Mod++"), "⌘+");
+        assert_eq!(mac("Mod+,"), "⌘,");
+        assert_eq!(mac("Ctrl+R"), "⌃R");
+    }
+
+    #[test]
+    fn keys_are_written_as_words_joined_by_plus_elsewhere() {
+        let other = |keys| display_on(keys, false);
+        assert_eq!(other("Mod+Shift+S"), "Ctrl+Shift+S");
+        assert_eq!(other("Mod+Shift+Backspace"), "Ctrl+Shift+Backspace");
+        assert_eq!(other("Alt+ArrowLeft"), "Alt+←");
+        assert_eq!(other("Shift+Enter"), "Shift+Enter");
+        assert_eq!(other("Mod+Delete"), "Ctrl+Del");
+        assert_eq!(other("Escape"), "Esc");
+        assert_eq!(other("+"), "+");
+        assert_eq!(other("Mod++"), "Ctrl++");
+        assert_eq!(other("Mod+,"), "Ctrl+,");
+        assert_eq!(parts_on("Mod+Alt+N", false), ["Ctrl", "Alt", "N"]);
+    }
+
+    #[test]
+    fn this_platform_writes_keys_its_own_way() {
+        assert_eq!(
+            display("Mod+Shift+S"),
+            display_on("Mod+Shift+S", cfg!(target_os = "macos"))
+        );
     }
 
     #[test]
@@ -584,7 +645,8 @@ mod tests {
 
     #[test]
     fn search_matches_written_keys_and_descriptions() {
-        let found = filter(groups(KeyboardPreset::Us, &Overrides::new()), "⌘⇧z");
+        let written = display("Mod+Shift+Z").to_lowercase();
+        let found = filter(groups(KeyboardPreset::Us, &Overrides::new()), &written);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].items[0].id, "edit.redo");
         let found = filter(groups(KeyboardPreset::Us, &Overrides::new()), "screenful");
