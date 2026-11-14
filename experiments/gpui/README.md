@@ -891,6 +891,23 @@ rustup, install that toolchain anywhere and put its `bin` first on `PATH`;
   titlebar view menu's layout and sort panel inline and its display panel
   inside "Display" (the same `shell::view_menu` panels), saved to the
   destination's view as production saves them. A confirmation dialog (`ui::confirm`) for the shared `ConfirmModal`.
+  Also: Copy (the files on the macOS pasteboard, from the menus, ⌘C over
+  the grid, the viewer, Quick Look, a detail window and the collection
+  editor, and the Edit menu), Open With Other (the applications Launch
+  Services lists for the type, with their icons, the default first, looked
+  up once per extension), Batch Rename (`BatchRenameModal`, also the Edit
+  menu's row and its keys), Regenerate Thumbnail(s) (as the Electron main
+  process regenerates, also ⇧⌘T and the Edit menu), Grayscale (a checked
+  row that keeps the menu open, and ⌘⌥G), Find Items with This Media (the
+  media-matches destination, with no sidebar row), Set as Library Cover
+  (the shared cover dialog, `MediaCoverDialog`, framing the item at once;
+  saving writes `.picto-library-cover.*` beside the copy's database, not
+  production's global config), Set as Thumbnail (a video's or Flash
+  movie's current frame), and the Duplicates cards' menu (Open with
+  Default App, Open in New Window). Opening, revealing, Open With and file
+  copies go through `desktop.rs`, which in the off-screen tool writes them
+  to `desktop.log` (a `desktop` script line) instead of reaching the
+  desktop.
 - Importing (`filesController.ts`, `GridScreen.tsx`'s drop handler), into
   the grid's destination (the Inbox's lifecycle when the Inbox is open, else
   the library's, and the open folder): files and folders dragged from Finder
@@ -1122,8 +1139,8 @@ element (`shell/rails.rs`).
   in the inspector's fields move the caret where production's only scroll.
 - A whole destination selected names no collection count in the item
   menu's Ungroup row ("Ungroup Collections..."); production looks the count
-  up. Open With Other offers the system chooser instead of listing the
-  applications (macOS lists them in production).
+  up. Open With Other lists the applications on macOS only; Windows'
+  chooser row has a `TODO`, and Linux offers none, as production.
 - Tab in the Folders dialog leaves the keyboard in the search field;
   production's browser moves it to the Cancel button with a focus ring.
 - Inbox review: a review key held down is told
@@ -1141,8 +1158,7 @@ element (`shell/rails.rs`).
   screen is opened again, not live.
 - Duplicates: the progress bar's position over a shown pair is a
   2px row above the cards (the Electron `.scanProgress` class has no rule).
-  The Smart merge ring follows the pointer only, not keyboard focus. No context menu on the
-  candidates (Open with Default App, Open in New Window). The difference
+  The Smart merge ring follows the pointer only, not keyboard focus. The difference
   picture is computed from the decoded images (GPUI has no blend modes), at
   most 4096 pixels on its longest side, from the thumbnails until both
   originals are in. A zoomed image is clipped to the preview's rectangle,
@@ -1285,18 +1301,18 @@ element (`shell/rails.rs`).
   listed under Checks.
 - Collections: in the detail window members and the space between them
   have no menu. The editor's drag does not become a drag of files out of
-  the window, and ⌘C copies no files (GPUI's clipboard holds no files).
-  After grouping, the new group is not selected. The organizer's radio is
+  the window. After grouping, the new group is not selected. The organizer's radio is
   the app's round check, not the system's.
 - Quick Look: GPUI clips to rectangles, so the image area's 8px rounded
-  corners do not clip a zoomed image. No Copy (the file itself).
+  corners do not clip a zoomed image.
   Its counter follows the selection at once, where production's trails until
   the next image has decoded. Stepping scrolls the grid only enough to show
   the item, not to its centre, and closing does not scroll the grid back to
   the item. Space paging the grid jumps where production scrolls smoothly.
-- Detail window: its menu's Copy, Search by Image and More rows do nothing
-  yet; no Copy (the file itself) shortcut, per-image zoom
-  memory, or "Loading..." placeholder; the
+- Detail window: its menu's Search by Image does nothing yet (see the
+  item menu); Set as Library Cover opens the dialog in the main window
+  (production's detail window has no dialog layer, so the row does
+  nothing there). No per-image zoom memory or "Loading..." placeholder; the
   pinned button rests at full strength rather than production's 94%. Moving
   the window by its toolbar does not keep the toolbar showing as
   `picto:window-moved` does. Its size uses the primary display's work area,
@@ -1307,18 +1323,16 @@ element (`shell/rails.rs`).
   subscriptions, and tags and tag groups on the Tags screen. The grid shell,
   the viewer toolbar, the Subscriptions screen and the Tags screen each host
   the menu as a full-window layer; the menu itself chooses between its
-  pop-up windows and the in-window panel. "Open With Other" is
-  the one-row chooser on every platform: the applications cannot be listed,
-  so macOS's submenu is not shown.
+  pop-up windows and the in-window panel.
 - Item menu rows shown, enabled as production has them, that do nothing yet
-  (each with a `TODO` where it is received): Open With Other (the system's
-  application list), Copy and Copy for several items (GPUI's macOS
-  pasteboard drops file lists), Search by Image (production uploads
-  the original from a hidden browser window), Set as Library Cover (the
-  cover dialog that frames the square), Find Items with This Media (an
-  ad-hoc media-matches destination), Regenerate Thumbnail, Grayscale, Edit
-  Group (the collection editor), Group when the selection needs the group
-  organizer, Batch Rename, Auto Tag, and Set as Thumbnail. "Add Tags", "Add to Folder" and "New Smart
+  (each with a `TODO` where it is received): Search by Image (production
+  uploads the original from a hidden browser window), Auto Tag, Open
+  Folder (the grid shows no folder tiles yet) and Windows' Open With Other
+  chooser. Copy puts the files on the macOS pasteboard
+  (`NSFilenamesPboardType`, as production); on Windows and Linux it
+  reports that file copying is unavailable (`TODO` in `desktop.rs`).
+  Production shows no notification when a menu's Copy, Regenerate
+  Thumbnail or Set as Thumbnail fails; these show one. "Add Tags", "Add to Folder" and "New Smart
   Folder" dispatch the shortcuts' `AddTags`, `AddToFolder` and
   `NewSmartFolder`, which open the Add Tags and Folders dialogs (the
   inspector's pickers from the viewer's menu) and the smart-folder editor.
@@ -1379,19 +1393,19 @@ element (`shell/rails.rs`).
   until the next page arrives. The very first opening shows one empty frame
   while the pane is measured.
 - Shortcuts not performed yet, bound to nothing and listed with their
-  reasons in `keymap::NOT_YET`: Add to Last Folder, Regenerate Thumbnail, Auto-Tag, Copy (⌘C copies files,
-  which GPUI's macOS clipboard cannot hold), Copy Tags and Paste Tags,
-  Remove from Group, Toggle Grayscale, the layout and tile-label keys,
+  reasons in `keymap::NOT_YET`: Add to Last Folder, Auto-Tag, Copy Tags
+  and Paste Tags, the layout and tile-label keys,
   Toggle Logs and the player's fullscreen key; production's deferred ids
-  are not bound either. Batch rename for several items is a `TODO`. Space scrolls the grid
+  are not bound either. Space scrolls the grid
   at once rather than smoothly, and `+` also answers to Shift+= (GPUI
   matches the typed character), where production's `+` needs the key
   itself.
 - Application menu: rows whose feature is missing are present and disabled:
   Library Manager, New Library, Open Library and Recent Libraries (only the
   open library is listed; opening real libraries awaits a decision), Check
-  for Updates, Batch Rename, Regenerate Thumbnail, Auto Tag and Log Window. Copy
-  outside a text field copies nothing (production's ⌘C copies files). A
+  for Updates, Auto Tag and Log Window. Copy outside a text field copies
+  the selection's files, as ⌘C does (production's row, chosen with the
+  pointer, copies nothing there). A
   row is enabled by whether its action has a handler where the keyboard is, so the selection's rows are disabled while Settings or a
   detail window is in front, where production's stay enabled and do
   nothing; Set Rating's submenu title stays enabled (AppKit enables a row

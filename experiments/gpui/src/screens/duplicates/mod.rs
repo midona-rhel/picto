@@ -238,6 +238,8 @@ pub struct DuplicatesScreen {
     /// Smart merge is hovered, which rings the file it would keep.
     smart_hovered: bool,
     survivor: motion::Fade,
+    /// A card's menu (`MediaCard`'s `contextMenu`).
+    menu: ui::menu::Host,
     _session: Vec<Subscription>,
 }
 
@@ -271,9 +273,11 @@ impl DuplicatesScreen {
                 }
             }),
         ];
+        let focus = cx.focus_handle();
         Self {
             session,
-            focus: cx.focus_handle(),
+            menu: ui::menu::Host::deferred(2, ui::menu::Return::To(focus.clone())),
+            focus,
             return_focus: None,
             controls,
             visible: false,

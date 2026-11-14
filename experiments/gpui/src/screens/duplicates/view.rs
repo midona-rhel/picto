@@ -174,10 +174,74 @@ impl DuplicatesScreen {
             .flex()
             .flex_col()
             .rounded(px(theme::RADIUS_MD))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_card_menu(index, event.position, window, cx);
+                }),
+            )
             .child(header)
             .child(self.preview(index, window, cx))
             .child(self.metadata(side, cx))
             .children(survivor)
+    }
+
+    /// `MediaCard`'s menu: open the file in its default application, or in
+    /// a window of its own.
+    fn open_card_menu(
+        &mut self,
+        index: usize,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::grid::menu as rows;
+        let Some(side) = self.shown.as_ref().map(|shown| &shown.sides[index]) else {
+            return;
+        };
+        let description = rows::Description {
+            single_hash: Some(side.file.file_hash.clone()),
+            handlers: rows::Handlers {
+                open_default: true,
+                open_new_window: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
+        let built = rows::open_menu(&description, &hints);
+        let entries = rows::entries(built, &mut |_| ui::menu::Entry::Separator);
+        let menu = cx.new(|cx| ui::menu::Menu::new(entries, position, cx).search(false));
+        self.menu.open(menu, window, cx, move |this, _, key, _, cx| {
+            let Some(side) = this.shown.as_ref().map(|shown| &shown.sides[index]) else {
+                return;
+            };
+            if key == rows::Action::OpenDefault.key() {
+                // `openDefaultAppForHash`: where the library keeps the file.
+                if let Some(media) = &side.media {
+                    crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
+                }
+            } else if key == rows::Action::OpenInNewWindow.key() {
+                // `openDetailWindow({ hash, width, height })`: the file alone.
+                let Some(details) = &side.details else {
+                    return;
+                };
+                let entry = crate::viewer::detail::Entry {
+                    root: details.root.root_id,
+                    hash: side.file.file_hash.clone(),
+                    name: side
+                        .media
+                        .as_ref()
+                        .map(|media| media.media_name.clone())
+                        .unwrap_or_else(|| side.file.file_hash.clone()),
+                    width: side.file.pixel_width,
+                    height: side.file.pixel_height,
+                    collection: false,
+                };
+                crate::viewer::detail::open(this.session.clone(), vec![entry], 0, cx);
+            }
+        });
     }
 
     /// The preview pane: the image in its frame, zoomed and panned with the
@@ -644,9 +708,11 @@ impl Render for DuplicatesScreen {
         let narrow = self.width > 0. && self.width <= NARROW_WIDTH;
         let comparison = self.comparison(compact, narrow, window, cx);
         let footer = self.footer(compact, narrow, window, cx);
+        let menu = self.menu.layer(window, cx);
         root.children(self.scan_progress.then(|| ui::progress_bar().height(2.)))
             .child(comparison)
             .child(footer)
+            .children(menu)
     }
 }
 

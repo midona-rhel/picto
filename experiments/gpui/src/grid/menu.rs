@@ -1151,6 +1151,14 @@ pub fn viewer_menu(
     rows
 }
 
+/// `buildEntityOpenContextEntries` alone: the rows that open the file, as
+/// the Duplicates screen's cards offer them.
+pub fn open_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    Builder { hint }.open_entries(d, &mut rows);
+    rows
+}
+
 /// The inspector preview's menu (`InspectorPreview`): opening the file, then
 /// "Set as Library Cover".
 pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
