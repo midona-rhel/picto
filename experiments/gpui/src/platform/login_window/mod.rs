@@ -53,8 +53,10 @@ pub enum Event {
     /// main frame): the address and the system's description of why. A
     /// load stopped by a newer one, or refused by the window, is not one.
     Failed { url: String, description: String },
-    /// The web view could not be made (no WebView2 Runtime, no
-    /// WebKitGTK); the window is of no use and is closed.
+    /// The web view could not be made after its window opened (no
+    /// WebView2 Runtime); the window is of no use and is closed. On Linux
+    /// the web view is made with its window, and `open` says so instead.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     Unavailable(String),
     /// The user closed the window.
     Closed,

@@ -706,6 +706,27 @@ events are run from GPUI's loop every 10 ms while one is open; it opens its
 own connection to X11 or Wayland). Every web view starts on a private data
 store of its own that goes when it closes, which is what production's
 partition, cleared when a login starts and once it is saved, comes to.
+The web view is made from a task of its own, outside any GPUI update:
+WebView2 runs the thread's messages while it starts, which run GPUI's
+tasks, and those must find the app unborrowed (a page asked for meanwhile
+loads once it is there). A page that fails to load is reported as
+production's `did-fail-load` is, "<service> could not load (…)", on all
+three systems: on macOS from a navigation delegate put in front of `wry`'s
+(which takes no failures) that passes every other message on, with the
+system's description; on Windows from a `NavigationCompleted` handler of
+its own beside `wry`'s (a failure with no answer from the server, named by
+WebView2's error status, e.g. `CONNECTION_ABORTED`); on Linux from
+WebKitGTK's `load-failed`, with its message. A load stopped by a newer one
+or refused by the window is not one, as Electron leaves out `ERR_ABORTED`.
+Pages cannot read or write the clipboard (WebKitGTK's
+`javascript-can-access-clipboard` is off; the user's own copy and paste in
+a field are the web view's editing), WebView2's own right-click menu is
+off as Electron has none, and every permission is refused. A login ends
+when the app quits and when its library closes (a switch, Close Library),
+the sign-in window or OnlyFans' browser and its profile with it, whether
+or not the Accounts dialog is open; an answer that comes back for a login
+that has since ended (a save, the outside browser's ending) changes
+nothing.
 `sites.rs` is the service table; `adapters.rs` holds production's rules for
 when a login has finished (the session cookies a service's login sets, read
 for that service's addresses only; the page showing a signed-in session; a
@@ -745,7 +766,9 @@ user's Picto keeps, whichever library is open. This app therefore sets `PICTO_EP
 first thing in `main` (`logins::keep_credentials_in_process`): logins live in
 the core's process-local store and go when the app quits, while the copy's
 `credential` rows (what the Accounts dialog lists) are written as production
-writes them. A login is not saved or removed if the switch is not set. This
+writes them. A login is not saved or removed if the switch is not set, and
+Pixiv's code exchange, which saves its login inside the core, is refused
+then too. This
 also keeps the core's opening pass, which removes retired services' secrets,
 away from the keychain.
 
@@ -1091,7 +1114,8 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_INSPECTOR=<width>` | debug builds | inspector width whatever was kept |
 | `PICTO_GPUI_HOLD_RUNS` | debug builds | the Subscriptions screen logs its commands and answers runs and gallery downloads itself instead of starting network work |
 | `PICTO_GPUI_SILENT` | debug builds | every player and Flash movie starts muted |
-| `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` | debug builds | every site login's addresses move onto that loopback origin, the sign-in window loads nothing outside it, and a login saved or removed is reported on standard error as `auth.credentials.list` and the core's store answer; for checking sign-ins against local pages |
+| `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` | debug builds | every site login's addresses move onto that loopback origin, the sign-in window loads nothing outside it, and a login saved or removed is reported on standard error as its `auth.credentials.list` row and the names (never the values) of the cookies the core's store holds; OnlyFans' own-browser login and Pixiv's code exchange, which would reach the real site whatever the window loads, are refused; for checking sign-ins against local pages |
+| `PICTO_GPUI_LOGIN_CHECK=<folder>` | debug builds | with `PICTO_GPUI_LOGIN_ORIGIN`, the app serves a login of its own at that origin and signs in through the system's sign-in window (`src/logins/check.rs`): a page that cannot load, Cancel, the window closed as by its close button, and a sign-in whose session cookie is saved through `auth.credentials.set`, read back and removed; it writes `login-check.log` (last line `result: pass` or `result: fail`) and pictures of the window to the folder, then quits |
 | `PICTO_GPUI_APP_DATA=<folder>` | debug builds | the core's application data (AI models in `models/`) there instead of beside the copy |
 | `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once |
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
@@ -1120,7 +1144,13 @@ points) and to 80% (the grid; the Settings window). The twelve pictures are
 uploaded as the `pictures-linux` and `pictures-windows` artifacts
 (`gh run download <run> -n pictures-linux`). They show the app's own drawing
 on each system, not the system's: no window frame, no system menus, no
-pointer.
+pointer. Then the app runs for real on that copy, with a screen (Xvfb on
+Linux, the runner's desktop on Windows, where the WebView2 Runtime is
+installed first if the image lacks it), and `PICTO_GPUI_LOGIN_CHECK` opens
+the sign-in window on the system's web view against the app's own local
+login; the step fails unless `login-check.log` ends `result: pass`. The
+log, the app's output and two pictures of the sign-in window are the
+`login-check-linux` and `login-check-windows` artifacts.
 
 ## What works
 
@@ -1164,7 +1194,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
 | AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
 | Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
-| Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); a sign-in end to end on macOS in a real window against a local login page (cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed), and a cancel; pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons) |
+| Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); the sign-in window end to end against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`: a page that cannot load, Cancel, the window closed by its close button, and a cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed) on macOS locally and on Linux and Windows in CI; the masked Cookie and X-BC fields (picture, accessibility tree); pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons) |
 | Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
 | Libraries | the gate, the Library Manager (list, Open Library, New Library, Open Existing…, Add to and Remove from Quick Access, Rename, Show in File Manager, Remove from List, the cover, statistics), Open Library…, Recent Libraries and Clear History, the switcher's rows and functions, switching, the last library at start, under the rules of section 2 | pictures (Library Manager against production's: same layout, header, sidebar and footer; the switcher; production's gate could not be shown, its reference opens a library by itself); tests (each rule; an open and a switch of generated libraries); off-screen with `PICTO_GPUI_TEST_LIBRARIES` (consent, open, switch, statistics, an incompatible schema refused) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
@@ -1348,23 +1378,32 @@ re-checked by reading the code; the rest were checked against it.
   there, or a notification, has not been heard.
 - Update checks, cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, not performed.
-- Site logins, partly. Seen working only on macOS against a local page; no
-  real service has been signed in to (no real site is contacted from a
-  check). Windows and Linux are built and tested in CI and have never opened
-  a sign-in window. A page that fails to load is not reported (the system's
-  web views tell `wry` nothing of it; production shows "<service> could not
-  load (…)"); the window shows the web view's own error page. FANBOX's
-  login keeps only the web view's User-Agent as its headers (production
-  keeps the headers Chromium sent to FANBOX's API, `sec-ch-ua` among them,
-  which WebKit does not send). The services' icons are the globe (production
-  fetches each site's own icon from the site). The OnlyFans browser login
-  has never run (it starts a browser of the user's, which would reach the
-  network). The manual session's Cookie and X-BC fields show their text
-  (production's are password fields), and the SubscribeStar service choice
-  is not disabled while a login runs. Logins last only as long as the app
-  (see "The keychain" in section 4). (Production derives no Retry now or
-  Review source action for a problem, so neither button shows in either
-  app.)
+- Site logins, partly. The sign-in window has run on all three systems,
+  only against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`): on
+  macOS locally (WKWebView), on Linux in CI (WebKitGTK in a GTK window on
+  Xvfb's X11, no window manager; Wayland not run) and on Windows in CI
+  (WebView2 Runtime 156 on the runner); see the Per platform table. No real
+  service has been signed in to on any of them (no check contacts a real
+  site), and no login other than Danbooru's cookie rule has run in a web
+  view (the others are tested against recorded pages). The window has not
+  been used by a person off macOS (typing, IME, the system's copy and paste
+  in a page's field). FANBOX's login keeps only the web view's User-Agent
+  as its headers (production keeps the headers Chromium sent to FANBOX's
+  API, `sec-ch-ua` among them, which WebKit does not send). The services'
+  icons are the globe (production fetches each site's own icon from the
+  site). The OnlyFans browser login has never run (it starts a browser of
+  the user's, which would reach the network; the local seam refuses it).
+  A password field (the manual session's Cookie and X-BC) does not switch
+  the system's input method off or turn on macOS's secure keyboard entry
+  as a system password field does; what an input method composes is drawn
+  as bullets. Logins last only as long as the app (see "The keychain" in
+  section 4), and the dialog says so ("Login saved for this session; it is
+  not kept after the app quits." where production says the system
+  credential store). Accounts' buttons are the shared action button at
+  production's 30px with 13px sides; its Log In and Remove keep that
+  button's medium weight and 1px dark ring, which production's dialog
+  buttons do not have. (Production derives no Retry now or Review source
+  action for a problem, so neither button shows in either app.)
 - Search by Image (it uploads the file to a search engine): its engines are
   drawn in every menu as production draws a disabled row (40%, no hover, no
   tooltip).
@@ -1629,7 +1668,7 @@ Smaller differences by area†
 | Detail window always on top | yes | no; the pin is hidden | no; the pin is hidden |
 | UI font | the system's (production bundles Geist) | the system's | the system's |
 | Video | bundled `ffmpeg`, frames uploaded per frame | same | same |
-| Site sign-in window | WebView2 in a GPUI window; needs the WebView2 Runtime; never run | WebKitGTK in a GTK window of its own (GTK 3, WebKitGTK 4.1); never run | same, over GTK's own Wayland connection; never run |
+| Site sign-in window | WebView2 in a GPUI window; needs the WebView2 Runtime. Run in CI against the local login (a failed load, reported as WebView2's status, e.g. `HTTP_INVALID_SERVER_RESPONSE`; Cancel; the window closed with `WM_CLOSE`; a saved login), with a GPUI task ready throughout while the web view starts; not used by a person | WebKitGTK in a GTK window of its own (GTK 3, WebKitGTK 4.1). Run in CI on Xvfb against the local login (the same four, the failure in WebKitGTK's words, e.g. "Connection terminated unexpectedly"; the window closed through `delete-event`); not used by a person | same, over GTK's own Wayland connection; never run |
 
 On every platform the Ruffle frame path reads back from the GPU and uploads
 again, and only AVFoundation video is drawn without a copy.
