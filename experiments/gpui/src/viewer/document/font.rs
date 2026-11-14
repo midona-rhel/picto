@@ -693,6 +693,11 @@ impl Render for FontViewer {
             let step =
                 |id: &'static str, icon: &'static str, larger: bool, cx: &mut Context<Self>| {
                     ui::icon_button(id, icon)
+                        .name(if larger {
+                            t("Increase font preview size")
+                        } else {
+                            t("Decrease font preview size")
+                        })
                         .glyph(14.)
                         .on_click(cx.listener(move |this, _, _, cx| this.step_scale(larger, cx)))
                 };
@@ -723,6 +728,7 @@ impl Render for FontViewer {
                                     300.,
                                     1.,
                                 )
+                                .name(t("Font preview size"))
                                 .width(96.)
                                 .on_change({
                                     let entity = cx.entity().downgrade();

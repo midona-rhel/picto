@@ -414,6 +414,10 @@ impl TagDialog {
             self.focus_index == Some(index),
             cx,
         )
+        // A check box named by the tag, ticked while the items will have it.
+        .role(Role::CheckBox)
+        .aria_label(full.clone())
+        .aria_toggled(crate::ui::a11y::toggled(checked))
         .child(check::check_box(
             if checked { Mark::Checked } else { Mark::Empty },
             CheckSize::Compact,

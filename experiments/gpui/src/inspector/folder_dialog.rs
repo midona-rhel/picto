@@ -221,7 +221,12 @@ impl FolderDialog {
         let removing = member && self.remove.contains(&id);
         let checked = (member && !removing) || self.add.contains(&id);
         let group = SharedString::from(format!("folder-dialog-row-{index}"));
-        let mut row = shell::item_row(("folder-dialog-row", index), group.clone(), false, cx);
+        // A check box named by the folder, ticked while the items will be
+        // in it.
+        let mut row = shell::item_row(("folder-dialog-row", index), group.clone(), false, cx)
+            .role(Role::CheckBox)
+            .aria_label(folder.name.clone())
+            .aria_toggled(crate::ui::a11y::toggled(checked));
         if let Some(line) = tree {
             if line.depth > 0 {
                 row = row.pl(px(8. + line.depth as f32 * INDENT));
@@ -231,6 +236,13 @@ impl FolderDialog {
                 let expanded = line.expanded;
                 let fold = SharedString::from(format!("folder-dialog-fold-{index}"));
                 slot.id(("folder-dialog-fold", index))
+                    .role(Role::Button)
+                    .aria_label(if expanded {
+                        crate::tf!("Collapse {value0}", folder.name)
+                    } else {
+                        crate::tf!("Expand {value0}", folder.name)
+                    })
+                    .aria_expanded(expanded)
                     .group(fold.clone())
                     .flex()
                     .items_center()

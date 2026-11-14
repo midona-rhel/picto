@@ -359,6 +359,8 @@ pub fn bring_all_to_front(cx: &mut App) {
 
 /// `WindowCloseButton`: a 28px square with a thin 16px cross, as the shared
 /// icon button's window-close look.
+// a11y: the window's buttons are the shared icon buttons, named by their
+// tooltips or as `WindowCloseButton` names itself.
 pub fn close_button(
     id: impl Into<ElementId>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,

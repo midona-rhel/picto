@@ -234,6 +234,12 @@ impl Inspector {
             .child(
                 div()
                     .id("open-source")
+                    .role(Role::Button)
+                    .aria_label(match &first {
+                        Some(url) => crate::tf!("Open {value0}", url),
+                        None => t("Add source URL").to_owned(),
+                    })
+                    .aria_disabled(unavailable)
                     .flex_1()
                     .min_w_0()
                     .h_full()
@@ -263,6 +269,9 @@ impl Inspector {
             field = field.child(
                 div()
                     .id("source-count")
+                    .role(Role::Button)
+                    .aria_label(crate::tf!("Show all {value0} source URLs", urls.len()))
+                    .aria_expanded(open)
                     .group("source-count")
                     .h_full()
                     .px(px(6.))
@@ -281,6 +290,9 @@ impl Inspector {
         }
         let action = div()
             .id("manage-sources")
+            .role(Role::Button)
+            .aria_label(t("Manage source URLs"))
+            .aria_expanded(open)
             .group("manage-sources")
             .w(px(31.))
             .h_full()
@@ -355,6 +367,8 @@ impl Inspector {
                 row.child(
                     div()
                         .id(("source-open", index))
+                        .role(Role::Button)
+                        .aria_label(crate::tf!("Open {value0}", url))
                         .flex_1()
                         .min_w_0()
                         .h(px(32.))
@@ -401,6 +415,8 @@ impl Inspector {
         list = list.child(
             div()
                 .id("source-add")
+                .role(Role::Button)
+                .aria_label(t("Add URL"))
                 .w_full()
                 .h(px(32.))
                 .px(px(10.))

@@ -279,7 +279,7 @@ impl RenderOnce for DatePicker {
                     cx.stop_propagation();
                     turn(cx);
                 });
-            calendar_button(button, named(label), 1., t(name), window, cx, move |_, cx| {
+            calendar_button(button, named(label), 1., name.to_owned(), window, cx, move |_, cx| {
                 pressed(cx)
             })
         };
@@ -292,7 +292,7 @@ impl RenderOnce for DatePicker {
                 -1,
                 "date-previous-month",
                 "date-previous",
-                "Previous month",
+                t("Previous month"),
             ))
             .child(
                 div()
@@ -305,7 +305,7 @@ impl RenderOnce for DatePicker {
                     .font_weight(FontWeight::MEDIUM)
                     .child(crate::i18n::format::month_year(month)),
             )
-            .child(step(1, "date-next-month", "date-next", "Next month"));
+            .child(step(1, "date-next-month", "date-next", t("Next month")));
         let weekdays = div()
             .flex()
             .gap(px(2.))

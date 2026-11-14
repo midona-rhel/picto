@@ -135,6 +135,13 @@ impl FolderPicker {
             right.child(
                 div()
                     .id(("folder-expand", index))
+                    .role(Role::Button)
+                    .aria_label(if expanded {
+                        crate::tf!("Collapse {value0}", folder.name)
+                    } else {
+                        crate::tf!("Expand {value0}", folder.name)
+                    })
+                    .aria_expanded(expanded)
                     .group(SharedString::from(format!("folder-expand-{index}")))
                     .size(px(26.))
                     .flex_none()
@@ -170,8 +177,19 @@ impl FolderPicker {
             right.child(div().size(px(26.)).flex_none())
         };
         let menu_folder = folder.clone();
+        // A check box named by its folder, at its level of the tree; the
+        // row the keys are on reads as focused.
         div()
             .id(("folder-row", index))
+            .role(Role::CheckBox)
+            .aria_label(folder.name.clone())
+            .aria_level(row.depth + 1)
+            .aria_toggled(if excluded {
+                Toggled::Mixed
+            } else {
+                crate::ui::a11y::toggled(selected)
+            })
+            .when(focused, |row| row.aria_active_descendant())
             .group(group)
             .relative()
             .h(px(ROW))
@@ -253,6 +271,10 @@ impl FolderPicker {
         let focused = self.focus_index == Some(0);
         let mut row = div()
             .id("folder-picker-library")
+            .role(Role::RadioButton)
+            .aria_label(t("Library"))
+            .aria_toggled(crate::ui::a11y::toggled(chosen))
+            .when(focused, |row| row.aria_active_descendant())
             .h(px(theme::CONTROL_MD))
             .flex_none()
             .px(px(6.))

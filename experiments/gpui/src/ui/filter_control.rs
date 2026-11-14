@@ -311,6 +311,7 @@ impl RenderOnce for FilterAction {
                 .absolute()
                 .inset_0()
         };
+        // a11y: named by its tooltip or name, given below.
         let mut button = super::icon_button(self.id, self.icon)
             .look(super::icon_button::Look::Filter)
             .toggled(self.active)

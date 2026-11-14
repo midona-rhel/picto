@@ -506,3 +506,111 @@ fn the_interface_zoom_scales_the_tree_to_the_window() {
     let transform = tree.root().node().transform().expect("a zoomed root");
     assert_eq!(transform.as_coeffs()[0], 1.5);
 }
+
+/// Every `.rs` file under `src/`, with its path from there.
+fn sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let name = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                out.push((name, std::fs::read_to_string(&path).unwrap()));
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out
+}
+
+/// A glyph button shows no text, so assistive technology knows it only by
+/// the name it is given: its tooltip (production's `aria-label` repeats
+/// it), a label, or a name of its own. Every call that makes one gives it
+/// one of these before the statement ends.
+#[test]
+fn guard_every_glyph_button_is_named() {
+    // The builders that take no tooltip themselves.
+    const BUILDERS: [&str; 3] = ["icon_button(", "small_button(", "filter_action("];
+    let mut unnamed = Vec::new();
+    for (file, text) in sources() {
+        if file.starts_with("ui/a11y/") {
+            continue;
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        for (at, line) in lines.iter().enumerate() {
+            let code = line.split("//").next().unwrap_or_default();
+            let Some(builder) = BUILDERS.iter().find(|builder| code.contains(*builder)) else {
+                continue;
+            };
+            // The definitions, calls that only forward to one, a view's own
+            // method of the same name, and a call marked `// a11y: <why>`
+            // on its line or the line above.
+            let above = |back: usize| lines[at.saturating_sub(back)..at].join("\n");
+            if code.contains(&format!("fn {builder}"))
+                || code.contains(&format!("self.{builder}"))
+                || line.contains("// a11y:")
+                || above(1).contains("// a11y:")
+                || above(3).contains("IconButton {")
+                || code.contains(&format!("pub use {}", builder.trim_end_matches('(')))
+            {
+                continue;
+            }
+            // The chain, up to the end of its statement or expression.
+            let depth = line.len() - line.trim_start().len();
+            let mut chain = String::new();
+            for next in lines.iter().skip(at).take(40) {
+                chain.push_str(next);
+                let indent = next.len() - next.trim_start().len();
+                if next.trim_end().ends_with(';')
+                    || (indent < depth && !next.trim().is_empty() && chain.len() > line.len())
+                {
+                    break;
+                }
+            }
+            let named = [".tip(", ".name(", ".label("]
+                .iter()
+                .any(|call| chain.contains(call))
+                // A wrapper that returns the button for its callers to name.
+                || chain.contains("-> ui::icon_button::IconButton")
+                || chain.contains("-> super::icon_button::IconButton")
+                || chain.contains("-> IconButton");
+            if !named {
+                unnamed.push(format!("{file}:{}", at + 1));
+            }
+        }
+    }
+    assert!(
+        unnamed.is_empty(),
+        "glyph buttons with no tooltip, label or name:\n  {}",
+        unnamed.join("\n  ")
+    );
+}
+
+/// Each shared control that takes a click or the keyboard says what it is:
+/// a file of `ui/` that makes an element clickable or a tab stop sets a role
+/// there (or declares the click presentational).
+#[test]
+fn guard_every_interactive_shared_control_has_a_role() {
+    let mut missing = Vec::new();
+    for (file, text) in sources() {
+        if !file.starts_with("ui/") || file.starts_with("ui/a11y") || file == "ui/focus.rs" {
+            continue;
+        }
+        let interactive = text.contains(".on_click(") || text.contains("focus::control(");
+        let described = text.contains(".role(")
+            || text.contains("// a11y:")
+            || text.contains("a11y_presentational")
+            || text.contains("a11y::text(")
+            || text.contains("a11y::heading(");
+        if interactive && !described {
+            missing.push(file);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "shared controls that take input but set no role: {missing:?}"
+    );
+}

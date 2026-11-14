@@ -43,8 +43,9 @@ const NOT_SHOWN: [&str; 7] = [
     "settings/registry.rs",
 ];
 
-/// Calls whose literal argument is drawn.
-const SINKS: [&str; 13] = [
+/// Calls whose literal argument is drawn, or read by assistive technology
+/// (an accessible name, description, value or placeholder).
+const SINKS: [&str; 17] = [
     "tip(",
     ".child(",
     ".label(",
@@ -58,6 +59,10 @@ const SINKS: [&str; 13] = [
     "notify::success(cx, ",
     "Tooltip::text(",
     ".detail(",
+    ".aria_label(",
+    ".aria_description(",
+    ".aria_placeholder(",
+    ".aria_value(",
 ];
 
 /// A string literal and where it is.

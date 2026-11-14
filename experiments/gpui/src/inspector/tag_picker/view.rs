@@ -11,6 +11,7 @@ use crate::ui::{
     overlay_shell::{self},
 };
 use crate::{grid::format, motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::TagRecord;
 use picto_library::predicate::SetMatchMode;
@@ -33,6 +34,9 @@ impl TagPicker {
         let group = SharedString::from(format!("{id}-{index}"));
         div()
             .id((id, index))
+            .role(Role::Button)
+            .aria_label(format!("{label} {}", format::grouped(count)))
+            .aria_toggled(crate::ui::a11y::toggled(active))
             .group(group.clone())
             .h(px(24.))
             .flex_none()
@@ -230,11 +234,23 @@ impl TagPicker {
             .flex_none()
         };
         let label = display_name(tag, prefixes);
+        // A check box named by the tag and its count: ticked while the tag
+        // is chosen, mixed while a filter excludes it; the row the keys are
+        // on reads as focused.
+        let name = format!("{label} ({})", format::grouped(tag.active_count));
         let text = overlay_shell::search_match(label, query, cx);
         let row_tag = tag.clone();
         let menu_tag = tag.clone();
         let mut row = div()
             .id(("picker-tag", index))
+            .role(Role::CheckBox)
+            .aria_label(name)
+            .aria_toggled(if excluded {
+                Toggled::Mixed
+            } else {
+                crate::ui::a11y::toggled(checked)
+            })
+            .when(focused, |row| row.aria_active_descendant())
             .group(group.clone())
             .relative()
             .h(px(ROW))
@@ -513,6 +529,8 @@ impl TagPicker {
         };
         let backdrop = div()
             .id("picker-settings-backdrop")
+            .role(Role::Button)
+            .aria_label(t("Close tag picker settings"))
             .absolute()
             .inset_0()
             .on_click(cx.listener(|this, _, _, cx| {
@@ -530,6 +548,9 @@ impl TagPicker {
             .child(
                 row()
                     .id("picker-counts")
+                    .role(Role::CheckBox)
+                    .aria_label(t("Show counts"))
+                    .aria_toggled(crate::ui::a11y::toggled(self.counts))
                     .cursor_pointer()
                     .hover(move |style| style.bg(theme.surface_hover()))
                     .child(t("Show counts"))
