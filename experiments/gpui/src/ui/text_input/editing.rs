@@ -65,7 +65,7 @@ fn word_end_after(text: &str, offset: usize) -> usize {
         .map_or(text.len(), |segment| segment.end)
 }
 
-/// Control-Right on Windows and Linux: past the word the caret is in
+/// Control-Right on Windows: past the word the caret is in
 /// and the space after it, to the start of the next word.
 fn next_word_start(text: &str, offset: usize) -> usize {
     let segments = segments(text);
@@ -83,13 +83,54 @@ fn next_word_start(text: &str, offset: usize) -> usize {
     position
 }
 
-/// The word Option-Right (Control-Right elsewhere) and Option-Delete go
-/// to on this platform.
-pub(super) fn word_right(text: &str, offset: usize) -> usize {
-    if cfg!(target_os = "macos") {
-        word_end_after(text, offset)
+/// Whose text-field conventions a field follows. Chromium edits the same
+/// way everywhere except where its `EditingBehavior` tells the Mac, Windows
+/// and the other systems (Linux) apart.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Platform {
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl Platform {
+    /// The system this build runs on.
+    pub(super) const CURRENT: Platform = if cfg!(target_os = "macos") {
+        Platform::Mac
+    } else if cfg!(target_os = "windows") {
+        Platform::Windows
     } else {
+        Platform::Linux
+    };
+
+    /// Control-Right on Windows goes past the space after a word, to the
+    /// next word's start; Option-Right on a Mac and Control-Right on Linux
+    /// stop at the word's end (`ShouldSkipSpaceWhenMovingRight`).
+    pub(super) fn skips_space_moving_right(self) -> bool {
+        self == Platform::Windows
+    }
+
+    /// A double-click on Windows selects a word with the space after it
+    /// (`select_trailing_whitespace_enabled`, on only there).
+    pub(super) fn selects_trailing_space(self) -> bool {
+        self == Platform::Windows
+    }
+
+    /// Up on the first row and Down on the last go to the text's start and
+    /// end, except on Windows, where they stay
+    /// (`ShouldMoveCaretToHorizontalBoundaryWhenPastTopOrBottom`).
+    pub(super) fn up_down_reach_the_ends(self) -> bool {
+        self != Platform::Windows
+    }
+}
+
+/// The word Option-Right (Control-Right elsewhere) and Option-Delete go
+/// to on `platform`.
+pub(super) fn word_right(text: &str, offset: usize, platform: Platform) -> usize {
+    if platform.skips_space_moving_right() {
         next_word_start(text, offset)
+    } else {
+        word_end_after(text, offset)
     }
 }
 
@@ -327,9 +368,10 @@ pub(super) fn hard_lines(text: &str) -> Vec<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        History, Snapshot, Typing, changed, decomposed_backward, hard_lines, next_grapheme,
-        next_word_start, normalize_breaks, one_line, paragraph_at, paragraph_end, paragraph_start,
-        previous_grapheme, transpose, utf8_offset, word_at, word_end_after, word_start_before,
+        History, Platform, Snapshot, Typing, changed, decomposed_backward, hard_lines,
+        next_grapheme, next_word_start, normalize_breaks, one_line, paragraph_at, paragraph_end,
+        paragraph_start, previous_grapheme, transpose, utf8_offset, word_at, word_end_after,
+        word_right, word_start_before,
     };
 
     #[test]
@@ -440,6 +482,25 @@ mod tests {
         assert_eq!(next_word_start(text, 16), 17);
         assert_eq!(next_word_start(text, 17), text.len());
         assert_eq!(next_word_start(text, text.len()), text.len());
+    }
+
+    #[test]
+    fn control_right_stops_at_the_word_end_except_on_windows() {
+        let text = "one two  three";
+        assert_eq!(word_right(text, 0, Platform::Mac), 3);
+        assert_eq!(word_right(text, 0, Platform::Linux), 3);
+        assert_eq!(word_right(text, 0, Platform::Windows), 4);
+        assert_eq!(word_right(text, 4, Platform::Linux), 7);
+        assert_eq!(word_right(text, 4, Platform::Windows), 9);
+    }
+
+    #[test]
+    fn only_a_windows_double_click_takes_the_space_after_the_word() {
+        let text = "one two";
+        let word = |platform: Platform| word_at(text, 1, platform.selects_trailing_space());
+        assert_eq!(word(Platform::Mac), 0..3);
+        assert_eq!(word(Platform::Linux), 0..3);
+        assert_eq!(word(Platform::Windows), 0..4);
     }
 
     #[test]

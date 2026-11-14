@@ -3,7 +3,7 @@
 //! paragraph, deletes, the kill buffer, Undo and Redo, and the clipboard.
 use std::ops::Range;
 
-use super::editing::{self, Snapshot, Typing};
+use super::editing::{self, Platform, Snapshot, Typing};
 use super::element::{hit_row, row_index, rows_of, x_in};
 use super::*;
 use gpui::{ClipboardItem, KeyDownEvent};
@@ -191,7 +191,7 @@ impl TextInput {
     }
 
     pub(super) fn word_right(&mut self, extend: bool, cx: &mut Context<Self>) {
-        let target = editing::word_right(&self.content, self.cursor_offset());
+        let target = editing::word_right(&self.content, self.cursor_offset(), Platform::CURRENT);
         self.go(target, false, extend, cx);
     }
 
@@ -298,7 +298,7 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         let cursor = self.cursor_offset();
-        let end = editing::word_right(&self.content, cursor);
+        let end = editing::word_right(&self.content, cursor, Platform::CURRENT);
         self.delete_or_selection(cursor..end, None, cx);
     }
 
@@ -411,7 +411,8 @@ impl TextInput {
     }
 
     /// Up and Down in a field of one line, which have no binding there so
-    /// that lists around the field keep them: to the start or the end.
+    /// that lists around the field keep them: to the start or the end
+    /// (nothing on Windows).
     pub(super) fn on_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -428,9 +429,10 @@ impl TextInput {
         {
             return;
         }
+        let ends = Platform::CURRENT.up_down_reach_the_ends();
         let target = match keystroke.key.as_str() {
-            "up" if cfg!(target_os = "macos") => 0,
-            "down" if cfg!(target_os = "macos") => self.content.len(),
+            "up" if ends => 0,
+            "down" if ends => self.content.len(),
             _ => return,
         };
         cx.stop_propagation();
@@ -468,7 +470,7 @@ impl TextInput {
 
     /// The caret one row up or down in wrapped text, keeping to the same
     /// distance from the left over rows that are shorter; past the first
-    /// or last row, to the start or end.
+    /// or last row, to the start or end (on Windows it stays).
     pub(super) fn vertical(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
         let from = if extend || self.selected_range.is_empty() {
             self.cursor_offset()
@@ -477,8 +479,16 @@ impl TextInput {
         } else {
             self.selected_range.start
         };
+        // Past the first or last row: to the text's end, or where it is.
+        let past = |end: usize| {
+            if Platform::CURRENT.up_down_reach_the_ends() {
+                end
+            } else {
+                from
+            }
+        };
         let Some(lines) = self.last_lines.as_ref() else {
-            let end = if down { self.content.len() } else { 0 };
+            let end = past(if down { self.content.len() } else { 0 });
             self.go(end, false, extend, cx);
             return;
         };
@@ -486,9 +496,9 @@ impl TextInput {
         let row = row_index(&rows, from, self.upstream);
         let x = self.goal_x.unwrap_or_else(|| x_in(lines, &rows[row], from));
         let (target, upstream) = if !down && row == 0 {
-            (0, false)
+            (past(0), false)
         } else if down && row + 1 >= rows.len() {
-            (self.content.len(), false)
+            (past(self.content.len()), false)
         } else {
             let next = if down { row + 1 } else { row - 1 };
             hit_row(lines, &rows[next], x)

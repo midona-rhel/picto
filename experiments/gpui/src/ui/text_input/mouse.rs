@@ -2,7 +2,7 @@
 //! Pressing, dragging and secondary clicks in a field.
 use std::ops::Range;
 
-use super::editing;
+use super::editing::{self, Platform};
 use super::*;
 use gpui::{MouseDownEvent, MouseUpEvent, Pixels, Point};
 /// What a press selects as the pointer drags: characters, or the whole
@@ -19,7 +19,11 @@ impl TextInput {
     fn unit_at(&self, granularity: Granularity, at: usize) -> Range<usize> {
         match granularity {
             Granularity::Character => at..at,
-            Granularity::Word => editing::word_at(&self.content, at, !cfg!(target_os = "macos")),
+            Granularity::Word => editing::word_at(
+                &self.content,
+                at,
+                Platform::CURRENT.selects_trailing_space(),
+            ),
             Granularity::Line if self.multiline => editing::paragraph_at(&self.content, at),
             Granularity::Line => 0..self.content.len(),
         }
