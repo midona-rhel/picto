@@ -68,28 +68,6 @@ pub fn display_tags(
     }
 }
 
-/// `toggleTag`: a tag the items have is marked to come off, or no longer;
-/// any other is marked to go on, or no longer.
-pub fn toggle(
-    entity: &BTreeSet<String>,
-    add: &mut Vec<String>,
-    remove: &mut Vec<String>,
-    tag: &str,
-) {
-    let flip = |list: &mut Vec<String>| match list.iter().position(|known| known == tag) {
-        Some(at) => {
-            list.remove(at);
-        }
-        None => list.push(tag.to_owned()),
-    };
-    if entity.contains(tag) {
-        flip(remove);
-        add.retain(|known| known != tag);
-    } else {
-        flip(add);
-    }
-}
-
 /// `estimatedTotal`: how many rows the list may reach while more pages are
 /// left, so its scrollbar is the size of the whole list.
 fn estimated_total(
@@ -253,7 +231,12 @@ impl TagDialog {
     }
 
     fn toggle(&mut self, tag: &str, cx: &mut Context<Self>) {
-        toggle(&self.entity, &mut self.add, &mut self.remove, tag);
+        super::membership::mark(
+            &self.entity,
+            &mut self.add,
+            &mut self.remove,
+            tag.to_owned(),
+        );
         cx.notify();
     }
 
@@ -627,7 +610,7 @@ impl Render for TagDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::{View, display_tags, toggle};
+    use super::{View, display_tags};
     use crate::tags::record_name as name;
     use picto_library::{TagId, TagNamespaceId, TagRecord};
     use std::collections::BTreeSet;
@@ -645,20 +628,6 @@ mod tests {
 
     fn set(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|name| name.to_string()).collect()
-    }
-
-    #[test]
-    fn a_click_marks_new_tags_to_add_and_the_items_tags_to_remove() {
-        let entity = set(&["cat"]);
-        let (mut add, mut remove) = (Vec::new(), Vec::new());
-        toggle(&entity, &mut add, &mut remove, "dog");
-        toggle(&entity, &mut add, &mut remove, "cat");
-        assert_eq!(add, ["dog"]);
-        assert_eq!(remove, ["cat"]);
-        // A second click takes the mark back.
-        toggle(&entity, &mut add, &mut remove, "dog");
-        toggle(&entity, &mut add, &mut remove, "cat");
-        assert!(add.is_empty() && remove.is_empty());
     }
 
     #[test]
