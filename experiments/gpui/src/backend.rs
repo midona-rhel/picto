@@ -282,6 +282,93 @@ fn first(window: &WindowRequest) -> usize {
     }
 }
 
+/// A destination's first window, read afresh. The scope's saved view
+/// decides the sort, exactly as it does for the Electron grid reading the
+/// same rows; `seed` keeps a random sort stable while paging.
+fn read_open(
+    library: &Library,
+    seed: &str,
+    scope: ItemScope,
+    filter: FilterExpr,
+    shuffle: bool,
+    window: &WindowRequest,
+) -> picto_library::Result<(RootWindow, crate::grid::prefs::ViewPrefs, RootQuery)> {
+    let saved = |key: &str| {
+        library.read_auxiliary_json("view_pref", key).map(|row| {
+            row.and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_else(|| serde_json::json!({}))
+        })
+    };
+    let mut defaults = saved("grid:defaults")?;
+    // A view without a spacing of its own takes the `gridSpacing` setting
+    // (`gridSpacingAtom`).
+    if defaults.get("spacing").is_none_or(|v| v.is_null())
+        && let Ok(Some(app)) = library.read_auxiliary_json("setting", "application")
+        && let Ok(app) = serde_json::from_str::<serde_json::Value>(&app)
+        && let Some(spacing) = app.get("gridSpacing").cloned()
+        && let Some(defaults) = defaults.as_object_mut()
+    {
+        defaults.insert("spacing".into(), spacing);
+    }
+    let overrides = saved(&crate::grid::prefs::scope_key(&scope))?;
+    let mut prefs = crate::grid::prefs::ViewPrefs::resolve(&scope, &defaults, &overrides, seed);
+    if shuffle {
+        prefs.sort = picto_library::predicate::ItemSort {
+            field: picto_library::predicate::SortField::Random,
+            direction: prefs.sort.direction,
+            random_seed: Some(seed.to_owned()),
+        };
+    }
+    // A folder without its subfolders' items (`show_subfolders` off) is the
+    // folder alone.
+    let scope = match scope {
+        ItemScope::FolderTree { folder_id } if !prefs.show_subfolders => {
+            ItemScope::Folder { folder_id }
+        }
+        scope => scope,
+    };
+    let query = RootQuery {
+        scope,
+        view: picto_library::predicate::ViewQuerySpec {
+            filter,
+            sort: prefs.sort.clone(),
+        },
+    };
+    let started = std::time::Instant::now();
+    let read = library.query_window(&query, window);
+    crate::stats::window_read("open", first(window), started.elapsed());
+    Ok((read?, prefs, query))
+}
+
+/// Another window of results already shown, read with their query. A
+/// refresh learns where the selection's items are now in the same visit,
+/// from the order the window was just read from.
+fn read_window(
+    library: &Library,
+    query: &RootQuery,
+    window: &WindowRequest,
+    fetch: &Fetch,
+) -> picto_library::Result<(RootWindow, Vec<Option<u64>>)> {
+    let started = std::time::Instant::now();
+    let read = library.query_window(query, window).and_then(|read| {
+        let places = match fetch {
+            Fetch::Refresh(ids) if !ids.is_empty() => library.root_positions(query, ids)?,
+            _ => Vec::new(),
+        };
+        Ok((read, places))
+    });
+    crate::stats::window_read(
+        match fetch {
+            Fetch::Open => "open",
+            Fetch::Move(_) => "move",
+            Fetch::Refresh(_) => "refresh",
+        },
+        first(window),
+        started.elapsed(),
+    );
+    read
+}
+
 /// Starts the library's thread, which opens the application on the copy and
 /// then answers requests with the application's own `Library`.
 ///
@@ -342,105 +429,21 @@ pub fn start(
                         continue;
                     }
                     Request::Query(generation, scope, filter, shuffle, window) => {
-                        // The scope's saved view decides the sort, exactly as it
-                        // does for the Electron grid reading the same rows.
-                        let saved = |key: &str| {
-                            library.read_auxiliary_json("view_pref", key).map(|row| {
-                                row.and_then(|json| serde_json::from_str(&json).ok())
-                                    .unwrap_or_else(|| serde_json::json!({}))
-                            })
-                        };
-                        saved("grid:defaults")
-                            .map(|mut defaults| {
-                                // A view without a spacing of its own takes
-                                // the `gridSpacing` setting (`gridSpacingAtom`).
-                                if defaults.get("spacing").is_none_or(|v| v.is_null())
-                                    && let Ok(Some(app)) =
-                                        library.read_auxiliary_json("setting", "application")
-                                    && let Ok(app) = serde_json::from_str::<serde_json::Value>(&app)
-                                    && let Some(spacing) = app.get("gridSpacing").cloned()
-                                    && let Some(defaults) = defaults.as_object_mut()
-                                {
-                                    defaults.insert("spacing".into(), spacing);
-                                }
-                                defaults
-                            })
-                            .and_then(|defaults| {
-                                saved(&crate::grid::prefs::scope_key(&scope))
-                                    .map(|overrides| (defaults, overrides))
-                            })
-                            .and_then(|(defaults, overrides)| {
-                                let mut prefs = crate::grid::prefs::ViewPrefs::resolve(
-                                    &scope, &defaults, &overrides, &seed,
-                                );
-                                if shuffle {
-                                    prefs.sort = picto_library::predicate::ItemSort {
-                                        field: picto_library::predicate::SortField::Random,
-                                        direction: prefs.sort.direction,
-                                        random_seed: Some(seed.clone()),
-                                    };
-                                }
-                                // A folder without its subfolders' items
-                                // (`show_subfolders` off) is the folder alone.
-                                let scope = match scope {
-                                    ItemScope::FolderTree { folder_id }
-                                        if !prefs.show_subfolders =>
-                                    {
-                                        ItemScope::Folder { folder_id }
-                                    }
-                                    scope => scope,
-                                };
-                                let query = RootQuery {
-                                    scope,
-                                    view: picto_library::predicate::ViewQuerySpec {
-                                        filter,
-                                        sort: prefs.sort.clone(),
-                                    },
-                                };
-                                let started = std::time::Instant::now();
-                                let read = library.query_window(&query, &window);
-                                crate::stats::window_read(
-                                    "open",
-                                    first(&window),
-                                    started.elapsed(),
-                                );
-                                read.map(|window| {
-                                    Reply::Arrived(Box::new(Arrived {
-                                        generation,
-                                        fetch: Fetch::Open,
-                                        window,
-                                        prefs: Some(prefs),
-                                        query,
-                                        places: Vec::new(),
-                                    }))
-                                })
+                        read_open(library, &seed, scope, filter, shuffle, &window)
+                            .map(|(window, prefs, query)| {
+                                Reply::Arrived(Box::new(Arrived {
+                                    generation,
+                                    fetch: Fetch::Open,
+                                    window,
+                                    prefs: Some(prefs),
+                                    query,
+                                    places: Vec::new(),
+                                }))
                             })
                             .map_err(|error| (generation, Fetch::Open, error))
                     }
                     Request::Window(generation, query, window, fetch) => {
-                        let started = std::time::Instant::now();
-                        let read = library.query_window(&query, &window).and_then(|window| {
-                            // A refresh learns where the selection's items
-                            // are now in the same visit, from the order the
-                            // window was just read from.
-                            let places = match &fetch {
-                                Fetch::Refresh(ids) if !ids.is_empty() => {
-                                    library.root_positions(&query, ids)?
-                                }
-                                _ => Vec::new(),
-                            };
-                            Ok((window, places))
-                        });
-                        crate::stats::window_read(
-                            match fetch {
-                                Fetch::Open => "open",
-                                Fetch::Move(_) => "move",
-                                Fetch::Refresh(_) => "refresh",
-                            },
-                            first(&window),
-                            started.elapsed(),
-                        );
-                        match read {
+                        match read_window(library, &query, &window, &fetch) {
                             Ok((window, places)) => Ok(Reply::Arrived(Box::new(Arrived {
                                 generation,
                                 fetch,
