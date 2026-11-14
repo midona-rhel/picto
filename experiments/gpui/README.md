@@ -1283,9 +1283,8 @@ element (`shell/rails.rs`).
   ready, and while it enters it grows and fades but keeps its resting turn
   instead of turning from 10 to 5 degrees. The folder card's radial light is
   a vertical gradient. Auto Tag is drawn (dimmed when nothing in it is an
-  image) but the AI tagger it opens is a `TODO`. The
-  summary spinners and the 250 ms switch to the loading skeleton are not
-  ported, and a selection's covers follow the order items were chosen in this
+  image) but the AI tagger it opens is a `TODO`. A selection's
+  covers follow the order items were chosen in this
   session, not the Electron query order, for shift ranges.
 - The subfolder tiles' cover is a vertical gradient rather than a radial
   one, a cover that cannot be read shows the folder glyph rather than the
@@ -1486,8 +1485,7 @@ element (`shell/rails.rs`).
   (a dialog clips only once its height has been measured, from its second
   frame). While a rail or dialog fades out it still takes the pointer, where
   production sets `pointer-events: none`. Still to port with the features
-  they belong to: a subscription's run progress fading in, the 250 ms
-  switch of a slow selection summary to the loading skeleton, smooth paging,
+  they belong to: a subscription's run progress fading in, smooth paging,
   and the spinner loops.
 - Context menus shown as pop-up windows (the default on macOS) are not
   blurred: their window is transparent, so there is nothing of the app's
