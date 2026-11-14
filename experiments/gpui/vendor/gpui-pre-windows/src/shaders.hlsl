@@ -941,7 +941,7 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
         }
     }
 
-    if (shadow.inset != 0u) {
+    if (shadow.inset == 1u) {
         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
         alpha = 1.0 - alpha;

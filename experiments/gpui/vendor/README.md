@@ -94,7 +94,10 @@ does not need: lens, dispersion, tint and rim light).
 
 `gpui-pre-apple` (Metal)
 - `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
-  drop shadow, coverage times the outside of the element). New blur shaders:
+  drop shadow, coverage times the outside of the element). The fragment
+  shader's inset branch is taken for `inset == 1` only: upstream tests
+  `inset != 0`, which sent mode 2 down the inset path and left every glass
+  panel without its outer shadow (the same in the WGSL and HLSL). New blur shaders:
   downsample (box average with bilinear taps), gaussian (one direction,
   clamped to the reduced region), composite (rounded-rectangle coverage,
   clip, saturate, brightness, premultiplied output).
@@ -1651,7 +1654,15 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
      bounds = shadow.element_bounds;
    } else {
      // Leave room for the gaussian tail outside the shadow rect.
-@@ -549,6 +549,11 @@
+@@ -542,13 +542,18 @@
+     }
+   }
+ 
+-  if (shadow.inset != 0u) {
++  if (shadow.inset == 1u) {
+     // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+     // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+     alpha = 1. - alpha;
      float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
                                        shadow.element_corner_radii);
      alpha *= saturate(0.5 - element_distance);
@@ -1681,10 +1692,11 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
    float distance =
        quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
  
-@@ -1277,3 +1289,152 @@
+@@ -1276,4 +1288,153 @@
+   }
  
    return color;
- }
++}
 +
 +// --- backdrop blur --- //
 +//
@@ -1725,7 +1737,7 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
 +  float2 unit_vertex = unit_vertices[unit_vertex_id];
 +  return BackdropBlurVertexOutput{
 +      float4(unit_vertex * float2(2., -2.) + float2(-1., 1.), 0., 1.)};
-+}
+ }
 +
 +// One reduced texel: the average of its box of frame pixels, read two by two
 +// with bilinear samples between them.
@@ -2500,7 +2512,15 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/shaders.wgsl b/gpui-pre-wgpu/src/shad
          geometry = shadow.element_bounds;
      } else {
          // Leave room for the gaussian tail outside the shadow rect.
-@@ -1040,6 +1040,11 @@
+@@ -1033,13 +1033,18 @@
+         }
+     }
+ 
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+         alpha = 1.0 - alpha;
          let element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
                                          shadow.element_corner_radii);
          alpha *= saturate(0.5 - element_distance);
@@ -2693,7 +2713,15 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
          bounds = shadow.element_bounds;
      } else {
          // Leave room for the gaussian tail outside the shadow rect.
-@@ -948,6 +948,11 @@
+@@ -941,13 +941,18 @@
+         }
+     }
+ 
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+         alpha = 1.0 - alpha;
          float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
                                            shadow.element_corner_radii);
          alpha *= saturate(0.5 - element_distance);

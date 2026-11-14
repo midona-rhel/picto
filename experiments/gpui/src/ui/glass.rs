@@ -286,6 +286,38 @@ impl Element for GlassPanel {
 #[cfg(test)]
 mod tests {
     use super::{fill_over_system_blur, fill_without_blur, laid_over};
+
+    /// A glass panel's shadow is a drop shadow with the panel cut out of it
+    /// (`Shadow::inset == 2`). Each renderer's shader must reach that branch:
+    /// tested as "inset is not 0", the branch before it takes mode 2 as an
+    /// inset shadow, and no panel has a shadow or an outline outside it.
+    #[test]
+    fn every_renderer_reaches_the_cut_out_shadow() {
+        for (renderer, shader) in [
+            (
+                "Metal",
+                include_str!("../../vendor/gpui-pre-apple/src/shaders.metal"),
+            ),
+            (
+                "wgpu",
+                include_str!("../../vendor/gpui-pre-wgpu/src/shaders.wgsl"),
+            ),
+            (
+                "DirectX",
+                include_str!("../../vendor/gpui-pre-windows/src/shaders.hlsl"),
+            ),
+        ] {
+            let cut_out = shader
+                .find("} else if (shadow.inset == 2u) {")
+                .unwrap_or_else(|| panic!("{renderer}: no cut-out branch"));
+            let before = &shader[..cut_out];
+            let condition = before.rfind("if (shadow.inset").unwrap();
+            assert!(
+                before[condition..].starts_with("if (shadow.inset == 1u) {"),
+                "{renderer}: the branch before the cut-out one takes it too"
+            );
+        }
+    }
     use gpui::{
         BACKDROP_BLUR_MAX_TAPS, BackdropBlur, BackdropBlurKernel, Bounds, ContentMask, Corners,
         DevicePixels, PrimitiveBatch, Quad, Rgba, ScaledPixels, Scene, Size,
