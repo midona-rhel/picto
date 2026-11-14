@@ -163,16 +163,21 @@ impl Look {
                     drop: 0.,
                 }
             }
-            Look::SettingsSearch | Look::Form => Frame {
+            Look::SettingsSearch => Frame {
                 height: theme::CONTROL_LG,
                 radius: theme::RADIUS_MD,
                 border: (theme.border(), theme.primary_at(60.)),
                 fill: (theme.control_surface(), theme.control_surface()),
                 focus: Duration::ZERO,
                 curve: motion::EASE_DEFAULT,
-                left: if self == Look::Form { 12. } else { 30. },
-                right: if self == Look::Form { 12. } else { 8. },
+                left: 30.,
+                right: 8.,
                 drop: 0.,
+            },
+            Look::Form => Frame {
+                left: 12.,
+                right: 12.,
+                ..Look::SettingsSearch.frame(theme)
             },
             Look::Number => Frame {
                 height: theme::CONTROL_SM,
