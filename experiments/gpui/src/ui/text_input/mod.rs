@@ -1,8 +1,8 @@
 // Adapted from gpui 0.2.2 examples/input.rs (Apache-2.0).
-//! A text field: the component, its key bindings and its public API. The
-//! editing commands are in `commands`, the pointer in `mouse`, the input
-//! method in `input_handler`, layout and painting in `element`, and the
-//! editing rules with no layout or GPUI in `editing`.
+//! A text field: the component, its actions and its public API. The keys
+//! are in `keys`, the editing commands in `commands`, the pointer in
+//! `mouse`, the input method in `input_handler`, layout and painting in
+//! `element`, and the editing rules with no layout or GPUI in `editing`.
 mod commands;
 /// The editing rules of the browser's text fields on a Mac (and their
 /// Windows and Linux equivalents), on byte offsets into the text and with
@@ -136,6 +136,187 @@ pub struct TextInput {
     autoscroll: Option<gpui::Task<()>>,
     /// The last edit was a kill (Control-K), which the next one adds to.
     killing: bool,
+}
+
+impl TextInput {
+    /// A field of `kind`, empty and with no placeholder. The builder
+    /// methods below give it the rest: a placeholder, Enter that submits,
+    /// a value committed when it loses focus, line breaks, an in-place
+    /// rename.
+    pub fn new(kind: Kind, cx: &mut Context<Self>) -> Self {
+        Self {
+            // A field is a stop for Tab, as an `<input>` is.
+            focus_handle: cx.focus_handle().tab_stop(true),
+            content: "".into(),
+            placeholder: "".into(),
+            selected_range: 0..0,
+            selection_reversed: false,
+            marked_range: None,
+            last_layout: None,
+            last_bounds: None,
+            is_selecting: false,
+            field_key: None,
+            original: "".into(),
+            kind,
+            // A text area leaves Escape to the dialog that holds it.
+            submits: kind == Kind::Area,
+            scroll: px(0.),
+            blink: std::time::Instant::now(),
+            blink_task: None,
+            renaming: false,
+            multiline: kind == Kind::Area,
+            overflowing: false,
+            last_lines: None,
+            area: gpui::ScrollHandle::new(),
+            revealed: None,
+            history: editing::History::default(),
+            upstream: false,
+            goal_x: None,
+            granularity: Granularity::Character,
+            drag_origin: 0..0,
+            drag_point: None,
+            autoscroll: None,
+            killing: false,
+        }
+    }
+
+    /// What the empty field shows.
+    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+
+    /// Enter submits the field ([`Submitted`]) and Escape is left to what
+    /// holds it: dialog fields, the Tags screen's search, the source list's
+    /// address editor.
+    pub fn submits(mut self) -> Self {
+        self.submits = true;
+        self
+    }
+
+    /// A stored field (the inspector's): losing focus commits its value
+    /// ([`Committed`]) and takes an expanded field back to its one line.
+    pub fn commits_on_blur(self, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+            this.commit(cx);
+            // An expanded field goes back to its one line.
+            cx.notify();
+        })
+        .detach();
+        self
+    }
+
+    /// The field takes line breaks with Shift+Enter and, while focused
+    /// text overflows its line, is drawn expanded by its frame
+    /// (`InspectorField`).
+    pub fn expanding(mut self) -> Self {
+        self.multiline = true;
+        self
+    }
+
+    /// An in-place rename (a sidebar row's, a grid subfolder tile's),
+    /// holding the current name selected. Enter or losing focus commits it
+    /// and Escape cancels it ([`Renamed`]).
+    pub fn renaming(mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        self.content = value.to_owned().into();
+        self.original = self.content.clone();
+        self.selected_range = 0..self.content.len();
+        self.renaming = true;
+        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
+            this.finish_rename(true, cx)
+        })
+        .detach();
+        self
+    }
+
+    /// Ends an in-place rename once: committed, or cancelled.
+    pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.renaming) {
+            return;
+        }
+        cx.emit(if commit {
+            Renamed::Commit(self.content.trim().to_owned())
+        } else {
+            Renamed::Cancel
+        });
+    }
+    pub fn select_everything(&mut self, cx: &mut Context<Self>) {
+        self.selected_range = 0..self.content.len();
+        self.selection_reversed = false;
+        self.moved();
+        cx.notify();
+    }
+    pub fn is_empty(&self) -> bool {
+        self.content.is_empty()
+    }
+    /// Empties the field. Text replaced from outside the field takes its
+    /// history with it.
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.content = "".into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.history.clear();
+        self.moved();
+        cx.notify();
+    }
+    pub fn value(&self) -> String {
+        self.content.to_string()
+    }
+    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
+        self.placeholder = placeholder.into();
+    }
+    /// Puts the caret after the text, where a browser's focus leaves it.
+    pub fn caret_at_end(&mut self, cx: &mut Context<Self>) {
+        self.move_to(self.content.len(), cx);
+    }
+    /// Replaces the text, which Escape then goes back to.
+    pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
+        self.original = text.clone().into();
+        self.content = text.into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.history.clear();
+        self.moved();
+        cx.notify();
+    }
+    /// A dialog's text area (`GlassTextarea`): its text is always drawn
+    /// wrapped from the top of its box, and Enter is a line break.
+    fn text_area(&self) -> bool {
+        self.kind == Kind::Area
+    }
+    /// Whether the field is focused and its text needs more than one line,
+    /// so its frame draws it expanded over what follows.
+    pub fn expanded(&self, window: &Window) -> bool {
+        self.multiline && self.overflowing && self.focus_handle.is_focused(window)
+    }
+    /// The scroll of the expanded field's area.
+    pub fn area(&self) -> &gpui::ScrollHandle {
+        &self.area
+    }
+    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
+        if self.field_key == Some(key) && self.content != self.original {
+            return;
+        }
+        if self.field_key != Some(key) || self.content.as_ref() != value {
+            self.history.clear();
+        }
+        self.field_key = Some(key);
+        self.original = value.clone().into();
+        self.content = value.into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.moved();
+        cx.notify();
+    }
+    pub fn commit(&mut self, cx: &mut Context<Self>) {
+        if let Some(key) = self.field_key {
+            let value = self.content.trim().to_owned();
+            if value != self.original.as_ref() {
+                self.original = value.clone().into();
+                cx.emit(Committed(key, value));
+            }
+        }
+    }
 }
 
 /// `.textarea`'s `line-height: 1.4` at 13px.
@@ -391,186 +572,5 @@ impl Render for TextInput {
 impl Focusable for TextInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-impl TextInput {
-    /// A field of `kind`, empty and with no placeholder. The builder
-    /// methods below give it the rest: a placeholder, Enter that submits,
-    /// a value committed when it loses focus, line breaks, an in-place
-    /// rename.
-    pub fn new(kind: Kind, cx: &mut Context<Self>) -> Self {
-        Self {
-            // A field is a stop for Tab, as an `<input>` is.
-            focus_handle: cx.focus_handle().tab_stop(true),
-            content: "".into(),
-            placeholder: "".into(),
-            selected_range: 0..0,
-            selection_reversed: false,
-            marked_range: None,
-            last_layout: None,
-            last_bounds: None,
-            is_selecting: false,
-            field_key: None,
-            original: "".into(),
-            kind,
-            // A text area leaves Escape to the dialog that holds it.
-            submits: kind == Kind::Area,
-            scroll: px(0.),
-            blink: std::time::Instant::now(),
-            blink_task: None,
-            renaming: false,
-            multiline: kind == Kind::Area,
-            overflowing: false,
-            last_lines: None,
-            area: gpui::ScrollHandle::new(),
-            revealed: None,
-            history: editing::History::default(),
-            upstream: false,
-            goal_x: None,
-            granularity: Granularity::Character,
-            drag_origin: 0..0,
-            drag_point: None,
-            autoscroll: None,
-            killing: false,
-        }
-    }
-
-    /// What the empty field shows.
-    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
-        self.placeholder = placeholder.into();
-        self
-    }
-
-    /// Enter submits the field ([`Submitted`]) and Escape is left to what
-    /// holds it: dialog fields, the Tags screen's search, the source list's
-    /// address editor.
-    pub fn submits(mut self) -> Self {
-        self.submits = true;
-        self
-    }
-
-    /// A stored field (the inspector's): losing focus commits its value
-    /// ([`Committed`]) and takes an expanded field back to its one line.
-    pub fn commits_on_blur(self, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
-            this.commit(cx);
-            // An expanded field goes back to its one line.
-            cx.notify();
-        })
-        .detach();
-        self
-    }
-
-    /// The field takes line breaks with Shift+Enter and, while focused
-    /// text overflows its line, is drawn expanded by its frame
-    /// (`InspectorField`).
-    pub fn expanding(mut self) -> Self {
-        self.multiline = true;
-        self
-    }
-
-    /// An in-place rename (a sidebar row's, a grid subfolder tile's),
-    /// holding the current name selected. Enter or losing focus commits it
-    /// and Escape cancels it ([`Renamed`]).
-    pub fn renaming(mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        self.content = value.to_owned().into();
-        self.original = self.content.clone();
-        self.selected_range = 0..self.content.len();
-        self.renaming = true;
-        cx.on_blur(&self.focus_handle, window, |this, _, cx| {
-            this.finish_rename(true, cx)
-        })
-        .detach();
-        self
-    }
-
-    /// Ends an in-place rename once: committed, or cancelled.
-    pub fn finish_rename(&mut self, commit: bool, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.renaming) {
-            return;
-        }
-        cx.emit(if commit {
-            Renamed::Commit(self.content.trim().to_owned())
-        } else {
-            Renamed::Cancel
-        });
-    }
-    pub fn select_everything(&mut self, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.content.len();
-        self.selection_reversed = false;
-        self.moved();
-        cx.notify();
-    }
-    pub fn is_empty(&self) -> bool {
-        self.content.is_empty()
-    }
-    /// Empties the field. Text replaced from outside the field takes its
-    /// history with it.
-    pub fn clear(&mut self, cx: &mut Context<Self>) {
-        self.content = "".into();
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.history.clear();
-        self.moved();
-        cx.notify();
-    }
-    pub fn value(&self) -> String {
-        self.content.to_string()
-    }
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
-        self.placeholder = placeholder.into();
-    }
-    /// Puts the caret after the text, where a browser's focus leaves it.
-    pub fn caret_at_end(&mut self, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
-    }
-    /// Replaces the text, which Escape then goes back to.
-    pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
-        self.original = text.clone().into();
-        self.content = text.into();
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.history.clear();
-        self.moved();
-        cx.notify();
-    }
-    /// A dialog's text area (`GlassTextarea`): its text is always drawn
-    /// wrapped from the top of its box, and Enter is a line break.
-    fn text_area(&self) -> bool {
-        self.kind == Kind::Area
-    }
-    /// Whether the field is focused and its text needs more than one line,
-    /// so its frame draws it expanded over what follows.
-    pub fn expanded(&self, window: &Window) -> bool {
-        self.multiline && self.overflowing && self.focus_handle.is_focused(window)
-    }
-    /// The scroll of the expanded field's area.
-    pub fn area(&self) -> &gpui::ScrollHandle {
-        &self.area
-    }
-    pub fn set_field(&mut self, key: u64, value: String, cx: &mut Context<Self>) {
-        if self.field_key == Some(key) && self.content != self.original {
-            return;
-        }
-        if self.field_key != Some(key) || self.content.as_ref() != value {
-            self.history.clear();
-        }
-        self.field_key = Some(key);
-        self.original = value.clone().into();
-        self.content = value.into();
-        self.selected_range = 0..0;
-        self.selection_reversed = false;
-        self.moved();
-        cx.notify();
-    }
-    pub fn commit(&mut self, cx: &mut Context<Self>) {
-        if let Some(key) = self.field_key {
-            let value = self.content.trim().to_owned();
-            if value != self.original.as_ref() {
-                self.original = value.clone().into();
-                cx.emit(Committed(key, value));
-            }
-        }
     }
 }
