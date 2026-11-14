@@ -17,7 +17,7 @@ mod shell;
 pub mod unsupported;
 
 #[cfg(test)]
-pub(crate) mod matrix;
+mod matrix;
 
 use crate::keymap::Scope;
 use font::FontViewer;
