@@ -11,6 +11,7 @@ mod commands;
 mod editing;
 mod element;
 mod input_handler;
+mod keys;
 mod mouse;
 
 use std::ops::Range;
@@ -21,6 +22,7 @@ use gpui::{
     App, Bounds, Context, CursorStyle, FocusHandle, Focusable, KeyBinding, MouseButton, Pixels,
     Point, ShapedLine, SharedString, Window, actions, div, prelude::*, px,
 };
+pub use keys::bind;
 use mouse::Granularity;
 actions!(
     text_input,
@@ -570,113 +572,5 @@ impl TextInput {
                 cx.emit(Committed(key, value));
             }
         }
-    }
-}
-/// The keys of a text field: AppKit's standard key bindings on a Mac (as
-/// Chromium performs them in production's fields), the Windows and Linux
-/// ones elsewhere. Undo and Redo come from the shortcut registry
-/// (`keymap.rs`), which follows the user's keys for them.
-pub fn bind(cx: &mut App) {
-    let field = Some("TextInput");
-    let area = Some("TextArea");
-    cx.bind_keys([
-        KeyBinding::new("enter", Commit, field),
-        KeyBinding::new("shift-enter", Newline, area),
-        KeyBinding::new("up", Up, area),
-        KeyBinding::new("down", Down, area),
-        KeyBinding::new("shift-up", SelectUp, area),
-        KeyBinding::new("shift-down", SelectDown, area),
-        KeyBinding::new("escape", Cancel, field),
-        KeyBinding::new("backspace", Backspace, field),
-        KeyBinding::new("delete", Delete, field),
-        KeyBinding::new("left", Left, field),
-        KeyBinding::new("right", Right, field),
-        KeyBinding::new("shift-left", SelectLeft, field),
-        KeyBinding::new("shift-right", SelectRight, field),
-    ]);
-    if cfg!(target_os = "macos") {
-        cx.bind_keys([
-            KeyBinding::new("cmd-a", SelectAll, field),
-            KeyBinding::new("cmd-v", Paste, field),
-            KeyBinding::new("cmd-c", Copy, field),
-            KeyBinding::new("cmd-x", Cut, field),
-            KeyBinding::new("home", Home, field),
-            KeyBinding::new("end", End, field),
-            KeyBinding::new("shift-home", SelectToStart, field),
-            KeyBinding::new("shift-end", SelectToEnd, field),
-            KeyBinding::new("cmd-up", Home, field),
-            KeyBinding::new("cmd-down", End, field),
-            KeyBinding::new("cmd-shift-up", SelectToStart, field),
-            KeyBinding::new("cmd-shift-down", SelectToEnd, field),
-            KeyBinding::new("alt-left", WordLeft, field),
-            KeyBinding::new("alt-right", WordRight, field),
-            KeyBinding::new("alt-shift-left", SelectWordLeft, field),
-            KeyBinding::new("alt-shift-right", SelectWordRight, field),
-            KeyBinding::new("ctrl-alt-b", WordLeft, field),
-            KeyBinding::new("ctrl-alt-f", WordRight, field),
-            KeyBinding::new("ctrl-alt-shift-b", SelectWordLeft, field),
-            KeyBinding::new("ctrl-alt-shift-f", SelectWordRight, field),
-            KeyBinding::new("cmd-left", LineStart, field),
-            KeyBinding::new("cmd-right", LineEnd, field),
-            KeyBinding::new("cmd-shift-left", SelectLineStart, field),
-            KeyBinding::new("cmd-shift-right", SelectLineEnd, field),
-            KeyBinding::new("ctrl-left", LineStart, field),
-            KeyBinding::new("ctrl-right", LineEnd, field),
-            KeyBinding::new("ctrl-shift-left", SelectLineStart, field),
-            KeyBinding::new("ctrl-shift-right", SelectLineEnd, field),
-            KeyBinding::new("alt-up", ParagraphBackward, field),
-            KeyBinding::new("alt-down", ParagraphForward, field),
-            KeyBinding::new("alt-shift-up", SelectParagraphBackward, field),
-            KeyBinding::new("alt-shift-down", SelectParagraphForward, field),
-            // The Emacs keys every Mac text field takes.
-            KeyBinding::new("ctrl-a", ParagraphStart, field),
-            KeyBinding::new("ctrl-e", ParagraphEnd, field),
-            KeyBinding::new("ctrl-shift-a", SelectParagraphStart, field),
-            KeyBinding::new("ctrl-shift-e", SelectParagraphEnd, field),
-            KeyBinding::new("ctrl-b", Left, field),
-            KeyBinding::new("ctrl-f", Right, field),
-            KeyBinding::new("ctrl-shift-b", SelectLeft, field),
-            KeyBinding::new("ctrl-shift-f", SelectRight, field),
-            KeyBinding::new("ctrl-p", Up, field),
-            KeyBinding::new("ctrl-n", Down, field),
-            KeyBinding::new("ctrl-shift-p", SelectUp, field),
-            KeyBinding::new("ctrl-shift-n", SelectDown, field),
-            KeyBinding::new("ctrl-h", Backspace, field),
-            KeyBinding::new("ctrl-d", Delete, field),
-            KeyBinding::new("ctrl-k", DeleteToParagraphEnd, field),
-            KeyBinding::new("ctrl-y", Yank, field),
-            KeyBinding::new("ctrl-t", Transpose, field),
-            KeyBinding::new("ctrl-o", OpenLine, field),
-            KeyBinding::new("alt-backspace", DeleteWordBackward, field),
-            KeyBinding::new("ctrl-alt-backspace", DeleteWordBackward, field),
-            KeyBinding::new("alt-delete", DeleteWordForward, field),
-            KeyBinding::new("cmd-backspace", DeleteToLineStart, field),
-            KeyBinding::new("ctrl-backspace", DeleteBackwardDecomposing, field),
-            KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, field),
-        ]);
-    } else {
-        cx.bind_keys([
-            KeyBinding::new("ctrl-a", SelectAll, field),
-            KeyBinding::new("ctrl-v", Paste, field),
-            KeyBinding::new("shift-insert", Paste, field),
-            KeyBinding::new("ctrl-c", Copy, field),
-            KeyBinding::new("ctrl-insert", Copy, field),
-            KeyBinding::new("ctrl-x", Cut, field),
-            KeyBinding::new("shift-delete", Cut, field),
-            KeyBinding::new("home", LineStart, field),
-            KeyBinding::new("end", LineEnd, field),
-            KeyBinding::new("shift-home", SelectLineStart, field),
-            KeyBinding::new("shift-end", SelectLineEnd, field),
-            KeyBinding::new("ctrl-home", Home, field),
-            KeyBinding::new("ctrl-end", End, field),
-            KeyBinding::new("ctrl-shift-home", SelectToStart, field),
-            KeyBinding::new("ctrl-shift-end", SelectToEnd, field),
-            KeyBinding::new("ctrl-left", WordLeft, field),
-            KeyBinding::new("ctrl-right", WordRight, field),
-            KeyBinding::new("ctrl-shift-left", SelectWordLeft, field),
-            KeyBinding::new("ctrl-shift-right", SelectWordRight, field),
-            KeyBinding::new("ctrl-backspace", DeleteWordBackward, field),
-            KeyBinding::new("ctrl-delete", DeleteWordForward, field),
-        ]);
     }
 }
