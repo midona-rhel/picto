@@ -133,6 +133,34 @@ const REFRESH_MAX: Duration = Duration::from_millis(1000);
 /// its way), a wanted refresh looks again after this long.
 const REFRESH_RETRY: Duration = Duration::from_millis(100);
 
+/// A read of something that can change while it is read. Asked for again
+/// while one is under way, it runs once more when that one is done, rather
+/// than twice at once or not at all.
+#[derive(Debug, Default)]
+pub struct Coalesced(Option<bool>);
+
+impl Coalesced {
+    /// Whether to start a read now; while one is under way, another is
+    /// noted instead.
+    pub fn begin(&mut self) -> bool {
+        match &mut self.0 {
+            Some(again) => {
+                *again = true;
+                false
+            }
+            None => {
+                self.0 = Some(false);
+                true
+            }
+        }
+    }
+
+    /// The read is done: whether it was asked for again meanwhile.
+    pub fn end(&mut self) -> bool {
+        self.0.take() == Some(true)
+    }
+}
+
 /// One step of Back and Forward.
 #[derive(Clone, Copy, PartialEq)]
 struct Visit {
@@ -208,12 +236,11 @@ pub struct Session {
     events: Receiver<Event>,
     pub subscriptions: SubscriptionActivity,
     /// The subscription list is being read for the sidebar's activity.
-    activity_reading: bool,
+    activity_reading: Coalesced,
     /// Reads progress again while a run is going.
     activity_poll: Option<Task<()>>,
-    /// The sidebar's destinations are being read again; `true` inside when
-    /// another change arrived meanwhile.
-    navigation_reading: Option<bool>,
+    /// The sidebar's destinations are being read again.
+    navigation_reading: Coalesced,
     pub nav: Vec<Navigation>,
     pub tags: HashMap<u32, TagRecord>,
     /// The destination chosen in the sidebar.
@@ -452,9 +479,9 @@ impl Session {
             application,
             events,
             subscriptions: SubscriptionActivity::default(),
-            activity_reading: false,
+            activity_reading: Coalesced::default(),
             activity_poll: None,
-            navigation_reading: None,
+            navigation_reading: Coalesced::default(),
             nav: Vec::new(),
             tags: HashMap::new(),
             scope: 0,
@@ -726,7 +753,21 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubscriptionActivity, thumbnail_in};
+    use super::{Coalesced, SubscriptionActivity, thumbnail_in};
+
+    #[test]
+    fn a_read_asked_for_while_one_runs_runs_once_more() {
+        let mut reading = Coalesced::default();
+        assert!(reading.begin());
+        // Two more asks while it runs: one more read, not two.
+        assert!(!reading.begin());
+        assert!(!reading.begin());
+        assert!(reading.end());
+        assert!(reading.begin());
+        assert!(!reading.end());
+        // Nothing under way: the next ask starts at once.
+        assert!(reading.begin());
+    }
     use std::path::{Path, PathBuf};
 
     /// The blob layout core keeps; a hash that is not hexadecimal names no

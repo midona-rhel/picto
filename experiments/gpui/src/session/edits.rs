@@ -172,11 +172,10 @@ impl Session {
     /// selected when they arrive.
     pub(super) fn read_details(&mut self, id: RootId, cx: &mut Context<Self>) {
         let answer = self.run(move |library| library.details(id));
-        cx.spawn(async move |session, cx| {
-            let Ok(result) = answer.await else {
-                return;
-            };
-            let _ = session.update(cx, |this, cx| match result {
+        then_on(
+            answer,
+            cx,
+            move |this: &mut Self, result, cx| match result {
                 Ok(details) if this.selected_item().is_some_and(|item| item.root_id == id) => {
                     let name = details.root.name.clone();
                     if let Some(focused) = &mut this.focus {
@@ -190,9 +189,8 @@ impl Session {
                 }
                 Ok(_) => {}
                 Err(error) => eprintln!("picto: {error}"),
-            });
-        })
-        .detach();
+            },
+        );
     }
 
     /// Undoes the library's last edit, whatever is selected (`edit.undo` is
@@ -222,14 +220,11 @@ impl Session {
             Reread::EVERYTHING,
             cx,
         );
-        cx.spawn(async move |session, cx| {
-            if let Ok(Ok(stepped)) = answer.await {
-                let _ = session.update(cx, |_, cx| {
-                    crate::history::show_step(&stepped, undo, cx.entity(), cx)
-                });
+        then_on(answer, cx, move |_: &mut Self, result, cx| {
+            if let Ok(stepped) = result {
+                crate::history::show_step(&stepped, undo, cx.entity(), cx)
             }
-        })
-        .detach();
+        });
     }
 }
 
@@ -255,15 +250,30 @@ pub fn edit_then<V: 'static, T: Send + 'static, E: std::fmt::Display + Send + 's
 
 /// Hands `answer` to `then` on the view once it arrives, if the view is
 /// still there; nothing happens when no answer comes.
-fn then_on<V: 'static, R: 'static>(
+pub(super) fn then_on<V: 'static, R: 'static>(
     answer: futures::channel::oneshot::Receiver<R>,
     cx: &mut Context<V>,
     then: impl FnOnce(&mut V, R, &mut Context<V>) + 'static,
 ) {
-    cx.spawn(async move |view, cx| {
-        if let Ok(result) = answer.await {
-            let _ = view.update(cx, move |view, cx| then(view, result, cx));
+    when_answered(answer, cx, |view, result, cx| {
+        if let Some(result) = result {
+            then(view, result, cx);
         }
+    });
+}
+
+/// Hands `answer` to `then` on the view once it arrives, or `None` once
+/// none will (the work was dropped), if the view is still there: for a
+/// view that has to finish something either way, such as a read it noted
+/// as under way.
+pub(super) fn when_answered<V: 'static, R: 'static>(
+    answer: futures::channel::oneshot::Receiver<R>,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Option<R>, &mut Context<V>) + 'static,
+) {
+    cx.spawn(async move |view, cx| {
+        let result = answer.await.ok();
+        let _ = view.update(cx, move |view, cx| then(view, result, cx));
     })
     .detach();
 }

@@ -1,5 +1,6 @@
 //! The application's events and what follows them: the sidebar's
 //! destinations and subscription activity read again, and the recents kept.
+use super::edits::when_answered;
 use super::{Change, SUBSCRIPTION_POLL, Session, SubscriptionActivity};
 use crate::application::{self, Event};
 use crate::backend;
@@ -65,44 +66,34 @@ impl Session {
     /// Reads the sidebar's destinations and counts again. Changes that
     /// arrive while a read is under way are folded into one more read.
     pub fn refresh_navigation(&mut self, cx: &mut Context<Self>) {
-        if let Some(again) = &mut self.navigation_reading {
-            *again = true;
+        if !self.navigation_reading.begin() {
             return;
         }
-        self.navigation_reading = Some(false);
         let answer = self.run(backend::navigation);
-        cx.spawn(async move |session, cx| {
-            let result = answer.await;
-            let _ = session.update(cx, |this: &mut Self, cx| {
-                let again = this.navigation_reading.take() == Some(true);
-                match result {
-                    Ok(Ok((nav, tags))) => this.replace_navigation(nav, tags, cx),
-                    Ok(Err(error)) => eprintln!("picto: {error}"),
-                    Err(_) => {}
-                }
-                if again {
-                    this.refresh_navigation(cx);
-                }
-            });
-        })
-        .detach();
+        when_answered(answer, cx, |this: &mut Self, result, cx| {
+            let again = this.navigation_reading.end();
+            match result {
+                Some(Ok((nav, tags))) => this.replace_navigation(nav, tags, cx),
+                Some(Err(error)) => eprintln!("picto: {error}"),
+                None => {}
+            }
+            if again {
+                this.refresh_navigation(cx);
+            }
+        });
     }
 
     /// Reads whether subscriptions are running or held, and keeps reading
-    /// while one runs.
+    /// while one runs. A change that arrives while a read is under way is
+    /// read once more after it, so a run that starts meanwhile is seen.
     pub fn refresh_activity(&mut self, cx: &mut Context<Self>) {
-        if self.activity_reading {
+        if !self.activity_reading.begin() {
             return;
         }
-        self.activity_reading = true;
         let answer = self.dispatch("subscriptions.list", serde_json::json!({}));
-        cx.spawn(async move |session, cx| {
-            let result = answer.await;
-            let _ = session.update(cx, |this: &mut Self, cx| {
-                this.activity_reading = false;
-                let Ok(Ok(list)) = result else {
-                    return;
-                };
+        when_answered(answer, cx, |this: &mut Self, result, cx| {
+            let again = this.activity_reading.end();
+            if let Some(Ok(list)) = result {
                 let activity = SubscriptionActivity {
                     busy: this.subscriptions.busy,
                     ..SubscriptionActivity::from_list(&list)
@@ -111,10 +102,14 @@ impl Session {
                     this.subscriptions = activity;
                     cx.emit(Change::Activity);
                 }
-                this.poll_activity(cx);
-            });
-        })
-        .detach();
+                if !again {
+                    this.poll_activity(cx);
+                }
+            }
+            if again {
+                this.refresh_activity(cx);
+            }
+        });
     }
 
     /// Polls while a run is going, as the renderer does every 1.5 s.
@@ -148,23 +143,19 @@ impl Session {
             "subscriptions.pause_all",
             serde_json::json!({ "paused": paused }),
         );
-        cx.spawn(async move |session, cx| {
-            let result = answer.await;
-            let _ = session.update(cx, |this: &mut Self, cx| {
-                this.subscriptions.busy = false;
-                if let Ok(Err(error)) = result {
-                    let title = if paused {
-                        "Could not pause subscriptions"
-                    } else {
-                        "Could not resume subscriptions"
-                    };
-                    crate::ui::notify::error(title, error, cx);
-                }
-                cx.emit(Change::Activity);
-                this.refresh_activity(cx);
-            });
-        })
-        .detach();
+        when_answered(answer, cx, move |this: &mut Self, result, cx| {
+            this.subscriptions.busy = false;
+            if let Some(Err(error)) = result {
+                let title = if paused {
+                    "Could not pause subscriptions"
+                } else {
+                    "Could not resume subscriptions"
+                };
+                crate::ui::notify::error(title, error, cx);
+            }
+            cx.emit(Change::Activity);
+            this.refresh_activity(cx);
+        });
     }
 
     /// Fetches the current destination again, after an edit made elsewhere.

@@ -15,7 +15,7 @@
 //! (the hand-offs, the drag out of the grid and "Copy File Path" refuse any
 //! other with a notification).
 use crate::application::{self, Event};
-use crate::session::Session;
+use crate::session::{Coalesced, Session};
 use gpui::{App, AppContext as _, Context, Entity, Global, Subscription, Task};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -66,14 +66,15 @@ struct Desktop {
     /// The count the badge shows.
     shown: Option<u64>,
     badge_timer: Option<Task<()>>,
-    /// A badge read is under way; `true` inside when another is wanted.
-    badge_reading: Option<bool>,
+    /// The Inbox count is being read.
+    badge_reading: Coalesced,
     /// The runs of the batch being watched, and whether one has been seen
     /// running.
     batch: BTreeSet<i64>,
     batch_active: bool,
     settle_timer: Option<Task<()>>,
-    settle_reading: Option<bool>,
+    /// The subscriptions and their finished runs are being read.
+    settle_reading: Coalesced,
     _events: Subscription,
 }
 
@@ -93,11 +94,11 @@ impl Desktop {
             session,
             shown: None,
             badge_timer: None,
-            badge_reading: None,
+            badge_reading: Coalesced::default(),
             batch: BTreeSet::new(),
             batch_active: false,
             settle_timer: None,
-            settle_reading: None,
+            settle_reading: Coalesced::default(),
             _events: events,
         };
         desktop.read_badge(cx);
@@ -119,11 +120,9 @@ impl Desktop {
 
     /// `library.inbox_count`, then the badge.
     fn read_badge(&mut self, cx: &mut Context<Self>) {
-        if let Some(again) = &mut self.badge_reading {
-            *again = true;
+        if !self.badge_reading.begin() {
             return;
         }
-        self.badge_reading = Some(false);
         let answer = self
             .session
             .read(cx)
@@ -131,7 +130,7 @@ impl Desktop {
         cx.spawn(async move |this, cx| {
             let result = answer.await;
             let _ = this.update(cx, |this, cx| {
-                let again = this.badge_reading.take() == Some(true);
+                let again = this.badge_reading.end();
                 match result {
                     Ok(Ok(count)) => this.show_badge(badge_count(&count)),
                     Ok(Err(error)) => eprintln!("picto: inbox badge refresh failed: {error}"),
@@ -168,11 +167,9 @@ impl Desktop {
     /// `refreshOnce`: notes the runs going; once none is, reads what the
     /// batch added and says so.
     fn read_runs(&mut self, cx: &mut Context<Self>) {
-        if let Some(again) = &mut self.settle_reading {
-            *again = true;
+        if !self.settle_reading.begin() {
             return;
         }
-        self.settle_reading = Some(false);
         let session = self.session.clone();
         let list = session
             .read(cx)
@@ -216,7 +213,7 @@ impl Desktop {
                 });
             }
             let _ = this.update(cx, |this, cx| {
-                if this.settle_reading.take() == Some(true) {
+                if this.settle_reading.end() {
                     this.read_runs(cx);
                 }
             });
