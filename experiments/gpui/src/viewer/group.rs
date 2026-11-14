@@ -605,7 +605,9 @@ impl GroupReader {
                 });
             }),
         )
-        // A double-click opens the member by itself (`setViewerIndex`).
+        // A double-click opens the member by itself (`setViewerIndex`); it
+        // is a picture to assistive technology, as production's `<img>`.
+        .a11y_presentational()
         .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
             if event.click_count() == 2 {
                 cx.emit(MemberOpened(index));

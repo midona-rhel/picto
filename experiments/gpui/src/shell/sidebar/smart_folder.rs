@@ -1096,6 +1096,8 @@ impl SmartFolderEditor {
             .unwrap_or("IconFolder".into());
         let trigger = div()
             .id("icon-trigger")
+            .role(Role::Button)
+            .aria_label(t("Change icon"))
             .relative()
             .w_full()
             .h(px(32.))
@@ -1166,6 +1168,9 @@ impl SmartFolderEditor {
             .unwrap_or(theme.text_tertiary());
         let trigger = div()
             .id(SharedString::from(format!("rule-{group}-{index}-color")))
+            .role(Role::Button)
+            .aria_label(t("Choose color"))
+            .aria_value(row.color.to_uppercase())
             .relative()
             .w_full()
             .h(px(theme::CONTROL_SM))

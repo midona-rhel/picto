@@ -124,8 +124,12 @@ pub fn crumb(
     cx: &App,
 ) -> Stateful<Div> {
     let theme = theme::theme(cx);
+    let label = label.into();
+    // A `<button>` read as its label.
     div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(label.clone())
         .occlude()
         .cursor_pointer()
         .text_color(theme.text_secondary())
@@ -133,7 +137,7 @@ pub fn crumb(
             let style = style.text_color(theme.text());
             if underline { style.underline() } else { style }
         })
-        .child(label.into())
+        .child(label)
 }
 
 /// The press-then-drag gesture along a track at `bounds`, set up from a

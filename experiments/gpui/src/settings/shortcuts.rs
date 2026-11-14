@@ -207,6 +207,8 @@ impl SettingsWindow {
                     .id(ElementId::Name(
                         format!("binding-clear-button-{id}-{slot_index}").into(),
                     ))
+                    .role(Role::Button)
+                    .aria_label(crate::i18n::t("Clear shortcut"))
                     .absolute()
                     .top(px(3.))
                     .right(px(3.))

@@ -20,6 +20,8 @@ fn about_link(
     let theme = theme::theme(cx);
     div()
         .id(id)
+        .role(Role::Link)
+        .aria_label(text)
         .min_w_0()
         .h(px(54.))
         .px(px(10.))

@@ -523,6 +523,13 @@ impl TagsScreen {
                     list = list.child(
                         div()
                             .id(("merge-result", position))
+                            .role(Role::Button)
+                            .aria_label(format!(
+                                "{}{} {}",
+                                prefix(&target.namespace, cx).map(|p| format!("{p}:")).unwrap_or_default(),
+                                target.subname,
+                                target.active_count
+                            ))
                             .w_full()
                             .min_h(px(36.))
                             .flex()

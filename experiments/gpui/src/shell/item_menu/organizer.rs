@@ -205,6 +205,9 @@ impl Organizer {
         };
         div()
             .id(("group-choice", id.0 as u64))
+            .role(Role::RadioButton)
+            .aria_label(name.clone())
+            .aria_toggled(crate::ui::a11y::toggled(chosen))
             .min_h(px(38.))
             .px(px(10.))
             .flex()

@@ -313,6 +313,9 @@ impl Panel {
     ) -> Stateful<Div> {
         div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(label.clone())
+            .aria_toggled(ui::a11y::toggled(active))
             .h(px(CONTROL))
             .px(px(7.))
             .flex()
@@ -347,6 +350,8 @@ impl Panel {
         let group: SharedString = format!("diagnostics-{id}").into();
         let button = div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(tip.clone())
             .group(group.clone())
             .size(px(CONTROL))
             .flex_none()

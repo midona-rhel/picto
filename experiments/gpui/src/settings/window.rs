@@ -224,8 +224,12 @@ impl SettingsWindow {
         };
         let id = ElementId::from(("settings-nav", index));
         let focus = ui::focus::control(&id, window, cx);
+        // The sections are tabs: the one shown is selected.
         let item = div()
             .id(id)
+            .role(Role::Tab)
+            .aria_label(t(panel.label))
+            .aria_selected(active)
             .h(px(32.))
             .flex_none()
             .px(px(6.))
@@ -274,6 +278,8 @@ impl SettingsWindow {
         );
         let card = div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(format!("{} {}", t(panel.label), t(panel.description)))
             .relative()
             .children(ring)
             .w_full()
@@ -402,6 +408,7 @@ impl Render for SettingsWindow {
             .child(
                 div()
                     .id("settings-sections")
+                    .role(Role::TabList)
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.nav_scroll)
@@ -522,6 +529,7 @@ impl Render for SettingsWindow {
                 .child(
                     div()
                         .id("settings-body")
+                        .role(Role::TabPanel)
                         .size_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.body_scroll)

@@ -492,6 +492,12 @@ fn half(
     let on_review = controls.on_review.clone();
     let mut element = div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(match side {
+            Half::Accept => t("Accept item"),
+            Half::Reject => t("Reject item"),
+        })
+        .aria_disabled(paused)
         .absolute()
         .left(px(match side {
             Half::Accept => 0.,

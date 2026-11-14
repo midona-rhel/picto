@@ -77,8 +77,12 @@ impl RenderOnce for StripButton {
             window.request_animation_frame();
         }
         let strength = hover.read(cx).value_with(motion::EASE);
+        // Named by its tooltip.
         let button = div()
             .id(self.id)
+            .role(Role::Button)
+            .aria_label(self.tip.label().clone())
+            .aria_disabled(self.disabled)
             .relative()
             .w(px(self.width))
             .h(px(32.))

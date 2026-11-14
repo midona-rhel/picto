@@ -759,6 +759,7 @@ impl Render for GroupEditor {
         for (index, thumb) in visible.iter().copied().zip(states) {
             let tile = self.layout.tiles[index];
             let item = self.members[index].clone();
+            let (name, count) = (SharedString::from(item.name.clone()), self.members.len());
             let selected = match &self.marquee {
                 Some(marquee) => marquee.shows_selected(index, &selected_now),
                 None => selected_now.contains(&index),
@@ -789,8 +790,14 @@ impl Render for GroupEditor {
             let image_height = tile.h - text_height;
             content = content.child(
                 cell.child(
+                    // An option of the collection's list, as a grid tile is.
                     div()
                         .id(("group-member-tile", index))
+                        .role(Role::ListBoxOption)
+                        .aria_label(name)
+                        .aria_selected(selected)
+                        .aria_position_in_set(index + 1)
+                        .aria_size_of_set(count)
                         .absolute()
                         .left_0()
                         .top_0()
@@ -859,6 +866,8 @@ impl Render for GroupEditor {
 
         let body = div()
             .id("group-editor-grid")
+            .role(Role::ListBox)
+            .aria_multiselectable(true)
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)

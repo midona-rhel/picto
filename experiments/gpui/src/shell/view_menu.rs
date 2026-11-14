@@ -446,12 +446,14 @@ impl ViewOptions {
             let (row_act, switch_act) = (act.clone(), act);
             // A disabled row is dimmed as a whole (`.toggleRowDisabled`);
             // its switch is not dimmed again.
-            let mut toggle = ui::toggle(("view-toggle", index), on);
+            let mut toggle = ui::toggle(("view-toggle", index), on).name(label.clone());
             if !disabled {
                 toggle = toggle.on_toggle(move |_, cx| switch_act(cx));
             }
+            // The row's click is its switch's, which carries its name.
             let mut element = div()
                 .id(("view-toggle-row", index))
+                .a11y_presentational()
                 .h(px(TOGGLE_ROW))
                 .flex()
                 .items_center()

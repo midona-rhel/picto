@@ -38,8 +38,13 @@ impl TagsScreen {
         cx: &App,
     ) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        // A button read as its label and count, pressed while it is the
+        // group shown.
         div()
             .id(id)
+            .role(Role::Button)
+            .aria_label(format!("{label} {}", crate::grid::format::grouped(count)))
+            .aria_toggled(ui::a11y::toggled(active))
             .h(px(theme::CONTROL_SM))
             .mx(px(8.))
             .mb(px(1.))
@@ -194,6 +199,13 @@ impl TagsScreen {
         let enabled = self.unused > 0 && !self.busy;
         let mut cleanup = div()
             .id("delete-unused-tags")
+            .role(Role::Button)
+            .aria_label(format!(
+                "{} {}",
+                t("Delete Unused"),
+                crate::grid::format::grouped(self.unused)
+            ))
+            .aria_disabled(!enabled)
             .h(px(theme::CONTROL_SM))
             .mt(px(10.))
             .mx(px(8.))
@@ -240,6 +252,8 @@ impl TagsScreen {
             .child(
                 div()
                     .id("tag-rail")
+                    .role(Role::Navigation)
+                    .aria_label(t("Tag groups"))
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.rail_scroll)
@@ -289,7 +303,7 @@ impl TagsScreen {
                 window,
             );
         let overflows = measure(label.clone(), theme::FONT_UI, theme::TEXT_MD, window) > room;
-        let name_cell = div().min_w_0().child(label);
+        let name_cell = div().min_w_0().child(label.clone());
         let name_cell = if overflows {
             name_cell.flex_1().truncate()
         } else {
@@ -298,6 +312,12 @@ impl TagsScreen {
         let (opened, menu_tag) = (tag.clone(), tag.clone());
         div()
             .id(("tag", tag.tag_id.0 as usize))
+            .role(Role::Button)
+            .aria_label(if starred {
+                format!("{label} {count} {}", t("Starred"))
+            } else {
+                format!("{label} {count}")
+            })
             // `repeat(columns, minmax(0, 1fr))`: every column the same
             // width, however many tags the row has.
             .w(px(width))
@@ -526,6 +546,8 @@ impl TagsScreen {
             .child(
                 div()
                     .id("tag-list")
+                    .role(Role::Region)
+                    .aria_label(t("Tags"))
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)

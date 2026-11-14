@@ -154,6 +154,7 @@ impl SubscriptionsScreen {
             let order = std::rc::Rc::new(order);
             let mut grid = div()
                 .id("subscription-cards")
+                .a11y_presentational()
                 .flex()
                 .flex_wrap()
                 .gap(px(CARD_GAP))
@@ -493,8 +494,19 @@ impl SubscriptionsScreen {
             .text_color(if selected { accent } else { theme.text() })
             .child(card.name.clone());
         let (click_order, menu_order) = (order.clone(), order);
+        // A card is a button named by its subscription; assistive
+        // technology's press opens it, as a double-click does.
         div()
             .id(("subscription-card", id as usize))
+            .role(Role::Button)
+            .aria_label(card.name.clone())
+            .aria_selected(selected)
+            .on_a11y_action(AccessibleAction::Click, {
+                let view = cx.entity().downgrade();
+                move |_, _, cx| {
+                    let _ = view.update(cx, |this, cx| this.open(id, cx));
+                }
+            })
             .w(px(CARD))
             .flex_none()
             .flex()

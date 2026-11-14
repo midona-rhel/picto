@@ -344,6 +344,8 @@ impl LibraryPopover {
                 "close-library-switcher",
                 div()
                     .id("close-library-switcher")
+                    .role(Role::Button)
+                    .aria_label(t("Close library switcher"))
                     .size(px(24.))
                     .flex_none()
                     .flex()
@@ -411,6 +413,9 @@ impl LibraryPopover {
         let current = library.current;
         let row = div()
             .id(("known-library", index))
+            .role(Role::Button)
+            .aria_label(format!("{} {}", library.name, library.dir))
+            .aria_selected(current)
             .w_full()
             .min_h(px(48.))
             .px(px(ROW_PADDING))

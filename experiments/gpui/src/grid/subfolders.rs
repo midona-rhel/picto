@@ -621,6 +621,9 @@ impl GridView {
         root = root.child(
             div()
                 .id("subfolders-label")
+                .role(Role::Button)
+                .aria_label(format!("{}{})", t("Folders ("), header.children.len()))
+                .aria_expanded(expanded)
                 .absolute()
                 .left(px(padding + 2.))
                 .top(px(LABEL_TOP))
@@ -863,8 +866,11 @@ impl GridView {
         );
         let node = child.node.clone();
         let (menu_node, open_index) = (child.node.clone(), child.index);
+        // A subfolder tile: a button named by its folder and count.
         let mut tile = div()
             .id(ElementId::Name(format!("subfolder-{}", child.node).into()))
+            .role(Role::Button)
+            .aria_label(format!("{} {metas}", child.label))
             .absolute()
             .left(px(x))
             .top(px(y))

@@ -181,9 +181,11 @@ impl SubscriptionsScreen {
                 .border_color(theme.border_secondary()),
         );
         let name = ui::tooltip::attach(
-            div()
-                .id("subscription-rail-name")
-                .max_w_full()
+            ui::a11y::text(
+                div().id("subscription-rail-name"),
+                subscription.name.clone(),
+            )
+            .max_w_full()
                 .mb(px(8.))
                 .text(theme::TEXT_XL)
                 .line_height(px(24.))
@@ -609,7 +611,11 @@ impl SubscriptionsScreen {
                 div()
                     .relative()
                     .child(place_of(self.add_folder.clone()))
-                    .child(add_square("subscription-add-folder").on_click(add_folder)),
+                    .child(
+                        add_square("subscription-add-folder")
+                            .name(t("Add to folders"))
+                            .on_click(add_folder),
+                    ),
             )
         };
         let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
@@ -656,7 +662,11 @@ impl SubscriptionsScreen {
                 div()
                     .relative()
                     .child(place_of(self.add_tag.clone()))
-                    .child(add_square("subscription-add-tag").on_click(add_tag)),
+                    .child(
+                        add_square("subscription-add-tag")
+                            .name(t("Add tags"))
+                            .on_click(add_tag),
+                    ),
             )
         };
         div()
@@ -960,6 +970,8 @@ impl SubscriptionsScreen {
                 name = name.child(
                     div()
                         .id(("subscription-query-auth", query_id))
+                        .role(Role::Button)
+                        .aria_label(warning.clone())
                         .flex_none()
                         .max_w(px(140.))
                         .truncate()
@@ -999,6 +1011,7 @@ impl SubscriptionsScreen {
             // A double-click on the buttons is theirs, not the row's.
             let actions = div()
                 .id(("subscription-query-actions", query_id))
+                .a11y_presentational()
                 .w_full()
                 .flex()
                 .justify_end()
@@ -1068,7 +1081,7 @@ impl SubscriptionsScreen {
                     .w_full()
                     .truncate()
                     .text_color(theme.text_secondary())
-                    .child(source)
+                    .child(source.clone())
                     .into_any_element(),
                 name.into_any_element(),
                 number(query.posts, cx),
@@ -1076,8 +1089,20 @@ impl SubscriptionsScreen {
                 actions.into_any_element(),
             ]));
             let details = query.clone();
+            let opened = query.clone();
+            let row_name = format!("{source} {}", query.display_name.as_ref().unwrap_or(&query.text));
             rows.push(
                 self.body_row(("subscription-query", query_id).into(), row, cx)
+                    // A row assistive technology presses opens its source's
+                    // details, as a double-click does.
+                    .role(Role::Row)
+                    .aria_label(row_name)
+                    .on_a11y_action(AccessibleAction::Click, {
+                        let view = cx.entity().downgrade();
+                        move |_, _, cx| {
+                            let _ = view.update(cx, |this, cx| this.open_details(&opened, cx));
+                        }
+                    })
                     .on_hover(move |hovered, _, cx| {
                         fade.update(cx, |fade, cx| {
                             fade.set(*hovered, motion::SMALL_BUTTON);
@@ -1197,6 +1222,8 @@ impl SubscriptionsScreen {
                 let target = match issue.url.clone() {
                     Some(url) => div()
                         .id(("issue-link", issue.id as usize))
+                        .role(Role::Link)
+                        .aria_label(target_label.clone())
                         .w_full()
                         .truncate()
                         .cursor_pointer()

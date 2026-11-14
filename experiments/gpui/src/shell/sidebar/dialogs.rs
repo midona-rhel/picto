@@ -298,6 +298,8 @@ impl Sidebar {
             .inset_0();
         let add = div()
             .id("auto-tags-add")
+            .role(Role::Button)
+            .aria_label(t("Add tags"))
             .group("auto-tags-add")
             .relative()
             .h(px(26.))

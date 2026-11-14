@@ -164,7 +164,25 @@ impl RenderOnce for VolumePanel {
         // `.volumeTrack` with its `.volumeFill`; a press sets the volume
         // where the pointer is, and a drag follows it anywhere in the window
         // until the button is up.
+        // The volume as a slider in percent, which assistive technology
+        // steps by tenths.
+        let stepped = |delta: f32| {
+            let change = self.on_change.clone();
+            move |_: Option<&gpui::accesskit::ActionData>, window: &mut Window, cx: &mut App| {
+                if let Some(change) = &change {
+                    change((effective + delta).clamp(0., 1.), window, cx);
+                }
+            }
+        };
         let track = div()
+            .id(child("volume"))
+            .role(Role::Slider)
+            .aria_label(crate::i18n::t("Volume"))
+            .aria_numeric_value((effective * 100.).round() as f64)
+            .aria_min_numeric_value(0.)
+            .aria_max_numeric_value(100.)
+            .on_a11y_action(AccessibleAction::Increment, stepped(0.1))
+            .on_a11y_action(AccessibleAction::Decrement, stepped(-0.1))
             .relative()
             .w(px(4.))
             .h(px(TRACK))

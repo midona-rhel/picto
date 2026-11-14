@@ -324,6 +324,9 @@ impl Render for SaveFilterEditor {
         let enabled = self.savable && !self.name.read(cx).value().trim().is_empty();
         let mut button = div()
             .id("save-filter")
+            .role(Role::Button)
+            .aria_label(t("Save"))
+            .aria_disabled(!enabled)
             .h(px(theme::CONTROL_MD))
             .px(px(10.))
             .flex()

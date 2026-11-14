@@ -25,10 +25,14 @@ pub(super) fn card(theme: theme::Theme) -> Div {
         .bg(theme.contrast(3.))
 }
 
-/// `.blockTitle`
-pub(super) fn title(theme: theme::Theme, text: &'static str) -> Div {
-    div()
-        .flex()
+/// `.blockTitle`, read as a heading.
+pub(super) fn title(theme: theme::Theme, text: &'static str) -> Stateful<Div> {
+    ui::a11y::heading(
+        div().id(ElementId::Name(format!("title-{text}").into())),
+        crate::i18n::t(text),
+        3,
+    )
+    .flex()
         .items_center()
         .gap(px(8.))
         .text(theme::TEXT_MD)
@@ -66,12 +70,19 @@ pub(super) fn row(
     text: impl Into<SharedString>,
     child: impl IntoElement,
 ) -> Div {
+    // The label is text assistive technology reads before the control.
+    let text = text.into();
     div()
         .flex()
         .items_center()
         .min_h(px(26.))
         .min_w_0()
-        .child(label(theme).child(text.into()))
+        .child(ui::a11y::text(
+            label(theme)
+                .id(ElementId::Name(format!("label-{text}").into()))
+                .child(text.clone()),
+            text,
+        ))
         .child(control().child(child))
 }
 
@@ -218,6 +229,9 @@ pub(super) fn swatch(
     let bubble = tip.read(cx).layer(&ui::tip(name).plain(), 20., cx);
     let mut cell = div()
         .id(id)
+        .role(Role::Button)
+        .aria_label(crate::tf!("{value0} theme", crate::i18n::t(name)))
+        .aria_toggled(ui::a11y::toggled(active))
         .relative()
         .size(px(20.))
         .flex_none()

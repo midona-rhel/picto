@@ -716,8 +716,35 @@ impl VideoPlayer {
         let waveform = self.waveform.clone().filter(|_| self.kind == Kind::Audio);
         let height = if waveform.is_some() { 40. } else { 16. };
         let entity = cx.entity().downgrade();
+        // The position as a slider in seconds, which assistive technology
+        // steps by the seek keys' five seconds or sets.
+        let stepped = |delta: f64| {
+            let view = cx.entity().downgrade();
+            move |_: Option<&gpui::accesskit::ActionData>, _: &mut Window, cx: &mut App| {
+                let _ = view.update(cx, |this, cx| {
+                    this.seek_by(delta);
+                    cx.notify();
+                });
+            }
+        };
+        let set = cx.entity().downgrade();
         let mut bar = div()
             .id("media-progress")
+            .role(Role::Slider)
+            .aria_label(crate::i18n::en("Seek"))
+            .aria_numeric_value(self.playback.current.round())
+            .aria_min_numeric_value(0.)
+            .aria_max_numeric_value(self.playback.duration.max(0.).round())
+            .on_a11y_action(AccessibleAction::Increment, stepped(5.))
+            .on_a11y_action(AccessibleAction::Decrement, stepped(-5.))
+            .on_a11y_action(AccessibleAction::SetValue, move |data, _, cx| {
+                if let Some(gpui::accesskit::ActionData::NumericValue(target)) = data {
+                    let _ = set.update(cx, |this, cx| {
+                        this.seek(*target);
+                        cx.notify();
+                    });
+                }
+            })
             .relative()
             .w_full()
             .h(px(height))
@@ -930,6 +957,8 @@ impl VideoPlayer {
             // list with them, do not hide while a rate is being chosen.
             let mut menu = div()
                 .id("media-rate-menu")
+                .role(Role::Menu)
+                .aria_label(t("Playback speed"))
                 .occlude()
                 .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.reveal(cx)))
                 .relative()
@@ -1137,6 +1166,7 @@ impl VideoPlayer {
 /// the current one.
 fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
     let id = SharedString::from(format!("media-rate-{rate}"));
+    let label = model::rate_label(rate);
     let color = if current {
         theme::MEDIA_GLYPH_STRONG
     } else {
@@ -1144,6 +1174,9 @@ fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
     };
     div()
         .id(id)
+        .role(Role::MenuItemRadio)
+        .aria_label(label.clone())
+        .aria_toggled(crate::ui::a11y::toggled(current))
         .w_full()
         .px(px(12.))
         .py(px(4.))
@@ -1158,7 +1191,7 @@ fn rate_row(rate: f32, current: bool) -> Stateful<Div> {
             row.bg(rgba(theme::MEDIA_POPUP_BORDER))
                 .text_color(rgba(theme::MEDIA_GLYPH_STRONG))
         })
-        .child(model::rate_label(rate))
+        .child(label)
 }
 
 /// The two looks of the audio scrubber's waveform, from the thumbnail's
@@ -1212,8 +1245,10 @@ impl Render for VideoPlayer {
             return div().id("media-player").size_full();
         }
         let visible = self.controls.visible();
+        // A click on the picture plays or pauses, as the play button does.
         let mut root = div()
             .id("media-player")
+            .a11y_presentational()
             .relative()
             .size_full()
             .flex()

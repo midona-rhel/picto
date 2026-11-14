@@ -463,6 +463,9 @@ impl Render for FontViewer {
             );
 
         let tabs = div()
+            .id("font-tabs")
+            .role(Role::TabList)
+            .aria_label(t("Font preview mode"))
             .flex()
             .items_center()
             .gap(px(8.))
@@ -470,6 +473,9 @@ impl Render for FontViewer {
                 let selected = self.tab == tab;
                 div()
                     .id(label)
+                    .role(Role::Tab)
+                    .aria_label(t(label))
+                    .aria_selected(selected)
                     .h(px(32.))
                     .px(px(12.))
                     .rounded(px(theme::RADIUS_MD))
@@ -491,6 +497,9 @@ impl Render for FontViewer {
                     .child(t(label))
             }));
         let papers = div()
+            .id("font-papers")
+            .role(Role::Group)
+            .aria_label(t("Preview background"))
             .flex()
             .items_center()
             .gap(px(6.))
@@ -537,6 +546,9 @@ impl Render for FontViewer {
                 };
                 div()
                     .id(SharedString::from(format!("paper-{choice:?}")))
+                    .role(Role::Button)
+                    .aria_label(crate::tf!("{value0} preview", format!("{choice:?}").to_lowercase()))
+                    .aria_toggled(crate::ui::a11y::toggled(pressed))
                     .size(px(20.))
                     .rounded(px(theme::RADIUS_SM))
                     .bg(fill)

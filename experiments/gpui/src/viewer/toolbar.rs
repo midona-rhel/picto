@@ -261,8 +261,11 @@ impl Render for ViewerToolbar {
                     .child(
                         // `.zoomLabel`: a click opens the levels; a right
                         // click switches between fit and actual size.
+                        // `<span role="button">` read as its percent.
                         div()
                             .id("viewer-zoom-label")
+                            .role(Role::Button)
+                            .aria_label(format!("{percent}%"))
                             .min_w(px(40.))
                             .flex()
                             .justify_center()

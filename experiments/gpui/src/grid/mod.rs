@@ -1137,6 +1137,8 @@ impl Render for GridView {
                 .child(
                     div()
                         .id("grid-retry")
+                        .role(Role::Button)
+                        .aria_label(t("Retry"))
                         .px(px(12.))
                         .py(px(4.))
                         .rounded(px(theme::RADIUS_SM))
