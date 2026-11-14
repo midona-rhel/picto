@@ -5,7 +5,9 @@
 //! protocol on the loopback. The login is complete when a request of
 //! OnlyFans' API has carried its `x-bc` signature and the profile holds the
 //! `sess` and `auth_id` cookies; the browser is then closed and its profile
-//! removed. It gives up after 15 minutes.
+//! removed. It gives up after 15 minutes. Cancelling the login (which the
+//! app does when it quits) closes the browser and removes the profile at
+//! once.
 //!
 //! The DevTools protocol is spoken over a WebSocket of the loopback, with
 //! the little of RFC 6455 a client needs (`websocket` below).
@@ -30,19 +32,58 @@ const COOKIE_NAMES: [&str; 3] = ["sess", "auth_id", "auth_uid"];
 
 /// The outside browser's login, closed when dropped.
 pub struct ExternalLogin {
-    closed: Arc<AtomicBool>,
+    shared: Arc<Shared>,
+}
+
+/// The browser and its profile, which whoever ends the login first (the
+/// watch, or a cancel) closes and removes.
+struct Shared {
+    closed: AtomicBool,
+    child: Mutex<Option<Child>>,
+    profile: Mutex<Option<tempfile::TempDir>>,
+}
+
+impl Shared {
+    /// Closes the browser and removes its profile, once.
+    fn end(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(mut child) = self.child.lock().ok().and_then(|mut slot| slot.take()) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(profile) = self.profile.lock().ok().and_then(|mut slot| slot.take()) {
+            remove_profile(profile);
+        }
+    }
+}
+
+/// Removes a profile folder, trying again for a few seconds while the
+/// browser's last processes let go of its files (Windows keeps them locked
+/// for a moment after the browser ends).
+fn remove_profile(profile: tempfile::TempDir) {
+    let path = profile.keep();
+    for _ in 0..20 {
+        if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    eprintln!(
+        "picto: the OnlyFans login's browser profile could not be removed: {}",
+        path.display()
+    );
 }
 
 impl ExternalLogin {
-    /// Ends the login: the browser is closed and its profile removed.
+    /// Ends the login: the browser is closed and its profile removed now.
     pub fn close(self) {
-        self.closed.store(true, Ordering::SeqCst);
+        self.shared.end();
     }
 }
 
 impl Drop for ExternalLogin {
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
+        self.shared.end();
     }
 }
 
@@ -86,16 +127,21 @@ pub fn launch(_: &mut App) -> (Result<ExternalLogin, String>, Finished) {
     })();
     match launched {
         Ok((child, port, profile)) => {
-            let closed = Arc::new(AtomicBool::new(false));
-            let watching = closed.clone();
+            let shared = Arc::new(Shared {
+                closed: AtomicBool::new(false),
+                child: Mutex::new(Some(child)),
+                profile: Mutex::new(Some(profile)),
+            });
+            let watching = shared.clone();
             std::thread::spawn(move || {
-                let result = watch(child, port, profile.path().to_path_buf(), &watching);
-                drop(profile);
-                if !watching.load(Ordering::SeqCst) {
+                let result = watch(port, &watching);
+                let cancelled = watching.closed.load(Ordering::SeqCst);
+                watching.end();
+                if !cancelled {
                     let _ = sender.send(result);
                 }
             });
-            (Ok(ExternalLogin { closed }), finished)
+            (Ok(ExternalLogin { shared }), finished)
         }
         Err(error) => (Err(error), finished),
     }
@@ -167,18 +213,13 @@ fn find_chromium(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 /// Watches the browser until its login is captured, it is closed, the login
 /// is cancelled or the time is up; then closes it.
-fn watch(
-    mut child: Child,
-    port: u16,
-    _profile: PathBuf,
-    closed: &AtomicBool,
-) -> Result<Credential, String> {
+fn watch(port: u16, shared: &Shared) -> Result<Credential, String> {
     let started = Instant::now();
     let captured: Arc<Mutex<Option<Credential>>> = Arc::default();
     let headers: Arc<Mutex<Option<BTreeMap<String, String>>>> = Arc::default();
     let mut attached = HashSet::new();
     let result = loop {
-        if closed.load(Ordering::SeqCst) {
+        if shared.closed.load(Ordering::SeqCst) {
             break Err("OnlyFans login was cancelled.".to_owned());
         }
         if let Some(credential) = captured.lock().ok().and_then(|mut slot| slot.take()) {
@@ -187,7 +228,12 @@ fn watch(
         if started.elapsed() >= TIMEOUT {
             break Err("OnlyFans login timed out.".to_owned());
         }
-        if let Ok(Some(_)) = child.try_wait() {
+        let exited = shared
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.as_mut().map(|child| child.try_wait()));
+        if !matches!(exited, Some(Ok(None))) {
             break Err("OnlyFans login was closed before authentication completed.".to_owned());
         }
         for target in read_targets(port) {
@@ -201,8 +247,6 @@ fn watch(
         }
         std::thread::sleep(TARGET_POLL);
     };
-    let _ = child.kill();
-    let _ = child.wait();
     result
 }
 
@@ -295,9 +339,11 @@ pub fn cookies_answer(message: &Value) -> Option<BTreeMap<String, String>> {
             .filter(|cookie| {
                 let domain = cookie["domain"].as_str().unwrap_or_default().to_lowercase();
                 let domain = domain.trim_start_matches('.');
-                domain == "onlyfans.com"
-                    || domain.ends_with(".onlyfans.com")
-                    || local.as_deref() == Some(domain)
+                match local.as_deref() {
+                    // Logins kept on local pages: only the local origin's.
+                    Some(local) => local == domain,
+                    None => domain == "onlyfans.com" || domain.ends_with(".onlyfans.com"),
+                }
             })
             .filter_map(|cookie| {
                 let name = cookie["name"].as_str()?;
@@ -321,10 +367,11 @@ pub fn api_signature(
     let headers = match message["method"].as_str()? {
         "Network.requestWillBeSent" => {
             let url = url::Url::parse(params["request"]["url"].as_str()?).ok()?;
-            let local = crate::seams::login_origin()
-                .is_some_and(|origin| url.as_str().starts_with(&origin));
-            if !(url.host_str() == Some("onlyfans.com") || local)
-                || !url.path().starts_with("/api2/")
+            let ours = match crate::seams::login_origin() {
+                Some(origin) => url.as_str().starts_with(&origin),
+                None => url.host_str() == Some("onlyfans.com"),
+            };
+            if !ours || !url.path().starts_with("/api2/")
             {
                 return None;
             }

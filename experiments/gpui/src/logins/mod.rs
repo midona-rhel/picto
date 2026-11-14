@@ -63,6 +63,12 @@ pub fn credentials_in_process() -> bool {
 pub const KEYCHAIN_REFUSED: &str =
     "Logins are kept only for this session here; the system keychain is not used.";
 
+/// Why a login that would reach a real site whatever the sign-in window
+/// loads is not started while `PICTO_GPUI_LOGIN_ORIGIN` keeps logins on
+/// local pages.
+pub const LOCAL_ONLY: &str =
+    "This login reaches the real site and is not run while logins are kept on local pages.";
+
 /// `AuthSessionState.status`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Status {
@@ -160,7 +166,16 @@ impl Logins {
             return logins;
         }
         let session = session.clone();
-        let logins = cx.new(|_| Logins {
+        let logins = cx.new(|cx| {
+            // `closeAuthWindow` on quit, as production cancels the session
+            // when its main window goes: the sign-in window, or OnlyFans'
+            // browser and its profile, never outlive the app.
+            cx.on_app_quit(|logins: &mut Logins, cx| {
+                logins.cancel(cx);
+                async {}
+            })
+            .detach();
+            Logins {
             machine: Machine::new(),
             session,
             window: None,
@@ -169,9 +184,20 @@ impl Logins {
             window_events: None,
             poll: None,
             external: None,
+            }
         });
         cx.set_global(GlobalLogins(logins.clone()));
         logins
+    }
+
+    /// The open library is closing (a switch, Close Library, quitting):
+    /// a login under way for it ends, whether or not the Accounts dialog
+    /// is open, so its credential never reaches another library.
+    pub fn library_closing(cx: &mut App) {
+        if let Some(global) = cx.try_global::<GlobalLogins>() {
+            let logins = global.0.clone();
+            logins.update(cx, |logins, cx| logins.cancel(cx));
+        }
     }
 
     /// `auth_session_state`.
@@ -210,15 +236,9 @@ impl Logins {
         input: &onlyfans::ManualInput,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let effects = match self.machine.save_manual_onlyfans(input) {
-            Ok(effects) => effects,
-            Err(error) => {
-                cx.notify();
-                return Err(error);
-            }
-        };
+        let (effects, saved) = self.machine.save_manual_onlyfans(input);
         self.perform(effects, cx);
-        Ok(())
+        saved
     }
 
     fn perform(&mut self, effects: Vec<Effect>, cx: &mut Context<Self>) {
@@ -256,15 +276,18 @@ impl Logins {
                 }
                 Effect::Inspect => self.inspect(cx),
                 Effect::Complete(url) => self.complete(url, cx),
-                Effect::Persist(credential) => self.persist(credential, cx),
-                Effect::CloseWindow { .. } => {
+                Effect::Persist {
+                    credential,
+                    session,
+                } => self.persist(credential, session, cx),
+                Effect::CloseWindow => {
                     self.poll = None;
                     self.window_events = None;
                     if let Some(window) = self.window.take() {
                         window.close(cx);
                     }
                 }
-                Effect::LaunchExternal => self.launch_external(cx),
+                Effect::LaunchExternal { session } => self.launch_external(session, cx),
                 Effect::CloseExternal => {
                     if let Some(external) = self.external.take() {
                         external.close();
@@ -348,9 +371,12 @@ impl Logins {
                 self.machine.could_not_open(error)
             }
             Event::Closed => {
-                // The platform closed it; nothing is left to close.
-                self.window = None;
+                // The platform closed the window; what is left of it (its
+                // user data folder, GTK's last events) goes now.
                 self.poll = None;
+                if let Some(window) = self.window.take() {
+                    window.close(cx);
+                }
                 self.machine.window_closed()
             }
         };
@@ -437,9 +463,11 @@ impl Logins {
         .detach();
     }
 
-    fn persist(&mut self, credential: Credential, cx: &mut Context<Self>) {
+    fn persist(&mut self, credential: Credential, session: u64, cx: &mut Context<Self>) {
         if !credentials_in_process() {
-            let effects = self.machine.persisted(Err(KEYCHAIN_REFUSED.to_owned()));
+            let effects = self
+                .machine
+                .persisted(session, Err(KEYCHAIN_REFUSED.to_owned()));
             self.perform(effects, cx);
             return;
         }
@@ -457,14 +485,21 @@ impl Logins {
                 if saved.is_ok() {
                     report_local_login(&this.session, &site, cx);
                 }
-                let effects = this.machine.persisted(saved);
+                let effects = this.machine.persisted(session, saved);
                 this.perform(effects, cx);
             });
         })
         .detach();
     }
 
-    fn launch_external(&mut self, cx: &mut Context<Self>) {
+    fn launch_external(&mut self, session: u64, cx: &mut Context<Self>) {
+        // OnlyFans' own browser can go anywhere; a debug build keeping
+        // logins on local pages does not start it.
+        if crate::seams::login_origin().is_some() {
+            let effects = self.machine.external_launched(Err(LOCAL_ONLY.to_owned()));
+            self.perform(effects, cx);
+            return;
+        }
         let (launched, finished) = browser::launch(cx);
         match launched {
             Ok(external) => {
@@ -476,7 +511,7 @@ impl Logins {
                         Err("OnlyFans login was closed before authentication completed.".to_owned())
                     });
                     let _ = this.update(cx, |this, cx| {
-                        let effects = this.machine.external_finished(credential);
+                        let effects = this.machine.external_finished(session, credential);
                         this.perform(effects, cx);
                     });
                 })
@@ -493,8 +528,8 @@ impl Logins {
 /// With `PICTO_GPUI_LOGIN_ORIGIN` (a debug build signing in to local pages
 /// only), writes to standard error what the application now reports for
 /// `site`: its row of `auth.credentials.list`, read through the command,
-/// and the cookies its credential store holds. A real login is never
-/// written out: the variable keeps the sign-in window off every real site.
+/// and the names of the cookies its credential store holds. No value is
+/// written out: a session pasted by hand is a real one.
 pub fn report_local_login(session: &Entity<Session>, site: &str, cx: &mut App) {
     if crate::seams::login_origin().is_none() {
         return;
@@ -515,9 +550,9 @@ pub fn report_local_login(session: &Entity<Session>, site: &str, cx: &mut App) {
             .ok()
             .flatten()
             .and_then(|credential| credential.cookies)
-            .map(|cookies| cookies.into_iter().collect::<BTreeMap<_, _>>());
+            .map(|cookies| cookies.into_keys().collect::<std::collections::BTreeSet<_>>());
         eprintln!(
-            "picto: local login for {site}: auth.credentials.list row {}; stored cookies {:?}",
+            "picto: local login for {site}: auth.credentials.list row {}; stored cookie names {:?}",
             row.map_or_else(|| "none".to_owned(), |row| row.to_string()),
             stored
         );
@@ -598,6 +633,17 @@ impl Services for AppServices {
     }
 
     async fn dispatch(&self, command: &str, args: Value) -> Result<Value, String> {
+        // Pixiv's code exchange saves the login inside the application,
+        // past `Effect::Persist`: the same guard as a saved login, and no
+        // exchange with the real site while logins are kept local.
+        if command == "pixiv_oauth_exchange" {
+            if !credentials_in_process() {
+                return Err(KEYCHAIN_REFUSED.to_owned());
+            }
+            if crate::seams::login_origin().is_some() {
+                return Err(LOCAL_ONLY.to_owned());
+            }
+        }
         let answer = {
             let cx = self.cx.borrow();
             self.session.read_with(&*cx, |session, _| {

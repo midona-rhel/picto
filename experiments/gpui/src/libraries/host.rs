@@ -788,6 +788,9 @@ fn shell_session(cx: &mut App) -> Option<Entity<crate::session::Session>> {
 /// stops reading, the main window shows `gate`. Hands back what is to be
 /// closed.
 fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Open> {
+    // A login under way is for this library; it ends with it, its
+    // sign-in window or browser too.
+    crate::logins::Logins::library_closing(cx);
     let manager = super::manager::window(cx);
     let main_any: AnyWindowHandle = main.into();
     for window in cx.windows() {

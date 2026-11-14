@@ -197,8 +197,10 @@ impl Hosted {
                         wry::WebViewBuilder::new_with_web_context(&mut context),
                         &options,
                     )
-                    // The page's own menu, as Chromium's login windows have.
-                    .with_default_context_menus(true)
+                    // Electron's windows have no menu of their own on a
+                    // right-click; WebView2's (Back, Reload, Inspect…) is
+                    // turned off. A page's own menu still shows.
+                    .with_default_context_menus(false)
                 };
                 #[cfg(target_os = "macos")]
                 let builder = super::configure(wry::WebViewBuilder::new(), &options);

@@ -21,6 +21,8 @@ type Slot = Rc<RefCell<Option<wry::WebView>>>;
 pub struct GtkLogin {
     window: gtk::Window,
     view: Slot,
+    /// GTK destroyed the window (the user closed it).
+    destroyed: Rc<std::cell::Cell<bool>>,
     _pump: Task<()>,
 }
 
@@ -61,7 +63,12 @@ impl GtkLogin {
             gtk::glib::Propagation::Proceed
         });
         super::opened();
-        window.connect_destroy(|_| super::closed());
+        let destroyed = Rc::new(std::cell::Cell::new(false));
+        let marked = destroyed.clone();
+        window.connect_destroy(move |_| {
+            marked.set(true);
+            super::closed();
+        });
         let web_view = match super::configure(wry::WebViewBuilder::new(), &options)
             .build_gtk(&window)
         {
@@ -88,6 +95,7 @@ impl GtkLogin {
         Ok(Self {
             window,
             view,
+            destroyed,
             _pump: pump,
         })
     }
@@ -139,11 +147,27 @@ impl GtkLogin {
             .map_err(|error| error.to_string())
     }
 
-    pub fn close(self, _: &mut App) {
+    pub fn close(self, cx: &mut App) {
         self.view.borrow_mut().take();
-        // SAFETY: the window is this login's own, and nothing holds it
-        // after it is destroyed.
-        unsafe { self.window.destroy() };
+        // A window the user closed is already destroyed.
+        if !self.destroyed.get() {
+            // SAFETY: the window is this login's own, and nothing holds it
+            // after it is destroyed.
+            unsafe { self.window.destroy() };
+        }
+        // GTK takes the window off the display server from its own events:
+        // they are run a little longer once the pump above stops.
+        cx.spawn(async move |cx| {
+            for _ in 0..50 {
+                while gtk::events_pending() {
+                    gtk::main_iteration_do(false);
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(10))
+                    .await;
+            }
+        })
+        .detach();
     }
 }
 

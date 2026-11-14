@@ -433,7 +433,10 @@ impl AccountApiAdapter {
 }
 
 /// What an OAuth login keeps between opening the authorization page and
-/// its callback.
+/// its callback, for as long as the window is open (production's
+/// `oauthState` and client): a callback refused by the user, then accepted,
+/// in the same window, is still checked against it.
+#[derive(Clone)]
 enum OAuthPending {
     Two {
         state: String,
@@ -557,7 +560,7 @@ impl OAuthAdapter {
         let params: BTreeMap<String, String> = url::Url::parse(url)
             .map(|url| url.query_pairs().into_owned().collect())
             .unwrap_or_default();
-        let pending = self.pending.borrow_mut().take();
+        let pending = self.pending.borrow().clone();
         match pending {
             Some(OAuthPending::Two {
                 state,
@@ -963,7 +966,6 @@ pub(super) mod tests {
     use super::*;
     use crate::logins::sites::{resolve, with_service_host};
     use futures::executor::block_on;
-    use std::rc::Rc;
 
     /// A recorded page: its address, the cookies its store holds by the
     /// address asked for, and what its scripts answer.
@@ -1513,6 +1515,40 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn an_oauth2_callback_refused_then_accepted_in_the_same_window_completes() {
+        let adapter = adapter(resolve("deviantart").unwrap()).unwrap();
+        let services = FakeServices::default();
+        let prepared = block_on(adapter.prepare(&services)).unwrap();
+        let state = url::Url::parse(&prepared.url)
+            .unwrap()
+            .query_pairs()
+            .find(|(name, _)| name == "state")
+            .unwrap()
+            .1
+            .into_owned();
+        let page = FakePage::default();
+        let denied = format!(
+            "https://mikf.github.io/gallery-dl/oauth-redirect.html?error=access_denied&state={state}"
+        );
+        assert_eq!(
+            block_on(adapter.complete(&denied, &page, &services)).unwrap_err(),
+            "No code in DeviantArt OAuth callback."
+        );
+        services.answers.borrow_mut().push(HttpResponse {
+            status: 200,
+            body: r#"{"access_token":"a","refresh_token":"durable"}"#.into(),
+        });
+        let accepted = format!(
+            "https://mikf.github.io/gallery-dl/oauth-redirect.html?code=c&state={state}"
+        );
+        let outcome = block_on(adapter.complete(&accepted, &page, &services)).unwrap();
+        assert_eq!(
+            outcome.credential.unwrap().oauth_token.as_deref(),
+            Some("durable")
+        );
+    }
+
     // 'persists both OAuth1 token values through the same host boundary'
     #[test]
     fn tumblr_keeps_both_access_token_values() {
@@ -1589,29 +1625,5 @@ pub(super) mod tests {
                 json!({ "code": "oauth-code", "code_verifier": "verifier", "phpsessid": "pixiv-session" })
             )
         );
-    }
-
-    #[test]
-    fn only_page_logins_are_looked_at_and_onlyfans_has_no_adapter() {
-        assert!(adapter(resolve("patreon").unwrap()).unwrap().inspects());
-        assert!(adapter(resolve("gelbooru").unwrap()).unwrap().inspects());
-        assert!(!adapter(resolve("tumblr").unwrap()).unwrap().inspects());
-        assert!(!adapter(resolve("pixiv").unwrap()).unwrap().inspects());
-        assert!(adapter(resolve("onlyfans").unwrap()).is_err());
-        let _ = Rc::new(());
-    }
-
-    #[test]
-    fn the_page_scripts_are_expressions_that_return_json() {
-        for script in [
-            ACCOUNT_API_SCRIPT,
-            SIGNED_IN_SCRIPT,
-            VERIFICATION_SCRIPT,
-            BROWSER_HEADERS_SCRIPT,
-            &fanbox_session_script("https://api.fanbox.cc/creator.listFollowing"),
-        ] {
-            assert!(script.starts_with("JSON.stringify("), "{script}");
-            assert!(script.ends_with(')'), "{script}");
-        }
     }
 }

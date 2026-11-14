@@ -215,7 +215,10 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         .with_incognito(true)
         .with_visible(true)
         .with_background_color((255, 255, 255, 255))
-        .with_clipboard(true)
+        // No page script reads or writes the clipboard (WebKitGTK's
+        // `javascript-can-access-clipboard`); the user's own copy and
+        // paste in the page's fields are the web view's editing.
+        .with_clipboard(false)
         .with_navigation_handler(move |url| {
             if intercept(&url) {
                 let _ = events.unbounded_send(Event::Callback(url));
