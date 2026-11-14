@@ -299,30 +299,9 @@ impl Shell {
             cx,
             |this, _: &app_menu::BatchRename, _, cx| this.rename_selected(cx),
         );
-        root = when(
-            root,
-            has,
-            cx,
-            |this, _: &app_menu::CopyPaths, window, cx| {
-                this.act_on_selection(Row::CopySelectionPaths, window, cx)
-            },
-        );
-        root = when(
-            root,
-            menu.names,
-            cx,
-            |this, _: &app_menu::CopyNames, window, cx| {
-                this.act_on_selection(Row::CopySelectionNames, window, cx)
-            },
-        );
-        root = when(
-            root,
-            has,
-            cx,
-            |this, _: &app_menu::CopyLinks, window, cx| {
-                this.act_on_selection(Row::CopySelectionLinks, window, cx)
-            },
-        );
+        root = row::<app_menu::CopyPaths>(root, has, Row::CopySelectionPaths, false, cx);
+        root = row::<app_menu::CopyNames>(root, menu.names, Row::CopySelectionNames, false, cx);
+        root = row::<app_menu::CopyLinks>(root, has, Row::CopySelectionLinks, false, cx);
         root = when(
             root,
             menu.thumbnails,
@@ -344,48 +323,18 @@ impl Shell {
                 }
             },
         );
-        root = when(
+        root = row::<app_menu::Restore>(root, menu.in_trash() && has, Row::Restore, true, cx);
+        root = row::<app_menu::DeletePermanently>(
             root,
             menu.in_trash() && has,
+            Row::DeletePermanently,
+            true,
             cx,
-            |this, _: &app_menu::Restore, window, cx| {
-                if !app_menu::typed_in_text_field(window) {
-                    this.act_on_selection(Row::Restore, window, cx)
-                }
-            },
         );
-        root = when(
-            root,
-            menu.in_trash() && has,
-            cx,
-            |this, _: &app_menu::DeletePermanently, window, cx| {
-                if !app_menu::typed_in_text_field(window) {
-                    this.act_on_selection(Row::DeletePermanently, window, cx)
-                }
-            },
-        );
-        root = when(
-            root,
-            !menu.in_trash() && has,
-            cx,
-            |this, _: &app_menu::MoveToTrash, window, cx| {
-                if !app_menu::typed_in_text_field(window) {
-                    this.act_on_selection(Row::MoveToTrash, window, cx)
-                }
-            },
-        );
-        root = when(
-            root,
-            menu.in_inbox() && has,
-            cx,
-            |this, _: &app_menu::Accept, window, cx| this.act_on_selection(Row::Accept, window, cx),
-        );
-        root = when(
-            root,
-            menu.in_inbox() && has,
-            cx,
-            |this, _: &app_menu::Reject, window, cx| this.act_on_selection(Row::Reject, window, cx),
-        );
+        root =
+            row::<app_menu::MoveToTrash>(root, !menu.in_trash() && has, Row::MoveToTrash, true, cx);
+        root = row::<app_menu::Accept>(root, menu.in_inbox() && has, Row::Accept, false, cx);
+        root = row::<app_menu::Reject>(root, menu.in_inbox() && has, Row::Reject, false, cx);
         root = when(root, has, cx, |_, _: &app_menu::AddTags, window, cx| {
             window.dispatch_action(Box::new(crate::keymap::AddTags), cx)
         });
@@ -409,20 +358,8 @@ impl Shell {
             cx,
             |this, _: &app_menu::ShowDuplicates, _, cx| this.show_screen(Screen::Duplicates, cx),
         );
-        root = when(
-            root,
-            menu.single_media(),
-            cx,
-            |this, _: &app_menu::OpenDefault, window, cx| {
-                this.act_on_selection(Row::OpenDefault, window, cx)
-            },
-        );
-        root = when(
-            root,
-            menu.single_media(),
-            cx,
-            |this, _: &app_menu::Reveal, window, cx| this.act_on_selection(Row::Reveal, window, cx),
-        );
+        root = row::<app_menu::OpenDefault>(root, menu.single_media(), Row::OpenDefault, false, cx);
+        root = row::<app_menu::Reveal>(root, menu.single_media(), Row::Reveal, false, cx);
         when(
             root,
             menu.single(),
@@ -432,6 +369,22 @@ impl Shell {
             },
         )
     }
+}
+
+/// Runs the item menu's `row` for `A` while `enabled`. A row on the Delete
+/// keys (`delete_key`) leaves a text field's ⌘⌫ to the field.
+fn row<A: Action>(
+    root: Div,
+    enabled: bool,
+    row: Row,
+    delete_key: bool,
+    cx: &mut Context<Shell>,
+) -> Div {
+    when(root, enabled, cx, move |this, _: &A, window, cx| {
+        if !(delete_key && app_menu::typed_in_text_field(window)) {
+            this.act_on_selection(row, window, cx)
+        }
+    })
 }
 
 /// Handles `A` on `root` while `enabled`.

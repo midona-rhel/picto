@@ -123,10 +123,7 @@ impl Shell {
                         .iter()
                         .filter_map(|index| details.and_then(|details| details.media.get(*index)))
                         .map(|media| match action {
-                            Action::CopySelectionNames if media.media_name.is_empty() => {
-                                "Untitled".to_owned()
-                            }
-                            Action::CopySelectionNames => media.media_name.clone(),
+                            Action::CopySelectionNames => display_name(&media.media_name),
                             Action::CopySelectionPaths => media.file_path.clone(),
                             _ => media_link(&media.facts.content_hash, &media.facts.mime),
                         })
@@ -140,13 +137,7 @@ impl Shell {
                 let names = target
                     .items
                     .iter()
-                    .map(|item| {
-                        if item.name.is_empty() {
-                            "Untitled".to_owned()
-                        } else {
-                            item.name.clone()
-                        }
-                    })
+                    .map(|item| display_name(&item.name))
                     .collect::<Vec<_>>();
                 write_text(names.join("\n"), cx);
             }
@@ -539,11 +530,7 @@ impl Shell {
             .into_iter()
             .map(|item| crate::shell::batch_rename::Item {
                 id: item.root_id,
-                name: if item.name.is_empty() {
-                    "Untitled".to_owned()
-                } else {
-                    item.name
-                },
+                name: display_name(&item.name),
             })
             .collect();
         self.batch_rename
@@ -821,6 +808,15 @@ impl Shell {
             }),
             cx,
         );
+    }
+}
+
+/// An item's name as the grid shows it: "Untitled" for none.
+fn display_name(name: &str) -> String {
+    if name.is_empty() {
+        "Untitled".to_owned()
+    } else {
+        name.to_owned()
     }
 }
 
