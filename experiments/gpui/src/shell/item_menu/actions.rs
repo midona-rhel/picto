@@ -402,7 +402,7 @@ impl Shell {
             Action::SetLibraryCover => {
                 // The shown file, framed at once (`initialCandidate`).
                 if let (Some(item), Some(file)) = (target.items.first(), file) {
-                    let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                    let candidate = crate::ui::cover_dialog::Candidate {
                         media_item: i64::from(item.root_id.0),
                         size: (item.width.unwrap_or(1), item.height.unwrap_or(1)),
                         thumbnail: crate::grid::thumbnails::present(
@@ -562,7 +562,7 @@ impl Shell {
     /// it is given.
     pub(crate) fn open_library_cover(
         &mut self,
-        candidate: Option<crate::screens::subscriptions::cover_dialog::Candidate>,
+        candidate: Option<crate::ui::cover_dialog::Candidate>,
         cx: &mut Context<Self>,
     ) {
         self.library_cover

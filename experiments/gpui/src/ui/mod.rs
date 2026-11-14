@@ -11,6 +11,7 @@ mod chip;
 pub mod color_editor;
 pub mod color_picker;
 pub mod confirm;
+pub mod cover_dialog;
 pub mod date_picker;
 mod empty_state;
 pub mod field;

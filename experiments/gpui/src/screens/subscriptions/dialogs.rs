@@ -2,9 +2,10 @@
 //! gallery download (`AddGalleryDialog`), a rename (`RenameDialog`), a
 //! source's edit (`QueryEditModal`) and details, the confirmations the
 //! screen asks before deleting or resetting, and the cover
-//! (`SubscriptionCoverDialog`, in [`super::cover_dialog`]).
-use super::{SubscriptionsScreen, cover_dialog, data, format, requests};
+//! (`SubscriptionCoverDialog`, in the shared `ui::cover_dialog`).
+use super::{SubscriptionsScreen, data, format, requests};
 use crate::theme::Text as _;
+use crate::ui::cover_dialog;
 use crate::ui::{
     self,
     action_button::Look as ButtonLook,

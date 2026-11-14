@@ -338,9 +338,8 @@ grid: Tags (`tags/`), Subscriptions (`subscriptions/`), Duplicates
 (`duplicates/`). A screen can hand the titlebar its own controls. The tag
 browser model the Tags screen, the tag picker and the Add Tags dialog share
 is `src/tags.rs`; the folder tree the folder picker and the Folders dialog
-share is `inspector/folder_picker.rs`. The shared cover dialog
-(`MediaCoverDialog`) lives in `screens/subscriptions/cover_dialog.rs` and is
-also used for the library cover.
+share is `inspector/folder_picker.rs`. The cover dialog (`MediaCoverDialog`)
+a subscription's cover and the library's share is `ui/cover_dialog.rs`.
 
 **Inspector** (`src/inspector/`). The right rail: the destination when
 nothing is selected (`scope.rs`), one item (`mod.rs`), several

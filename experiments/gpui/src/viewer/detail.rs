@@ -557,7 +557,7 @@ impl DetailWindow {
                 let Some(entry) = self.entry() else {
                     return;
                 };
-                let candidate = crate::screens::subscriptions::cover_dialog::Candidate {
+                let candidate = crate::ui::cover_dialog::Candidate {
                     media_item: i64::from(entry.root.0),
                     size: (entry.width.unwrap_or(1), entry.height.unwrap_or(1)),
                     thumbnail: crate::grid::thumbnails::present(
