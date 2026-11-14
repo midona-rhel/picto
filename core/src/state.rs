@@ -945,7 +945,10 @@ mod tests {
         .unwrap();
         let (library, published) = handed.try_recv().unwrap();
         assert!(!published);
-        assert!(std::sync::Arc::ptr_eq(&library, state.application().library()));
+        assert!(std::sync::Arc::ptr_eq(
+            &library,
+            state.application().library()
+        ));
         assert!(library.sidebar_counts().is_ok());
         super::close_library().await.unwrap();
     }
