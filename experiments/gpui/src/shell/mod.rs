@@ -1158,6 +1158,14 @@ impl Render for Shell {
         if self.rails.animating() {
             window.request_animation_frame();
         }
-        root
+        // The window's content, which stands for the keyboard while no
+        // control has it, so that the grid's tile the keyboard is on reads
+        // as focused inside it (`aria_active_descendant`).
+        div()
+            .id("shell")
+            .role(Role::Group)
+            .a11y_focus(&self.focus)
+            .size_full()
+            .child(root)
     }
 }

@@ -1249,8 +1249,11 @@ impl Render for GridView {
                             .border_color(rgba(theme::MARQUEE_BORDER)),
                     );
                 }
+                // The tiles' list: several can be selected.
                 div()
                     .id("media-grid")
+                    .role(Role::ListBox)
+                    .aria_multiselectable(true)
                     .size_full()
                     .opacity(fade)
                     .overflow_y_scroll()

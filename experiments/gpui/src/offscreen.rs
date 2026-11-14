@@ -198,6 +198,27 @@ fn plays_a_script() {
                 })
                 .unwrap();
             println!("focused: {focused}");
+        } else if let Some(name) = line.strip_prefix("a11y ") {
+            // The window's accessibility tree, as assistive technology would
+            // be told it, written as indented text: the tree is built from
+            // here on, as when a screen reader is attached.
+            cx.update_window(window, |_, window, _| window.set_a11y_active_for_test(true))
+                .unwrap();
+            settle(&mut cx, window, Duration::from_millis(100), false);
+            let (update, unexposed) = cx
+                .update_window(window, |_, window, _| {
+                    (
+                        window.last_a11y_tree_update(),
+                        window.a11y_unexposed_clickables(),
+                    )
+                })
+                .unwrap();
+            let tree = crate::ui::a11y::tree::Tree::new(update.expect("a tree"));
+            let mut text = tree.dump();
+            for (at, bounds) in unexposed {
+                text.push_str(&format!("unexposed click: {at} {bounds:?}\n"));
+            }
+            std::fs::write(out.join(format!("{}.a11y.txt", name.trim())), text).unwrap();
         } else if line == "lazy" || line == "eager" {
             lazy = line == "lazy";
         } else if let Some(rest) = line.strip_prefix("notify ") {

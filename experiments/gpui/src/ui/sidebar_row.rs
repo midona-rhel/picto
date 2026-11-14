@@ -385,6 +385,9 @@ impl RenderOnce for SidebarRow {
             .aria_level(self.depth + 1)
             .aria_selected(self.active || self.selected)
             .when_some(self.disclosure, |row, expanded| row.aria_expanded(expanded))
+            // The row the sidebar's keys are on reads as focused while the
+            // rows have the keyboard.
+            .when(self.focused, |row| row.aria_active_descendant())
             .relative()
             .flex()
             .items_center()

@@ -463,13 +463,35 @@ impl GridView {
             && self.scrolled.elapsed() >= crate::motion::MAGNIFIER_RESUME;
         look.alphas = reveal::alphas(self.reveal.progress(look.item.root_id.0, now));
         look.grayscale = self.session.read(cx).grayscale;
+        // An option of the grid's list, named by its file, selected while in
+        // the selection, at its place in the whole destination. Only the
+        // tiles drawn are in the tree; the one the keyboard is on is what
+        // assistive technology reads as focused.
+        let described = crate::ui::a11y::active(window).then(|| {
+            let session = self.session.read(cx);
+            (
+                SharedString::from(look.item.name.clone()),
+                session.total as usize,
+                session.focus_ordinal() == Some(ordinal),
+            )
+        });
         let cell = tile_art(look, prefs, &mut self.art, &self.thumbnails, window, cx);
+        let mut hit = div().id(ordinal);
+        if let Some((name, total, focused)) = described {
+            hit = hit
+                .role(Role::ListBoxOption)
+                .aria_label(name)
+                .aria_selected(in_selection)
+                .aria_position_in_set(ordinal + 1)
+                .aria_size_of_set(total.max(ordinal + 1));
+            if focused {
+                hit = hit.aria_active_descendant();
+            }
+        }
         // Only the image takes the pointer: the name and resolution rows
         // below it are empty space, as in the canvas grid's hit test.
         cell.child(
-            div()
-                .id(ordinal)
-                .absolute()
+            hit.absolute()
                 .left_0()
                 .top_0()
                 .w(px(tile.w))

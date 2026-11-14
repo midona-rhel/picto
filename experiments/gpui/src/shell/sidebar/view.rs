@@ -95,8 +95,14 @@ impl Sidebar {
         .absolute()
         .inset_0();
         let entered = (state, hint.clone());
+        // `LibrarySwitcherButton`: a button named by the library, expanded
+        // while its popover is open.
+        let open = self.library_popover.read(cx).is_open();
         div()
             .id("library-switcher")
+            .role(Role::Button)
+            .aria_label(name.clone())
+            .aria_expanded(open)
             .relative()
             .h(px(48.))
             .flex_none()
@@ -238,8 +244,10 @@ impl Render for Sidebar {
             })
         };
 
+        // The destinations as a tree: each row an item at its level.
         let mut list = div()
             .id("navigation")
+            .role(Role::Tree)
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
