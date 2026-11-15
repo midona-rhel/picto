@@ -4,6 +4,7 @@
 //! action is handled here only while production's rule enables the row, so
 //! AppKit shows the row enabled exactly then.
 use super::Shell;
+use super::shortcuts::Picker;
 use crate::app_menu::{self, MenuContext, ScopeKind, Status};
 use crate::backend::Screen;
 use crate::grid::menu::{self as rows, Action as Row};
@@ -270,8 +271,8 @@ impl Shell {
         });
     }
 
-    /// Batch Rename… and its keys: the dialog on the selected items, every
-    /// one loaded and chosen one by one.
+    /// Batch Rename…: the dialog on the selected items, every one loaded
+    /// and chosen one by one.
     pub(super) fn rename_selected(&mut self, cx: &mut Context<Self>) {
         let items = self
             .session
@@ -283,14 +284,9 @@ impl Shell {
         self.batch_rename(items, cx);
     }
 
-    /// Regenerate Thumbnail(s) and its keys: the selected media's files,
-    /// while the menu's rule allows it (every selected item a loaded media
-    /// item, chosen one by one).
-    pub(super) fn regenerate_selected(&mut self, cx: &mut Context<Self>) {
-        if !self.menu_context(cx).thumbnails {
-            cx.propagate();
-            return;
-        }
+    /// Regenerate Thumbnail(s): the selected media's files (every selected
+    /// item a loaded media item, chosen one by one, as the rule says).
+    fn regenerate_selected(&mut self, cx: &mut Context<Self>) {
         let files = self
             .session
             .read(cx)
@@ -301,11 +297,22 @@ impl Shell {
         self.regenerate_thumbnails(files, cx);
     }
 
-    /// Wires the menu's rows on the window's root, each while its rule holds.
+    /// The commands the application menu and the keys share, each with the
+    /// one rule that says when it applies and what it does. A row with keys
+    /// in production binds the keymap's action itself; a row production
+    /// shows without keys has an action of its own (a row shows the keys of
+    /// its action) under the same rule. Each action is handled only while
+    /// its rule holds, so AppKit enables the row, and the key reaches it,
+    /// exactly then. The rules are production's menu rules
+    /// (`applicationMenuRuntime.ts`'s `menuContext`), whose accelerators the
+    /// keys are; the viewer adds the item it shows.
     pub(super) fn menu_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
+        use crate::keymap;
         let menu = app_menu::context(cx);
         let has = menu.has_selection();
+        let viewing = self.viewing(cx);
         let mut root = root;
+        // ── Library and File ──
         root = when(
             root,
             menu.can_create_folder(),
@@ -322,97 +329,138 @@ impl Shell {
             root,
             menu.can_create_smart_folder(),
             cx,
-            |_, _: &app_menu::NewSmartFolder, window, cx| {
-                window.dispatch_action(Box::new(crate::keymap::NewSmartFolder), cx)
+            |this, _: &app_menu::NewSmartFolder, window, cx| {
+                this.sidebar
+                    .update(cx, |sidebar, cx| sidebar.new_top_smart_folder(window, cx))
             },
         );
         root = when(
             root,
             menu.import,
             cx,
-            |_, _: &app_menu::ImportFiles, window, cx| {
-                window.dispatch_action(Box::new(crate::keymap::ImportFiles), cx)
+            |this, _: &keymap::ImportFiles, window, cx| {
+                this.import(super::import::Import::Files, window, cx)
             },
         );
         root = when(
             root,
             menu.import,
             cx,
-            |_, _: &app_menu::ImportFolder, window, cx| {
-                window.dispatch_action(Box::new(crate::keymap::ImportFolder), cx)
+            |this, _: &keymap::ImportFolder, window, cx| {
+                this.import(super::import::Import::Folder, window, cx)
             },
         );
-        // The export rows are handled by `export_actions`.
+        // ── Edit ──
+        // Rename for one item, Batch Rename… for several.
         root = when(
             root,
-            menu.can_rename_one(),
+            menu.names,
             cx,
-            |_, _: &app_menu::Rename, window, cx| {
-                window.dispatch_action(Box::new(crate::keymap::Rename), cx)
+            |this, _: &keymap::Rename, window, cx| this.rename(window, cx),
+        );
+        root = when(
+            root,
+            has,
+            cx,
+            |this, _: &keymap::CopyFilePath, window, cx| {
+                // The viewer's: the file it shows.
+                let row = if this.viewing(cx) {
+                    Row::CopyPath
+                } else {
+                    Row::CopySelectionPaths
+                };
+                this.act_on_selection(row, window, cx)
             },
         );
-        root = when(
-            root,
-            menu.names && menu.selection > 1,
-            cx,
-            |this, _: &app_menu::BatchRename, _, cx| this.rename_selected(cx),
-        );
-        root = row::<app_menu::CopyPaths>(root, has, Row::CopySelectionPaths, false, cx);
         root = row::<app_menu::CopyNames>(root, menu.names, Row::CopySelectionNames, false, cx);
         root = row::<app_menu::CopyLinks>(root, has, Row::CopySelectionLinks, false, cx);
         root = when(
             root,
             menu.thumbnails,
             cx,
-            |this, _: &app_menu::RegenerateThumbnails, _, cx| this.regenerate_selected(cx),
+            |this, _: &keymap::RegenerateThumbnails, _, cx| this.regenerate_selected(cx),
         );
         root = when(root, has, cx, |this, _: &app_menu::DeselectAll, _, cx| {
             this.session
                 .update(cx, |session, cx| session.clear_selection(cx))
         });
         // The rows on the Delete keys leave a text field's ⌘⌫ to the field.
-        root = when(
-            root,
-            menu.in_folder() && has,
-            cx,
-            |_, _: &app_menu::RemoveFromFolder, window, cx| {
-                if !app_menu::typed_in_text_field(window) {
-                    window.dispatch_action(Box::new(crate::keymap::RemoveFromFolder), cx)
-                }
-            },
-        );
-        root = row::<app_menu::Restore>(root, menu.in_trash() && has, Row::Restore, true, cx);
-        root = row::<app_menu::DeletePermanently>(
-            root,
-            menu.in_trash() && has,
-            Row::DeletePermanently,
-            true,
-            cx,
-        );
+        let remove = menu.in_folder() && has;
+        root = row::<app_menu::RemoveFromFolder>(root, remove, Row::RemoveFromFolder, true, cx);
+        root = row::<keymap::RemoveFromFolder>(root, remove, Row::RemoveFromFolder, true, cx);
+        let trash = menu.in_trash() && has;
+        root = row::<keymap::RestoreItems>(root, trash, Row::Restore, true, cx);
+        root = row::<app_menu::DeletePermanently>(root, trash, Row::DeletePermanently, true, cx);
         root =
             row::<app_menu::MoveToTrash>(root, !menu.in_trash() && has, Row::MoveToTrash, true, cx);
-        root = row::<app_menu::Accept>(root, menu.in_inbox() && has, Row::Accept, false, cx);
-        root = row::<app_menu::Reject>(root, menu.in_inbox() && has, Row::Reject, false, cx);
-        root = when(root, has, cx, |_, _: &app_menu::AddTags, window, cx| {
-            window.dispatch_action(Box::new(crate::keymap::AddTags), cx)
+        // ── Organize ──
+        // Over the media view or Quick Look, Accept and Reject review the
+        // item being viewed (`InboxReviewControls`); over the grid, the
+        // selection.
+        let inbox = menu.in_inbox() && has;
+        root = when(
+            root,
+            inbox || viewing,
+            cx,
+            |this, _: &app_menu::Accept, window, cx| this.accept(window, cx),
+        );
+        root = when(
+            root,
+            inbox || viewing,
+            cx,
+            |this, _: &keymap::AcceptInbox, window, cx| this.accept(window, cx),
+        );
+        root = when(
+            root,
+            inbox || viewing,
+            cx,
+            |this, _: &app_menu::Reject, window, cx| this.reject(window, cx),
+        );
+        root = when(
+            root,
+            inbox || viewing,
+            cx,
+            |this, _: &keymap::RejectInbox, window, cx| this.reject(window, cx),
+        );
+        root = when(root, has, cx, |this, _: &app_menu::AddTags, window, cx| {
+            this.pick(Picker::Tags, window, cx)
         });
-        root = when(root, has, cx, |_, _: &app_menu::AddToFolder, window, cx| {
-            window.dispatch_action(Box::new(crate::keymap::AddToFolder), cx)
-        });
-        root = when(root, has, cx, |this, _: &app_menu::AutoTag, window, cx| {
-            this.act_on_selection(Row::AutoTag, window, cx)
+        root = when(root, has, cx, |this, _: &keymap::AddTags, window, cx| {
+            this.pick(Picker::Tags, window, cx)
         });
         root = when(
             root,
             has,
             cx,
+            |this, _: &keymap::AddToFolder, window, cx| this.pick(Picker::AddToFolder, window, cx),
+        );
+        root = when(
+            root,
+            has,
+            cx,
+            |this, _: &keymap::AddToFolders, window, cx| this.pick(Picker::Folders, window, cx),
+        );
+        root = row::<keymap::AutoTag>(root, has || viewing, Row::AutoTag, false, cx);
+        root = when(
+            root,
+            has || viewing,
+            cx,
             |this, rating: &app_menu::SetRating, window, cx| {
+                this.act_on_selection(Row::Rate(rating.stars), window, cx)
+            },
+        );
+        root = when(
+            root,
+            has || viewing,
+            cx,
+            |this, rating: &keymap::Rate, window, cx| {
                 this.act_on_selection(Row::Rate(rating.stars), window, cx)
             },
         );
         root = when(root, true, cx, |this, _: &app_menu::ShowTags, _, cx| {
             this.show_screen(Screen::Tags, cx)
         });
+        // ── View ──
         root = when(
             root,
             true,
@@ -425,8 +473,9 @@ impl Shell {
             cx,
             |this, _: &app_menu::LogWindow, window, cx| this.toggle_diagnostics(window, cx),
         );
-        root = row::<app_menu::OpenDefault>(root, menu.single_media(), Row::OpenDefault, false, cx);
-        root = row::<app_menu::Reveal>(root, menu.single_media(), Row::Reveal, false, cx);
+        root =
+            row::<keymap::OpenDefaultApp>(root, menu.single_media(), Row::OpenDefault, false, cx);
+        root = row::<keymap::RevealInFinder>(root, menu.single_media(), Row::Reveal, false, cx);
         when(
             root,
             menu.single(),

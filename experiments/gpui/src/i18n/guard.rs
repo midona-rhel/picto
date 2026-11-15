@@ -37,14 +37,16 @@ use std::path::{Path, PathBuf};
 /// through `t()` and whose key names stay English as production writes
 /// them; and this module's own data (the languages' number and date
 /// words, the English plural suffix).
-const NOT_SHOWN: [&str; 8] = [
+const NOT_SHOWN: [&str; 10] = [
     "offscreen.rs",
     "net_check.rs",
     "i18n/tests.rs",
     "i18n/guard.rs",
     "i18n/format.rs",
     "i18n/mod.rs",
-    "app_menu.rs",
+    "app_menu/mod.rs",
+    "app_menu/model.rs",
+    "app_menu/presentation.rs",
     "settings/registry.rs",
 ];
 

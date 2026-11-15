@@ -55,10 +55,6 @@ pub enum OpenWith {
     Chooser,
 }
 
-// Rows production offers and runs whose feature this app does not have
-// yet: they are drawn where production draws them, disabled, as the
-// application menu's rows for the same features are (`.todo()`).
-
 // Windows' own application chooser on the file (`desktop::open_with_chooser`,
 // `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
 // system that offers "Open With Other..." as a chooser.
