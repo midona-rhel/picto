@@ -694,7 +694,10 @@ thumbnail; `rendered.rs` draws the thumbnails the core cannot make (PDF,
 DjVu and comic first pages, Flash frames), only into the open library. Also here:
 the context-menu rows (`menu.rs`, pure functions), filters and the filter
 bar, rubber band, keyboard movement, hover preview, subfolder tiles, drag
-out. Rule: every decoded picture leaves GPUI's sprite atlas through
+out, and the pointer over tiles (hover, magnifier, rubber band and its
+edge scrolling) that the collection editor shares (`pointer.rs`). The
+grid's frame reads the session and lays out in `frame.rs` and draws its
+body in `body.rs`. Rule: every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 
 **Viewer** (`src/viewer/`). One media surface (`surface.rs`) shows any item:
