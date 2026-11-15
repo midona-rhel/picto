@@ -304,6 +304,37 @@ pub fn edit_then_in<V: 'static, T: Send + 'static, E: std::fmt::Display + Send +
     .detach();
 }
 
+/// A view's read of the library: `work` runs on the library's thread (see
+/// [`Session::run`]), then `then` has its answer on the view, if the view
+/// is still there. Nothing is reported or read again; a read changes
+/// nothing to read.
+pub fn read_then<V: 'static, T: Send + 'static>(
+    session: &Entity<Session>,
+    work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, T, &mut Context<V>) + 'static,
+) {
+    let answer = session.read(cx).run(work);
+    then_on(answer, cx, then);
+}
+
+/// [`read_then`] for a follow-up that needs the view's window.
+pub fn read_then_in<V: 'static, T: Send + 'static>(
+    session: &Entity<Session>,
+    work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, T, &mut Window, &mut Context<V>) + 'static,
+) {
+    let answer = session.read(cx).run(work);
+    cx.spawn_in(window, async move |view, cx| {
+        if let Ok(result) = answer.await {
+            let _ = view.update_in(cx, move |view, window, cx| then(view, result, window, cx));
+        }
+    })
+    .detach();
+}
+
 /// What [`Session::edit_reporting`] tells the user about an edit, as the
 /// production call it stands for does.
 #[derive(Clone, Default)]

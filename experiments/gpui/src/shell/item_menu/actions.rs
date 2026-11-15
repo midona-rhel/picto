@@ -4,7 +4,7 @@ use super::{File, Target, media_link};
 use crate::grid::format::grouped;
 use crate::grid::menu::Action;
 use crate::i18n::{en, t};
-use crate::session::{Report, Reread, edit_then, edit_then_in};
+use crate::session::{Report, Reread, edit_then, edit_then_in, read_then};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::selection::SelectionTarget;
@@ -639,10 +639,8 @@ impl Shell {
     ) {
         let File { root, hash, .. } = file;
         let work = move |library: &Library| super::file_path(library, root, &hash);
-        edit_then(
+        read_then(
             &self.session,
-            Report::default(),
-            Reread::NOTHING,
             work,
             cx,
             |_, path, cx| {
@@ -751,13 +749,11 @@ impl Shell {
                     .collect::<Vec<_>>(),
             )
         };
-        edit_then(
+        read_then(
             &self.session,
-            Report::default(),
-            Reread::NOTHING,
             work,
             cx,
-            |this, tags, cx| {
+            |this, tags: picto_library::Result<Vec<String>>, cx| {
                 if let Ok(tags) = tags {
                     write_text(serde_json::to_string(&tags).unwrap_or_default(), cx);
                     this.items.tag_clipboard = tags;

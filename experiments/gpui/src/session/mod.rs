@@ -8,7 +8,7 @@ mod results;
 mod selection;
 pub mod settle;
 
-pub use edits::{Report, Reread, edit_then, edit_then_in};
+pub use edits::{Report, Reread, edit_then, edit_then_in, read_then, read_then_in};
 
 use crate::application::{Application, Event};
 use crate::backend::{self, Arrived, Navigation, Reply, Request};

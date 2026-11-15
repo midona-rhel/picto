@@ -382,10 +382,8 @@ impl Shell {
     fn look_up_applications(&mut self, file: File, menu: WeakEntity<Menu>, cx: &mut Context<Self>) {
         let key = type_key(&file.mime);
         let File { root, hash, .. } = file;
-        crate::session::edit_then(
+        crate::session::read_then(
             &self.session,
-            crate::session::Report::default(),
-            crate::session::Reread::NOTHING,
             move |library| file_path(library, root, &hash),
             cx,
             move |_, path, cx| {
