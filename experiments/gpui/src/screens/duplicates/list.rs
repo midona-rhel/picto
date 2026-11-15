@@ -602,6 +602,8 @@ impl DuplicatesScreen {
                 .bg(rgb(theme::GRID_SELECTION))
                 .child(ui::icon("check", 12., rgb(theme::BADGE_STRONG_TEXT)))
         });
+        // The keyboard's file: a quiet ring in the text colour, unlike the
+        // kept file's selection stroke.
         let ring = cursor.then(|| {
             let extent = 6.;
             div()
@@ -612,7 +614,7 @@ impl DuplicatesScreen {
                 .h(px(media.3 + 2. * extent))
                 .rounded(px(theme::TILE_RADIUS + extent))
                 .border_1()
-                .border_color(theme.border_focus())
+                .border_color(theme.text_tertiary())
         });
         let span = |text: String, bright: bool| {
             div()
