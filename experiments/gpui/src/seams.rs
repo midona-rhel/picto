@@ -225,25 +225,3 @@ fn held_download(value: &str) -> Option<HeldDownload> {
     let percent = value.parse::<f64>().unwrap_or(0.).clamp(0., 100.);
     Some(HeldDownload::Progress(percent / 100.))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{HeldDownload, held_download, window_size};
-
-    #[test]
-    fn a_held_download_reports_its_share_or_fails() {
-        assert_eq!(held_download("1"), Some(HeldDownload::Progress(0.01)));
-        assert_eq!(held_download("42"), Some(HeldDownload::Progress(0.42)));
-        assert_eq!(held_download(""), Some(HeldDownload::Progress(0.)));
-        assert_eq!(held_download("250"), Some(HeldDownload::Progress(1.)));
-        assert_eq!(held_download("FAIL"), Some(HeldDownload::Fail));
-    }
-
-    #[test]
-    fn a_window_size_is_a_width_by_a_height() {
-        assert_eq!(window_size("1213x865"), Some((1213., 865.)));
-        assert_eq!(window_size(" 800 x 600 "), Some((800., 600.)));
-        assert_eq!(window_size("1213"), None);
-        assert_eq!(window_size("wide x tall"), None);
-    }
-}

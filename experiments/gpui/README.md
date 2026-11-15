@@ -998,7 +998,7 @@ name:
 | Test | Needs |
 | --- | --- |
 | `real_copy_answers_commands_and_reports_changes`, `real_snapshot_query_details_rating_undo_redo`, `real_snapshot_subscriptions_read`, `real_snapshot_tags_browse_rename_and_groups` | `PICTO_GPUI_TEST_LIBRARY` naming a copy; they write to it |
-| `window_reads_stay_flat_across_the_library`, `time_each_stage` | the same; they time every grid read and each stage of opening (use `--nocapture`) |
+| `window_reads_stay_flat_across_the_library` | the same; it times every grid read (use `--nocapture`) |
 | `offscreen::plays_a_script` | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` (below) |
 | `viewers_render_off_screen` | a GPU; pictures saved when `PICTO_GPUI_MATRIX_OUT` is set |
 | `renders_a_real_file` | `PICTO_GPUI_MEDIA=<file>` (type from the extension, or `PICTO_GPUI_MEDIA_MIME`) |
@@ -1010,7 +1010,7 @@ name:
 ```sh
 PICTO_GPUI_TEST_LIBRARY="$(PICTO_GPUI_COPY_ONLY=1 ./run.sh /path/to/Main.library)" \
   cargo test --locked -- --ignored --test-threads=1 --nocapture \
-  real_copy real_snapshot window_reads_stay_flat time_each_stage
+  real_copy real_snapshot window_reads_stay_flat
 PICTO_GPUI_TEST_WEBM=/path/to/video.webm PICTO_GPUI_TEST_AUDIO=/path/to/audio.mp3 \
   cargo test --locked -- --ignored real_webm decodes_and_seeks plays_through
 PICTO_GPUI_TEST_VIDEO=/path/to/video.mov cargo test --locked --test avfoundation_frames

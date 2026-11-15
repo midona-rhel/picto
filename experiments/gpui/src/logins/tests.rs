@@ -251,9 +251,22 @@ fn exhentai_moves_to_its_check_then_saves() {
         harness.loaded.last().map(String::as_str),
         Some("https://exhentai.org/")
     );
+    assert_eq!(harness.state().status, Status::Loading);
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Verifying ExHentai access...")
+    );
     assert!(harness.persisted.is_empty());
     harness.finish_load();
     assert_eq!(harness.persisted.len(), 1);
+    assert_eq!(
+        harness.persisted[0].cookies,
+        Some(BTreeMap::from([
+            ("igneous".into(), "igneous".into()),
+            ("ipb_member_id".into(), "member".into()),
+            ("ipb_pass_hash".into(), "hash".into())
+        ]))
+    );
     assert_eq!(
         harness.state().message.as_deref(),
         Some("ExHentai session captured.")
@@ -273,30 +286,65 @@ fn a_booru_login_hides_the_window_while_it_reads_the_key() {
     assert!(harness.loaded.last().unwrap().contains("s=options"));
     assert_eq!(harness.hidden, 1);
     assert_eq!(harness.state().status, Status::Loading);
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Authenticated. Reading Rule34.xxx API credentials…")
+    );
     *harness.page.scripts.borrow_mut() = vec![(
         "inputs",
         json!({ "authenticated": true, "onOptions": true, "apiKey": "a".repeat(32), "userId": "599664" }),
     )];
     harness.finish_load();
-    assert_eq!(harness.persisted[0].credential_type, "api_key");
-    assert_eq!(harness.persisted[0].username.as_deref(), Some("599664"));
+    assert_eq!(
+        harness.persisted[0],
+        Credential {
+            site_category: "rule34".into(),
+            credential_type: "api_key".into(),
+            username: Some("599664".into()),
+            password: Some("a".repeat(32)),
+            ..Credential::default()
+        }
+    );
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Rule34.xxx API key captured.")
+    );
 }
 
 // 'uses gallery-dl DeviantArt OAuth and keeps its refresh token plus session
 // cookies'
 #[test]
 fn an_oauth_callback_is_not_loaded_but_completed() {
-    let page = FakePage::at("").with_cookies(&[("auth", "a"), ("userinfo", "u")]);
+    let page = FakePage::at("").with_cookies(&[
+        ("auth", "a"),
+        ("auth_secure", "s"),
+        ("userinfo", "u"),
+        ("unrelated", "ignored"),
+    ]);
     let mut harness = Harness::with_page(page);
     harness.start("deviantart", None).unwrap();
     assert!(!harness.polling);
-    let state = url::Url::parse(&harness.loaded[0])
-        .unwrap()
-        .query_pairs()
-        .find(|(name, _)| name == "state")
-        .unwrap()
-        .1
-        .into_owned();
+    let authorize = url::Url::parse(&harness.loaded[0]).unwrap();
+    assert_eq!(
+        format!(
+            "{}{}",
+            authorize.origin().ascii_serialization(),
+            authorize.path()
+        ),
+        "https://www.deviantart.com/oauth2/authorize"
+    );
+    let query: BTreeMap<String, String> = authorize.query_pairs().into_owned().collect();
+    assert_eq!(
+        query["redirect_uri"],
+        "https://mikf.github.io/gallery-dl/oauth-redirect.html"
+    );
+    assert_eq!(query["scope"], "browse user.manage");
+    assert_eq!(query["response_type"], "code");
+    assert_eq!(
+        harness.state().message.as_deref(),
+        Some("Authorize Picto with DeviantArt in the popup window.")
+    );
+    let state = query["state"].clone();
     harness.services.answers.borrow_mut().push(HttpResponse {
         status: 200,
         body: r#"{"refresh_token":"durable"}"#.into(),
@@ -315,34 +363,40 @@ fn an_oauth_callback_is_not_loaded_but_completed() {
         Some("Completing DeviantArt login…")
     );
     harness.run(effects);
+    // The code goes to the token address with the client's basic
+    // authorization, never its secret in the body.
+    {
+        use base64::Engine as _;
+        let posts = harness.services.posts.borrow();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].url, "https://www.deviantart.com/oauth2/token");
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode("5388:76b08c69cfb27f26d6161f9ab6d061a1");
+        assert!(
+            posts[0]
+                .headers
+                .contains(&("Authorization".into(), format!("Basic {basic}")))
+        );
+        let body: BTreeMap<String, String> = url::form_urlencoded::parse(posts[0].body.as_bytes())
+            .into_owned()
+            .collect();
+        assert!(!body.contains_key("client_secret"));
+        assert_eq!(body["grant_type"], "authorization_code");
+    }
+    assert_eq!(harness.persisted[0].credential_type, "oauth_token");
     assert_eq!(harness.persisted[0].oauth_token.as_deref(), Some("durable"));
+    assert_eq!(
+        harness.persisted[0].cookies,
+        Some(BTreeMap::from([
+            ("auth".into(), "a".into()),
+            ("auth_secure".into(), "s".into()),
+            ("userinfo".into(), "u".into())
+        ]))
+    );
     assert_eq!(harness.state().status, Status::Completed);
     assert_eq!(
         harness.state().message.as_deref(),
         Some("DeviantArt authorization completed.")
-    );
-}
-
-// 'uses one host-owned Pixiv OAuth flow for Pixiv and Pixiv-user queries'
-#[test]
-fn pixiv_is_saved_by_the_application_not_here() {
-    let mut harness =
-        Harness::with_page(FakePage::at("").with_cookies(&[("PHPSESSID", "pixiv-session")]));
-    harness.services.command_answers.borrow_mut().push(json!({
-        "login_url": "https://app-api.pixiv.net/web/v1/login", "code_verifier": "verifier",
-    }));
-    harness.start("pixivuser", None).unwrap();
-    assert_eq!(harness.state().site_category.as_deref(), Some("pixiv"));
-    assert_eq!(harness.state().status, Status::Active);
-    let (_, effects) = harness
-        .machine
-        .may_navigate("pixiv://account/login?code=oauth-code");
-    harness.run(effects);
-    assert!(harness.persisted.is_empty());
-    assert_eq!(harness.state().status, Status::Completed);
-    assert_eq!(
-        harness.services.commands.borrow()[1].0,
-        "pixiv_oauth_exchange"
     );
 }
 

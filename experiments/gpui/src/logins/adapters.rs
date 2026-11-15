@@ -1136,51 +1136,6 @@ pub(super) mod tests {
         }
     }
 
-    // 'verifies ExHentai in the managed login popup before persisting its
-    // gallery-dl cookies'
-    #[test]
-    fn exhentai_is_verified_before_its_cookies_are_kept() {
-        let adapter = adapter(resolve("ehentai").unwrap()).unwrap();
-        let page = FakePage::at("https://forums.e-hentai.org/index.php?act=Login&CODE=00")
-            .with_cookies(&[
-                ("ipb_member_id", "member"),
-                ("ipb_pass_hash", "hash"),
-                ("igneous", "igneous"),
-            ]);
-        let first = inspect(&adapter, &page);
-        assert_eq!(first.navigate.as_deref(), Some("https://exhentai.org/"));
-        assert_eq!(first.status, Some(Status::Loading));
-        assert_eq!(
-            first.message.as_deref(),
-            Some("Verifying ExHentai access...")
-        );
-        // A second look before the page moved does not navigate again.
-        assert_eq!(inspect(&adapter, &page).navigate, None);
-        assert_eq!(
-            *page.asked.borrow(),
-            [
-                "https://forums.e-hentai.org",
-                "https://e-hentai.org",
-                "https://exhentai.org",
-                "https://forums.e-hentai.org",
-                "https://e-hentai.org",
-                "https://exhentai.org"
-            ]
-        );
-
-        *page.url.borrow_mut() = "https://exhentai.org/".into();
-        let done = inspect(&adapter, &page);
-        assert_eq!(
-            cookies_of(&done),
-            pairs(&[
-                ("igneous", "igneous"),
-                ("ipb_member_id", "member"),
-                ("ipb_pass_hash", "hash")
-            ])
-        );
-        assert_eq!(done.message.as_deref(), Some("ExHentai session captured."));
-    }
-
     // 'accepts an existing ExHentai session when the optional igneous
     // cookie is absent'
     #[test]
@@ -1339,47 +1294,6 @@ pub(super) mod tests {
         FakePage::at(url).answering("inputs", answer)
     }
 
-    // 'reads booru API credentials from account settings after login'
-    #[test]
-    fn a_booru_login_reads_its_api_key_from_the_options_page() {
-        let adapter = adapter(resolve("rule34").unwrap()).unwrap();
-        let home = account_page(
-            "https://rule34.xxx/index.php?page=account&s=home",
-            json!({ "authenticated": true }),
-        );
-        let outcome = inspect(&adapter, &home);
-        assert!(outcome.hide);
-        assert!(
-            outcome
-                .navigate
-                .as_deref()
-                .is_some_and(|url| url.contains("s=options"))
-        );
-        assert_eq!(
-            outcome.message.as_deref(),
-            Some("Authenticated. Reading Rule34.xxx API credentials…")
-        );
-        let options = account_page(
-            "https://rule34.xxx/index.php?page=account&s=options",
-            json!({ "authenticated": true, "onOptions": true, "apiKey": "a".repeat(32), "userId": "599664" }),
-        );
-        let outcome = inspect(&adapter, &options);
-        assert_eq!(
-            outcome.credential,
-            Some(Credential {
-                site_category: "rule34".into(),
-                credential_type: "api_key".into(),
-                username: Some("599664".into()),
-                password: Some("a".repeat(32)),
-                ..Credential::default()
-            })
-        );
-        assert_eq!(
-            outcome.message.as_deref(),
-            Some("Rule34.xxx API key captured.")
-        );
-    }
-
     #[test]
     fn a_booru_options_page_without_a_key_is_an_error_shown_in_the_window() {
         let adapter = adapter(resolve("gelbooru").unwrap()).unwrap();
@@ -1419,82 +1333,6 @@ pub(super) mod tests {
         assert_eq!(
             inspect(&adapter, &blank).message.as_deref(),
             Some("Waiting for Rule34.xxx login…")
-        );
-    }
-
-    // 'uses gallery-dl DeviantArt OAuth and keeps its refresh token plus
-    // session cookies'
-    #[test]
-    fn deviantart_exchanges_its_code_for_the_refresh_token_with_basic_auth() {
-        let adapter = adapter(resolve("deviantart").unwrap()).unwrap();
-        let services = FakeServices::default();
-        let prepared = block_on(adapter.prepare(&services)).unwrap();
-        let authorize = url::Url::parse(&prepared.url).unwrap();
-        assert_eq!(
-            format!(
-                "{}{}",
-                authorize.origin().ascii_serialization(),
-                authorize.path()
-            ),
-            "https://www.deviantart.com/oauth2/authorize"
-        );
-        let query: BTreeMap<String, String> = authorize.query_pairs().into_owned().collect();
-        assert_eq!(
-            query["redirect_uri"],
-            "https://mikf.github.io/gallery-dl/oauth-redirect.html"
-        );
-        assert_eq!(query["scope"], "browse user.manage");
-        assert_eq!(query["response_type"], "code");
-        assert_eq!(
-            prepared.message,
-            "Authorize Picto with DeviantArt in the popup window."
-        );
-        let callback = format!(
-            "https://mikf.github.io/gallery-dl/oauth-redirect.html?code=code&state={}",
-            query["state"]
-        );
-        assert!(adapter.handles(&callback));
-        assert!(!adapter.handles("https://mikf.github.io/gallery-dl/other.html?code=x"));
-
-        services.answers.borrow_mut().push(HttpResponse {
-            status: 200,
-            body: r#"{"access_token":"temporary-access","refresh_token":"durable-refresh"}"#.into(),
-        });
-        let page = FakePage::at(&callback).with_cookies(&[
-            ("auth", "auth-cookie"),
-            ("auth_secure", "secure-cookie"),
-            ("userinfo", "user-cookie"),
-            ("unrelated", "ignored"),
-        ]);
-        let outcome = block_on(adapter.complete(&callback, &page, &services)).unwrap();
-        let posts = services.posts.borrow();
-        assert_eq!(posts.len(), 1);
-        assert_eq!(posts[0].url, "https://www.deviantart.com/oauth2/token");
-        {
-            use base64::Engine as _;
-            let basic = base64::engine::general_purpose::STANDARD
-                .encode("5388:76b08c69cfb27f26d6161f9ab6d061a1");
-            assert!(
-                posts[0]
-                    .headers
-                    .contains(&("Authorization".into(), format!("Basic {basic}")))
-            );
-        }
-        let body: BTreeMap<String, String> = url::form_urlencoded::parse(posts[0].body.as_bytes())
-            .into_owned()
-            .collect();
-        assert!(!body.contains_key("client_secret"));
-        assert_eq!(body["grant_type"], "authorization_code");
-        let credential = outcome.credential.unwrap();
-        assert_eq!(credential.credential_type, "oauth_token");
-        assert_eq!(credential.oauth_token.as_deref(), Some("durable-refresh"));
-        assert_eq!(
-            credential.cookies,
-            Some(BTreeMap::from([
-                ("auth".into(), "auth-cookie".into()),
-                ("auth_secure".into(), "secure-cookie".into()),
-                ("userinfo".into(), "user-cookie".into())
-            ]))
         );
     }
 
