@@ -45,6 +45,11 @@ going on. In one transaction it:
 
 - disconnects cloud sync (provider, account and remote root cleared, state
   disabled), so nothing is written to the user's cloud folder;
+- gives the copy a cloud identity of its own once (a new `library_id` and
+  `device_id`, recorded in `.gpui-cloud-identity`), so a copy the user then
+  connects to a cloud folder writes, and purges, only under its own name
+  there, never the library's it was copied from
+  (`a_copy_never_syncs_as_the_library_it_was_copied_from`);
 - switches off every watched folder;
 - clears every subscription's next run, and cancels subscription runs and
   run queries that were pending or running; choosing a schedule again in the
@@ -237,7 +242,7 @@ The session's scratch folder (the cover's crops, dropped data) is in a
 copy's own temporary folder, or the system's for a library the user keeps:
 nothing is written beside a library the user keeps.
 
-The Library Manager has what production's has, cloud aside. A library's
+The Library Manager has what production's has. A library's
 colour and icon are kept in this app's `state.json` (`libraryMeta`, as
 production keeps them in its `config.json`) and drawn on its avatar; they
 follow a rename, move or Locate…. The actions menu's Rename, Show in File
@@ -260,10 +265,64 @@ Trash), only if it is a real `.library` folder (not a link) holding a
 `library.sqlite` file and no other holder has the core's lock
 (`delete_removes_only_a_library_that_is_neither_open_nor_held`,
 `move_puts_the_library_in_the_folder_chosen_and_nowhere_else`,
-`a_copy_across_volumes_is_verified_before_the_original_goes`). The Cloud
-Sync card, the cloud rows of the actions menu and Open from Cloud… are not
-built (cloud needs the network): the card and Open from Cloud… are drawn
-as production draws them for a library with no cloud location, disabled.
+`a_copy_across_volumes_is_verified_before_the_original_goes`). Cloud sync
+is described under "Cloud" below.
+
+### Cloud
+
+Production's cloud sync signs in to nothing and opens no connection: a
+library publishes verified snapshots of its database and its originals
+into the folder of a Google Drive or Dropbox desktop app already installed
+on the device, and that app carries them to the provider. The core owns all
+of it (`core/src/cloud/`, the commands `cloud.*` and its snapshot worker,
+which publishes once changes have been idle 30 s); this app sends the same
+commands production's renderer sends and keeps no tokens or secrets (there
+are none, so nothing goes near the system keychain from any build):
+
+- Settings › Cloud: provider, folder, state, last sync; Sync now, Pause or
+  Resume, Create snapshot; pending work; the four retention fields, written
+  on each change (`cloud.retention.update`); Restore History
+  (`cloud.restore.list`) and Restore with production's question.
+- Library Manager: the Cloud Sync card (provider and account, state with
+  its coloured dot, last sync as "Just now" / "n min ago", pending changes
+  and files, the sync's progress and time remaining, or the core's
+  message), the dot on the open library's row, Synchronize Library with
+  each folder found, Connect Google Drive… / Connect Dropbox… (the folder
+  is validated as the root of an installed app, kept as `cloudLocations` in
+  `state.json`, and connected when the open library has no folder yet), the
+  actions menu's Sync Now, Pause/Resume Sync, Create Recovery Snapshot,
+  Show Cloud Folder, Stop Syncing (with production's question) or Enable
+  Cloud Sync's submenu, and Open from Cloud… (the libraries in the folders,
+  those already added marked, a local name, Choose Location…).
+- The main window: production's `CloudSyncBar` (the bar along the bottom
+  between the rails while a sync runs, with bytes or units done) and the
+  blocking progress dialog while a library joined from the cloud restores
+  its media; `cloudSettle`'s notifications ("Cloud changes found" with
+  View progress, which opens the log window; "Cloud sync needs attention";
+  "Cloud update complete").
+
+Two things differ from production because the app reads the library
+directly rather than only through commands:
+
+- **Restore** (`host::restore`) closes the library's views (Settings
+  included, as a switch does), waits until this app holds no connection to
+  the database (at most 15 s, else nothing is restored), has the core set
+  the database aside as an emergency copy and put the snapshot's in place,
+  and opens the library again; a copy keeps the folder it was connected to,
+  and the consent to a library the user keeps carries over to the restored
+  database file.
+- **Open from Cloud…** (`host::join`) closes the open library first, has
+  the core make the new library from the newest snapshot, and opens it as a
+  library the user made here (consent recorded, `cloudLibraryId` kept); a
+  failed join removes the folder it made and opens the previous library
+  again. The new library is one the user keeps, so it follows section 2: a
+  debug build needs `--allow-real-libraries` and no automation seam.
+
+While an automation seam is active (any check, any test build) only the
+folders `PICTO_GOOGLE_DRIVE_ROOT` and `PICTO_DROPBOX_ROOT` name are listed or
+accepted, so no check lists or writes a real account's folder. The core's
+own validation still looks for installed apps under the home folder, so
+local checks run with `HOME` pointed at an empty folder.
 
 Rename, Show in File Manager, Move… and Delete… act on a library the user
 may not have opened here, so they ask the same consent as opening does
@@ -1124,6 +1183,7 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
 | `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
 | `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen tool | start at the gate; the generated libraries directly in that temporary folder may be listed and opened |
+| `PICTO_DROPBOX_ROOT`, `PICTO_GOOGLE_DRIVE_ROOT` (the core's) | every build; while a seam is active, the only cloud folders | a folder standing in for that desktop app's folder (section 2, "Cloud") |
 | `PICTO_GPUI_TEST_PICTO_RUNNING` | off-screen tool | the Electron app's probe says it runs (`after-open`: from after the open on) |
 | `PICTO_GPUI_TEST_LIBRARY`, `PICTO_GPUI_TEST_WEBM`, `PICTO_GPUI_TEST_AUDIO`, `PICTO_GPUI_TEST_VIDEO` | ignored tests | inputs |
 | `PICTO_GPUI_MATRIX_OUT`, `PICTO_GPUI_MEDIA`, `PICTO_GPUI_MEDIA_MIME` | format matrix tests | pictures folder, a real file, its type |
@@ -1153,7 +1213,15 @@ installed first if the image lacks it), and `PICTO_GPUI_LOGIN_CHECK` opens
 the sign-in window on the system's web view against the app's own local
 login; the step fails unless `login-check.log` ends `result: pass`. The
 log, the app's output and two pictures of the sign-in window are the
-`login-check-linux` and `login-check-windows` artifacts.
+`login-check-linux` and `login-check-windows` artifacts. The Cloud step
+plays `ci/cloud.txt`: a library made in a test folder (three of
+`resources/tutorial`'s pictures dropped in), connected to a folder standing
+in for Dropbox, paused, a folder made, a snapshot taken, another folder
+made, then restored from Settings › Cloud's Restore History; the step fails
+unless the later folder is gone and the earlier one there after the
+restore, the snapshot is listed, an emergency copy was kept, and Stop
+Syncing cleared the folder. Its log and pictures are the `cloud-linux` and
+`cloud-windows` artifacts.
 
 ## What works
 
@@ -1200,6 +1268,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); the sign-in window end to end against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`: a page that cannot load, Cancel, the window closed by its close button, and a cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed) on macOS locally and on Linux and Windows in CI; the masked Cookie and X-BC fields (picture, accessibility tree); pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons) |
 | Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
 | Libraries | the gate, the Library Manager (list, Open Library, New Library, Open Existing…, Add to and Remove from Quick Access, Rename, Show in File Manager, Remove from List, the cover, statistics), Open Library…, Recent Libraries and Clear History, the switcher's rows and functions, switching, the last library at start, under the rules of section 2 | pictures (Library Manager against production's: same layout, header, sidebar and footer; the switcher; production's gate could not be shown, its reference opens a library by itself); tests (each rule; an open and a switch of generated libraries); off-screen with `PICTO_GPUI_TEST_LIBRARIES` (consent, open, switch, statistics, an incompatible schema refused) |
+| Cloud | Settings › Cloud, the Library Manager's Cloud Sync card, menu rows, row dot, Connect…, Open from Cloud…, the sync bar and blocking restore dialog, `cloudSettle`'s notifications, through the core's commands (section 2, "Cloud") | off-screen on macOS against a folder standing in for Dropbox: connect, first sync, a change synced, pause and resume, Sync Now, Create snapshot, retention, restore (a later change undone; another library's change brought in), Open from Cloud… into a new library with its media restored, Stop Syncing and reconnecting, Show Cloud Folder, an unreachable folder, a library whose originals do not match their hashes ("Needs attention"); CI on Linux and Windows (`ci/cloud.txt`); never against a real provider or account |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
 
 Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
@@ -1368,8 +1437,7 @@ re-checked by reading the code; the rest were checked against it.
 
 ### Missing features
 
-- Libraries, partly: the Library Manager's cloud rows and Open from
-  Cloud… are not built (shown disabled or left out); no library has ever
+- Libraries, partly: no library has ever
   been opened in a real window, nor the consent, the blocking notice or a
   switch seen on a screen.
 - Localization, partly: the application menu stays English, as production's
@@ -1403,11 +1471,14 @@ re-checked by reading the code; the rest were checked against it.
   group's arrows do not move the choice (as for the keyboard). The import
   task bar is a live region too; whether any platform announces a change
   there, or a notification, has not been heard.
-- Update checks, cloud sync, pause, snapshots, restore points and retention
-  writes: drawn in Settings, disabled, not performed. On a library with a
-  cloud provider, Settings › Cloud says under its buttons that they are
-  not available in this version, and Restore History says its snapshots
-  are not listed rather than that there are none.
+- Update checks: drawn in Settings, disabled, not performed.
+- Cloud sync has never run against a real Google Drive or Dropbox desktop
+  app or account, nor been used in a real window: only off-screen against a
+  plain folder (macOS locally, Linux and Windows in CI). The provider
+  detection of installed apps (`~/Library/CloudStorage`, Dropbox's
+  `info.json`, Windows drive letters) is the core's and was not run by any
+  check. The row dot has no hover tooltip (production's `title`); its name
+  is read by assistive technology.
 - Site logins, partly. The sign-in window has run on all three systems,
   only against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`): on
   macOS locally (WKWebView), on Linux in CI (WebKitGTK in a GTK window on
@@ -1501,7 +1572,10 @@ re-checked by reading the code; the rest were checked against it.
   (shared with the user's Picto, under the service's name alone, whatever
   the library) or keep its process-local store, as now, also when it opens
   a library the user keeps.
-- Network features: update check and install, cloud sync, AI model download.
+- Network features: update check and install, AI model download.
+- Cloud: whether a disposable copy should be allowed to connect to a cloud
+  folder at all. It may now, under a cloud identity of its own, and is
+  disconnected again at its next launch.
 
 ### Kept different on purpose
 
@@ -1597,8 +1671,8 @@ Navigation and results
 - A detail window on one item whose details cannot be read keeps the
   thumbnail and never opens the file; production opens the file by its hash
   without reading details.
-- Settings reads the library's statistics and cloud state once when it
-  opens; the keyboard preset, audio visualization and shortcut edits apply
+- Settings reads the library's statistics once when it opens (the cloud
+  state follows the core's events); the keyboard preset, audio visualization and shortcut edits apply
   only on Save, without production's live preview†; an undo that reverts a
   settings write does not reload the model†.
 

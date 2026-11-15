@@ -692,7 +692,12 @@ impl Manager {
                 .disabled(row.current || row.missing || self.busy || !real)
                 .into(),
         ]);
-        let menu = cx.new(|cx| Menu::new(entries, position, cx).width(236.).in_window());
+        let menu = cx.new(|cx| {
+            Menu::new(entries, position, cx)
+                .width(236.)
+                .search(false)
+                .in_window()
+        });
         let path = row.path.clone();
         let missing = row.missing;
         self.menu.open(

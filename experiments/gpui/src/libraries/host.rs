@@ -658,7 +658,13 @@ pub fn restore(
             .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
         drop(application);
         cx.update(|cx| {
-            host.update(cx, |host, _| host.busy = false);
+            // The restored database is a new file; the user's consent to
+            // this library, given before they restored it here, is kept
+            // for it once it opens.
+            host.update(cx, |host, _| {
+                host.busy = false;
+                host.created = (kind == Kind::Real).then(|| root.clone());
+            });
             start_with(root, kind, instance, main, true, cx);
             done(result.map(|_| ()), cx);
         });

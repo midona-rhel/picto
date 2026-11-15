@@ -188,7 +188,10 @@ impl SettingsWindow {
                         // Production writes it without a key.
                         en("Choose a cloud folder in Libraries").into()
                     }),
-                ),
+                )
+                // A long folder is cut short rather than drawn over its label.
+                .min_w_0()
+                .truncate(),
             ))
             .child(separator(theme))
             .child(row(theme, t("State"), value(theme, state)))
