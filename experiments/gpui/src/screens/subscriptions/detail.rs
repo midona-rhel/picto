@@ -423,17 +423,13 @@ impl SubscriptionsScreen {
                     )),
             )
             .child(
-                div()
-                    .h(px(3.))
-                    .rounded_full()
-                    .overflow_hidden()
-                    .bg(theme.surface_active())
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(share))
-                            .rounded_full()
-                            .bg(theme.primary()),
+                ui::progress_bar()
+                    .height(3.)
+                    .radius(9999.)
+                    .track(theme.surface_active())
+                    .filled(
+                        ElementId::NamedInteger("run-progress".into(), subscription.id as u64),
+                        share,
                     ),
             )
     }

@@ -238,8 +238,9 @@ pub const PROGRESS_SWEEP: Duration = Duration::from_millis(900);
 /// `TaskDialog.module.css` `backdropIn` and `dialogIn`: the task dialog and
 /// its backdrop come in over 200 ms on `--ease-scale-in`.
 pub const TASK_DIALOG_IN: Duration = Duration::from_millis(200);
-/// `.fill`: a task's progress moves over 250 ms on `--ease-default`.
-pub const TASK_PROGRESS: Duration = Duration::from_millis(250);
+/// `.fill { transition: width 250ms var(--ease-default) }`: a progress
+/// bar's fill moving to a new share (`ProgressBar` and the task's `.fill`).
+pub const PROGRESS_FILL: Duration = Duration::from_millis(250);
 /// `.fill[data-indeterminate]`: one sweep of a task of unknown length.
 pub const TASK_PROGRESS_SWEEP: Duration = Duration::from_millis(1100);
 /// A Flash movie is advanced and redrawn this often (about 60 frames a
