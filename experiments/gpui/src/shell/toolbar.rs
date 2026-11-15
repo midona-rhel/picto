@@ -140,7 +140,7 @@ impl Toolbar {
     }
 
     /// Shows `note` after the scope title while `screen` is the
-    /// destination shown at its top, with no place of it open.
+    /// destination shown; the note itself says nothing on a place of it.
     pub fn set_screen_note(&mut self, screen: Screen, note: AnyView) {
         self.screen_notes.retain(|(owner, _)| *owner != screen);
         self.screen_notes.push((screen, note));
@@ -175,15 +175,12 @@ impl Toolbar {
             if let Some(label) = session.place().and(session.place_label.clone()) {
                 crumbs.push((usize::MAX, label.to_string()));
             }
-            let note = session
-                .screen()
-                .filter(|_| session.place().is_none())
-                .and_then(|screen| {
-                    self.screen_notes
-                        .iter()
-                        .find(|(owner, _)| *owner == screen)
-                        .map(|(_, note)| note.clone())
-                });
+            let note = session.screen().and_then(|screen| {
+                self.screen_notes
+                    .iter()
+                    .find(|(owner, _)| *owner == screen)
+                    .map(|(_, note)| note.clone())
+            });
             (crumbs, results, session.place().is_some(), note)
         };
         // A screen's open place keeps its own name whole: when the path does
@@ -207,7 +204,12 @@ impl Toolbar {
                 + (crumbs.len() - 1) as f32 * (10. + width("/"));
             path > room
         };
-        if shortened {
+        // With no room for even a few letters of it, the place's name is
+        // left out rather than shown as an ellipsis alone.
+        if shortened && room < 40. {
+            crumbs.clear();
+        }
+        if shortened && !crumbs.is_empty() {
             crumbs.drain(..crumbs.len() - 1);
         }
         let last = crumbs.len().saturating_sub(1);
@@ -414,10 +416,12 @@ impl Render for Toolbar {
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
             // `.titlebarToolbar`: the controls take the rest of the row and
-            // sit at its right end, clear of the scope title.
+            // sit at its right end, clear of the scope title. They belong to
+            // the screen, so they fade with it as the title does.
             return toolbar
                 .child(
                     div()
+                        .opacity(opacity)
                         .flex_1()
                         .min_w_0()
                         .h_full()

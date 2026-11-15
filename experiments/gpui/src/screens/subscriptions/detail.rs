@@ -88,6 +88,36 @@ fn fit(width: f32, columns: &[Column]) -> Vec<Option<f32>> {
         .collect()
 }
 
+/// The widest of `texts` in the table's face, at least `floor`: a column
+/// sized to what it holds.
+fn widest<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+    floor: f32,
+    size: f32,
+    window: &Window,
+) -> f32 {
+    texts
+        .into_iter()
+        .map(|text| {
+            f32::from(
+                ui::shape_line(text.to_owned(), font(theme::FONT_UI), size, black(), window).width,
+            )
+        })
+        .fold(floor, f32::max)
+        .ceil()
+        // The cells draw their figures tabular, a little wider than shaped.
+        + 8.
+}
+
+/// The widest badge among `labels`, at least `floor`.
+fn widest_badge<'a>(labels: impl IntoIterator<Item = &'a str>, floor: f32, window: &Window) -> f32 {
+    labels
+        .into_iter()
+        .map(|label| home::badge_width(label, window))
+        .fold(floor, f32::max)
+        .ceil()
+}
+
 /// One row of a table, the cells of the columns shown at their widths.
 fn table_row(widths: &[Option<f32>], cells: Vec<AnyElement>) -> Div {
     let mut row = div()
@@ -1013,22 +1043,40 @@ impl SubscriptionsScreen {
         self.table("subscription-sources", header, rows, Some(add), window, cx)
     }
 
-    /// History: the reused count gives way first when narrow, then the
-    /// fetched count, then the notes.
+    /// History: the start and the state as wide as what they hold, the
+    /// counts, and the notes in the rest. When narrow the reused count
+    /// gives way first, then the fetched count, then the notes.
     fn history(
         &self,
         detail: Option<&Detail>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let runs = detail.map_or(&[][..], |detail| &detail.runs[..]);
+        let started: Vec<String> = runs
+            .iter()
+            .map(|run| format::date_time(Some(&run.started_at)))
+            .collect();
+        let states: Vec<String> = runs.iter().map(|run| format::run_status(run).1).collect();
         let widths = fit(
             self.row_width(),
             &[
-                column(Track::Fixed(160.), 0),
-                column(Track::Fixed(96.), 0),
-                column(Track::Fixed(64.), 2),
-                column(Track::Fixed(64.), 1),
-                column(Track::Flex(100., 1.), 3),
+                column(
+                    Track::Fixed(widest(
+                        started.iter().map(String::as_str),
+                        60.,
+                        theme::TEXT_MD,
+                        window,
+                    )),
+                    0,
+                ),
+                column(
+                    Track::Fixed(widest_badge(states.iter().map(String::as_str), 48., window)),
+                    0,
+                ),
+                column(Track::Fixed(56.), 2),
+                column(Track::Fixed(56.), 1),
+                column(Track::Flex(80., 1.), 3),
             ],
         );
         let header = table_row(
@@ -1078,8 +1126,10 @@ impl SubscriptionsScreen {
         self.table("subscription-history", header, rows, None, window, cx)
     }
 
-    /// Problems: when narrow, the time it was last seen gives way first,
-    /// then the post; the state, why it failed and the fix stay.
+    /// Problems: the state and when it was last seen as wide as what they
+    /// hold, the post, and why it failed in the rest; the fix's column only
+    /// while a problem has one. When narrow the time gives way first, then
+    /// the post; the state, why it failed and the fix stay.
     fn problems(
         &self,
         detail: Option<&Detail>,
@@ -1087,16 +1137,44 @@ impl SubscriptionsScreen {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = theme::theme(cx);
-        let widths = fit(
-            self.row_width(),
-            &[
-                column(Track::Fixed(108.), 0),
-                column(Track::Flex(100., 0.6), 2),
-                column(Track::Flex(120., 2.), 0),
-                column(Track::Fixed(88.), 1),
-                column(Track::Fixed(28.), 0),
-            ],
-        );
+        let now = chrono::Local::now();
+        let issues = detail.map_or(&[][..], |detail| &detail.issues.items[..]);
+        let fixable = |kind: &str| {
+            kind.contains("auth") || kind.contains("credential") || kind == "unauthorized"
+        };
+        let any_fix = issues.iter().any(|issue| fixable(&issue.kind));
+        let labels: Vec<String> = issues
+            .iter()
+            .map(|issue| format::issue_label(&issue.kind))
+            .collect();
+        let seen: Vec<String> = issues
+            .iter()
+            .map(|issue| format::relative_time(Some(&issue.last_seen_at), now))
+            .collect();
+        let mut columns = vec![
+            column(
+                Track::Fixed(widest_badge(labels.iter().map(String::as_str), 48., window)),
+                0,
+            ),
+            column(Track::Flex(100., 1.), 2),
+            column(Track::Flex(120., 2.), 0),
+            column(
+                Track::Fixed(widest(
+                    seen.iter().map(String::as_str),
+                    60.,
+                    theme::TEXT_MD,
+                    window,
+                )),
+                1,
+            ),
+        ];
+        if any_fix {
+            columns.push(column(Track::Fixed(28.), 0));
+        }
+        let mut widths = fit(self.row_width(), &columns);
+        if !any_fix {
+            widths.push(None);
+        }
         let header = table_row(
             &widths,
             vec![
@@ -1118,7 +1196,6 @@ impl SubscriptionsScreen {
             }
             Some(detail) => detail,
         };
-        let now = chrono::Local::now();
         let rows = detail
             .issues
             .items
@@ -1151,10 +1228,7 @@ impl SubscriptionsScreen {
                 // (`mapIssue`: Retry now and Review source never appear).
                 // Fix login opens the Accounts dialog on the service of the
                 // problem's source (none: the first service).
-                let fix = (issue.kind.contains("auth")
-                    || issue.kind.contains("credential")
-                    || issue.kind == "unauthorized")
-                    .then(|| {
+                let fix = fixable(&issue.kind).then(|| {
                         let site = issue.query.and_then(|query| {
                             self.subscription(detail.subscription)?
                                 .queries
@@ -1253,8 +1327,9 @@ impl SubscriptionsScreen {
             .items_center()
             .gap(px(8.))
             .child(
+                // The site's select gives up width before the query does.
                 ui::select("add-query-site", self.add_site, sites)
-                    .width(140.)
+                    .width((self.row_width() * 0.3).clamp(120., 140.))
                     .on_change(move |site, _, cx| {
                         let _ = view.update(cx, |this, cx| this.choose_add_site(site, cx));
                     }),
