@@ -5,24 +5,41 @@
 //!
 //! The check serves, at that origin, what the features would reach: GitHub's
 //! list of releases with one newer application release, its `latest.yml`
-//! and `latest-linux.yml` and a 3 MB installer; each search engine's page
-//! with its upload control and results page, recording the bytes, name and
-//! type of every file uploaded to it; and services' icons (a touch icon, a
-//! favicon, a page where an icon should be, nothing). Then it runs:
+//! and `latest-linux.yml` and an installer, a harmless stand-in the check
+//! builds itself (on Windows a small program compiled with the system's C#
+//! compiler, elsewhere a shell script) that only writes what it was started
+//! with (its path, its arguments, the AppImage variables) to
+//! `installer-ran.txt` in the folder; each search engine's page with its
+//! upload control and results page, recording the bytes, name and type of
+//! every file uploaded to it; and services' icons (a touch icon, a favicon,
+//! a page where an icon should be, nothing). Then it runs:
 //!
 //! - the services' icons through `site_icons`: two found and kept in the
 //!   cache, two not (the globe);
 //! - an update check through `updates` as this system runs it: on Windows
-//!   and Linux the installer downloaded and verified against the feed, then
-//!   a feed whose checksum does not match, which must end in an error with
-//!   no installer kept; on macOS the release page offered;
+//!   and Linux the installer downloaded and verified against the feed; a
+//!   feed whose checksum does not match, which must end in an error with
+//!   no installer kept, and Restart and Install then starting nothing; the
+//!   good installer again, changed on disk after its verification, which
+//!   Restart and Install must refuse, starting nothing and leaving the app
+//!   running with the error shown; then downloaded once more. On macOS the
+//!   release page offered;
 //! - a search on every engine through `search_by_image`, in its hidden web
 //!   view: nothing reaches an engine before the search starts, the engine
 //!   receives exactly the file's bytes, name and type, and the results
-//!   address is production's.
+//!   address is production's;
+//! - last, the install: Restart and Install, which starts the stand-in as
+//!   production starts its installer and quits the app; or, when the
+//!   folder holds a file `install-on-quit`, the app quits with the update
+//!   waiting (icons and searches are skipped then), which installs it
+//!   silently. On macOS, Open Download Page writes the release page down;
+//!   following another system's flow (`PICTO_GPUI_UPDATE_PLATFORM`), the
+//!   installer is verified but not started.
 //!
 //! It writes `net-check.log`, whose last line is `result: pass` or
-//! `result: fail`, to the folder, then the app quits.
+//! `result: fail`, to the folder, then the app quits. Whether the stand-in
+//! ran, and how, is for the caller to read in `installer-ran.txt` once the
+//! app has ended (the workflow's Network features step).
 use crate::grid::menu::{ENGINES, Engine};
 use base64::Engine as _;
 use gpui::*;
@@ -51,6 +68,9 @@ struct Received {
     sha256: String,
 }
 
+/// Where the stand-in installer writes what it was started with.
+const MARKER: &str = "installer-ran.txt";
+
 #[derive(Clone)]
 struct Server {
     origin: String,
@@ -77,7 +97,16 @@ pub fn start(cx: &mut App) {
         cx.quit();
         return;
     };
-    let server = match serve(&origin) {
+    let installer = match stand_in(&out) {
+        Ok(installer) => installer,
+        Err(error) => {
+            log.push(format!("the stand-in installer could not be made: {error}"));
+            finish(&out, &log, false);
+            cx.quit();
+            return;
+        }
+    };
+    let server = match serve(&origin, installer) {
         Ok(server) => server,
         Err(error) => {
             log.push(format!(
@@ -108,7 +137,9 @@ pub fn start(cx: &mut App) {
             std::env::consts::OS,
             std::env::consts::ARCH
         ));
-        let passed = run(&server, &out, &mut report, cx).await;
+        let on_quit = out.join("install-on-quit").exists();
+        let mut passed = run(&server, &out, on_quit, &mut report, cx).await;
+        passed &= install(&out, on_quit, passed, &mut report, cx).await;
         finish(&out, &report.lines, passed);
         cx.update(|cx| {
             cx.set_global(Finished);
@@ -153,12 +184,23 @@ async fn pause(cx: &mut AsyncApp, ms: u64) {
 async fn run(
     server: &Server,
     out: &std::path::Path,
+    on_quit: bool,
     report: &mut Report,
     cx: &mut AsyncApp,
 ) -> bool {
     let mut passed = true;
+    if !on_quit {
+        passed &= icons(report, cx).await;
+    }
+    passed &= updates(server, out, report, cx).await;
+    if !on_quit {
+        passed &= searches(server, out, report, cx).await;
+    }
+    passed
+}
 
-    // ── Icons ──
+async fn icons(report: &mut Report, cx: &mut AsyncApp) -> bool {
+    let mut passed = true;
     for (domain, _) in ICONS {
         cx.update(|cx| crate::site_icons::get(domain, cx));
     }
@@ -191,7 +233,16 @@ async fn run(
         );
     }
 
-    // ── Updates ──
+    passed
+}
+
+async fn updates(
+    server: &Server,
+    out: &std::path::Path,
+    report: &mut Report,
+    cx: &mut AsyncApp,
+) -> bool {
+    let mut passed = true;
     // A first start of this version shows its bundled notes, which hold
     // checks back until they are read.
     let state = cx.update(crate::updates::state);
@@ -257,9 +308,68 @@ async fn run(
                 state.status, state.error
             ),
         );
-    }
+        // Restart and Install has nothing to start.
+        cx.update(crate::updates::install);
+        pause(cx, 1500).await;
+        let state = cx.update(crate::updates::state);
+        passed &= report.expect(
+            state.status == crate::updates::Status::Error && !out.join(MARKER).exists(),
+            "Restart and Install after the refused download started nothing",
+        );
 
-    // ── Search by Image ──
+        // The good installer again, then changed on disk before it starts.
+        server.bad_checksum.store(false, Ordering::SeqCst);
+        let state = check_update(cx).await;
+        let downloaded = state.downloaded.clone();
+        passed &= report.expect(
+            state.status == crate::updates::Status::Downloaded && downloaded.is_some(),
+            &format!(
+                "installer downloaded again: {:?} {:?}",
+                state.status, state.error
+            ),
+        );
+        if let Some(path) = &downloaded
+            && let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(path)
+        {
+            let _ = file.write_all(b"changed");
+        }
+        cx.update(crate::updates::install);
+        pause(cx, 1500).await;
+        let state = cx.update(crate::updates::state);
+        passed &= report.expect(
+            state.status == crate::updates::Status::Error
+                && state.error.is_some()
+                && downloaded.as_ref().is_some_and(|path| !path.exists())
+                && !out.join(MARKER).exists(),
+            &format!(
+                "installer changed after its verification not started, the app still running, the error shown: {:?} {:?}",
+                state.status, state.error
+            ),
+        );
+        let state = check_update(cx).await;
+        let kept = state
+            .downloaded
+            .as_ref()
+            .and_then(|path| std::fs::read(path).ok());
+        passed &= report.expect(
+            state.status == crate::updates::Status::Downloaded
+                && kept.as_deref() == Some(server.installer.as_slice()),
+            &format!(
+                "installer downloaded and verified once more: {:?} {:?}",
+                state.status, state.error
+            ),
+        );
+    }
+    passed
+}
+
+async fn searches(
+    server: &Server,
+    out: &std::path::Path,
+    report: &mut Report,
+    cx: &mut AsyncApp,
+) -> bool {
+    let mut passed = true;
     let engine_requests = |server: &Server| {
         server
             .requests
@@ -324,6 +434,129 @@ async fn run(
         );
     }
     passed
+}
+
+/// The last step: the update installed as this system installs it (the
+/// app then quits, which ends the check), or the release page on macOS.
+async fn install(
+    out: &std::path::Path,
+    on_quit: bool,
+    passed: bool,
+    report: &mut Report,
+    cx: &mut AsyncApp,
+) -> bool {
+    use crate::updates::Status;
+    let state = cx.update(crate::updates::state);
+    if state.mac() {
+        cx.update(crate::updates::install);
+        let opened = crate::net::opened();
+        return report.expect(
+            opened
+                .last()
+                .is_some_and(|url| url.ends_with(&format!("/tag/v{RELEASE}"))),
+            &format!("Open Download Page: the release page, {opened:?}"),
+        );
+    }
+    if state.status != Status::Downloaded {
+        return report.expect(false, "no update waiting to be installed");
+    }
+    let system = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        _ => "linux",
+    };
+    if state.platform != system {
+        // Another system's flow: verified, never started.
+        cx.update(crate::updates::install);
+        pause(cx, 1500).await;
+        let state = cx.update(crate::updates::state);
+        return report.expect(
+            state.status == Status::Downloaded && !out.join(MARKER).exists(),
+            &format!(
+                "{} installer verified and not started on {system}",
+                state.platform
+            ),
+        );
+    }
+    if on_quit {
+        report.line("quitting with the update waiting: it installs as the app quits");
+        return true;
+    }
+    // The app quits once the installer has started; what the log says
+    // must be written first.
+    report.line("Restart and Install: the installer starts and the app quits");
+    finish(out, &report.lines, passed);
+    cx.update(crate::updates::install);
+    pause(cx, 15_000).await;
+    let state = cx.update(crate::updates::state);
+    report.expect(
+        false,
+        &format!(
+            "the app did not quit after Restart and Install: {:?} {:?}",
+            state.status, state.error
+        ),
+    )
+}
+
+/// The stand-in installer, whose only effect is to write what it was
+/// started with to [`MARKER`] in `out`: on Windows a program compiled with
+/// the C# compiler of the .NET Framework every Windows has, elsewhere a
+/// shell script (the AppImage's stand-in; never run on macOS).
+fn stand_in(out: &std::path::Path) -> Result<Vec<u8>, String> {
+    let marker = out.join(MARKER);
+    let _ = std::fs::remove_file(&marker);
+    let marker = marker.to_string_lossy().into_owned();
+    if std::env::consts::OS != "windows" {
+        if marker.contains('\'') {
+            return Err(format!("the folder's path holds a quote: {marker}"));
+        }
+        return Ok(format!(
+            "#!/bin/sh\n{{\n  printf 'path=%s\\n' \"$0\"\n  for argument in \"$@\"; do printf 'arg=%s\\n' \"$argument\"; done\n  printf 'silent=%s\\n' \"$APPIMAGE_SILENT_INSTALL\"\n  printf 'exit-after=%s\\n' \"$APPIMAGE_EXIT_AFTER_INSTALL\"\n}} > '{marker}.part' && mv '{marker}.part' '{marker}'\n"
+        )
+        .into_bytes());
+    }
+    let windows = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(PathBuf::from)
+        .ok_or("no SystemRoot")?;
+    let compiler = ["Framework64", "Framework"]
+        .iter()
+        .map(|framework| {
+            windows
+                .join("Microsoft.NET")
+                .join(framework)
+                .join("v4.0.30319")
+                .join("csc.exe")
+        })
+        .find(|compiler| compiler.exists())
+        .ok_or("no C# compiler of the .NET Framework")?;
+    let folder = out.join("stand-in");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let source = folder.join("StandIn.cs");
+    let program = folder.join("StandIn.exe");
+    let verbatim = marker.replace('"', "\"\"");
+    std::fs::write(
+        &source,
+        format!(
+            "using System.Collections.Generic;\nstatic class StandIn {{\n  static void Main(string[] arguments) {{\n    var lines = new List<string>();\n    lines.Add(\"path=\" + System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName);\n    foreach (var argument in arguments) lines.Add(\"arg=\" + argument);\n    System.IO.File.WriteAllLines(@\"{verbatim}.part\", lines);\n    System.IO.File.Move(@\"{verbatim}.part\", @\"{verbatim}\");\n  }}\n}}\n"
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    let built = std::process::Command::new(&compiler)
+        .arg("/nologo")
+        .arg("/target:winexe")
+        .arg(format!("/out:{}", program.display()))
+        .arg(&source)
+        .output()
+        .map_err(|error| format!("{}: {error}", compiler.display()))?;
+    if !built.status.success() {
+        return Err(format!(
+            "{}: {}",
+            compiler.display(),
+            String::from_utf8_lossy(&built.stdout)
+        ));
+    }
+    std::fs::read(&program).map_err(|error| error.to_string())
 }
 
 /// A check from Check Now, followed to its end.
@@ -439,16 +672,12 @@ async function send(input, next) {{
     )
 }
 
-fn serve(origin: &str) -> std::io::Result<Server> {
+fn serve(origin: &str, installer: Vec<u8>) -> std::io::Result<Server> {
     let address = origin.trim_start_matches("http://");
     let listener = TcpListener::bind(address)?;
     let server = Server {
         origin: origin.to_owned(),
-        installer: Arc::new(
-            (0..3 * 1024 * 1024_u32)
-                .map(|index| (index * 7 % 251) as u8)
-                .collect(),
-        ),
+        installer: Arc::new(installer),
         bad_checksum: Arc::new(AtomicBool::new(false)),
         received: Arc::default(),
         requests: Arc::default(),

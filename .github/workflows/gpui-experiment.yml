@@ -267,34 +267,83 @@ jobs:
       # The network features in the app on the copy above, against fixtures
       # the app serves itself on the loopback (`src/net_check.rs`): the
       # services' icons fetched, kept and drawn or left as the globe; an
-      # update found, its installer downloaded and verified against this
+      # update found, its installer (a stand-in the check builds, which only
+      # writes down how it was started) downloaded and verified against this
       # system's feed (`latest.yml` on Windows, `latest-linux.yml` on Linux),
-      # then a mismatching one refused and not kept; and Search by Image on
-      # every engine in the hidden web view, each receiving exactly the
-      # file's bytes, name and type. No real service is contacted.
+      # a mismatching one refused and not kept and one changed after its
+      # verification never started; Search by Image on every engine in the
+      # hidden web view, each receiving exactly the file's bytes, name and
+      # type; then Restart and Install, after which the app must have quit
+      # and the stand-in run as electron-updater runs the installer: on
+      # Windows with `--updated --force-run`, on Linux moved over the
+      # AppImage `$APPIMAGE` names (a stand-in here) under its new name and
+      # run with `APPIMAGE_SILENT_INSTALL=true`. A second run quits with the
+      # update waiting instead, which installs it silently (`--updated /S`;
+      # on Linux run until it exits, with `APPIMAGE_EXIT_AFTER_INSTALL`).
+      # No real service is contacted and no real installer is started.
       - name: Network features
         shell: bash
         run: |
           native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
           unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
-          out="$(unix "$RUNNER_TEMP")/net-check"
-          mkdir -p "$out/state" "$out/data"
-          export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_SILENT=1
-          export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
-          export PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:47614
-          export PICTO_GPUI_NET_CHECK="$(native "$out")"
           if [[ "$RUNNER_OS" == Linux ]]; then
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
             run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
           else
             run=()
           fi
-          status=0
-          timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
-          echo "app ended with $status"
-          grep -i "net check\|panic\|search by image\|web view" "$out/app.log" || true
-          test -f "$out/net-check.log"
-          grep -qx 'result: pass' "$out/net-check.log"
+          check() {
+            out="$1"
+            mkdir -p "$out/state" "$out/data" "$out/app"
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              printf 'the AppImage being replaced\n' > "$out/app/Picto-0.6.1-alpha.AppImage"
+              chmod 755 "$out/app/Picto-0.6.1-alpha.AppImage"
+              export APPIMAGE="$out/app/Picto-0.6.1-alpha.AppImage"
+            fi
+            export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_SILENT=1
+            export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+            export PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:47614
+            export PICTO_GPUI_NET_CHECK="$(native "$out")"
+            status=0
+            timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+            echo "app ended with $status"
+            grep -i "net check\|panic\|search by image\|web view\|install" "$out/app.log" || true
+            # Ended by itself, not by the timeout.
+            test "$status" != 124
+            test -f "$out/net-check.log"
+            grep -qx 'result: pass' "$out/net-check.log"
+            for _ in $(seq 60); do test -f "$out/installer-ran.txt" && break; sleep 1; done
+            echo "the stand-in installer wrote:"
+            cat "$out/installer-ran.txt"
+            tr -d '\r' < "$out/installer-ran.txt" > "$out/ran.txt"
+          }
+          out="$(unix "$RUNNER_TEMP")/net-check"
+          check "$out"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            grep -qi '^path=.*\\updates\\Picto-Setup-0\.7\.0-alpha\.exe$' "$out/ran.txt"
+            test "$(grep '^arg=' "$out/ran.txt")" = "$(printf 'arg=--updated\narg=--force-run')"
+          else
+            test ! -e "$out/app/Picto-0.6.1-alpha.AppImage"
+            test -x "$out/app/Picto-0.7.0-alpha.AppImage"
+            grep -qx "path=$out/app/Picto-0.7.0-alpha.AppImage" "$out/ran.txt"
+            test -z "$(grep '^arg=' "$out/ran.txt" || true)"
+            grep -qx 'silent=true' "$out/ran.txt"
+            grep -qx 'exit-after=' "$out/ran.txt"
+          fi
+          quit="$(unix "$RUNNER_TEMP")/net-check-quit"
+          mkdir -p "$quit"
+          touch "$quit/install-on-quit"
+          check "$quit"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            grep -qi '^path=.*\\updates\\Picto-Setup-0\.7\.0-alpha\.exe$' "$quit/ran.txt"
+            test "$(grep '^arg=' "$quit/ran.txt")" = "$(printf 'arg=--updated\narg=/S')"
+          else
+            test ! -e "$quit/app/Picto-0.6.1-alpha.AppImage"
+            test -x "$quit/app/Picto-0.7.0-alpha.AppImage"
+            grep -qx "path=$quit/app/Picto-0.7.0-alpha.AppImage" "$quit/ran.txt"
+            grep -qx 'silent=true' "$quit/ran.txt"
+            grep -qx 'exit-after=true' "$quit/ran.txt"
+          fi
 
       - name: Upload network check
         if: always()
@@ -303,6 +352,9 @@ jobs:
           name: net-check-${{ matrix.platform }}
           path: |
             ${{ runner.temp }}/net-check/*.log
+            ${{ runner.temp }}/net-check/installer-ran.txt
+            ${{ runner.temp }}/net-check-quit/*.log
+            ${{ runner.temp }}/net-check-quit/installer-ran.txt
           if-no-files-found: warn
 
       - name: Upload sign-in window check
