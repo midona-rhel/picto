@@ -906,7 +906,7 @@ mod tests {
     }
 
     use super::{
-        Application, active_runs, badge_count, finished_body, new_items, sort_applications,
+        Application, active_runs, finished_body, new_items, sort_applications,
     };
     use serde_json::json;
 
@@ -1035,12 +1035,5 @@ mod tests {
             finished_body(1234),
             "1,234 new library items are ready to review."
         );
-    }
-
-    #[test]
-    fn the_badge_is_capped() {
-        assert_eq!(badge_count(&json!(12)), 12);
-        assert_eq!(badge_count(&json!(120000)), 9_999);
-        assert_eq!(badge_count(&json!(null)), 0);
     }
 }

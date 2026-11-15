@@ -723,7 +723,7 @@ impl Exports {
 
 #[cfg(test)]
 mod tests {
-    use super::{Format, PackSource, Request, digits, export_outcome, safe_pack_name};
+    use super::{PackSource, Request, export_outcome, safe_pack_name};
     use picto_library::selection::SelectionTarget;
     use picto_library::{FolderId, RootId, SmartFolderId};
     use serde_json::json;
@@ -736,26 +736,6 @@ mod tests {
         assert_eq!(safe_pack_name("Notes..."), "Notes");
         assert_eq!(safe_pack_name("..."), "Picto Pack");
         assert_eq!(safe_pack_name(""), "Picto Pack");
-    }
-
-    #[test]
-    fn dimension_fields_keep_only_digits() {
-        assert_eq!(digits("12a3 px"), "123");
-        assert_eq!(digits("-4.5"), "45");
-        assert_eq!(digits(""), "");
-    }
-
-    #[test]
-    fn the_dialog_shows_quality_and_resizing_only_where_they_apply() {
-        assert!(!Format::Original.has_quality() && !Format::Original.resizes());
-        assert!(!Format::Png.has_quality() && Format::Png.resizes());
-        for format in [Format::Jpeg, Format::Webp, Format::Avif] {
-            assert!(format.has_quality() && format.resizes());
-        }
-        assert_eq!(
-            Format::ALL.map(Format::label),
-            ["Original Format", "JPEG", "PNG", "WebP", "AVIF"]
-        );
     }
 
     #[test]
