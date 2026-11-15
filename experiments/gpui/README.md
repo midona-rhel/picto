@@ -796,11 +796,13 @@ the sign-in window or OnlyFans' browser and its profile with it, whether
 or not the Accounts dialog is open; an answer that comes back for a login
 that has since ended (a save, the outside browser's ending) changes
 nothing.
-`sites.rs` is the service table; `adapters.rs` holds production's rules for
-when a login has finished (the session cookies a service's login sets, read
-for that service's addresses only; the page showing a signed-in session; a
-booru's API key on its options page; an OAuth callback, which never loads;
-ExHentai's check page; FANBOX's API answering); `machine.rs` is the session
+`sites.rs` is the service table; `adapters/` holds production's rules for
+when a login has finished, one file per kind of service (`cookie.rs`: the
+session cookies a service's login sets, read for that service's addresses
+only, the page showing a signed-in session, ExHentai's check page,
+FANBOX's API answering; `account_api.rs`: a booru's API key on its options
+page; `oauth.rs`: an OAuth callback, which never loads, Pixiv's flow, and
+OAuth 1.0a signing; `scripts.rs`: the scripts run in the page); `machine.rs` is the session
 (one at a time, every state and message the Accounts dialog shows, a look at
 the page every 750 ms bounded to 4 s, cancel, the window closed by the user)
 as a pure state machine; `Logins` (`mod.rs`) performs what it asks for and

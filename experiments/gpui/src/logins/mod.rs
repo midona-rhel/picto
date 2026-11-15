@@ -22,7 +22,6 @@ pub mod browser;
 pub mod check;
 pub mod cookies;
 pub mod machine;
-pub mod oauth;
 pub mod onlyfans;
 pub mod sites;
 
