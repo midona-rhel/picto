@@ -152,6 +152,21 @@ pub fn shell(cx: &mut App) -> Option<Entity<Shell>> {
     main.read(cx).ok()?.shell.clone()
 }
 
+/// Runs `change` on the open library's shell, in the main window.
+pub fn update_shell(
+    cx: &mut App,
+    change: impl FnOnce(&mut Shell, &mut Window, &mut Context<Shell>),
+) {
+    let Some(main) = host(cx).read(cx).main else {
+        return;
+    };
+    let _ = main.update(cx, |main, window, cx| {
+        if let Some(shell) = main.shell.clone() {
+            shell.update(cx, |shell, cx| change(shell, window, cx));
+        }
+    });
+}
+
 /// Open Library… (`openLibraryDialog`): a `.library` chosen in the system's
 /// dialog, opened if the rules let it.
 pub fn open_dialog(cx: &mut App) {
@@ -581,6 +596,189 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
     .detach();
 }
 
+/// How long a restore waits for this app to let the library's connections
+/// go before it gives up and replaces nothing.
+const RELEASE_LIMIT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Restore in Settings › Cloud (`cloud.restore.start`), once the user
+/// confirmed: the library's views close and this app lets go of every
+/// connection to its database (otherwise the database could not be renamed
+/// on Windows, and elsewhere a connection left open would go on reading
+/// the file set aside); the core then sets the current database aside as
+/// an emergency copy, puts the snapshot's in its place and opens it, and
+/// this app opens the library again. A copy keeps the cloud folder it was
+/// connected to. `done` hears how it went.
+pub fn restore(
+    snapshot: String,
+    cx: &mut App,
+    done: impl FnOnce(Result<(), String>, &mut App) + 'static,
+) {
+    let host = host(cx);
+    let Some(main) = host.read(cx).main else {
+        return;
+    };
+    if host.read(cx).busy {
+        return;
+    }
+    let Some((root, kind)) = current(cx) else {
+        return done(Err(en("No library is open.").to_owned()), cx);
+    };
+    let Some(Open {
+        application,
+        instance,
+    }) = close_views(main, Gate::Loading(super::name(&root.to_string_lossy())), cx)
+    else {
+        return;
+    };
+    host.update(cx, |host, _| host.busy = true);
+    cx.spawn(async move |cx| {
+        let (sent, answered) = futures::channel::oneshot::channel();
+        let restoring = application.clone();
+        std::thread::Builder::new()
+            .name("picto-restore".into())
+            .spawn(move || {
+                let result = if restoring.wait_released(RELEASE_LIMIT) {
+                    restoring.run_blocking(
+                        "cloud.restore.start",
+                        serde_json::json!({ "snapshot_id": snapshot }),
+                    )
+                } else {
+                    Err(en("The library is still in use; nothing was restored.").to_owned())
+                };
+                // Whatever the core has open now (the restored library, or
+                // the previous one put back) is closed, and opened again
+                // below as any library is.
+                restoring.close();
+                drop(restoring);
+                let _ = sent.send(result);
+            })
+            .ok();
+        let result = answered
+            .await
+            .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+        drop(application);
+        cx.update(|cx| {
+            host.update(cx, |host, _| host.busy = false);
+            start_with(root, kind, instance, main, true, cx);
+            done(result.map(|_| ()), cx);
+        });
+    })
+    .detach();
+}
+
+/// Open from Cloud… (`joinCloudLibrary`), once the user chose where: the
+/// library opened here (if any) closes, the core makes `target` from the
+/// cloud library's newest verified snapshot (its media are then restored
+/// in the background, blocking the window), and it opens as a library the
+/// user made here. A failed join removes what it made and opens the
+/// previous library again. `done` hears how it went.
+pub fn join(
+    choice: crate::cloud::Choice,
+    target: PathBuf,
+    cx: &mut App,
+    done: impl FnOnce(Result<PathBuf, String>, &mut App) + 'static,
+) {
+    let host = host(cx);
+    let Some(main) = host.read(cx).main else {
+        return;
+    };
+    if host.read(cx).busy {
+        return;
+    }
+    let probes = host.read(cx).probes.clone();
+    if let Err(refusal) = admission::admit_new(&target, &super::facts(), &*probes) {
+        let (_, message) = refusal.words();
+        refuse(&refusal, cx);
+        return done(Err(message), cx);
+    }
+    let previous = current(cx);
+    let open = close_views(
+        main,
+        Gate::Loading(super::name(&target.to_string_lossy())),
+        cx,
+    );
+    host.update(cx, |host, _| host.busy = true);
+    cx.spawn(async move |cx| {
+        if let Some(open) = open {
+            close_application(open, cx).await;
+        }
+        let (sent, answered) = futures::channel::oneshot::channel();
+        let joined = target.clone();
+        std::thread::Builder::new()
+            .name("picto-join".into())
+            .spawn(move || {
+                // An application of its own for the join, whose events go
+                // nowhere: the library is opened again as any other below.
+                let (events, _) = std::sync::mpsc::channel();
+                let application = Application::new(joined.clone(), Kind::Real, events);
+                let result = application.run_unopened(
+                    "cloud.library.join",
+                    serde_json::json!({
+                        "provider": choice.root.provider,
+                        "account_label": choice.root.account_label,
+                        "root_path": choice.root.path,
+                        "library_id": choice.library.library_id,
+                        "target_root": joined.to_string_lossy(),
+                    }),
+                );
+                drop(application);
+                if result.is_err() {
+                    remove_remnants(&joined);
+                }
+                let _ = sent.send(result.map(|_| choice.library.library_id));
+            })
+            .ok();
+        let result = answered
+            .await
+            .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+        cx.update(|cx| {
+            host.update(cx, |host, cx| {
+                host.busy = false;
+                cx.notify();
+            });
+            match result {
+                Ok(library_id) => {
+                    let root = target.canonicalize().unwrap_or(target);
+                    let path = root.to_string_lossy().into_owned();
+                    crate::state::update(cx, |state| {
+                        history::add(&mut state.library_history, &mut state.last_library, &path);
+                        state
+                            .library_meta
+                            .entry(path.clone())
+                            .or_default()
+                            .cloud_library_id = Some(library_id);
+                    });
+                    host.update(cx, |host, _| host.created = Some(root.clone()));
+                    begin(root.clone(), Kind::Real, cx);
+                    done(Ok(root), cx);
+                }
+                Err(error) => {
+                    if let Some((root, kind)) = previous {
+                        begin(root, kind, cx);
+                    }
+                    done(Err(error), cx);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// What a failed join left at `target`, which did not exist before it:
+/// removed only while it is a plain `.library` folder (not a link) with no
+/// library in it.
+fn remove_remnants(target: &Path) {
+    let plain = target
+        .symlink_metadata()
+        .is_ok_and(|data| data.file_type().is_dir());
+    let named = target
+        .extension()
+        .is_some_and(|extension| extension == "library");
+    if plain && named && !target.join("library.sqlite").exists() {
+        let _ = std::fs::remove_dir_all(target);
+    }
+}
+
 /// Tells the user why a library was not opened: a notification in the main
 /// window, and the Library Manager's error box.
 fn refuse(refusal: &Refusal, cx: &mut App) {
@@ -658,6 +856,18 @@ pub fn start(
     main: WindowHandle<Main>,
     cx: &mut App,
 ) {
+    start_with(root, kind, instance, main, false, cx);
+}
+
+/// [`start`], keeping a copy's cloud folder after a restore (`keep_cloud`).
+fn start_with(
+    root: PathBuf,
+    kind: Kind,
+    instance: Option<Arc<crate::opening::instance::Instance>>,
+    main: WindowHandle<Main>,
+    keep_cloud: bool,
+    cx: &mut App,
+) {
     let host = host(cx);
     host.update(cx, |host, _| {
         host.busy = true;
@@ -674,6 +884,9 @@ pub fn start(
         }
         let (events, delivered) = std::sync::mpsc::channel();
         let application = Application::new(root.clone(), kind, events);
+        if keep_cloud {
+            application.keep_cloud();
+        }
         let mut opened = application.opened();
         let shown = cx.update(|cx| {
             let made = main.update(cx, |main, window, cx| {

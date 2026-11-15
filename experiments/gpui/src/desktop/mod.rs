@@ -444,6 +444,29 @@ pub fn reveal_library(path: &Path, cx: &mut App) {
     }
 }
 
+/// Show Cloud Folder: the provider folder the open library syncs to, and
+/// no other folder.
+pub fn reveal_cloud_folder(path: &Path, cx: &mut App) {
+    let configured = crate::libraries::host::shell(cx)
+        .and_then(|shell| {
+            let cloud = shell.read(cx).cloud().read(cx);
+            cloud.configuration.as_ref()?.root_path.clone()
+        })
+        .is_some_and(|root| Path::new(&root) == path);
+    if !configured || !path.is_dir() {
+        return crate::ui::notify::error(
+            "Could not show file",
+            format!("{} is not the open library's cloud folder", path.display()),
+            cx,
+        );
+    }
+    if live(cx) {
+        cx.reveal_path(&system_path(path));
+    } else {
+        record(format!("reveal {}", path.display()));
+    }
+}
+
 /// `picto:shell:openWithApplication`: the file, if it is one of the copy's,
 /// in the application at `application` (macOS only, as in production).
 #[cfg(target_os = "macos")]

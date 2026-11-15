@@ -19,21 +19,6 @@ use gpui::*;
 use picto_library::LibraryStatistics;
 use std::collections::HashMap;
 
-/// The Cloud section's state, read from the library's `cloud_state`.
-#[derive(Clone, Debug, Default)]
-pub struct CloudInfo {
-    pub provider: Option<String>,
-    pub root_path: Option<String>,
-    pub state: String,
-    pub message: String,
-    pub last_sync_at: Option<String>,
-    pub pending_mutations: i64,
-    pub pending_blobs: i64,
-    pub missing_blobs: i64,
-    /// Daily, weekly and yearly snapshots, and days deleted files are kept.
-    pub retention: [i64; 4],
-}
-
 pub struct SettingsWindow {
     pub(super) model: Entity<SettingsModel>,
     /// The chosen section, by its place in `PANELS`.
@@ -48,7 +33,9 @@ pub struct SettingsWindow {
     body_focus: FocusHandle,
     pub(super) shortcuts_scroll: ScrollHandle,
     pub(super) statistics: Option<LibraryStatistics>,
-    pub(super) cloud: Option<CloudInfo>,
+    /// The library's cloud sync state, and the Cloud section's own.
+    pub(super) cloud: Option<Entity<crate::cloud::Cloud>>,
+    pub(super) cloud_panel: super::panels::CloudPanel,
     /// The AI Tagging section's runtime status and operations.
     pub(super) ai: super::panels::AiState,
     /// Shortcuts whose new keys another shortcut has: the other's label, and
@@ -108,22 +95,37 @@ impl SettingsWindow {
         // Every section's data is read when the window opens, as production
         // preloads it, so choosing a section never shows it empty.
         let session = model.read(cx).session.clone();
-        let read = session.read(cx).run(|library| {
-            (
-                library.library_statistics().ok(),
-                panels::cloud_info(library),
-            )
-        });
+        let read = session
+            .read(cx)
+            .run(|library| library.library_statistics().ok());
         cx.spawn(async move |this, cx| {
-            if let Ok((statistics, cloud)) = read.await {
+            if let Ok(statistics) = read.await {
                 let _ = this.update(cx, |this, cx| {
                     this.statistics = statistics;
-                    this.cloud = Some(cloud);
                     cx.notify();
                 });
             }
         })
         .detach();
+        // The cloud state is the shell's, read as it changes; the restore
+        // points are read here, again whenever the core says the sync's
+        // state changed (`cloud`).
+        let cloud = session.read(cx).cloud.clone();
+        let mut subscriptions = subscriptions;
+        if let Some(cloud) = &cloud {
+            subscriptions.push(cx.observe(cloud, |_, _, cx| cx.notify()));
+            subscriptions.push(cx.subscribe(
+                &session,
+                |this, _, event: &crate::application::Event, cx| {
+                    if let crate::application::Event::Changed(changed) = event
+                        && crate::application::touches(changed, "cloud")
+                    {
+                        this.refresh_restore_points(cx);
+                    }
+                },
+            ));
+        }
+        cx.defer_in(window, |this, _, cx| this.refresh_restore_points(cx));
         // The AI model runtime's status reads the models' folder only.
         cx.defer_in(window, |this, _, cx| this.refresh_ai(cx));
         Self {
@@ -137,7 +139,8 @@ impl SettingsWindow {
             body_focus: cx.focus_handle(),
             shortcuts_scroll: ScrollHandle::new(),
             statistics: None,
-            cloud: None,
+            cloud,
+            cloud_panel: Default::default(),
             ai: Default::default(),
             conflicts: HashMap::new(),
             conflict_generation: 0,
@@ -618,7 +621,8 @@ impl Render for SettingsWindow {
             .key_context("Settings") // i18n: a key context
             .child(sidebar)
             .child(content);
-        root.children(ui::window_chrome::resize_edges(window))
+        root.children(self.restore_question(cx))
+            .children(ui::window_chrome::resize_edges(window))
             .children(ui::window_chrome::rim(window, cx))
     }
 }

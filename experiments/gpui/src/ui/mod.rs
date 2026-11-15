@@ -33,6 +33,7 @@ pub mod overlay_shell;
 mod panel_section;
 pub mod popover;
 pub mod progress_bar;
+pub mod progress_dialog;
 pub mod property_row;
 mod scroll_to_top;
 pub mod scrollbar;

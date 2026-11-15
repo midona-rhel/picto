@@ -22,6 +22,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::path::{Path, PathBuf};
 
+mod cloud;
+
 const WIDTH: f32 = 700.;
 const HEIGHT: f32 = 550.;
 /// `.sidebar`'s width, `.libraryRow`'s height, the header's and the
@@ -122,6 +124,8 @@ enum Act {
 enum Pane {
     Library,
     Create,
+    /// Open from Cloud… (`showCloudOpen`).
+    Cloud,
 }
 
 struct ManagerGlobal(WindowHandle<Manager>);
@@ -201,6 +205,23 @@ pub struct Manager {
     focus: FocusHandle,
     /// Where the other libraries' covers are cropped to.
     scratch: Option<tempfile::TempDir>,
+    /// The open library's cloud sync state, followed while it is open.
+    cloud: Option<(Entity<crate::cloud::Cloud>, Subscription)>,
+    /// The provider folders on this device and those the user chose, and
+    /// the Picto libraries found in them (`refreshCloud`).
+    roots: Vec<crate::cloud::Root>,
+    choices: Vec<crate::cloud::Choice>,
+    /// The cloud library chosen in Open from Cloud…, and its local name.
+    chosen: Option<usize>,
+    cloud_name: Entity<TextInput>,
+    /// A cloud operation under way (production's `busy` key).
+    working: Option<&'static str>,
+    /// How fast the sync's remaining work falls, and the estimate.
+    samples: Vec<crate::cloud::Sample>,
+    work_key: Option<String>,
+    eta: Option<u64>,
+    /// Stop Syncing's question.
+    stopping: Option<ui::modal::Presence>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -212,8 +233,14 @@ impl Manager {
                 .submits()
         });
         let host = host::host(cx);
+        let cloud_name = cx.new(|cx| TextInput::new(InputKind::Form, cx).submits());
         let subscriptions = vec![
             cx.observe(&name, |_, _, cx| cx.notify()),
+            cx.observe(&cloud_name, |_, _, cx| cx.notify()),
+            cx.subscribe(
+                &cloud_name,
+                |this, _, _: &crate::ui::text_input::Submitted, cx| this.join(cx),
+            ),
             // Enter in the name chooses the location, as the button does.
             cx.subscribe(
                 &name,
@@ -255,9 +282,20 @@ impl Manager {
                 .prefix("picto-gpui-covers.")
                 .tempdir()
                 .ok(),
+            cloud: None,
+            roots: Vec::new(),
+            choices: Vec::new(),
+            chosen: None,
+            cloud_name,
+            working: None,
+            samples: Vec::new(),
+            work_key: None,
+            eta: None,
+            stopping: None,
             _subscriptions: subscriptions,
         };
         this.read(cx);
+        this.refresh_cloud(cx);
         this
     }
 
@@ -325,6 +363,7 @@ impl Manager {
         }
         self.rows = rows;
         self.read_stats(cx);
+        self.follow_cloud(cx);
         cx.notify();
     }
 
@@ -354,6 +393,7 @@ impl Manager {
     fn choose(&mut self, path: String, cx: &mut Context<Self>) {
         self.selected = Some(path);
         self.pane = Pane::Library;
+        self.chosen = None;
         self.renaming = None;
         self.icons = None;
         cx.notify();
@@ -609,12 +649,15 @@ impl Manager {
                     t("Add to Quick Access")
                 },
             )
+            .icon("menu-pin")
             .disabled(!real)
             .into(),
             menu::item("rename", t("Rename"))
+                .icon("menu-pencil")
                 .disabled(row.missing || !real)
                 .into(),
             menu::item("reveal", t("Show in File Manager"))
+                .icon("menu-folder-open")
                 .disabled(row.missing)
                 .into(),
             // A missing library is located instead of moved.
@@ -626,22 +669,29 @@ impl Manager {
                     t("Move…")
                 },
             )
+            .icon("menu-folder-symlink")
             .disabled(self.busy || !real)
             .into(),
-            // TODO: Sync Now, Pause Sync, Create Recovery Snapshot, Show
-            // Cloud Folder, Stop Syncing and Enable Cloud Sync for the open
-            // library; cloud sync is not built.
+        ];
+        let mut entries = entries;
+        if row.current {
+            entries.push(menu::Entry::Separator);
+            entries.extend(self.cloud_rows(cx));
+        }
+        entries.extend([
             menu::Entry::Separator,
             menu::item("remove", t("Remove from List"))
+                .icon("menu-x")
                 .danger(true)
                 .disabled(row.current || !real)
                 .into(),
             // Production asks for confirmation and refuses the open library.
             menu::item("delete", t("Delete…"))
+                .icon("menu-trash")
                 .danger(true)
                 .disabled(row.current || row.missing || self.busy || !real)
                 .into(),
-        ];
+        ]);
         let menu = cx.new(|cx| Menu::new(entries, position, cx).width(236.).in_window());
         let path = row.path.clone();
         let missing = row.missing;
@@ -670,7 +720,7 @@ impl Manager {
                     this.removing = Some((path.clone(), ui::modal::Presence::new()));
                     cx.notify();
                 }
-                _ => {}
+                action => this.cloud_action(action, cx),
             },
         );
     }
@@ -792,6 +842,7 @@ impl Manager {
                                     .child(row.dir.clone()),
                             ),
                     )
+                    .children(row.current.then(|| self.row_sync_dot(cx)).flatten())
                     .children(status),
             );
         }
@@ -1064,7 +1115,7 @@ impl Manager {
             .child(self.statistics(row, cx));
         // i18n: translated where drawn
         let cloud = Self::card("Cloud Sync", cx).mt(px(12.)).child(if current {
-            cloud_providers("library-cloud", cx).into_any_element()
+            self.cloud_card(cx)
         } else {
             div()
                 .text(theme::TEXT_SM)
@@ -1290,15 +1341,15 @@ impl Manager {
                 .label(t("Open Existing…"))
                 .on_click(|_, _, cx| cx.defer(host::open_dialog)),
             )
-            // TODO: Open from Cloud… (`joinCloudLibrary`); cloud sync is not
-            // built, so it is shown and does nothing.
             .child(
                 ui::action_button::action_button(
                     "library-open-cloud",
                     ui::action_button::Look::Standard,
                 )
+                .icon("IconCloud", 14.)
                 .label(t("Open from Cloud…"))
-                .disabled(true),
+                .disabled(self.busy || self.working.is_some())
+                .on_click(cx.listener(|this, _, _, cx| this.show_cloud_open(cx))),
             )
     }
 
@@ -1416,29 +1467,6 @@ fn look_color(look: &crate::state::LibraryLook) -> Option<Rgba> {
     look.color.as_deref().and_then(theme::parse_hex).map(rgb)
 }
 
-/// The cloud card's providers as production shows them when the library
-/// has no cloud location yet (`cloudProviderButton`s).
-// TODO: connect Google Drive and Dropbox (`chooseCloudRoot`); cloud sync
-// is not built, so they are shown and do nothing.
-fn cloud_providers(id: &'static str, cx: &App) -> Div {
-    let _ = cx;
-    let button = |suffix: &'static str, label: &'static str| {
-        ui::action_button::action_button(
-            ElementId::NamedChild(std::sync::Arc::new(id.into()), suffix.into()),
-            ui::action_button::Look::Standard,
-        )
-        .icon("IconCloud", 14.)
-        .label(t(label))
-        .disabled(true)
-    };
-    // i18n: translated where drawn
-    div()
-        .flex()
-        .gap(px(8.))
-        .child(button("drive", "Connect Google Drive…"))
-        .child(button("dropbox", "Connect Dropbox…"))
-}
-
 /// Cover › Choose… for the open library: the main window's cover dialog.
 fn choose_cover(cx: &mut App) {
     if let Some(shell) = host::shell(cx) {
@@ -1453,6 +1481,7 @@ impl Render for Manager {
         self.busy = host::host(cx).read(cx).busy();
         let detail = match (self.pane, self.selected_row().cloned()) {
             (Pane::Create, _) => self.create_pane(cx),
+            (Pane::Cloud, _) => self.cloud_pane(cx),
             (Pane::Library, Some(row)) => self.library_pane(&row, window, cx),
             (Pane::Library, None) => div()
                 .flex()
@@ -1475,7 +1504,8 @@ impl Render for Manager {
                 .child(
                     div()
                         .mt(px(8.))
-                        .child(cloud_providers("library-start-cloud", cx)),
+                        .w_full()
+                        .child(self.connect_buttons("library-start-cloud", cx)),
                 )
                 .into_any_element(),
         };
@@ -1513,6 +1543,7 @@ impl Render for Manager {
             .children(self.removal(cx))
             .children(self.deletion(cx))
             .children(self.consent(cx))
+            .children(self.stop_question(cx))
             .children(ui::window_chrome::rim(window, cx))
     }
 }

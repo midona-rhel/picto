@@ -386,6 +386,7 @@ pub fn start(
     let (wake, woken) = futures::channel::mpsc::unbounded();
     let replies = Replies { sender, wake };
     let finished = tx.clone();
+    let holder = application.clone();
     std::thread::spawn(move || {
         let work = || -> Result<(), Box<dyn std::error::Error>> {
             let (readable, opening) = mpsc::channel();
@@ -467,6 +468,9 @@ pub fn start(
         if let Err(error) = work() {
             let _ = replies.send(Reply::Error(error.to_string()));
         }
+        // `work` has dropped the library: this app holds none of its
+        // connections now.
+        holder.release();
     });
     (tx, rx, woken)
 }

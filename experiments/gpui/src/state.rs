@@ -165,6 +165,10 @@ pub struct State {
     /// path, as the Library Manager sets them. (The cover is kept in the
     /// library's own folder.)
     pub library_meta: BTreeMap<String, LibraryLook>,
+    /// `config.json` `cloudLocations`: the provider folder last chosen for
+    /// each provider (`rememberCloudRoot`), offered again until it is no
+    /// longer one.
+    pub cloud_locations: BTreeMap<String, crate::cloud::Root>,
 }
 
 /// A library's colour (`#RRGGBB`) and icon (an icon picker name), each
@@ -173,6 +177,9 @@ pub struct State {
 pub struct LibraryLook {
     pub color: Option<String>,
     pub icon: Option<String>,
+    /// The cloud library it was opened from (`cloudLibraryId`), so Open
+    /// from Cloud… says it is already added.
+    pub cloud_library_id: Option<String>,
 }
 
 impl LibraryLook {
@@ -188,11 +195,12 @@ impl LibraryLook {
         Self {
             color: text("color"),
             icon: text("icon"),
+            cloud_library_id: text("cloudLibraryId"),
         }
     }
 
     pub fn is_default(&self) -> bool {
-        self.color.is_none() && self.icon.is_none()
+        self.color.is_none() && self.icon.is_none() && self.cloud_library_id.is_none()
     }
 }
 
@@ -224,6 +232,7 @@ impl Default for State {
             library_consents: Vec::new(),
             libraries_seeded: false,
             library_meta: BTreeMap::new(),
+            cloud_locations: BTreeMap::new(),
         }
     }
 }
@@ -391,6 +400,15 @@ impl State {
                 .filter(|(_, look)| !look.is_default())
                 .collect();
         }
+        if let Some(locations) = get("cloudLocations").and_then(Value::as_object) {
+            state.cloud_locations = locations
+                .iter()
+                .filter_map(|(provider, root)| {
+                    let root: crate::cloud::Root = serde_json::from_value(root.clone()).ok()?;
+                    (root.provider == *provider).then(|| (provider.clone(), root))
+                })
+                .collect();
+        }
         if let Some(seeded) = get("librariesSeeded").and_then(Value::as_bool) {
             state.libraries_seeded = seeded;
         }
@@ -488,11 +506,19 @@ impl State {
                     .map(|(path, look)| {
                         (
                             path.clone(),
-                            json!({ "color": look.color, "icon": look.icon }),
+                            json!({
+                                "color": look.color,
+                                "icon": look.icon,
+                                "cloudLibraryId": look.cloud_library_id,
+                            }),
                         )
                     })
                     .collect(),
             ),
+        );
+        put(
+            "cloudLocations",
+            serde_json::to_value(&self.cloud_locations).unwrap_or_default(),
         );
         Value::Object(object)
     }
@@ -505,7 +531,7 @@ impl State {
 }
 
 /// The fields this version reads and writes.
-const KNOWN: [&str; 24] = [
+const KNOWN: [&str; 25] = [
     "version",
     "window",
     "sidebarWidth",
@@ -530,6 +556,7 @@ const KNOWN: [&str; 24] = [
     "libraryConsents",
     "librariesSeeded",
     "libraryMeta",
+    "cloudLocations",
 ];
 
 /// Brings a file written by an earlier version to this version's layout,
@@ -763,6 +790,7 @@ mod tests {
                 super::LibraryLook {
                     color: Some("#FA5252".into()),
                     icon: Some("IconStar".into()),
+                    cloud_library_id: None,
                 },
             )]),
             ..State::default()
