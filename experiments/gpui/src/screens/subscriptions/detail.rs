@@ -1066,9 +1066,9 @@ impl SubscriptionsScreen {
         let widths = fit(
             self.row_width(),
             &[
-                column(Track::Between(84., 128.), 0),
-                column(Track::Flex(100., 0.8), 2),
-                column(Track::Flex(120., 1.), 0),
+                column(Track::Fixed(108.), 0),
+                column(Track::Flex(100., 0.6), 2),
+                column(Track::Flex(120., 2.), 0),
                 column(Track::Fixed(88.), 1),
                 column(Track::Fixed(28.), 0),
             ],
