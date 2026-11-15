@@ -204,11 +204,14 @@ impl Accounts {
         let cookie = secret(cx);
         let user_agent = field(cx);
         let x_bc = secret(cx);
+        let icons = crate::site_icons::entity(cx);
         let subscriptions = vec![
             cx.observe(&logins, |this, _, cx| this.login_changed(cx)),
             cx.observe(&cookie, |_, _, cx| cx.notify()),
             cx.observe(&user_agent, |_, _, cx| cx.notify()),
             cx.observe(&x_bc, |_, _, cx| cx.notify()),
+            // A service's icon arrived (or may be asked for again).
+            cx.observe(&icons, |_, _, cx| cx.notify()),
         ];
         let mut accounts = Self {
             session,
@@ -502,11 +505,21 @@ fn read_health(answer: Option<&Value>) -> Vec<(String, Health)> {
 
 // ── Drawing ─────────────────────────────────────────────────────
 
-/// `.siteMark` and `.detailMark`: the service's mark, its globe.
-/// (Production shows the site's own icon, fetched from it; this app makes
-/// no request to a site to draw this dialog.)
-fn mark(size: f32, glyph: f32, radius: f32, cx: &App) -> Div {
+/// `.siteMark` and `.detailMark` holding `SiteIcon`: the service's own
+/// icon (`crate::site_icons`), or the globe while there is none or it
+/// cannot be drawn.
+fn mark(domain: &str, size: f32, glyph: f32, radius: f32, cx: &mut App) -> Div {
     let theme = theme::theme(cx);
+    let globe = theme.text_tertiary();
+    let content = match crate::site_icons::get(domain, cx) {
+        Some(icon) => img(icon)
+            .size(px(glyph))
+            .object_fit(ObjectFit::Contain)
+            .rounded(px(3.))
+            .with_fallback(move || ui::icon("world", glyph, globe).into_any_element())
+            .into_any_element(),
+        None => ui::icon("world", glyph, globe).into_any_element(),
+    };
     div()
         .size(px(size))
         .flex_none()
@@ -517,7 +530,7 @@ fn mark(size: f32, glyph: f32, radius: f32, cx: &App) -> Div {
         .border_1()
         .border_color(theme.border())
         .bg(theme.control_surface())
-        .child(ui::icon("world", glyph, theme.text_tertiary()))
+        .child(content)
 }
 
 /// A service's dot in the list (`.accountDot`).
@@ -595,7 +608,10 @@ impl Accounts {
                 .when(!selected, |row| {
                     row.hover(move |style| style.bg(theme.surface_hover()))
                 })
-                .child(mark(22., 14., theme::RADIUS_CONTROL, cx).text(theme::TEXT_CAPTION))
+                .child(
+                    mark(&account.domain, 22., 14., theme::RADIUS_CONTROL, cx)
+                        .text(theme::TEXT_CAPTION),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -739,7 +755,7 @@ impl Accounts {
             .gap(px(12.))
             .border_b_1()
             .border_color(theme.border_secondary())
-            .child(mark(38., 22., theme::RADIUS_LG, cx).text(theme::TEXT_XL))
+            .child(mark(&account.domain, 38., 22., theme::RADIUS_LG, cx).text(theme::TEXT_XL))
             .child(
                 div()
                     .flex_1()
