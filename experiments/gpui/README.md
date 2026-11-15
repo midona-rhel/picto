@@ -1358,12 +1358,16 @@ re-checked by reading the code; the rest were checked against it.
   the settling of what arrived (a test); Windows' reading of virtual files
   from a data object of the test's own, through the platform's reading
   code (`cargo test` in CI); X11's direct save against a source of the
-  test's own on Xvfb (`Drop check (Linux)` in CI). On macOS the receiving
-  code has not received a real drag: AppKit lets receivers deliver only
-  during a real drop (`_NSDragManager _isDropping`), and the screen was
-  locked while this was built, so no drag could be played; production
-  (Electron 43's Chromium links no `NSFilePromiseReceiver`) imports no
-  promised file at all on macOS, which this app now does.
+  test's own on Xvfb (`Drop check (Linux)` in CI). On macOS a real
+  drag was played onto a window (AppKit lets receivers deliver only during
+  a real drop, so a pasteboard alone cannot show it): a small program began
+  a dragging session with an `NSFilePromiseProvider` and let go over the
+  grid; the promised picture was delivered into the drop's folder and
+  imported, and a source that wrote half its file and failed imported
+  nothing and left no file behind. No drag from Photos, Mail or a browser
+  has been tried. Production (Electron 43's Chromium links no
+  `NSFilePromiseReceiver`) imports no promised file at all on macOS, which
+  this app now does.
 - **macOS system integration.** Seen on a library copy: Reveal in Finder
   opened a Finder window with the copy's file selected; Open with Default
   App opened the copy's file in Preview; Open With Other listed the
