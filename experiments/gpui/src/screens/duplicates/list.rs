@@ -37,6 +37,8 @@ const PAD_BOTTOM: f32 = 12.;
 /// A cell less its pictures, whose band is as tall as the tallest picture
 /// of its shelf.
 const CELL_CHROME: f32 = PAD_TOP + HEADER + HEADER_GAP + TEXT_HEIGHT + PAD_BOTTOM;
+/// A cell: its header, its pictures' square and their text.
+pub const CELL_HEIGHT: f32 = CELL_CHROME + TILE;
 /// The narrowest cell: a pair of tiles.
 const UNIT: f32 = 2. * TILE + TILE_GAP + 2. * PAD_X;
 pub const FOOTER: f32 = 52.;
@@ -62,13 +64,11 @@ pub struct Place {
     pub x: f32,
     pub width: f32,
     pub top: f32,
-    /// The shelf's picture band: its tallest picture.
-    pub band: f32,
 }
 
 impl Place {
     pub fn height(&self) -> f32 {
-        self.band + CELL_CHROME
+        CELL_HEIGHT
     }
 }
 
@@ -81,22 +81,15 @@ impl Layout {
         }
     }
 
-    /// Each set's place, in order: a set starts a new shelf when it does
-    /// not fit beside the ones before it, and the last cell of a shelf
-    /// takes the shelf's remaining columns, so no shelf ends in a hole.
-    /// Each set is its count of files and its tallest picture; a shelf is
-    /// as tall as the tallest picture in it, so a shelf of wide pictures
-    /// wastes no height on a square box. Sets fill each shelf in order;
-    /// when the next set does not fit the room left, a set a little further
-    /// on that does is brought forward, and only when none does is the last
-    /// cell of the shelf widened to its end, so shelves seldom end in a
-    /// hole and the order stays close to the sort.
-    pub fn places(&self, sets: impl Iterator<Item = (usize, f32)>) -> Vec<Place> {
+    /// Each set's place, from its count of files. Sets fill each shelf in
+    /// order; when the next set does not fit the room left, a set a little
+    /// further on that does is brought forward, and only when none does is
+    /// the last cell of the shelf widened to its end, so shelves seldom end
+    /// in a hole and the order stays close to the sort.
+    pub fn places(&self, sets: impl Iterator<Item = usize>) -> Vec<Place> {
         const LOOK_AHEAD: usize = 12;
-        let sets = sets.collect::<Vec<_>>();
         let spans = sets
-            .iter()
-            .map(|(files, _)| ((needed(*files) / self.cell).ceil() as usize).clamp(1, self.cols))
+            .map(|files| ((needed(files) / self.cell).ceil() as usize).clamp(1, self.cols))
             .collect::<Vec<_>>();
         let blank = Place {
             shelf: 0,
@@ -105,7 +98,6 @@ impl Layout {
             x: 0.,
             width: 0.,
             top: 0.,
-            band: 0.,
         };
         let mut places = vec![blank; spans.len()];
         let mut pending = (0..spans.len()).collect::<std::collections::VecDeque<_>>();
@@ -142,20 +134,8 @@ impl Layout {
                 last_in_shelf = None;
             }
         }
-        let shelves = Self::shelves(&places);
-        let mut bands = vec![0f32; shelves];
-        for (place, (_, tallest)) in places.iter().zip(&sets) {
-            bands[place.shelf] = bands[place.shelf].max(*tallest);
-        }
-        let mut tops = Vec::with_capacity(shelves);
-        let mut top = 0.;
-        for band in &bands {
-            tops.push(top);
-            top += band + CELL_CHROME;
-        }
         for place in &mut places {
-            place.top = tops[place.shelf];
-            place.band = bands[place.shelf];
+            place.top = place.shelf as f32 * CELL_HEIGHT;
         }
         places
     }
@@ -172,14 +152,6 @@ impl Layout {
         place.span = to - place.col;
         place.x = place.col as f32 * self.cell;
         place.width = place.span as f32 * self.cell;
-    }
-
-    pub fn shelves(places: &[Place]) -> usize {
-        places
-            .iter()
-            .map(|place| place.shelf + 1)
-            .max()
-            .unwrap_or(0)
     }
 
     /// The height of every shelf together.
@@ -519,7 +491,7 @@ impl DuplicatesScreen {
         let overflow = needed(count) > place.width;
         let keeper = self.keeper(index);
         let differ = Differences::of(&self.entries[index]);
-        let band = place.band;
+        let band = TILE;
         let mut row = div().flex().gap(px(TILE_GAP)).h(px(band + TEXT_HEIGHT));
         for file in 0..count {
             row = row.child(self.tile(
@@ -586,14 +558,14 @@ impl DuplicatesScreen {
             .thumb(&resource, &side.file.mime_type);
         let item = summary(side, facts, name);
         let media = media_rect(&side.file, band);
-        // Pictures stand on the band's floor, so every name of a shelf is
-        // on one line.
+        // Pictures are centred in their square, as Eagle's are, so every
+        // set's pictures and names sit on the same lines.
         let look = TileLook {
             tile: Tile {
                 x: 0.,
-                y: media.1,
+                y: 0.,
                 w: TILE,
-                h: media.3 + TEXT_ROW_HEIGHT,
+                h: TILE + TEXT_ROW_HEIGHT,
             },
             item,
             thumbnail,
@@ -887,12 +859,21 @@ impl DuplicatesScreen {
                 "{}.",
                 crate::text::size_to_megabytes(saving)
             )))
-            .children((self.capped && width > 1100.).then(|| {
+            // The list holds the first 500 pairs of each kind: it says so,
+            // as the first thing to give way when the footer is short.
+            .children(self.capped.filter(|_| width > 1100.).map(|(shown, total)| {
                 div()
                     .ml(px(8.))
                     .text_color(theme.text_tertiary())
                     .truncate()
-                    .child(en("More sets follow once these are settled."))
+                    .child(format!(
+                        "{} {} {} {} {}",
+                        en("Showing"),
+                        crate::i18n::format::grouped(shown as u64),
+                        en("of"),
+                        crate::i18n::format::grouped(total),
+                        en("pairs; settle these to see the rest.")
+                    ))
             }));
         let similar = self.tab == Tab::Similar;
         let entity = cx.entity().downgrade();
@@ -993,7 +974,7 @@ fn tile_prefs() -> ViewPrefs {
 }
 
 /// Where the picture sits: fitted in a square as the grid fits it, and
-/// standing on the floor of a band `band` tall.
+/// centred in a band `band` tall.
 fn media_rect(file: &picto_library::DuplicateFile, band: f32) -> (f32, f32, f32, f32) {
     let (x, _, width, height) = match (file.pixel_width, file.pixel_height) {
         (Some(width), Some(height)) if width > 0 && height > 0 => {
@@ -1002,19 +983,12 @@ fn media_rect(file: &picto_library::DuplicateFile, band: f32) -> (f32, f32, f32,
         }
         _ => (0., 0., TILE, TILE),
     };
-    (x, band - height, width, height)
+    (x, (band - height) / 2., width, height)
 }
 
-/// A set as the shelves lay it out: its count of files and its tallest
-/// picture.
-fn shape(entry: &Entry) -> (usize, f32) {
-    let tallest = entry
-        .set
-        .files
-        .iter()
-        .map(|side| media_rect(&side.file, 0.).3)
-        .fold(0., f32::max);
-    (entry.set.files.len(), tallest)
+/// A set as the shelves lay it out: its count of files.
+fn shape(entry: &Entry) -> usize {
+    entry.set.files.len()
 }
 
 /// The file as the grid's tile drawing takes an item.

@@ -177,6 +177,24 @@ impl Render for DuplicatesToolbar {
             .flex()
             .items_center()
             .gap(px(8.));
+        let entity = cx.entity().downgrade();
+        let bar = bar.relative().child(
+            canvas(
+                move |bounds, window, cx| {
+                    let width = f32::from(bounds.size.width);
+                    let _ = entity.update(cx, |this, cx| {
+                        if this.width != width {
+                            this.width = width;
+                            cx.notify();
+                            window.request_animation_frame();
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        );
         let Some(screen) = self.screen.upgrade() else {
             return bar;
         };
@@ -192,10 +210,10 @@ impl Render for DuplicatesToolbar {
             }
         };
         // The controls sit at the row's right end, as every screen's do,
-        // clear of the scope title on the left half; the least needed give
-        // way first when the row is short.
-        let width = f32::from(this.bounds.size.width);
-        let roomy = |needed: f32| width == 0. || width >= needed;
+        // in the half the scope title leaves them; the least needed give
+        // way first when that half is short of `needed`.
+        let half = self.width / 2.;
+        let roomy = |needed: f32| self.width == 0. || half >= needed;
         let caption = |text: String| {
             div()
                 .flex_none()
@@ -258,7 +276,7 @@ impl Render for DuplicatesToolbar {
                 // a move of the window from the titlebar.
                 bar.child(div().flex_1())
                     .child(div().flex_none().occlude().child(tabs))
-                    .children(roomy(760.).then(|| div().flex_none().child(sort)))
+                    .children(roomy(420.).then(|| div().flex_none().child(sort)))
                     .child(
                         ui::icon_button("duplicates-scan", "action-refresh")
                             .disabled(this.scanning || this.busy)
@@ -290,7 +308,7 @@ impl Render for DuplicatesToolbar {
                 let zoom = this.zoom_mode();
                 let hover = self.screen.clone();
                 bar.child(div().flex_1())
-                    .children(roomy(560.).then(|| caption(counter)))
+                    .children(roomy(300.).then(|| caption(counter)))
                     .child(
                         ui::icon_button("duplicates-difference", "toolbar-difference")
                             .disabled(shown == keeper)

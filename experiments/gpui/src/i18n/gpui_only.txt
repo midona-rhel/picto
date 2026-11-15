@@ -176,7 +176,6 @@ Remove from This Set
 Merge every checked set, keeping each marked file
 set, merging saves
 sets, merging saves
-More sets follow once these are settled.
 Similarity
 kept
 Verify Before Merge
@@ -188,7 +187,6 @@ Every link is kept.
 The kept file is placed in every folder.
 The kept file has every tag. These are not on every file:
 more
-The notes are joined.
 You have no duplicated items.
 Identical
 Similar
@@ -201,3 +199,6 @@ of
 file
 sets differ
 Compare
+Showing
+pairs; settle these to see the rest.
+The kept file's notes after the merge:

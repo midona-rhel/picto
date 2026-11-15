@@ -3,8 +3,9 @@
 //! The sets are listed on the left; on the right, only what differs in the
 //! one chosen, and what the kept file ends up with. The library's merge
 //! decides that itself (the kept item takes the most descriptive name and
-//! every link, folder and tag; the notes are joined), so this is a check,
-//! not a choice; identical files merge without it.
+//! every link, folder and tag; notes are joined, each said once), so this
+//! is a check that shows what the merge will write, not a choice; identical
+//! files merge without it.
 use super::list::summary;
 use super::{DuplicatesScreen, Entry, Mode};
 use crate::grid::layout::Tile;
@@ -76,6 +77,50 @@ impl Combined {
     fn differs(sets: &[BTreeSet<u32>]) -> bool {
         sets.windows(2).any(|pair| pair[0] != pair[1])
     }
+}
+
+/// What the kept file ends up with, its name and its notes, worked out as
+/// the library's merge writes them: pair by pair in the merge's order, each
+/// kept file taking the more descriptive name of the two and the notes the
+/// library joins (`picto_library::preferred_name`, `merged_notes`).
+fn outcome(entry: &Entry, keeper: usize) -> (String, Option<String>) {
+    let set = &entry.set;
+    let mut names = (0..set.files.len())
+        .map(|file| {
+            (
+                set.files[file].file.file_id,
+                entry.facts[file].name(set, file),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut notes = (0..set.files.len())
+        .map(|file| {
+            let notes = entry.facts[file]
+                .details
+                .as_ref()
+                .and_then(|details| details.root.notes.clone());
+            (set.files[file].file.file_id, notes)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    for (a, b, choice) in set.merge_steps(keeper) {
+        let picto_library::DuplicateResolutionChoice::KeepFile { winner_file_id } = choice else {
+            continue;
+        };
+        let loser = if a == winner_file_id { b } else { a };
+        let name =
+            picto_library::preferred_name(&names[&winner_file_id], &names[&loser]).to_owned();
+        names.insert(winner_file_id, name);
+        let joined = picto_library::merged_notes(
+            notes[&winner_file_id].as_deref(),
+            notes[&loser].as_deref(),
+        );
+        notes.insert(winner_file_id, joined);
+    }
+    let kept = set.files[keeper].file.file_id;
+    (
+        names.remove(&kept).unwrap_or_default(),
+        notes.remove(&kept).flatten(),
+    )
 }
 
 /// Whether a merge of this set combines anything that differs.
@@ -258,6 +303,10 @@ impl DuplicatesScreen {
     fn verify_detail(&self, entry: &Entry, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let combined = Combined::of(entry);
+        let keeper = self
+            .entry_index(entry.set.key)
+            .map_or(entry.set.best, |index| self.keeper(index));
+        let (kept_name, kept_notes) = outcome(entry, keeper);
         let session = self.session.read(cx);
         let note = |text: &'static str| {
             div()
@@ -305,14 +354,34 @@ impl DuplicatesScreen {
                 ),
         );
         if combined.names.len() > 1 {
-            sections = sections.child(
-                ui::panel_section("verify-names", t("File name")).content(Some(
-                    div()
-                        .child(note(en("The most descriptive name is kept.")))
-                        .children(combined.names.iter().cloned().map(line))
-                        .into_any_element(),
-                )),
-            );
+            sections =
+                sections.child(
+                    ui::panel_section("verify-names", t("File name")).content(Some(
+                        div()
+                            .child(note(en("The most descriptive name is kept.")))
+                            .children(combined.names.iter().map(|name| {
+                                // The name kept is marked; the others go with
+                                // their files, dimmed as the list dims them.
+                                let kept = *name == kept_name;
+                                div()
+                                    .h(px(20.))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .text(theme::TEXT_SM)
+                                    .text_color(if kept {
+                                        theme.text()
+                                    } else {
+                                        theme.text_tertiary()
+                                    })
+                                    .child(div().w(px(12.)).flex_none().children(kept.then(|| {
+                                        ui::icon("check", 12., rgb(theme::GRID_SELECTION))
+                                    })))
+                                    .child(div().min_w_0().truncate().child(name.clone()))
+                            }))
+                            .into_any_element(),
+                    )),
+                );
         }
         if Combined::links_differ(entry) {
             sections = sections.child(
@@ -395,13 +464,13 @@ impl DuplicatesScreen {
             sections = sections.child(
                 ui::panel_section("verify-notes", t("Notes")).content(Some(
                     div()
-                        .child(note(en("The notes are joined.")))
-                        .children(combined.notes.iter().map(|notes| {
+                        .child(note(en("The kept file's notes after the merge:")))
+                        .children(kept_notes.clone().map(|notes| {
                             div()
                                 .py(px(3.))
                                 .text(theme::TEXT_SM)
                                 .text_color(theme.text())
-                                .child(notes.clone())
+                                .child(notes)
                         }))
                         .into_any_element(),
                 )),

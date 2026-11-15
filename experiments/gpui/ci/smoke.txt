@@ -5,7 +5,7 @@
 # Windows and Linux only), and the Settings window; then the interface zoomed
 # to 150% (the grid, and an item's menu opened by a press at window points,
 # which lands on the tile drawn there) and to 80% (the grid and the open
-# Settings window, which follows).
+# Settings window, which follows); last the Duplicates screen (below).
 reload
 size 1213 865
 wait 800
@@ -99,3 +99,37 @@ shot 11-zoom-80-grid
 window 1
 wait 600
 shot 12-zoom-80-settings
+# The Duplicates screen after a scan of the library, at 125% (the window
+# about 970 points wide, near the smallest it may be): the list of sets,
+# Compare and the check before merging, whose titlebar controls share the
+# row with the window's own buttons on Windows and Linux.
+window 0
+key secondary-0
+wait 300
+invoke duplicates.scan {"distance_threshold":16}
+wait 1500
+move 73 338
+down 73 338
+up 73 338
+wait 3000
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 100
+key secondary-=
+wait 1200
+shot 13-duplicates-list
+key space
+wait 2500
+shot 14-duplicates-compare
+key escape
+wait 600
+move 1121 832
+down 1121 832
+up 1121 832
+wait 1500
+shot 15-duplicates-verify

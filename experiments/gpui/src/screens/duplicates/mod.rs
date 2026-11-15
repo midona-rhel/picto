@@ -172,8 +172,9 @@ pub struct DuplicatesScreen {
     /// The keyboard was taken for this visit.
     focused_once: bool,
     entries: Vec<Entry>,
-    /// The library had more pairs than it hands at once.
-    capped: bool,
+    /// When the library had more pairs than it hands at once (500 of each
+    /// kind), how many were read and how many there are.
+    capped: Option<(usize, u64)>,
     tab: Tab,
     sort: Sort,
     /// The Similar tab shows sets at least this alike, in percent.
@@ -226,7 +227,7 @@ impl DuplicatesScreen {
         cx: &mut Context<Self>,
     ) -> Self {
         let screen = cx.weak_entity();
-        let controls = cx.new(|_| DuplicatesToolbar { screen });
+        let controls = cx.new(|_| DuplicatesToolbar { screen, width: 0. });
         let subscriptions = vec![
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 if *change == Change::Navigation {
@@ -263,7 +264,7 @@ impl DuplicatesScreen {
             visible: false,
             focused_once: false,
             entries: Vec::new(),
-            capped: false,
+            capped: None,
             tab: Tab::Identical,
             sort: Sort::Saving,
             similarity: SIMILARITY_MIN,
@@ -511,6 +512,7 @@ impl DuplicatesScreen {
                     .into_iter()
                     .filter(|pair| !known.contains(&(pair.file_id_a, pair.file_id_b))),
             );
+            let shown = pairs.len();
             let entries = sets::build(&pairs)
                 .into_iter()
                 .map(|set| {
@@ -527,7 +529,7 @@ impl DuplicatesScreen {
                 })
                 .collect::<Vec<_>>();
             let count = library.sidebar_counts().map_err(error)?.duplicates;
-            Ok::<_, String>((entries, capped, count))
+            Ok::<_, String>((entries, capped.then_some(shown), count))
         });
         self.fetch_task = Some(cx.spawn(async move |this, cx| {
             let Ok(reply) = receiver.await else {
@@ -541,7 +543,7 @@ impl DuplicatesScreen {
     fn received(
         &mut self,
         generation: u64,
-        reply: Result<(Vec<Entry>, bool, u64), String>,
+        reply: Result<(Vec<Entry>, Option<usize>, u64), String>,
         cx: &mut Context<Self>,
     ) {
         if generation != self.generation {
@@ -588,7 +590,7 @@ impl DuplicatesScreen {
         self.checks.retain(|key, _| alive.contains_key(key));
         self.rows.retain(|key, _| alive.contains_key(key));
         self.entries = entries;
-        self.capped = capped;
+        self.capped = capped.map(|shown| (shown, count));
         // A tab with nothing in it gives way to the other.
         let has = |tab: Tab| {
             self.entries
@@ -1365,4 +1367,8 @@ fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
 /// set and its file in Compare.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
+    /// The row's width as last laid out: on Windows and Linux the window's
+    /// own buttons take part of the titlebar, so the screen's width does
+    /// not tell how much room the controls have.
+    width: f32,
 }
