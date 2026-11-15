@@ -179,7 +179,7 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
     };
     // The order of the Electron sidebar's system rows.
     let mut nav = vec![
-        system(t("All"), "photo", Some(counts.all), ItemScope::All),
+        system(t("All"), "IconPhoto", Some(counts.all), ItemScope::All),
         system(t("Inbox"), "inbox", Some(counts.inbox), ItemScope::Inbox),
         system(
             t("Recently Viewed"),
@@ -199,7 +199,12 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
             Some(counts.untagged),
             ItemScope::Untagged,
         ),
-        screen(Screen::Tags, t("Tags"), "bookmark", Some(tags.len() as u64)),
+        screen(
+            Screen::Tags,
+            t("Tags"),
+            "IconBookmark",
+            Some(tags.len() as u64),
+        ),
         Navigation {
             random: true,
             ..system(t("Random"), "arrows-shuffle", None, ItemScope::All)

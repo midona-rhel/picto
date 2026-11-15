@@ -5,7 +5,7 @@
 use super::stack::{self, Pose, Stack};
 use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
-use crate::grid::format;
+use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::{Report, Reread};
 use crate::theme;
@@ -596,7 +596,7 @@ impl Inspector {
 
     /// `.summarySpinner`: the property row's spinner, turning from when the
     /// selection started loading.
-    fn spinner(&self, window: &mut Window, cx: &App) -> Svg {
+    fn spinner(&self, window: &mut Window, cx: &mut App) -> Svg {
         ui::property_row::spinner(self.loading_since(), window, cx)
     }
 
@@ -610,7 +610,7 @@ impl Inspector {
 
     /// `.pendingSection` and `.pendingRating`: a 20px line with the spinner
     /// at its end, in place of what the selection shares.
-    fn pending(&self, window: &mut Window, cx: &App) -> Div {
+    fn pending(&self, window: &mut Window, cx: &mut App) -> Div {
         div()
             .min_h(px(20.))
             .flex()

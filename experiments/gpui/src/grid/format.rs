@@ -60,12 +60,6 @@ pub fn format_duration(ms: u64) -> String {
     }
 }
 
-/// `toLocaleString()` for a count: digits grouped as the system's language
-/// groups them.
-pub fn grouped(count: impl Into<i128>) -> String {
-    crate::i18n::format::grouped(count.into())
-}
-
 /// A palette entry as an sRGB colour (`labToHex` in `labColor.ts`).
 pub fn lab_to_rgb(l: f32, a: f32, b: f32) -> u32 {
     let fy = (l + 16.) / 116.;
@@ -228,15 +222,10 @@ mod tests {
     }
 
     #[test]
-    fn durations_and_counts() {
+    fn durations() {
         assert_eq!(format_duration(65_000), "1:05");
         assert_eq!(format_duration(3_725_000), "1:02:05");
         assert_eq!(format_duration(900), "0:00");
-        assert_eq!(grouped(2673u64), "2,673");
-        assert_eq!(grouped(999u64), "999");
-        assert_eq!(grouped(1_000_000u64), "1,000,000");
-        assert_eq!(grouped(-1234567i64), "-1,234,567");
-        assert_eq!(grouped(0i64), "0");
     }
 
     #[test]

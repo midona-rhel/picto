@@ -765,8 +765,8 @@ impl SubscriptionsScreen {
                             .unwrap_or(&query.text)
                             .to_owned(),
                     ),
-                    (t("Posts"), crate::grid::format::grouped(query.posts)),
-                    (t("Media"), crate::grid::format::grouped(query.media)),
+                    (t("Posts"), crate::i18n::format::grouped(query.posts)),
+                    (t("Media"), crate::i18n::format::grouped(query.media)),
                     (
                         t("Last check"),
                         match format::query_last_check(query) {

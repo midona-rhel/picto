@@ -336,6 +336,8 @@ impl Panel {
             .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
     }
 
+    /// `.iconButton`: 26px, the tertiary glyph turning to the primary
+    /// colour over the hover surface.
     fn icon_button(
         &self,
         id: &'static str,
@@ -343,36 +345,15 @@ impl Panel {
         size: f32,
         tip: SharedString,
         on_click: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let group: SharedString = format!("diagnostics-{id}").into();
-        let button = div()
-            .id(id)
-            .role(Role::Button)
-            .aria_label(tip.clone())
-            .group(group.clone())
-            .size(px(CONTROL))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(theme::RADIUS_MD))
-            .hover(|style| style.bg(theme.surface_hover()))
-            .child(
-                ui::icon(glyph, size, theme.text_tertiary())
-                    .group_hover(group, move |style| style.text_color(theme.text())),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)));
-        tooltip::attach(
-            button,
-            SharedString::from(format!("{id}-tip")),
-            tooltip::tip(tip),
-            CONTROL,
-            window,
-            cx,
-        )
+    ) -> ui::icon_button::IconButton {
+        ui::icon_button(id, glyph)
+            .look(ui::icon_button::Look::Close)
+            .size(CONTROL)
+            .radius(theme::RADIUS_MD)
+            .glyph(size)
+            .tip(tooltip::tip(tip))
+            .on_click(cx.listener(move |this, _, _, cx| on_click(this, cx)))
     }
 }
 
@@ -568,7 +549,6 @@ impl Render for Panel {
                 14.,
                 t("Copy visible logs").into(),
                 |this, cx| this.copy(cx),
-                window,
                 cx,
             ))
             .child(self.icon_button(
@@ -577,7 +557,6 @@ impl Render for Panel {
                 14.,
                 t("Save support report").into(),
                 |this, cx| this.save_report(cx),
-                window,
                 cx,
             ))
             .child(self.icon_button(
@@ -586,7 +565,6 @@ impl Render for Panel {
                 14.,
                 t("Clear logs").into(),
                 |_, _| super::clear(),
-                window,
                 cx,
             ))
             .child(self.icon_button(
@@ -595,7 +573,6 @@ impl Render for Panel {
                 15.,
                 t("Close diagnostics").into(),
                 |this, cx| this.close(cx),
-                window,
                 cx,
             ));
 

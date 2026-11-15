@@ -29,15 +29,6 @@ fn on_click(
     move |_, window, cx| handler(window, cx)
 }
 
-/// `.separator`: a 1px rule with 12px above and below.
-fn separator(theme: &theme::Theme) -> Div {
-    div()
-        .h(px(1.))
-        .my(px(12.))
-        .flex_none()
-        .bg(theme.border_secondary())
-}
-
 /// "Export 3 Files", with the count as production writes it, ungrouped.
 pub(super) fn convert_title(count: u64) -> String {
     crate::tf!(
@@ -131,7 +122,7 @@ impl Exports {
                     .child(ui::field(id, input, FieldLook::Modal))
             };
             body = body
-                .child(separator(theme))
+                .child(ui::form::separator(*theme))
                 .child(field(
                     theme,
                     t("Resize (optional)"),
@@ -280,7 +271,7 @@ impl Exports {
                         .child(glyph)
                         .child(notes),
                 )
-                .child(separator(theme))
+                .child(ui::form::separator(*theme))
                 .child(facts),
         )
         .footer(

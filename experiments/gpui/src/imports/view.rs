@@ -58,7 +58,7 @@ impl Render for Imports {
             };
         }
         let mut root = div().absolute().inset_0();
-        root = root.children(self.bar(window, cx));
+        root = root.children(self.bar(cx));
         root = root.children(self.task_dialog(window, cx));
         root = root.children(self.dialog_layer(window, cx));
         root
@@ -90,13 +90,10 @@ impl Imports {
         let (body, foot) = if task.open() && self.view.stopping.is_some() {
             self.stop_view(&task, &this, cx)
         } else {
-            self.task_view(&task, &this, window, cx)
+            self.task_view(&task, &this, cx)
         };
         // `role="dialog"` named by the task's title.
-        let panel = ui::glass_panel("task-dialog", DIALOG_RADIUS, cx)
-            .role(Role::Dialog)
-            .aria_modal(true)
-            .aria_label(task.heading())
+        let panel = ui::modal::dialog_panel("task-dialog", DIALOG_RADIUS, task.heading(), cx)
             .w(px(width))
             .overflow_hidden()
             .opacity(eased)
@@ -107,7 +104,6 @@ impl Imports {
             .font_family(theme::FONT_UI)
             .text_size(px(theme::TEXT_MD))
             .line_height(line(theme::TEXT_MD))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(body)
             .child(foot);
         let open = task.open();
@@ -115,7 +111,7 @@ impl Imports {
         let escape = this.clone();
         let layer = ui::modal::backdrop("task-backdrop", eased, Some(&self.focus), window)
             // Escape sends a working import to the task bar.
-            .on_action(move |_: &ui::modal::Close, _, cx| {
+            .on_action(move |_: &ui::keys::Dismiss, _, cx| {
                 if open {
                     let _ = escape.update(cx, |imports, cx| imports.minimize(id, cx));
                 }
@@ -129,7 +125,6 @@ impl Imports {
         &mut self,
         task: &Task,
         this: &WeakEntity<Imports>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> (AnyElement, AnyElement) {
         let theme = theme::theme(cx);
@@ -179,7 +174,7 @@ impl Imports {
             .px(px(20.))
             .pb(px(16.))
             .child(head)
-            .child(progress(task, 6., 4., window, cx))
+            .child(progress(task, 6., 4., cx))
             .child(
                 div()
                     .flex()
@@ -204,7 +199,7 @@ impl Imports {
                     .children((task.existing > 0).then(|| {
                         div().child(crate::tf!(
                             "{value0} already in library",
-                            crate::grid::format::grouped(task.existing)
+                            crate::i18n::format::grouped(task.existing)
                         ))
                     }))
                     .children((task.failed > 0).then(|| {
@@ -212,7 +207,7 @@ impl Imports {
                             .text_color(rgb(theme::TASK_WARNING_GLYPH))
                             .child(crate::tf!(
                                 "{value0} failed",
-                                crate::grid::format::grouped(task.failed)
+                                crate::i18n::format::grouped(task.failed)
                             ))
                     })),
             );
@@ -231,7 +226,7 @@ impl Imports {
                     } else {
                         crate::tf!(
                             "Show {value0} failed",
-                            crate::grid::format::grouped(task.failed)
+                            crate::i18n::format::grouped(task.failed)
                         )
                     })
                     .on_click(on_click(this, |imports, cx| imports.toggle_failures(cx))),
@@ -329,8 +324,8 @@ impl Imports {
                 crate::tf!("Stop importing “{value0}”?", task.title),
                 crate::tf!(
                     "{value0} of {value1} files are done so far",
-                    crate::grid::format::grouped(task.done),
-                    crate::grid::format::grouped(task.total)
+                    crate::i18n::format::grouped(task.done),
+                    crate::i18n::format::grouped(task.total)
                 ),
                 false,
                 &theme,
@@ -471,7 +466,7 @@ impl Imports {
 
     /// `TaskBar`: one row per task sent to the background, above the
     /// bottom edge between the rails.
-    fn bar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+    fn bar(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let shown: Vec<Task> = self.presentation.in_bar(&self.tasks).cloned().collect();
         if shown.is_empty() {
             return None;
@@ -539,7 +534,7 @@ impl Imports {
                                 .on_click(on_click(&this, move |imports, cx| imports.show(id, cx)))
                                 .child(task.heading()),
                         )
-                        .child(div().flex_1().child(progress(&task, 4., 0., window, cx)))
+                        .child(div().flex_1().child(progress(&task, 4., 0., cx)))
                         .child(
                             div()
                                 .flex_none()
@@ -781,75 +776,44 @@ fn kind(task: &Task, size: f32, radius: f32, theme: &theme::Theme) -> Div {
         .child(ui::icon(task.glyph(), 17., glyph))
 }
 
+/// `@keyframes indeterminate`: a 30% segment moving from
+/// `translateX(-110%)` to `translateX(340%)` of its own width.
+const TASK_SWEEP: ui::progress_bar::Sweep = ui::progress_bar::Sweep {
+    segment: 0.3,
+    period: motion::TASK_PROGRESS_SWEEP,
+    travel: 4.5,
+};
+
 /// The progress track (`.track`, `.fill`): a share that moves over 250 ms,
-/// or a 30% segment sweeping across while the share is unknown.
-fn progress(task: &Task, height: f32, top: f32, window: &mut Window, cx: &mut App) -> Div {
+/// or a 30% segment sweeping across while the share is unknown, in the
+/// task's tone.
+fn progress(task: &Task, height: f32, top: f32, cx: &App) -> Stateful<Div> {
     let theme = theme::theme(cx);
     let fill_color = match task.tone() {
         Tone::Working => theme.primary(),
         Tone::Paused | Tone::Warning => theme.contrast(35.),
         Tone::Done => rgb(theme::TASK_DONE_FILL),
     };
-    let fill = if task.indeterminate() {
-        motion::loop_frame(window, cx);
-        div()
-            .absolute()
-            .top_0()
-            .h_full()
-            .w(relative(0.3))
-            .left(relative(sweep(motion::loop_clock())))
-    } else {
-        // Where the fill was, where it goes, and since when.
-        let state = window.use_keyed_state(
+    let mut bar = ui::progress_bar()
+        .height(height)
+        .radius(6.)
+        .track(theme.contrast(10.))
+        .fill_color(fill_color)
+        .sweep(TASK_SWEEP);
+    if !task.indeterminate() {
+        bar = bar.filled(
             ElementId::NamedInteger("task-fill".into(), task.task_id as u64),
-            cx,
-            |_, _| (0f32, 0f32, Instant::now()),
+            task.share(),
         );
-        let target = task.share();
-        let (from, to, since) = *state.read(cx);
-        let now_at = from
-            + (to - from)
-                * motion::EASE_DEFAULT
-                    .ease(motion::progress(since.elapsed(), motion::TASK_PROGRESS));
-        if (target - to).abs() > f32::EPSILON {
-            state.update(cx, |state, _| *state = (now_at, target, Instant::now()));
-        }
-        let (from, to, since) = *state.read(cx);
-        let along = motion::progress(since.elapsed(), motion::TASK_PROGRESS);
-        if along < 1. {
-            window.request_animation_frame();
-        }
-        let share = from + (to - from) * motion::EASE_DEFAULT.ease(along);
-        div().h_full().w(relative(share))
-    };
-    div()
-        .relative()
-        .w_full()
-        .h(px(height))
-        .mt(px(top))
-        .overflow_hidden()
-        .rounded(px(6.))
-        .bg(theme.contrast(10.))
-        .child(fill.rounded(px(6.)).bg(fill_color))
-}
-
-/// `@keyframes indeterminate`: the segment's left edge, as a share of the
-/// track, moving from `translateX(-110%)` to `translateX(340%)` of its own
-/// width on `ease-in-out`, over and over.
-fn sweep(elapsed: std::time::Duration) -> f32 {
-    let period = motion::TASK_PROGRESS_SWEEP.as_secs_f32();
-    let along = (elapsed.as_secs_f32() % period) / period;
-    0.3 * (-1.1 + 4.5 * motion::EASE_IN_OUT.ease(along))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sweep;
-    use std::time::Duration;
-
-    #[test]
-    fn the_unknown_progress_segment_sweeps_from_before_the_track_to_past_it() {
-        assert!((sweep(Duration::ZERO) - 0.3 * -1.1).abs() < 1e-4);
-        assert!((sweep(Duration::from_millis(1099)) - 0.3 * 3.4).abs() < 1e-2);
     }
+    // Each task's bar under an id of its own, so that several in the task
+    // bar do not share one.
+    div()
+        .id(ElementId::NamedInteger(
+            "task-progress".into(),
+            task.task_id as u64,
+        ))
+        .w_full()
+        .mt(px(top))
+        .child(bar)
 }

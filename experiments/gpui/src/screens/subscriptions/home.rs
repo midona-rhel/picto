@@ -354,12 +354,12 @@ impl SubscriptionsScreen {
             .to_owned(),
             (_, Some(total)) => crate::tf!(
                 "{value0} / {value1} images downloaded",
-                crate::grid::format::grouped(downloaded),
-                crate::grid::format::grouped(total)
+                crate::i18n::format::grouped(downloaded),
+                crate::i18n::format::grouped(total)
             ),
             (_, None) => crate::tf!(
                 "{value0} images downloaded",
-                crate::grid::format::grouped(downloaded)
+                crate::i18n::format::grouped(downloaded)
             ),
         };
         let id = job.id;

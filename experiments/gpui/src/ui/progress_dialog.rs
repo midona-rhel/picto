@@ -84,14 +84,12 @@ impl RenderOnce for ProgressDialog {
                     .child(detail),
             );
         }
-        let panel = super::glass_panel(
+        let panel = super::modal::dialog_panel(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "panel".into()),
-            10.,
+            theme::WINDOW_RADIUS,
+            self.message,
             cx,
         )
-        .role(Role::Dialog)
-        .aria_label(self.message)
-        .aria_modal(true)
         .min_w(px(360.))
         .px(px(24.))
         .py(px(20.))

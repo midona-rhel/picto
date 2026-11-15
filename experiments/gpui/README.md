@@ -583,7 +583,8 @@ view owns another's state.
 **Shared UI layer** (`src/ui/`). One implementation of each control, as
 `src/shared/ui` is for production: buttons, icon buttons, check boxes and
 radios, switches, selects, sliders, number fields, date and colour pickers,
-chips, rows, the scrollbar, tooltips, empty states, segmented controls and
+chips, rows, the rows of a rail of views (`rail_item`, a look per
+stylesheet, as glyph buttons have), the scrollbar, tooltips, empty states, segmented controls and
 tab strips, breadcrumbs, window chrome, and the track-drag gesture and hover
 fade they share. A control that only one view has in production (its own CSS
 class, such as the grid's Retry button) is drawn by that view. The pieces
@@ -611,7 +612,14 @@ every view relies on:
   `PICTO_GPUI_MENU=window`, panels are drawn in the window.
 - *Dialogs* (`ui/modal.rs`, `ui/confirm.rs`, `ui/form.rs`): the centred glass
   dialog with its backdrop and motion, the confirmation production calls
-  `ConfirmModal`, and the form pieces.
+  `ConfirmModal`, and the form pieces. `modal::backdrop` is the one dimmed
+  (or clear) layer every dialog and floating panel's backdrop is, and
+  `modal::dialog_panel` the one dialog panel, which the progress dialog and
+  the import task dialog lay their own contents in.
+- *Keys* (`ui/keys.rs`): Escape, the arrows, Enter and Tab as one set of
+  actions, which each floating surface (dialog, popover, picker panel,
+  selection dialog, menu) binds in its own key context; the innermost one
+  holding the keyboard takes them.
 - *Text input* (`ui/text_input/`): one `TextInput` with builder options,
   split into keys per platform, editing commands, pointer, input method,
   layout and pure editing rules. It edits as Chromium does on each platform.
@@ -692,7 +700,10 @@ thumbnail; `rendered.rs` draws the thumbnails the core cannot make (PDF,
 DjVu and comic first pages, Flash frames), only into the open library. Also here:
 the context-menu rows (`menu.rs`, pure functions), filters and the filter
 bar, rubber band, keyboard movement, hover preview, subfolder tiles, drag
-out. Rule: every decoded picture leaves GPUI's sprite atlas through
+out, and the pointer over tiles (hover, magnifier, rubber band and its
+edge scrolling) that the collection editor shares (`pointer.rs`). The
+grid's frame reads the session and lays out in `frame.rs` and draws its
+body in `body.rs`. Rule: every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 
 **Viewer** (`src/viewer/`). One media surface (`surface.rs`) shows any item:

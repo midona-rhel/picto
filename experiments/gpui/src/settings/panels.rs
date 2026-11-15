@@ -7,7 +7,7 @@ use super::pieces::{
     two_columns, value,
 };
 use super::window::SettingsWindow;
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use crate::i18n::{en, t};
 use crate::theme;
 use crate::theme::Text as _;

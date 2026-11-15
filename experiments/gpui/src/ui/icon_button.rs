@@ -67,6 +67,18 @@ pub enum Look {
     /// colour, turning to the primary one over the hover surface, with no
     /// transition.
     Task,
+    /// `LibrarySwitcher.module.css` `.closeButton`: 24px, the tertiary text
+    /// colour turning to the primary one over the hover surface, with no
+    /// transition. The diagnostics panel's `.iconButton` is the same at
+    /// 26px.
+    Close,
+    /// `AiTaggerPanel.module.css` `.navButton`: a 24px chevron in the text
+    /// colour over the hover surface, with no transition; disabled at 28%.
+    Nav,
+    /// `ShortcutsPanel.module.css` `.clearButton`: 22px inside a binding's
+    /// field, the tertiary text colour turning to the primary one over the
+    /// text colour at 10%, with no transition.
+    ShortcutClear,
 }
 
 impl Look {
@@ -82,9 +94,13 @@ impl Look {
             Look::Pin => (motion::PIN_BUTTON, motion::EASE),
             Look::Condition => (motion::CONDITION_BUTTON, motion::EASE),
             Look::TagAdd => (motion::TAG_ADD_BUTTON, motion::EASE_DEFAULT),
-            Look::Filter | Look::ChipAdd | Look::UrlAction | Look::Task => {
-                (Duration::ZERO, motion::EASE_DEFAULT)
-            }
+            Look::Filter
+            | Look::ChipAdd
+            | Look::UrlAction
+            | Look::Task
+            | Look::Close
+            | Look::Nav
+            | Look::ShortcutClear => (Duration::ZERO, motion::EASE_DEFAULT),
         }
     }
 
@@ -238,6 +254,34 @@ impl Look {
                 fill_hover: theme.surface_hover(),
                 fill_press: theme.surface_hover(),
                 glyph_color: theme.text_secondary(),
+                ..base
+            },
+            Look::Close => Paint {
+                glyph: 14.,
+                fill: clear(theme.surface_hover()),
+                fill_hover: theme.surface_hover(),
+                fill_press: theme.surface_hover(),
+                glyph_color: theme.text_tertiary(),
+                ..base
+            },
+            Look::Nav => Paint {
+                radius: 5.,
+                glyph: 15.,
+                fill: clear(theme.surface_hover()),
+                fill_hover: theme.surface_hover(),
+                fill_press: theme.surface_hover(),
+                disabled_opacity: 0.28,
+                ..base
+            },
+            Look::ShortcutClear => Paint {
+                width: 22.,
+                height: 22.,
+                radius: theme::RADIUS_CONTROL,
+                glyph: 13.,
+                fill: clear(theme.contrast(10.)),
+                fill_hover: theme.contrast(10.),
+                fill_press: theme.contrast(10.),
+                glyph_color: theme.text_tertiary(),
                 ..base
             },
             Look::UrlAction => Paint {

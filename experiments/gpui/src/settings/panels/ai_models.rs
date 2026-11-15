@@ -409,11 +409,15 @@ impl SettingsWindow {
             .h(px(2.))
             .overflow_hidden();
         if active {
-            track = track.bg(theme.border_secondary()).child(
-                div()
-                    .h_full()
-                    .w(relative((percent / 100.) as f32))
-                    .bg(theme.primary()),
+            track = track.child(
+                ui::progress_bar()
+                    .height(2.)
+                    .radius(0.)
+                    .track(theme.border_secondary())
+                    .filled(
+                        SharedString::from(format!("model-progress-{}", model.slug)),
+                        (percent / 100.) as f32,
+                    ),
             );
         }
         div()

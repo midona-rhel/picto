@@ -2,11 +2,11 @@
 //! view entries and separators, in the owner's window or a pop-up window.
 use super::layout::{Path, Rect, Row};
 use super::{
-    CHECK_SLOT, CUSTOM_PADDING, Cancel, CloseSubmenu, Confirm, Down, Entry, GAP, Menu, OpenSubmenu,
-    Opened, PADDING, Presentation, ROW_PADDING, Role, SEARCH_HEIGHT, SEARCH_INPUT_LEFT,
-    SHORTCUT_GAP, SWATCH, SWATCH_ROW, Up,
+    CHECK_SLOT, CUSTOM_PADDING, Entry, GAP, Menu, Opened, PADDING, Presentation, ROW_PADDING, Role,
+    SEARCH_HEIGHT, SEARCH_INPUT_LEFT, SHORTCUT_GAP, SWATCH, SWATCH_ROW,
 };
 use crate::theme::Text as _;
+use crate::ui::keys::{Confirm, Dismiss, Down, Left, Right, Up};
 use crate::ui::text_input;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -28,11 +28,11 @@ impl Menu {
             .on_action(cx.listener(|this, _: &Up, _, cx| this.arrow(false, cx)))
             .on_action(cx.listener(|this, _: &Down, _, cx| this.arrow(true, cx)))
             .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm(window, cx)))
-            .on_action(cx.listener(|this, _: &Cancel, _, cx| this.dismiss(cx)))
-            .on_action(cx.listener(|this, _: &OpenSubmenu, window, cx| {
+            .on_action(cx.listener(|this, _: &Dismiss, _, cx| this.dismiss(cx)))
+            .on_action(cx.listener(|this, _: &Right, window, cx| {
                 this.right(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &CloseSubmenu, _, cx| {
+            .on_action(cx.listener(|this, _: &Left, _, cx| {
                 this.left(cx);
             }))
             .capture_action(cx.listener(|this, _: &text_input::Commit, window, cx| {

@@ -6,6 +6,16 @@ use crate::theme;
 use crate::theme::Text as _;
 use gpui::*;
 
+/// `.separator` (the export dialogs) and `.rowSep` (Settings): a 1px rule
+/// with 12px above and below.
+pub fn separator(theme: theme::Theme) -> Div {
+    div()
+        .h(px(1.))
+        .my(px(12.))
+        .flex_none()
+        .bg(theme.border_secondary())
+}
+
 /// A dialog's help text (`.pickerHint`, `.inlineLabel`, `.settingHint`):
 /// small secondary text. Each place adds its own spacing.
 pub fn help_text(theme: theme::Theme, text: impl Into<SharedString>) -> Div {

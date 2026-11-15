@@ -620,7 +620,7 @@ fn finished_body(count: usize) -> String {
         1 => "1 new library item is ready to review.".into(),
         count => format!(
             "{} new library items are ready to review.",
-            crate::grid::format::grouped(count as i128)
+            crate::i18n::format::grouped(count as i128)
         ),
     }
 }

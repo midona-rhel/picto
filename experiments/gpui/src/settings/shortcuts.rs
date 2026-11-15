@@ -7,7 +7,6 @@ use crate::i18n::t;
 use crate::theme;
 use crate::theme::Text as _;
 use crate::ui::{self, choice, field::Look};
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use std::time::Duration;
 
@@ -200,45 +199,15 @@ impl SettingsWindow {
         }
         let mut wrap = div().relative().w_full().child(input);
         if !keys.is_empty() {
-            let clear = window.use_keyed_state(
-                ElementId::Name(format!("binding-clear-{id}-{slot_index}").into()),
-                cx,
-                |_, _| false,
-            );
-            let hovered = *clear.read(cx);
             wrap = wrap.child(
-                div()
-                    .id(ElementId::Name(
-                        format!("binding-clear-button-{id}-{slot_index}").into(),
-                    ))
-                    .role(Role::Button)
-                    .aria_label(crate::i18n::t("Clear shortcut"))
-                    .absolute()
-                    .top(px(3.))
-                    .right(px(3.))
-                    .size(px(22.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(theme::RADIUS_CONTROL))
-                    .when(hovered, |button| button.bg(theme.contrast(10.)))
-                    .cursor_pointer()
-                    .child(ui::icon(
+                div().absolute().top(px(3.)).right(px(3.)).child(
+                    ui::icon_button(
+                        ElementId::Name(format!("binding-clear-button-{id}-{slot_index}").into()),
+                        // i18n: an icon's name
                         "x",
-                        13.,
-                        if hovered {
-                            theme.text()
-                        } else {
-                            theme.text_tertiary()
-                        },
-                    ))
-                    .on_hover(move |hovered, _, cx| {
-                        clear.update(cx, |state, cx| {
-                            *state = *hovered;
-                            cx.notify();
-                        })
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    )
+                    .look(ui::icon_button::Look::ShortcutClear)
+                    .name(crate::i18n::t("Clear shortcut"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.bind(id, slot, String::new(), cx);
                         if this.capturing.is_some() {
@@ -247,6 +216,7 @@ impl SettingsWindow {
                         }
                         cx.notify();
                     })),
+                ),
             );
         }
         grow(div().p(px(4.)), 3.).child(wrap)

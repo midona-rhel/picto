@@ -1,24 +1,36 @@
 //! `ProgressBar.tsx`: a thin bar on the subtle overlay, filled to the share
 //! of done over total, or, with `indeterminate`, swept by a 35% primary
-//! segment every 900 ms.
+//! segment every 900 ms. Views that restyle a progress track (the import
+//! task's, a model's download, a subscription's run) give it their colours,
+//! corners and sweep.
 use crate::{motion, theme};
 use gpui::*;
 use std::time::{Duration, Instant};
 
-/// `.fill { transition: width 250ms var(--ease-default) }`.
-const FILL_MOVE: Duration = Duration::from_millis(250);
+/// The indeterminate segment: its width as a share of the track, one
+/// sweep's time, and how far it travels (`translateX(-110%)` to
+/// `translateX(-110% + travel)` of its own width, on `ease-in-out`).
+#[derive(Clone, Copy)]
+pub struct Sweep {
+    pub segment: f32,
+    pub period: Duration,
+    pub travel: f32,
+}
 
-/// `.indeterminate { width: 35% }`.
-const SEGMENT: f32 = 0.35;
+/// `.indeterminate { width: 35% }`, to `translateX(310%)` every 900 ms.
+pub const SWEEP: Sweep = Sweep {
+    segment: 0.35,
+    period: motion::PROGRESS_SWEEP,
+    travel: 4.2,
+};
 
-/// Where the indeterminate segment's left edge is, as a share of the track:
-/// `translateX(-110%)` to `translateX(310%)` of its own width, on
-/// `ease-in-out`, over and over.
-fn sweep_offset(elapsed: Duration) -> f32 {
-    let along = (elapsed.as_secs_f32() % motion::PROGRESS_SWEEP.as_secs_f32())
-        / motion::PROGRESS_SWEEP.as_secs_f32();
-    let moved = -1.1 + 4.2 * motion::EASE_IN_OUT.ease(along);
-    SEGMENT * moved
+impl Sweep {
+    /// Where the segment's left edge is, as a share of the track, over and
+    /// over.
+    fn offset(&self, elapsed: Duration) -> f32 {
+        let along = (elapsed.as_secs_f32() % self.period.as_secs_f32()) / self.period.as_secs_f32();
+        self.segment * (-1.1 + self.travel * motion::EASE_IN_OUT.ease(along))
+    }
 }
 
 /// The share `done / total` fills, from 0 to 1; nothing while the total is
@@ -40,6 +52,8 @@ pub struct ProgressBar {
     /// `[role='progressbar']` (the cloud bar and the progress dialog).
     radius: f32,
     track: Option<Rgba>,
+    fill: Option<Rgba>,
+    sweep: Sweep,
 }
 
 /// A bar of unknown progress (`<ProgressBar indeterminate />`).
@@ -50,6 +64,8 @@ pub fn progress_bar() -> ProgressBar {
         filled: None,
         radius: 2.,
         track: None,
+        fill: None,
+        sweep: SWEEP,
     }
 }
 
@@ -63,7 +79,8 @@ struct Fill {
 
 impl Fill {
     fn at(&self, now: Instant) -> f32 {
-        let done = motion::EASE_DEFAULT.ease(motion::progress(now - self.since, FILL_MOVE));
+        let done =
+            motion::EASE_DEFAULT.ease(motion::progress(now - self.since, motion::PROGRESS_FILL));
         self.from + (self.to - self.from) * done
     }
 }
@@ -81,6 +98,16 @@ impl ProgressBar {
     /// The track's colour instead of the subtle overlay.
     pub fn track(mut self, color: Rgba) -> Self {
         self.track = Some(color);
+        self
+    }
+    /// The fill's colour instead of the primary one.
+    pub fn fill_color(mut self, color: Rgba) -> Self {
+        self.fill = Some(color);
+        self
+    }
+    /// The indeterminate segment's own size and timing.
+    pub fn sweep(mut self, sweep: Sweep) -> Self {
+        self.sweep = sweep;
         self
     }
     /// A bar of known progress (`done` and `total`), filled to `share`; a
@@ -126,7 +153,7 @@ impl RenderOnce for ProgressBar {
                     };
                     state.update(cx, |stored, _| *stored = fill);
                 }
-                if now - fill.since < FILL_MOVE {
+                if now - fill.since < motion::PROGRESS_FILL {
                     window.request_animation_frame();
                 }
                 div()
@@ -136,7 +163,7 @@ impl RenderOnce for ProgressBar {
                     .h_full()
                     .w(relative(fill.at(now)))
                     .rounded(px(self.radius))
-                    .bg(theme.primary())
+                    .bg(self.fill.unwrap_or_else(|| theme.primary()))
             }
             None => {
                 motion::loop_frame(window, cx);
@@ -144,10 +171,10 @@ impl RenderOnce for ProgressBar {
                     .absolute()
                     .top_0()
                     .h_full()
-                    .left(relative(sweep_offset(motion::loop_clock())))
-                    .w(relative(SEGMENT))
+                    .left(relative(self.sweep.offset(motion::loop_clock())))
+                    .w(relative(self.sweep.segment))
                     .rounded(px(self.radius))
-                    .bg(theme.primary())
+                    .bg(self.fill.unwrap_or_else(|| theme.primary()))
             }
         };
         root.relative()
@@ -163,17 +190,18 @@ impl RenderOnce for ProgressBar {
 
 #[cfg(test)]
 mod tests {
-    use super::{SEGMENT, share, sweep_offset};
+    use super::{SWEEP, share};
     use std::time::Duration;
 
     #[test]
     fn the_segment_sweeps_from_before_the_track_to_past_it() {
-        assert!((sweep_offset(Duration::ZERO) - SEGMENT * -1.1).abs() < 1e-4);
+        let segment = SWEEP.segment;
+        assert!((SWEEP.offset(Duration::ZERO) - segment * -1.1).abs() < 1e-4);
         // Halfway through a sweep, ease-in-out is halfway too.
-        assert!((sweep_offset(Duration::from_millis(450)) - SEGMENT * 1.).abs() < 1e-3);
+        assert!((SWEEP.offset(Duration::from_millis(450)) - segment * 1.).abs() < 1e-3);
         // It starts again from the left.
-        assert!((sweep_offset(Duration::from_millis(900)) - SEGMENT * -1.1).abs() < 1e-4);
-        assert!(sweep_offset(Duration::from_millis(899)) > 1.);
+        assert!((SWEEP.offset(Duration::from_millis(900)) - segment * -1.1).abs() < 1e-4);
+        assert!(SWEEP.offset(Duration::from_millis(899)) > 1.);
     }
 
     #[test]
