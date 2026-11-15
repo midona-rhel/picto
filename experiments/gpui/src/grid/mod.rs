@@ -12,6 +12,7 @@ pub mod marquee;
 pub mod menu;
 pub mod nav;
 pub mod originals;
+pub mod pointer;
 pub mod prefs;
 pub mod preview;
 pub mod rendered;
@@ -347,15 +348,10 @@ impl GridView {
             return;
         }
         let hit = self.image_at(position);
-        let hovered = hit.map(|(index, _, _)| index);
-        if hovered != self.hovered {
-            self.hovered = hovered;
+        if pointer::hover(&mut self.hovered, hit) {
             cx.notify();
         }
-        let magnifier = hit.filter(|&(index, x, y)| {
-            marquee::on_magnifier(&self.layout.tiles[index], x, y, self.text_height)
-        });
-        if let Some((index, _, _)) = magnifier {
+        if let Some(index) = pointer::magnifier(hit, &self.layout, self.text_height) {
             // The item under the magnifier when the pointer arrived is the
             // one previewed, as the Electron grid's timer captures it: the
             // item the tile was laid out for, if the session still holds it.
@@ -394,11 +390,17 @@ impl GridView {
 
     /// The pointer left the grid.
     fn pointer_left(&mut self, cx: &mut Context<Self>) {
-        self.pointer = None;
-        if self.marquee.is_none() && self.hovered.take().is_some() {
+        let banding = self.marquee.is_some();
+        if pointer::left(
+            &mut self.pointer,
+            &mut self.hovered,
+            banding,
+            &mut self.preview,
+            |this: &mut Self| &mut this.preview,
+            cx,
+        ) {
             cx.notify();
         }
-        self.preview.left(|this: &mut Self| &mut this.preview, cx);
     }
 
     /// A left press on empty space starts a rubber band. Shift, or the
@@ -544,10 +546,14 @@ impl GridView {
         let local = self.local(position);
         let top = self.scroll_top() - self.placement.top;
         let viewport = f32::from(self.bounds.size.height);
-        if let Some(marquee) = &mut self.marquee {
-            marquee.pointer = local;
-            marquee.speed = marquee::auto_scroll_speed(local.1, viewport);
-            marquee.track(top, &self.layout, self.text_height);
+        if pointer::band_moved(
+            self.marquee.as_mut(),
+            local,
+            top,
+            viewport,
+            &self.layout,
+            self.text_height,
+        ) {
             cx.notify();
         }
     }
@@ -683,21 +689,8 @@ impl Render for GridView {
         let build_started = crate::stats::Started::now();
         // A rubber band near the top or bottom edge scrolls the grid each
         // frame; the rectangle follows below.
-        if let Some(speed) = self
-            .marquee
-            .as_ref()
-            .map(|marquee| marquee.speed)
-            .filter(|speed| *speed != 0.)
-        {
-            let current = self.raw_scroll();
-            let limit = f32::from(self.scroll.max_offset().y).max(0.);
-            let next = (current + speed).clamp(0., limit);
-            // At the end of the list nothing moves, so nothing is drawn
-            // until the pointer does.
-            if next != current {
-                self.scroll.set_offset(point(px(0.), px(-next)));
-                window.request_animation_frame();
-            }
+        if pointer::autoscroll(self.marquee.as_ref(), &self.scroll, self.raw_scroll()) {
+            window.request_animation_frame();
         }
         // The session moves its scope change along, hears how far this grid
         // is scrolled and where its window lies, and says where a restored
@@ -1106,23 +1099,9 @@ impl Render for GridView {
             window.request_animation_frame();
         }
 
-        let entity = cx.entity().downgrade();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                let _ = entity.update(cx, |this, cx| {
-                    if this.bounds != bounds {
-                        this.bounds = bounds;
-                        cx.notify();
-                        // A notification made while a frame is being drawn
-                        // does not by itself bring another frame.
-                        window.request_animation_frame();
-                    }
-                });
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
+        let measure = pointer::measure(cx.entity().downgrade(), |this: &mut Self| &mut this.bounds)
+            .absolute()
+            .size_full();
 
         // Only the tiles scroll: an empty or failed grid has no scrollbar,
         // whatever the last results left in the scroll handle.
@@ -1389,14 +1368,7 @@ impl Render for GridView {
         {
             root = root.child(drag::ghost(&items, &self.thumbnails, cx));
         }
-        if let Some(shown) = &self.preview.shown {
-            let (overlay, fading) = preview::overlay(shown, window);
-            if fading {
-                window.request_animation_frame();
-            }
-            root = root.children(overlay);
-        }
-        root
+        root.children(pointer::preview_overlay(&self.preview, window))
     }
 }
 
