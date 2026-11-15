@@ -128,10 +128,24 @@ impl Library {
     }
 
     pub fn duplicate_candidates(&self, limit: usize) -> Result<Vec<crate::DuplicateCandidate>> {
+        self.duplicate_candidates_from(0, limit)
+    }
+
+    /// The pairs still to review at least `min_distance` apart, least
+    /// apart first: with 1, the similar pairs past every identical one,
+    /// which the first window of [`Library::duplicate_candidates`] may
+    /// not reach.
+    pub fn duplicate_candidates_from(
+        &self,
+        min_distance: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::DuplicateCandidate>> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::duplicate::list_candidates(connection, &snapshot, limit),
+            |connection, snapshot| {
+                crate::duplicate::list_candidates(connection, &snapshot, min_distance, limit)
+            },
         )
     }
 
@@ -171,104 +185,123 @@ impl Library {
         choice: DuplicateResolutionChoice,
         decided_at_ms: i64,
     ) -> Result<DuplicateResolutionResult> {
+        let receipt = self.resolve_duplicates(
+            &[(file_id_a, file_id_b, choice)],
+            "Resolve duplicate",
+            decided_at_ms,
+        )?;
+        Ok(DuplicateResolutionResult {
+            choice,
+            affected_root_ids: receipt.item_ids.clone(),
+            receipt,
+        })
+    }
+
+    /// Settles several duplicate pairs in order, in one publication and as
+    /// one undoable step labelled `label`: a set of files reviewed together
+    /// (one kept, the rest merged into it pair by pair; or every pair of the
+    /// set kept apart). A later step sees what the earlier ones changed, so
+    /// a file merged into another can in turn be merged on.
+    pub fn resolve_duplicates(
+        &self,
+        steps: &[(FileId, FileId, DuplicateResolutionChoice)],
+        label: &str,
+        decided_at_ms: i64,
+    ) -> Result<MutationReceipt> {
+        if steps.is_empty() {
+            return Err(LibraryError::InvalidInput("no duplicate pairs to resolve".into()));
+        }
         let projections = self.projections.clone();
         let publication = self.publication.clone();
         let history = self.history.clone();
-        let (result, _, ()) = self.database.published_write(
+        let label = label.to_owned();
+        let (receipt, _, ()) = self.database.published_write(
             WorkPriority::ForegroundMutation,
             |revision| self.capture_revision(revision),
             |transaction, _, revision, snapshot| {
-                let mut output = crate::duplicate::resolve(
-                    transaction,
-                    (*snapshot).clone(),
-                    file_id_a,
-                    file_id_b,
-                    choice,
-                    decided_at_ms,
-                )?;
-                let mut merge = Merge {
-                    record: true,
-                    ..Merge::default()
-                };
-                if let Some((survivor, losers)) = output.merge.take() {
-                    for loser in losers {
-                        merge_media(
-                            transaction,
-                            revision,
-                            &mut output.snapshot,
-                            survivor,
-                            loser,
-                            decided_at_ms,
-                            &mut merge,
-                        )?;
-                    }
-                    output.affected_roots |= &merge.affected;
-                }
-                if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
-                    crate::smart::settle_affected(
+                let mut snapshot = (*snapshot).clone();
+                let mut affected_roots = RoaringBitmap::new();
+                let mut resources = BTreeSet::from(["duplicates".to_owned()]);
+                let mut changes = Vec::with_capacity(steps.len());
+                let mut merges_files = false;
+                for &(file_id_a, file_id_b, choice) in steps {
+                    let mut output = crate::duplicate::resolve(
                         transaction,
-                        &mut output.snapshot,
-                        &output.affected_roots,
+                        snapshot,
+                        file_id_a,
+                        file_id_b,
+                        choice,
+                        decided_at_ms,
                     )?;
-                }
-                insert_cloud_journal(
-                    transaction,
-                    revision,
-                    "duplicate.resolve",
-                    (!output.affected_roots.is_empty()).then_some(&output.affected_roots),
-                    serde_json::json!({
-                        "file_id_a": output.history.file_id_a().0,
-                        "file_id_b": output.history.file_id_b().0,
-                        "choice": choice,
-                    }),
-                    decided_at_ms,
-                )?;
-                output.snapshot.revision = revision;
-                let resources = if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
-                    let mut resources = vec![
-                        "duplicates".into(),
-                        "media".into(),
-                        "roots".into(),
-                        "smart-folders".into(),
-                    ];
-                    if output.history.changes_names() {
-                        resources.push("search".into());
+                    let mut merge = Merge {
+                        record: true,
+                        ..Merge::default()
+                    };
+                    if let Some((survivor, losers)) = output.merge.take() {
+                        for loser in losers {
+                            merge_media(
+                                transaction,
+                                revision,
+                                &mut output.snapshot,
+                                survivor,
+                                loser,
+                                decided_at_ms,
+                                &mut merge,
+                            )?;
+                        }
+                        output.affected_roots |= &merge.affected;
                     }
-                    resources.extend(merge.resources.iter().cloned());
-                    resources.sort();
-                    resources.dedup();
-                    resources
+                    if matches!(choice, DuplicateResolutionChoice::KeepFile { .. }) {
+                        merges_files = true;
+                        resources.extend(
+                            ["media", "roots", "smart-folders"].map(str::to_owned),
+                        );
+                        if output.history.changes_names() {
+                            resources.insert("search".into());
+                        }
+                        resources.extend(merge.resources.iter().cloned());
+                    }
+                    insert_cloud_journal(
+                        transaction,
+                        revision,
+                        "duplicate.resolve",
+                        (!output.affected_roots.is_empty()).then_some(&output.affected_roots),
+                        serde_json::json!({
+                            "file_id_a": output.history.file_id_a().0,
+                            "file_id_b": output.history.file_id_b().0,
+                            "choice": choice,
+                        }),
+                        decided_at_ms,
+                    )?;
+                    affected_roots |= &output.affected_roots;
+                    snapshot = output.snapshot;
+                    changes.push(if merge.changes.is_empty() {
+                        SemanticChange::DuplicateResolution(output.history)
+                    } else {
+                        SemanticChange::Compound(
+                            std::iter::once(SemanticChange::DuplicateResolution(output.history))
+                                .chain(merge.changes)
+                                .collect(),
+                        )
+                    });
+                }
+                if merges_files {
+                    crate::smart::settle_affected(transaction, &mut snapshot, &affected_roots)?;
+                }
+                snapshot.revision = revision;
+                let receipt =
+                    PublicationCoordinator::receipt(revision, resources, affected_roots.iter().map(RootId));
+                let change = if changes.len() == 1 {
+                    changes.pop().expect("one change")
                 } else {
-                    vec!["duplicates".into()]
-                };
-                let receipt = PublicationCoordinator::receipt(
-                    revision,
-                    resources,
-                    output.affected_roots.iter().map(RootId),
-                );
-                let result = DuplicateResolutionResult {
-                    choice,
-                    affected_root_ids: receipt.item_ids.clone(),
-                    receipt: receipt.clone(),
+                    SemanticChange::Compound(changes)
                 };
                 Ok((
-                    result,
+                    receipt.clone(),
                     PublishedDelta {
-                        snapshot: output.snapshot,
+                        snapshot,
                         receipt,
-                        history: Some(HistoryEntry::for_command(
-                            "duplicates.resolve",
-                            "Resolve duplicate",
-                            if merge.changes.is_empty() {
-                                SemanticChange::DuplicateResolution(output.history)
-                            } else {
-                                SemanticChange::Compound(
-                                    std::iter::once(SemanticChange::DuplicateResolution(output.history))
-                                        .chain(merge.changes)
-                                        .collect(),
-                                )
-                            },
-                        )),
+                        history: Some(HistoryEntry::for_command("duplicates.resolve", &label, change)),
                     },
                 ))
             },
@@ -277,6 +310,6 @@ impl Library {
                 push_history(&history, history_entry);
             },
         )?;
-        Ok(result)
+        Ok(receipt)
     }
 }

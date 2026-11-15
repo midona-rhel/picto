@@ -183,23 +183,37 @@ pub(crate) fn list_pairs(
     status: Option<DuplicateStatus>,
     limit: usize,
 ) -> Result<Vec<DuplicatePair>> {
+    list_pairs_from(connection, status, 0, limit)
+}
+
+/// [`list_pairs`] of the pairs at least `min_distance` apart.
+fn list_pairs_from(
+    connection: &Connection,
+    status: Option<DuplicateStatus>,
+    min_distance: u32,
+    limit: usize,
+) -> Result<Vec<DuplicatePair>> {
     let limit = limit.clamp(1, 500) as i64;
-    let sql = if status.is_some() {
-        "SELECT file_id_a, file_id_b, distance, status, detected_at_ms,
-                decided_at_ms, winner_file_id
-         FROM duplicate_pair WHERE status = ?1
-         ORDER BY distance, file_id_a, file_id_b LIMIT ?2"
-    } else {
-        "SELECT file_id_a, file_id_b, distance, status, detected_at_ms,
-                decided_at_ms, winner_file_id
-         FROM duplicate_pair
-         ORDER BY status, distance, file_id_a, file_id_b LIMIT ?1"
-    };
-    let mut statement = connection.prepare(sql)?;
-    let mut rows = if let Some(status) = status {
-        statement.query(params![encode_status(status), limit])?
-    } else {
-        statement.query([limit])?
+    let mut statement;
+    let mut rows = match status {
+        Some(status) => {
+            statement = connection.prepare(
+                "SELECT file_id_a, file_id_b, distance, status, detected_at_ms,
+                        decided_at_ms, winner_file_id
+                 FROM duplicate_pair WHERE status = ?1 AND distance >= ?2
+                 ORDER BY distance, file_id_a, file_id_b LIMIT ?3",
+            )?;
+            statement.query(params![encode_status(status), min_distance, limit])?
+        }
+        None => {
+            statement = connection.prepare(
+                "SELECT file_id_a, file_id_b, distance, status, detected_at_ms,
+                        decided_at_ms, winner_file_id
+                 FROM duplicate_pair WHERE distance >= ?1
+                 ORDER BY status, distance, file_id_a, file_id_b LIMIT ?2",
+            )?;
+            statement.query(params![min_distance, limit])?
+        }
     };
     let mut pairs = Vec::new();
     while let Some(row) = rows.next()? {
@@ -211,9 +225,10 @@ pub(crate) fn list_pairs(
 pub(crate) fn list_candidates(
     connection: &Connection,
     snapshot: &ProjectionSnapshot,
+    min_distance: u32,
     limit: usize,
 ) -> Result<Vec<DuplicateCandidate>> {
-    let pairs = list_pairs(connection, Some(DuplicateStatus::Detected), 500)?;
+    let pairs = list_pairs_from(connection, Some(DuplicateStatus::Detected), min_distance, 500)?;
     let mut candidates = Vec::with_capacity(limit.min(pairs.len()));
     // A file near many others appears in many pairs; read each side once.
     let mut sides = std::collections::HashMap::<FileId, Option<DuplicateCandidateSide>>::new();

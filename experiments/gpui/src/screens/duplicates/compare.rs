@@ -1,40 +1,8 @@
-//! The arithmetic of duplicate review: which pair comes next, how its facts
-//! are written, and the linked zoom and pan of the two previews
-//! (`useLinkedComparisonZoom.ts`).
+//! The arithmetic of Compare: how a file's facts are written, and the zoom
+//! and pan that stay the same while the set's files flip in place
+//! (`useLinkedComparisonZoom.ts`): the zoom is relative to each picture's
+//! fitted size and the centre a fraction of each picture.
 use crate::i18n::t;
-use picto_library::FileId;
-
-/// A pair, by its two file IDs in ascending order.
-pub type PairKey = (u32, u32);
-
-pub fn pair_key(a: FileId, b: FileId) -> PairKey {
-    (a.0.min(b.0), a.0.max(b.0))
-}
-
-/// The pair to show after the queue was fetched again: the one shown, if it
-/// is still there, else the nearest after it in the old order, else the
-/// nearest before it, else the first (`selectStablePairKey`).
-pub fn select_stable(
-    previous: &[PairKey],
-    active: Option<PairKey>,
-    next: &[PairKey],
-) -> Option<PairKey> {
-    let first = *next.first()?;
-    let Some(active) = active else {
-        return Some(first);
-    };
-    if next.contains(&active) {
-        return Some(active);
-    }
-    if let Some(at) = previous.iter().position(|key| *key == active) {
-        let after = previous[at + 1..].iter().find(|key| next.contains(key));
-        let before = previous[..at].iter().rev().find(|key| next.contains(key));
-        if let Some(key) = after.or(before) {
-            return Some(*key);
-        }
-    }
-    Some(first)
-}
 
 /// `similarityLabel`. The distance is in hundredths of a percent; JavaScript's
 /// `toFixed` rounds a tie up, so the arithmetic is done in whole hundredths.
@@ -58,10 +26,10 @@ pub fn similarity_label(distance: u32) -> String {
     }
 }
 
-/// `dimensions`: `W x H`, or Unknown.
+/// `W × H`, as the inspector writes them, or Unknown.
 pub fn dimensions(width: Option<u32>, height: Option<u32>) -> String {
     match (width, height) {
-        (Some(width), Some(height)) => format!("{width} x {height}"),
+        (Some(width), Some(height)) => format!("{width} × {height}"),
         _ => t("Unknown").into(),
     }
 }
@@ -230,37 +198,7 @@ impl LinkedZoom {
 
 #[cfg(test)]
 mod tests {
-    use super::{Extent, LinkedZoom, Mode, dimensions, pair_key, select_stable, similarity_label};
-    use picto_library::FileId;
-
-    #[test]
-    fn a_pair_key_is_the_same_either_way_round() {
-        assert_eq!(pair_key(FileId(9), FileId(3)), (3, 9));
-        assert_eq!(pair_key(FileId(3), FileId(9)), (3, 9));
-    }
-
-    #[test]
-    fn the_queue_keeps_its_place_when_fetched_again() {
-        let previous = [(1, 2), (3, 4), (5, 6), (7, 8)];
-        // Still there: stays.
-        assert_eq!(
-            select_stable(&previous, Some((3, 4)), &[(1, 2), (3, 4)]),
-            Some((3, 4))
-        );
-        // Resolved: the next one after it that remains.
-        assert_eq!(
-            select_stable(&previous, Some((3, 4)), &[(1, 2), (7, 8)]),
-            Some((7, 8))
-        );
-        // Nothing after it remains: the nearest before it.
-        assert_eq!(
-            select_stable(&previous, Some((5, 6)), &[(1, 2), (3, 4)]),
-            Some((3, 4))
-        );
-        // Nothing known: the first.
-        assert_eq!(select_stable(&[], None, &[(9, 10)]), Some((9, 10)));
-        assert_eq!(select_stable(&previous, Some((3, 4)), &[]), None);
-    }
+    use super::{Extent, LinkedZoom, Mode, dimensions, similarity_label};
 
     #[test]
     fn similarity_reads_as_the_electron_label() {
@@ -274,7 +212,7 @@ mod tests {
 
     #[test]
     fn sizes_and_dimensions_read_as_the_electron_rows() {
-        assert_eq!(dimensions(Some(640), Some(480)), "640 x 480");
+        assert_eq!(dimensions(Some(640), Some(480)), "640 × 480");
         assert_eq!(dimensions(None, Some(480)), "Unknown");
     }
 

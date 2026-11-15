@@ -1,44 +1,24 @@
-//! The Duplicates screen's drawing: the loading and empty states, the two
-//! candidate cards with their previews and facts, the footer of decisions,
-//! and the titlebar controls.
+//! The Duplicates screen's drawing: its loading, empty and error states,
+//! the view the mode chooses, and the titlebar controls.
 use super::{
-    ActualPixels, CARD_HEADER, CARD_METADATA, COMPACT_WIDTH, CONTEXT, Decision, Drag,
-    DuplicatesScreen, DuplicatesToolbar, FitPair, KeepBoth, KeepLeft, KeepRight, NARROW_WIDTH,
-    NextPair, NotDuplicate, PREVIEW_MIN, PreviousPair, Side, SmartMerge, compare,
+    ActualPixels, CONTEXT, DuplicatesScreen, DuplicatesToolbar, FitPair, KeepAll, Leave, Merge,
+    Mode, Next, NotDuplicate, OpenCompare, Previous, SetAbove, SetBelow, Sort, Tab,
 };
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
-use crate::ui::action_button::Look;
-use crate::{motion, theme, ui};
+use crate::{theme, ui};
 use gpui::*;
-use picto_library::{Rating, RootKind};
-use std::sync::Arc;
-
-/// The rating as the Electron screen prints it: the stored name.
-
-fn rating_name(rating: Rating) -> &'static str {
-    match rating {
-        Rating::Unrated => "unrated",
-        Rating::One => "one",
-        Rating::Two => "two",
-        Rating::Three => "three",
-        Rating::Four => "four",
-        Rating::Five => "five",
-    }
-}
 
 impl DuplicatesScreen {
-    /// `.centerState`: the queue's first read, with its message after 200 ms.
+    /// The first read, with its message after 200 ms.
     fn loading_state(&self, cx: &App) -> Div {
         let theme = theme::theme(cx);
         div()
             .size_full()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(10.))
-            .p(px(24.))
+            .text(theme::TEXT_SM)
             .text_color(theme.text_secondary())
             .children(
                 self.loading_message
@@ -46,20 +26,17 @@ impl DuplicatesScreen {
             )
     }
 
+    /// Nothing to review (Eagle's words), or the read failed; with the
+    /// scan's button and its progress bar's place.
     fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
-        let resolved = self.initial_total.saturating_sub(self.total);
         let (title, description) = match &self.error {
             Some(error) => (
                 t("Unable to load duplicate review").to_owned(),
                 error.clone(),
             ),
-            None if resolved > 0 => (
-                en("Review complete").to_owned(),
-                format!("{resolved} decisions saved."),
-            ),
             None => (
-                en("No duplicate pairs").to_owned(),
-                en("Scan the library to find similar images.").to_owned(),
+                en("Enjoy your day").to_owned(),
+                en("You have no duplicated items.").to_owned(),
             ),
         };
         let action = ui::empty_state_action(
@@ -71,8 +48,15 @@ impl DuplicatesScreen {
                 t("Scan library")
             },
         )
-        .disabled(self.scanning || self.resolving)
-        .on_click(cx.listener(|this, _, _, cx| this.scan(cx)));
+        .disabled(self.scanning || self.busy)
+        .on_click(cx.listener(|this, _, _, cx| {
+            if this.error.is_some() && !this.scanning {
+                this.error = None;
+                this.fetch(cx);
+            } else {
+                this.scan(cx);
+            }
+        }));
         ui::empty_state(
             "empty-copy",
             title,
@@ -80,8 +64,7 @@ impl DuplicatesScreen {
             vec![action.into_any_element()],
             cx,
         )
-        // `.progress`: the 180 × 2 slot of the scan's progress bar, which
-        // keeps its place while empty.
+        // The 180 × 2 slot of the scan's progress bar, kept while empty.
         .child(
             div()
                 .w(px(180.))
@@ -92,565 +75,11 @@ impl DuplicatesScreen {
         )
         .into_any_element()
     }
-
-    /// One candidate (`MediaCard`): its header with Keep, its preview, and
-    /// its facts.
-    fn card(
-        &self,
-        index: usize,
-        compact: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let theme = theme::theme(cx);
-        let shown = self.shown.as_ref().expect("a pair is on screen");
-        let side = &shown.sides[index];
-        // Production fills the side's English name in: `t("Keep {value0}")`
-        // for the tip, `{t("Keep ")}{side}` on the button.
-        let (label, which) = if index == 0 {
-            (en("Left candidate"), "left")
-        } else {
-            (en("Right candidate"), "right")
-        };
-        let keep = crate::tf!("Keep {value0}", which);
-        // Keeps this file and merges the other's item into it; the other
-        // file is deleted from the copy.
-        let mut keep_button = ui::action_button(("duplicate-keep", index), Look::Standard)
-            .icon("check", 15.)
-            .height(theme::CONTROL_MD)
-            .text_size(theme::TEXT_SM)
-            .tip(ui::tip(keep).shortcut(
-                if index == 0 {
-                    "dup.keepLeft"
-                } else {
-                    "dup.keepRight"
-                },
-                cx,
-            ))
-            .disabled(self.resolving)
-            .on_click(cx.listener(move |this, _, _, cx| this.keep(index, cx)));
-        keep_button = if compact {
-            keep_button.width(theme::CONTROL_MD).padding(0.)
-        } else {
-            keep_button
-                .padding(10.)
-                .label(format!("{}{which}", t("Keep ")))
-        };
-        let header = div()
-            .h(px(CARD_HEADER))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.))
-            .pl(px(14.))
-            .pr(px(8.))
-            .child(
-                div()
-                    .text_color(theme.text_secondary())
-                    .text(theme::TEXT_SM)
-                    .child(label),
-            )
-            .child(keep_button);
-        // `.mediaCard::after`: the green ring around the file Smart merge
-        // would keep, 5px outside the card, fading over 140 ms.
-        let ring = self.survivor.value();
-        if self.survivor.animating() {
-            window.request_animation_frame();
-        }
-        let survivor = (ring > 0. && self.survivor_side() == Some(index)).then(|| {
-            let at = |color: u32| {
-                let color = rgba(color);
-                Rgba {
-                    a: color.a * ring,
-                    ..color
-                }
-            };
-            div()
-                .absolute()
-                .top(px(-5.))
-                .left(px(-5.))
-                .right(px(-5.))
-                .bottom(px(-5.))
-                .rounded(px(theme::RADIUS_MD + 5.))
-                .bg(at(theme::MERGE_SURVIVOR_FILL))
-                .border_1()
-                .border_color(at(theme::MERGE_SURVIVOR_RING))
-        });
-        div()
-            .relative()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .rounded(px(theme::RADIUS_MD))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.open_card_menu(index, event.position, window, cx);
-                }),
-            )
-            .child(header)
-            .child(self.preview(index, window, cx))
-            .child(self.metadata(side, cx))
-            .children(survivor)
-    }
-
-    /// `MediaCard`'s menu: open the file in its default application, or in
-    /// a window of its own.
-    fn open_card_menu(
-        &mut self,
-        index: usize,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        use crate::grid::menu as rows;
-        let Some(side) = self.shown.as_ref().map(|shown| &shown.sides[index]) else {
-            return;
-        };
-        let description = rows::Description {
-            single_hash: Some(side.file.file_hash.clone()),
-            handlers: rows::Handlers {
-                open_default: true,
-                open_new_window: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
-        let built = rows::open_menu(&description, &hints);
-        let entries = rows::entries(built, &mut |_| ui::menu::Entry::Separator);
-        let menu = cx.new(|cx| ui::menu::Menu::new(entries, position, cx).search(false));
-        self.menu
-            .open(menu, window, cx, move |this, _, key, _, cx| {
-                let Some(side) = this.shown.as_ref().map(|shown| &shown.sides[index]) else {
-                    return;
-                };
-                if key == rows::Action::OpenDefault.key() {
-                    // `openDefaultAppForHash`: where the library keeps the file.
-                    if let Some(media) = &side.media {
-                        crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
-                    }
-                } else if key == rows::Action::OpenInNewWindow.key() {
-                    // `openDetailWindow({ hash, width, height })`: the file alone.
-                    let Some(details) = &side.details else {
-                        return;
-                    };
-                    let entry = crate::viewer::detail::Entry {
-                        root: details.root.root_id,
-                        hash: side.file.file_hash.clone(),
-                        name: side
-                            .media
-                            .as_ref()
-                            .map(|media| media.media_name.clone())
-                            .unwrap_or_else(|| side.file.file_hash.clone()),
-                        width: side.file.pixel_width,
-                        height: side.file.pixel_height,
-                        collection: false,
-                    };
-                    crate::viewer::detail::open(this.session.clone(), vec![entry], 0, cx);
-                }
-            });
-    }
-
-    /// The preview pane: the image in its frame, zoomed and panned with the
-    /// other, or the difference picture while Show Difference is held.
-    fn preview(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let shown = self.shown.as_ref().expect("a pair is on screen");
-        let side = &shown.sides[index];
-        let entity = cx.weak_entity();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                Self::measured(&entity, window, cx, |this| {
-                    std::mem::replace(&mut this.panes[index], bounds) != bounds
-                })
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
-        // The frame: where the image sits in the pane. Until the pane has
-        // been measured, the image fills it, fitted, which is the same.
-        let (pane, image) = (self.pane(index), side.image());
-        let frame = |layer: Div| {
-            if pane.width > 0. && pane.height > 0. && image.width > 0. && image.height > 0. {
-                let frame = self.zoom.frame(pane, image);
-                layer
-                    .absolute()
-                    .left(px(frame.left))
-                    .top(px(frame.top))
-                    .w(px(frame.width))
-                    .h(px(frame.height))
-            } else {
-                layer.absolute().inset_0()
-            }
-        };
-        let fill = |image: Arc<RenderImage>, fit: ObjectFit| {
-            img(image).absolute().inset_0().size_full().object_fit(fit)
-        };
-        let mut inside = div()
-            .absolute()
-            .inset(px(1.))
-            .overflow_hidden()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(measure)
-            .children(side.details.is_none().then(|| {
-                div()
-                    .text_color(theme.text_secondary())
-                    .text(theme::TEXT_SM)
-                    .child(t("Media details unavailable"))
-            }));
-        if self.difference_hovered && !self.resolving {
-            // `.differenceComposite`: on black.
-            inside = inside.child(
-                frame(div().bg(rgb(theme::DIFFERENCE_BACKGROUND))).children(
-                    shown
-                        .difference
-                        .clone()
-                        .map(|image| fill(image, ObjectFit::Fill)),
-                ),
-            );
-        } else {
-            let opacity = side.full_opacity();
-            // Painting continues only while an arrived original fades in.
-            if side.full_since.is_some() && opacity < 1. {
-                window.request_animation_frame();
-            }
-            let mut layers = frame(div());
-            if opacity < 1.
-                && let Some(thumbnail) = side.thumbnail.clone()
-            {
-                layers = layers.child(fill(thumbnail, ObjectFit::Contain));
-            }
-            if let Some(full) = side.full.clone() {
-                layers = layers.child(fill(full, ObjectFit::Contain).opacity(opacity));
-            }
-            inside = inside.child(layers);
-        }
-        let dragging = self.drag.as_ref().is_some_and(|drag| drag.side == index);
-        div()
-            .id(("duplicate-preview", index))
-            .relative()
-            .flex_1()
-            .min_h(px(PREVIEW_MIN))
-            .rounded(px(theme::RADIUS_MD))
-            .bg(rgba(theme::BLACK_30))
-            .cursor(if dragging {
-                CursorStyle::ClosedHand
-            } else {
-                CursorStyle::OpenHand
-            })
-            .child(inside)
-            // The border over the image, which may cover the pane's edge.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(theme.border_secondary()),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus, cx);
-                    if event.click_count == 2 {
-                        this.drag = None;
-                        this.fit(cx);
-                    } else {
-                        this.drag = Some(Drag {
-                            side: index,
-                            from: event.position,
-                            center: this.zoom.center(),
-                        });
-                        cx.notify();
-                    }
-                    cx.stop_propagation();
-                }),
-            )
-            .on_scroll(cx.listener(move |this, event: &ScrollEvent, window, cx| {
-                this.wheel(index, event, window, cx);
-                cx.stop_propagation();
-            }))
-    }
-
-    /// The file's facts (`.metadata`).
-    fn metadata(&self, side: &Side, cx: &App) -> Div {
-        let theme = theme::theme(cx);
-        let name = side.media.as_ref().map_or_else(
-            || side.file.file_hash.clone(),
-            |media| media.media_name.clone(),
-        );
-        let details = side.details.as_ref();
-        let row = |label: &'static str, value: String| {
-            ui::property_row(label, value).mono(theme::FONT_MONO)
-        };
-        let mut rows = vec![
-            row(
-                t("Resolution"),
-                compare::dimensions(side.file.pixel_width, side.file.pixel_height),
-            ),
-            row(
-                t("Size"),
-                crate::text::size_to_megabytes(side.file.size_bytes),
-            ),
-            row(t("Format"), side.file.mime_type.clone()),
-            row(
-                t("Rating"),
-                details
-                    .map_or(t("Unrated"), |details| rating_name(details.rating))
-                    .into(),
-            ),
-            row(
-                t("Tags"),
-                details
-                    .map_or(0, |details| details.tag_ids.len())
-                    .to_string(),
-            ),
-            row(
-                t("Created"),
-                details
-                    .and_then(|details| details.root.captured_at_ms)
-                    .filter(|at| *at != 0)
-                    .map_or_else(|| t("Unknown").into(), compare::short_date),
-            ),
-            row(
-                t("Added"),
-                details.map_or_else(
-                    || t("Unknown").into(),
-                    |details| compare::short_date(details.root.imported_at_ms),
-                ),
-            ),
-        ];
-        if let Some(root) = details
-            .map(|details| &details.root)
-            .filter(|root| root.kind == RootKind::Collection)
-        {
-            let group = if root.name.is_empty() {
-                format!("Group {}", root.root_id.0)
-            } else {
-                root.name.clone()
-            };
-            rows.push(row(t("Group"), group));
-        }
-        rows.push(row(t("Occurrences"), side.occurrences.to_string()));
-        div()
-            .h(px(CARD_METADATA))
-            .flex_none()
-            .pt(px(10.))
-            .px(px(4.))
-            .pb(px(12.))
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .mb(px(4.))
-                    .text_color(theme.text())
-                    .text_size(px(theme::TEXT_MD))
-                    .line_height(px(16.))
-                    .truncate()
-                    .child(name),
-            )
-            .children(rows)
-    }
-
-    /// The decisions (`.footer`).
-    fn footer(
-        &self,
-        compact: bool,
-        narrow: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let theme = theme::theme(cx);
-        let shown = self.shown.as_ref().expect("a pair is on screen");
-        let button = |id: &'static str, look: Look| {
-            ui::action_button(id, look)
-                .height(36.)
-                .disabled(self.resolving)
-        };
-        let not_duplicates = button("duplicates-not", Look::Standard)
-            .icon("action-x", 15.)
-            .label(t("Not duplicates"))
-            .tip(ui::tip(t("These are different media")).shortcut("dup.notDuplicate", cx))
-            .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
-        let keep_both = button("duplicates-keep-both", Look::Standard)
-            .icon("action-copy", 15.)
-            .label(t("Keep both"))
-            .tip(ui::tip(t("Keep both files")).shortcut("dup.keepBoth", cx))
-            .on_click(cx.listener(|this, _, _, cx| this.keep_both(cx)));
-        // Keeps the better file of the two and merges the other into it,
-        // ringing the survivor in green while hovered.
-        let hover = cx.weak_entity();
-        let smart_merge = button("duplicates-smart-merge", Look::Primary)
-            .icon("action-arrows-join", 16.)
-            .label(t("Smart merge"))
-            .tip(
-                ui::tip(t("Keep the stronger file and preserve item metadata"))
-                    .shortcut("dup.smartMerge", cx),
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.decide(Decision::Smart, cx)))
-            .on_hover(move |hovered, _, cx| {
-                let _ = hover.update(cx, |this, cx| this.set_smart_hovered(hovered, cx));
-            });
-        let entity = cx.weak_entity();
-        let difference = button("duplicates-difference", Look::Standard)
-            .icon("toolbar-difference", 16.)
-            .label(t("Show Difference"))
-            // `.differenceButton`'s padding, gap and type lose to the shared
-            // `.btn` in the built stylesheet, so it looks like its neighbours.
-            .tip(ui::tip(t("Show differences while held")))
-            .on_hover(move |hovered, _, cx| {
-                let _ = entity.update(cx, |this, cx| {
-                    if this.difference_hovered != hovered {
-                        this.difference_hovered = hovered;
-                        cx.notify();
-                    }
-                });
-            });
-        let similarity = ui::tooltip::attach(
-            div()
-                .id("duplicates-similarity")
-                .ml(px(8.))
-                .text_color(theme.text_secondary())
-                .text(theme::TEXT_SM)
-                .whitespace_nowrap()
-                .child(compare::similarity_label(shown.distance)),
-            ("duplicates-similarity", 1usize),
-            ui::tip(t("Perceptual similarity is not pixel equality")),
-            theme::TEXT_SM + 2.,
-            window,
-            cx,
-        );
-        let mut actions = div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .gap(px(6.))
-            .child(not_duplicates)
-            .child(keep_both)
-            .child(smart_merge)
-            .child(difference)
-            .child(similarity);
-        if compact {
-            actions = actions.flex_wrap();
-        }
-        div()
-            .min_h(px(58.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .py(px(8.))
-            .px(px(if narrow { 8. } else { 18. }))
-            .border_t_1()
-            .border_color(theme.border_secondary())
-            .bg(theme.background())
-            .child(actions)
-    }
-
-    /// The two cards: side by side, or stacked in a scrolling column when
-    /// the screen is narrow.
-    fn comparison(
-        &self,
-        compact: bool,
-        narrow: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let entity = cx.weak_entity();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                Self::measured(&entity, window, cx, |this| {
-                    let height = f32::from(bounds.size.height);
-                    std::mem::replace(&mut this.comparison_height, height) != height
-                })
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
-        let (left, right) = (
-            self.card(0, compact, window, cx),
-            self.card(1, compact, window, cx),
-        );
-        if narrow {
-            // One column, each card at least as tall as its rows allow and
-            // sharing any height left over (`grid-template-columns: 1fr`).
-            let gap = 10.;
-            let card = ((self.comparison_height - 2. * 10. - gap) / 2.)
-                .max(CARD_HEADER + PREVIEW_MIN + CARD_METADATA);
-            return div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .child(measure)
-                .child(
-                    div()
-                        .id("duplicates-comparison")
-                        .size_full()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(gap))
-                                .p(px(10.))
-                                // `scrollbar-gutter: stable`
-                                .pr(px(10. + ui::scrollbar::GUTTER))
-                                .child(left.h(px(card)))
-                                .child(right.h(px(card))),
-                        ),
-                )
-                .child(ui::scrollbar(
-                    "duplicates-scrollbar",
-                    &self.scroll,
-                    window,
-                    cx,
-                ))
-                .into_any_element();
-        }
-        let (gap, x, y) = if compact {
-            (8., 10., 10.)
-        } else {
-            (12., 18., 14.)
-        };
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .gap(px(gap))
-            .px(px(x))
-            .py(px(y))
-            .child(measure)
-            .child(left.flex_1())
-            .child(right.flex_1())
-            .into_any_element()
-    }
 }
 
 impl Render for DuplicatesScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let entity = cx.weak_entity();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                Self::measured(&entity, window, cx, |this| {
-                    let width = f32::from(bounds.size.width);
-                    std::mem::replace(&mut this.width, width) != width
-                })
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
         let mut root = div()
             .id("duplicates")
             .track_focus(&self.focus)
@@ -663,30 +92,31 @@ impl Render for DuplicatesScreen {
             .bg(theme.background())
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
-            .child(measure)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)),
             )
-            .on_action(cx.listener(|this, _: &PreviousPair, _, cx| this.step(-1, cx)))
-            .on_action(cx.listener(|this, _: &NextPair, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &Previous, _, cx| this.step(-1, cx)))
+            .on_action(cx.listener(|this, _: &Next, _, cx| this.step(1, cx)))
+            .on_action(cx.listener(|this, _: &SetAbove, _, cx| this.step_row(-1, cx)))
+            .on_action(cx.listener(|this, _: &SetBelow, _, cx| this.step_row(1, cx)))
+            .on_action(cx.listener(|this, _: &Merge, _, cx| this.merge_key(cx)))
+            .on_action(cx.listener(|this, _: &OpenCompare, _, cx| this.compare_key(cx)))
+            .on_action(cx.listener(|this, _: &KeepAll, _, cx| this.apart_key(cx)))
+            .on_action(cx.listener(|this, _: &NotDuplicate, _, cx| this.apart_key(cx)))
             .on_action(cx.listener(|this, _: &FitPair, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &ActualPixels, _, cx| this.actual(cx)))
-            .on_action(cx.listener(|this, _: &KeepBoth, _, cx| this.keep_both(cx)))
-            .on_action(cx.listener(|this, _: &NotDuplicate, _, cx| this.keep_both(cx)))
-            .on_action(cx.listener(|this, _: &KeepLeft, _, cx| this.keep(0, cx)))
-            .on_action(cx.listener(|this, _: &KeepRight, _, cx| this.keep(1, cx)))
-            .on_action(cx.listener(|this, _: &SmartMerge, _, cx| this.decide(Decision::Smart, cx)));
-        if self.shown.is_none() {
+            .on_action(cx.listener(|this, _: &Leave, _, cx| this.leave(cx)));
+        if self.entries.is_empty() {
             return root.child(if self.loading {
                 self.loading_state(cx).into_any_element()
             } else {
                 self.empty_state(cx)
             });
         }
-        // A drag follows the pointer anywhere in the window until the
-        // button is released, as pointer capture does.
-        if self.drag.is_some() {
+        // A drag of the picture follows the pointer anywhere in the window
+        // until the button is released, as pointer capture does.
+        if self.compare.drag.is_some() {
             let entity = cx.weak_entity();
             root = root.child(
                 canvas(
@@ -703,7 +133,7 @@ impl Render for DuplicatesScreen {
                         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
                             if phase == DispatchPhase::Capture {
                                 let _ = released.update(cx, |this, cx| {
-                                    this.drag = None;
+                                    this.compare.drag = None;
                                     cx.notify();
                                 });
                             }
@@ -714,93 +144,202 @@ impl Render for DuplicatesScreen {
                 .size_full(),
             );
         }
-        // `mergePreviewActive`: hovered, nothing resolving, a clear winner.
-        let ring = self.smart_hovered && !self.resolving && self.survivor_side().is_some();
-        self.survivor.set(ring, motion::SURVIVOR_RING);
-        let compact = self.width > 0. && self.width <= COMPACT_WIDTH;
-        let narrow = self.width > 0. && self.width <= NARROW_WIDTH;
-        let comparison = self.comparison(compact, narrow, window, cx);
-        let footer = self.footer(compact, narrow, window, cx);
+        root = match self.mode.clone() {
+            Mode::List => {
+                let list = self.list(window, cx);
+                let footer = self.footer(window, cx);
+                root.child(list).child(footer)
+            }
+            Mode::Compare { set, shown } => root.child(self.compare_view(set, shown, window, cx)),
+            Mode::Verify { sets, current } => {
+                root.child(self.verify_view(sets, current, window, cx))
+            }
+        };
+        if let Some(shown) = &self.preview.shown {
+            let (overlay, fading) = crate::grid::preview::overlay(shown, window);
+            if fading {
+                window.request_animation_frame();
+            }
+            root = root.children(overlay);
+        }
         let menu = self.menu.layer(window, cx);
-        root.children(self.scan_progress.then(|| ui::progress_bar().height(2.)))
-            .child(comparison)
-            .child(footer)
-            .children(menu)
+        root.children(menu)
     }
 }
 
 impl Render for DuplicatesToolbar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let bar = div().flex_1().min_w_0().h_full().flex().items_center();
-        let Some(model) = self
-            .screen
-            .upgrade()
-            .and_then(|screen| screen.read(cx).toolbar_model())
-        else {
+        let bar = div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(px(8.));
+        let entity = cx.entity().downgrade();
+        let bar = bar.relative().child(
+            canvas(
+                move |bounds, window, cx| {
+                    let width = f32::from(bounds.size.width);
+                    let _ = entity.update(cx, |this, cx| {
+                        if this.width != width {
+                            this.width = width;
+                            cx.notify();
+                            window.request_animation_frame();
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        );
+        let Some(screen) = self.screen.upgrade() else {
             return bar;
         };
-        // The buttons call the screen directly: the screen repaints these
-        // controls itself, which it could not do while they were updating.
-        let act = |action: fn(&mut DuplicatesScreen, &mut Context<DuplicatesScreen>)| {
-            let screen = self.screen.clone();
+        let this = screen.read(cx);
+        if this.entries.is_empty() {
+            return bar;
+        }
+        let weak = self.screen.clone();
+        let act = move |action: fn(&mut DuplicatesScreen, &mut Context<DuplicatesScreen>)| {
+            let screen = weak.clone();
             move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
                 let _ = screen.update(cx, action);
             }
         };
-        bar.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .ml(px(4.))
-                        .text_color(theme.text_secondary())
-                        .text(theme::TEXT_SM)
-                        .font_weight(FontWeight::MEDIUM)
-                        .whitespace_nowrap()
-                        .child(format!("{} / {}", model.index + 1, model.total)),
-                ),
-        )
-        .child(
+        // The controls sit at the row's right end, as every screen's do,
+        // in the half the scope title leaves them; the least needed give
+        // way first when that half is short of `needed`.
+        let half = self.width / 2.;
+        let roomy = |needed: f32| self.width == 0. || half >= needed;
+        let caption = |text: String| {
             div()
                 .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .child(
-                    ui::icon_button("duplicates-fit", "toolbar-fit")
-                        .toggled(model.fit)
-                        .tip(ui::tip(t("Zoom to fit")).shortcut("view.fitWindow", cx))
-                        .on_click(act(DuplicatesScreen::fit)),
+                .text(theme::TEXT_SM)
+                .text_color(theme.text_tertiary())
+                .whitespace_nowrap()
+                .child(text)
+        };
+        match this.mode.clone() {
+            Mode::List => {
+                let (identical, similar) = this.tab_counts();
+                let tab = this.tab;
+                let sort = this.sort;
+                let tabs_screen = self.screen.clone();
+                let sort_screen = self.screen.clone();
+                let tabs = ui::segmented::segmented(
+                    "duplicates-tabs",
+                    ui::segmented::Look::Tabs,
+                    vec![
+                        ui::segmented::tab(format!("{} {identical}", en("Identical"))),
+                        ui::segmented::tab(format!("{} {similar}", en("Similar"))),
+                    ],
+                    Some(if tab == Tab::Identical { 0 } else { 1 }),
                 )
-                .child(
-                    ui::icon_button("duplicates-actual", "toolbar-actual-size")
-                        .toggled(model.actual)
-                        .tip(ui::tip(t("Actual pixels")).shortcut("view.actualSize", cx))
-                        .on_click(act(DuplicatesScreen::actual)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .child(
-                            ui::icon_button("duplicates-previous", "toolbar-chevron-left")
-                                .disabled(!model.can_previous || model.disabled)
-                                .tip(ui::tip(t("Previous pair")).shortcut("dup.prevPair", cx))
-                                .on_click(act(|screen, cx| screen.step(-1, cx))),
+                .name(t("Duplicates"))
+                .on_select(move |index, _, cx| {
+                    let _ = tabs_screen.update(cx, |this, cx| {
+                        this.set_tab(
+                            if index == 0 {
+                                Tab::Identical
+                            } else {
+                                Tab::Similar
+                            },
+                            cx,
                         )
-                        .child(
-                            ui::icon_button("duplicates-next", "toolbar-chevron-right")
-                                .disabled(!model.can_next || model.disabled)
-                                .tip(ui::tip(t("Next pair")).shortcut("dup.nextPair", cx))
-                                .on_click(act(|screen, cx| screen.step(1, cx))),
-                        ),
-                ),
-        )
+                    });
+                });
+                let value = Sort::VALUES
+                    .iter()
+                    .find(|(each, _)| *each == sort)
+                    .map_or("saving", |(_, value)| value);
+                let sort = ui::select(
+                    "duplicates-sort",
+                    value,
+                    vec![
+                        ui::choice("saving", en("Largest saving")),
+                        ui::choice("files", en("Most files")),
+                        ui::choice("alike", en("Most alike")),
+                    ],
+                )
+                .name(en("Sort sets"))
+                .on_change(move |value, _, cx| {
+                    let sort = Sort::VALUES
+                        .iter()
+                        .find(|(_, each)| *each == value)
+                        .map_or(Sort::Saving, |(sort, _)| *sort);
+                    let _ = sort_screen.update(cx, |this, cx| this.set_sort(sort, cx));
+                });
+                // The tabs take their presses, which would otherwise start
+                // a move of the window from the titlebar.
+                bar.child(div().flex_1())
+                    .child(div().flex_none().occlude().child(tabs))
+                    .children(roomy(420.).then(|| div().flex_none().child(sort)))
+                    .child(
+                        ui::icon_button("duplicates-scan", "action-refresh")
+                            .disabled(this.scanning || this.busy)
+                            .tip(ui::tip(t("Scan library")))
+                            .on_click(act(|this, cx| this.scan(cx))),
+                    )
+            }
+            Mode::Compare { set, shown } => {
+                let Some(index) = this.entry_index(set) else {
+                    return bar;
+                };
+                let entry = &this.entries[index];
+                let position = this
+                    .order
+                    .iter()
+                    .position(|&each| each == index)
+                    .map_or(0, |at| at + 1);
+                let keeper = this.keeper(index);
+                let counter = format!(
+                    "{} {position} {} {} · {} {} {} {}",
+                    en("Set"),
+                    en("of"),
+                    this.order.len(),
+                    en("file"),
+                    shown + 1,
+                    en("of"),
+                    entry.set.files.len()
+                );
+                let zoom = this.zoom_mode();
+                let hover = self.screen.clone();
+                bar.child(div().flex_1())
+                    .children(roomy(300.).then(|| caption(counter)))
+                    .child(
+                        ui::icon_button("duplicates-difference", "toolbar-difference")
+                            .disabled(shown == keeper)
+                            .tip(ui::tip(t("Show differences while held")))
+                            .on_hover(move |hovered, _, cx| {
+                                let _ = hover.update(cx, |this, cx| {
+                                    if this.compare.difference_hovered != hovered {
+                                        this.compare.difference_hovered = hovered;
+                                        cx.notify();
+                                    }
+                                });
+                            }),
+                    )
+                    .child(
+                        ui::icon_button("duplicates-fit", "toolbar-fit")
+                            .toggled(zoom == super::compare::Mode::Fit)
+                            .tip(ui::tip(t("Zoom to fit")).shortcut("dup.fitToWindow", cx))
+                            .on_click(act(DuplicatesScreen::fit)),
+                    )
+                    .child(
+                        ui::icon_button("duplicates-actual", "toolbar-actual-size")
+                            .toggled(zoom == super::compare::Mode::Actual)
+                            .tip(ui::tip(t("Actual pixels")).shortcut("view.actualSize", cx))
+                            .on_click(act(DuplicatesScreen::actual)),
+                    )
+            }
+            Mode::Verify { sets, .. } => bar.child(div().flex_1()).child(caption(format!(
+                "{} {}",
+                sets.len(),
+                en("sets differ")
+            ))),
+        }
     }
 }

@@ -1201,6 +1201,14 @@ pub fn open_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
     rows
 }
 
+/// `buildEntityCopyContextEntries` alone: the rows that copy the file, as
+/// the Duplicates screen's tiles offer them after the open rows.
+pub fn copy_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    Builder { hint }.copy_entries(d, &mut rows);
+    rows
+}
+
 /// The inspector preview's menu (`InspectorPreview`): opening the file, then
 /// "Set as Library Cover".
 pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {

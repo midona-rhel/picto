@@ -91,7 +91,7 @@ const PREVIEW: f32 = 200.;
 
 /// A tag's chip in its namespace's colour (`TagChip`). With the
 /// `showTagPrefixes` setting off, it shows the tag without its group.
-fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
+pub(crate) fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
     let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
     ui::chip(
         ("inspector-tag", tag.tag_id.0 as usize),

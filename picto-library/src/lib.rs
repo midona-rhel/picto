@@ -36,7 +36,13 @@ pub mod work_queue;
 pub use database::LibraryDatabase;
 pub use error::{LibraryError, Result};
 pub use model::*;
-pub use mutation::{Library, SharedFileMerge};
+pub use mutation::{Library, SharedFileMerge, merged_notes};
+
+/// The name a duplicate merge keeps of two: `incoming` only when it is a
+/// more descriptive kind of name than `existing`.
+pub fn preferred_name<'a>(existing: &'a str, incoming: &'a str) -> &'a str {
+    name_quality::preferred(existing, incoming)
+}
 pub use projection::{ProjectionSnapshot, ProjectionStore};
 pub use publication::{LibraryChanged, MutationReceipt};
 pub use query_request::{LoadStage, OpenCancellation, OpenStage};

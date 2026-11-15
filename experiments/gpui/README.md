@@ -67,8 +67,8 @@ out). Each makes the path canonical and refuses, with a notification, any
 file not inside the open library, whatever the library stored; the paths are
 handed over without Windows' `\\?\` prefix (`desktop::system_path`). Links
 open only when they are `http:` or `https:` (`desktop::open_link`). Delete
-Permanently, Empty Trash and the Duplicates screen's Keep and Smart merge
-remove files only through the core, from the open library's blobs. The
+Permanently, Empty Trash and the Duplicates screen's merges remove files
+only through the core, from the open library's blobs. The
 source of a copy is only ever read.
 
 ### Opening a library you keep
@@ -356,7 +356,17 @@ actions go in the titlebar (`Toolbar::set_screen_controls`). Subscriptions
 lays its subscriptions out as grid tiles (`grid::layout`), and a
 subscription's page puts its counters, schedule and destination in a rail
 the shell shows in the inspector's place, with the inspector's width,
-toggle and sections (`ui::panel_section`, `ui::property_row`). **Inspector**
+toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
+may give the shell such a rail (`shell::ScreenRail`). Duplicates
+gathers the core's matching pairs into sets of files that match one another
+(`duplicates/sets.rs`), each with the file Smart merge would keep marked,
+in Identical and Similar tabs; a set is merged, compared one file at a time
+(Compare, a place of the screen, whose facts are its rail), kept apart,
+or checked for the bulk
+merge, which shows the check before merging only for sets whose names,
+links, folders, tags or notes differ. Each decision on a set, or on all
+checked sets, is one undoable step (`Library::resolve_duplicates`).
+**Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
 

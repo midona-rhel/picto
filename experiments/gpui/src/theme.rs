@@ -515,10 +515,6 @@ pub const DANGER: u32 = 0xef8b8b;
 pub const SUCCESS: u32 = 0x5fb56b;
 /// The subscription tables' warm failure text (`.qFailureText`).
 pub const FAILURE_TEXT: u32 = 0xf0ad91;
-/// Smart merge's survivor ring (`.mediaCard::after`): a green tint at 8%
-/// and a 1px ring at 50% of `rgb(72, 199, 116)`.
-pub const MERGE_SURVIVOR_FILL: u32 = 0x48c77414;
-pub const MERGE_SURVIVOR_RING: u32 = 0x48c77480;
 
 /// `TaskDialog.module.css`: a task's glyph and fill by its tone (`.kind`,
 /// `.fill`), the warning text, the danger choice and the dimmed backdrop.
