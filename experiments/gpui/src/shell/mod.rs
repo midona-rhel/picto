@@ -783,10 +783,12 @@ impl Render for Shell {
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`),
         // except a subscription's page, whose rail takes the inspector's
-        // place, width and toggle.
+        // place, width and toggle. The page the Subscriptions screen shows
+        // stays while it fades out, so between a page and the grid or the
+        // viewer the rail stays in place and only what is in it changes.
         let subscription_rail = screen == Some(Screen::Subscriptions)
             && !viewer_open
-            && self.session.read(cx).place().is_some();
+            && self.subscriptions.read(cx).showing_page();
         let inspector_available = screen.is_none() || viewer_open || subscription_rail;
         match self.inspector_available {
             Some(was) if was != inspector_available => self

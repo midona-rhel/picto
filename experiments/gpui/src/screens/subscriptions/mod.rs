@@ -452,6 +452,12 @@ impl SubscriptionsScreen {
         self.list.as_ref()?.iter().find(|entry| entry.id == place)
     }
 
+    /// Whether a subscription's page is what the screen shows (it keeps
+    /// showing it while the screen fades out), for its rail.
+    pub fn showing_page(&self) -> bool {
+        self.place_seen.is_some()
+    }
+
     /// Gives the scope title the open subscription's name.
     fn name_place(&self, cx: &mut Context<Self>) {
         let label = self

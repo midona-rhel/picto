@@ -1327,8 +1327,9 @@ impl SubscriptionsScreen {
             .items_center()
             .gap(px(8.))
             .child(
+                // The site's select gives up width before the query does.
                 ui::select("add-query-site", self.add_site, sites)
-                    .width(140.)
+                    .width((self.row_width() * 0.3).clamp(120., 140.))
                     .on_change(move |site, _, cx| {
                         let _ = view.update(cx, |this, cx| this.choose_add_site(site, cx));
                     }),

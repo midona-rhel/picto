@@ -83,7 +83,7 @@ impl Render for SubscriptionsNote {
         let text = self
             .screen
             .upgrade()
-            .filter(|screen| screen.read(cx).list.is_some())
+            .filter(|screen| screen.read(cx).list.is_some() && !screen.read(cx).showing_page())
             .map(|screen| screen.read(cx).count_note());
         div().whitespace_nowrap().children(text)
     }
