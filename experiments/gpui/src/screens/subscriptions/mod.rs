@@ -1,7 +1,8 @@
-//! The Subscriptions screen (`SubscriptionsScreen.tsx`): a grid of the
-//! library's subscriptions, and one subscription's workspace when a card is
-//! opened. Opening a subscription is a place of the screen, so Back returns
-//! to the grid and the scope title names it.
+//! The Subscriptions screen (`SubscriptionsScreen.tsx`): the library's
+//! subscriptions as grid tiles, and one subscription's page when a tile is
+//! opened, with its rail in the inspector's place. Opening a subscription is
+//! a place of the screen, so Back returns to the tiles and the scope title
+//! names it.
 mod accounts;
 mod cover;
 mod data;
@@ -11,6 +12,9 @@ mod format;
 mod home;
 pub mod requests;
 mod sync;
+mod toolbar;
+
+pub use toolbar::{controls, note, rail};
 
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
@@ -237,18 +241,24 @@ pub struct SubscriptionsScreen {
     shown: bool,
     /// The place showing at the last navigation.
     place_seen: Option<i64>,
-    /// The grid's content width and the data plane's width, which the
-    /// container-relative CSS sizes are measured against.
+    /// The tiles' width and the page's width, which the tiles' layout and
+    /// the tables' columns are measured against.
     home_width: Rc<Cell<f32>>,
     plane_width: Rc<Cell<f32>>,
-    /// Where the rail's "More actions" button is, to open its menu below it,
-    /// and the destination's add buttons, to open the pickers above them.
+    /// Where the titlebar's "More actions" button is, to open its menu
+    /// below it; the rail, and the destination's add buttons, to open the
+    /// pickers beside the rail at them.
     overflow: Rc<Cell<Bounds<Pixels>>>,
+    rail_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The titlebar's room for the screen's controls.
+    titlebar_width: Rc<Cell<f32>>,
     add_folder: Rc<Cell<Bounds<Pixels>>>,
     add_tag: Rc<Cell<Bounds<Pixels>>>,
     home_scroll: ScrollHandle,
     rail_scroll: ScrollHandle,
     table_scroll: ScrollHandle,
+    /// The rail's sections folded, by title.
+    collapsed: HashSet<&'static str>,
     /// Subscriptions with a command on its way; their controls wait.
     acting: HashSet<i64>,
     /// Edits on their way (`busyKey`): rows, dialogs and the add bar wait.
@@ -354,11 +364,14 @@ impl SubscriptionsScreen {
             home_width: Rc::new(Cell::new(0.)),
             plane_width: Rc::new(Cell::new(0.)),
             overflow: Rc::new(Cell::new(Bounds::default())),
+            rail_bounds: Rc::new(Cell::new(Bounds::default())),
+            titlebar_width: Rc::new(Cell::new(f32::MAX)),
             add_folder: Rc::new(Cell::new(Bounds::default())),
             add_tag: Rc::new(Cell::new(Bounds::default())),
             home_scroll: ScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             table_scroll: ScrollHandle::new(),
+            collapsed: HashSet::new(),
             acting: HashSet::new(),
             busy: 0,
             outbox: Outbox::from_environment(),
@@ -705,8 +718,16 @@ impl SubscriptionsScreen {
         self.set_destination(id, folders, tags, cx);
     }
 
-    /// The folder picker, above the add button, on the folders new files go
-    /// to.
+    /// Where a picker opens for the add button at `control`: beside the
+    /// rail, its top at the button's, as the inspector's pickers open.
+    fn beside_rail(&self, control: Bounds<Pixels>) -> Point<f32> {
+        point(
+            f32::from(self.rail_bounds.get().left()),
+            f32::from(control.top()),
+        )
+    }
+
+    /// The folder picker, beside the rail, on the folders new files go to.
     fn pick_folders(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -717,19 +738,14 @@ impl SubscriptionsScreen {
             .filter_map(|folder| u32::try_from(*folder).ok())
             .map(picto_library::FolderId)
             .collect();
-        let anchor = self.add_folder.get().origin;
+        let anchor = self.beside_rail(self.add_folder.get());
         self.picking = Some(Picking::Folders(id));
         self.folder_picker.update(cx, |picker, cx| {
-            picker.open_above(
-                point(f32::from(anchor.x), f32::from(anchor.y)),
-                folders,
-                window,
-                cx,
-            )
+            picker.open(Some(anchor), folders, window, cx)
         });
     }
 
-    /// The tag picker, above the add button, on the tags new files get.
+    /// The tag picker, beside the rail, on the tags new files get.
     fn pick_tags(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -739,15 +755,10 @@ impl SubscriptionsScreen {
             .iter()
             .map(|tag| crate::tags::record(tag))
             .collect();
-        let anchor = self.add_tag.get().origin;
+        let anchor = self.beside_rail(self.add_tag.get());
         self.picking = Some(Picking::Tags(id));
         self.tag_picker.update(cx, |picker, cx| {
-            picker.open_above(
-                point(f32::from(anchor.x), f32::from(anchor.y)),
-                records,
-                window,
-                cx,
-            )
+            picker.open(Some(anchor), records, window, cx)
         });
     }
 

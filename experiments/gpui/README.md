@@ -351,7 +351,12 @@ sound) and documents (`document/`). Three hosts: the media view, Quick Look
 and detail windows. Collections open in the reader or the editor. Rule:
 decoding never runs on the thread that draws.
 
-**Screens** (`screens/`): Tags, Subscriptions, Duplicates. **Inspector**
+**Screens** (`screens/`): Tags, Subscriptions, Duplicates. A screen's
+actions go in the titlebar (`Toolbar::set_screen_controls`). Subscriptions
+lays its subscriptions out as grid tiles (`grid::layout`), and a
+subscription's page puts its counters, schedule and destination in a rail
+the shell shows in the inspector's place, with the inspector's width,
+toggle and sections (`ui::panel_section`, `ui::property_row`). **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
 

@@ -76,6 +76,9 @@ pub struct Shell {
     quick_look: Entity<QuickLook>,
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
+    /// A subscription's rail, which takes the inspector's place while a
+    /// subscription's page shows.
+    subscription_rail: AnyView,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
     focus: FocusHandle,
     sidebar_collapsed: bool,
@@ -323,6 +326,17 @@ impl Shell {
         let tags = cx.new(|cx| {
             screens::tags::TagsScreen::new(session.clone(), thumbnails.clone(), window, cx)
         });
+        let subscriptions_screen = cx.new(|cx| {
+            screens::subscriptions::SubscriptionsScreen::new(
+                session.clone(),
+                thumbnails.clone(),
+                window,
+                cx,
+            )
+        });
+        let subscription_rail = screens::subscriptions::rail(&subscriptions_screen, cx);
+        let subscription_controls = screens::subscriptions::controls(&subscriptions_screen, cx);
+        let subscription_note = screens::subscriptions::note(&subscriptions_screen, cx);
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
         let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
@@ -390,6 +404,8 @@ impl Shell {
         toolbar.update(cx, |toolbar, _| {
             toolbar.set_screen_controls(Screen::Duplicates, controls.into());
             toolbar.set_screen_controls(Screen::Tags, tag_controls.into());
+            toolbar.set_screen_controls(Screen::Subscriptions, subscription_controls);
+            toolbar.set_screen_note(Screen::Subscriptions, subscription_note);
         });
         Self {
             sidebar,
@@ -398,14 +414,8 @@ impl Shell {
             viewer,
             quick_look,
             tags,
-            subscriptions: cx.new(|cx| {
-                screens::subscriptions::SubscriptionsScreen::new(
-                    session.clone(),
-                    thumbnails.clone(),
-                    window,
-                    cx,
-                )
-            }),
+            subscriptions: subscriptions_screen,
+            subscription_rail,
             duplicates,
             grid,
             session,
@@ -771,8 +781,13 @@ impl Render for Shell {
             sidebar_width
         };
         // The inspector belongs to the grid and the viewer. A screen has the
-        // window's full width, titlebar included (`inspectorAvailable`).
-        let inspector_available = screen.is_none() || viewer_open;
+        // window's full width, titlebar included (`inspectorAvailable`),
+        // except a subscription's page, whose rail takes the inspector's
+        // place, width and toggle.
+        let subscription_rail = screen == Some(Screen::Subscriptions)
+            && !viewer_open
+            && self.session.read(cx).place().is_some();
+        let inspector_available = screen.is_none() || viewer_open || subscription_rail;
         match self.inspector_available {
             Some(was) if was != inspector_available => self
                 .inspector_presence
@@ -929,7 +944,7 @@ impl Render for Shell {
                         .flex()
                         .items_center()
                         .justify_end()
-                        .child(
+                        .children((!subscription_rail).then(|| {
                             // While pinned, the inspector keeps showing what
                             // it had instead of following the selection.
                             ui::icon_button(
@@ -953,19 +968,21 @@ impl Render for Shell {
                                 this.inspector
                                     .update(cx, |inspector, cx| inspector.set_pinned(pinned, cx));
                                 cx.notify();
-                            })),
-                        )
+                            }))
+                        }))
                         .children(ui::window_chrome::caption_buttons(
                             "inspector-caption",
                             window,
                         )),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(self.inspector.clone().cached(fill())),
-                )
+                .child(div().flex_1().min_h_0().child(if subscription_rail {
+                    self.subscription_rail
+                        .clone()
+                        .cached(fill())
+                        .into_any_element()
+                } else {
+                    self.inspector.clone().cached(fill()).into_any_element()
+                }))
                 // The rail's edge is its resize handle: 5px wide over the
                 // content, so it takes no width itself.
                 .child(inspector_edge)

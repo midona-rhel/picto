@@ -1,23 +1,19 @@
-//! The grid of subscriptions (`SubscriptionsGrid.tsx`): a header with the
-//! count, any gallery downloads and the add actions, over 180px cards of
-//! cover, name, status and counts.
+//! The subscriptions as grid tiles (`SubscriptionsGrid.tsx`), laid out and
+//! drawn by the grid's own rules: the cover as the tile's picture, the name
+//! under it, and the state and counts as its details row; any gallery
+//! downloads in a bar above them. The count and the add actions are in the
+//! titlebar (`toolbar.rs`).
 use super::data::{self, Cover};
 use super::{SubscriptionsScreen, format, measure};
+use crate::grid::layout::{self, Layout, Tile, ViewMode};
+use crate::grid::prefs::ViewPrefs;
 use crate::i18n::t;
 use crate::theme::Text as _;
-use crate::ui::{self, action_button::Look};
-use crate::{motion, theme};
-use gpui::*;
+use crate::{theme, ui};
+use gpui::{prelude::FluentBuilder as _, *};
 
-/// `.followingGrid`: `repeat(auto-fill, minmax(150px, 180px))`, 16px apart.
-/// Tracks take their 180px maximum whenever one fits.
-const CARD: f32 = 180.;
-const CARD_GAP: f32 = 16.;
-
-/// `clamp(min, <percent>cqi, max)` against the grid's content width.
-fn clamp_cqi(width: f32, min: f32, percent: f32, max: f32) -> f32 {
-    (width * percent / 100.).clamp(min, max)
-}
+/// A tile's two text rows under its picture: the name, then the details.
+const TEXT_ROWS: f32 = 2. * layout::TEXT_ROW_HEIGHT;
 
 /// A subscription's cover in a square box of `size` with a 1px border: the
 /// framed image, or the download glyph over a faint gradient.
@@ -119,6 +115,39 @@ pub(super) fn empty_state(cx: &App) -> Div {
         )))
 }
 
+/// The space either side of a tile's details row.
+const DETAILS_INSET: f32 = 4.;
+const DETAILS_GAP: f32 = 6.;
+
+/// How wide a tile's details row is: the state badge (its spaced mono
+/// capitals, padding and border), the gap, and the items and sources.
+fn details_width(card: &data::Subscription, window: &Window) -> f32 {
+    let (_, label) = format::card_status(card);
+    let label = label.to_uppercase();
+    let badge = f32::from(
+        ui::shape_line(
+            label.clone(),
+            font(theme::FONT_MONO),
+            theme::TEXT_XS,
+            black(),
+            window,
+        )
+        .width,
+    ) + label.chars().count() as f32 * theme::TEXT_XS * 0.04
+        + 12.;
+    let meta = f32::from(
+        ui::shape_line(
+            format::card_meta(card.items, card.queries.len()),
+            font(theme::FONT_UI),
+            theme::TEXT_CAPTION,
+            black(),
+            window,
+        )
+        .width,
+    );
+    (badge + DETAILS_GAP + meta + 2. * DETAILS_INSET).ceil()
+}
+
 impl SubscriptionsScreen {
     /// The subscriptions the grid shows, gallery downloads aside, in its order.
     pub(super) fn cards(&self) -> Vec<&data::Subscription> {
@@ -137,88 +166,89 @@ impl SubscriptionsScreen {
     }
 
     pub(super) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // `cqi` and the container queries measure the content box: the
-        // measured width less the padding and the scrollbar's gutter.
-        let width = (self.home_width.get() - 32. - ui::scrollbar::GUTTER).max(0.);
-        let order = self.card_order();
+        let order = std::rc::Rc::new(self.card_order());
         let cards: Vec<data::Subscription> = self.cards().into_iter().cloned().collect();
-        let header = self.header(cards.len(), width, cx);
-        let content = if cards.is_empty() {
-            div()
-                .py(px(4.))
-                .text(theme::TEXT_MD)
-                .text_color(theme::theme(cx).text_tertiary())
-                .child(t("Create a subscription, then add the artists, tags, or accounts it should follow."))
-                .into_any_element()
-        } else {
-            let order = std::rc::Rc::new(order);
-            let mut grid = div()
-                .id("subscription-cards")
-                .a11y_presentational()
-                .flex()
-                .flex_wrap()
-                .gap(px(CARD_GAP))
-                // A click between cards clears the selection.
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.selected.clear();
-                    cx.notify();
-                }));
-            for (index, card) in cards.iter().enumerate() {
-                grid = grid.child(self.card(index, card, order.clone(), window, cx));
+        // The grid's own layout at its default size and spacing, across the
+        // width the tiles have, with the size setting raised a step at a
+        // time, as the grid's slider raises it, until every tile's details
+        // fit on their line.
+        let prefs = ViewPrefs::default();
+        let needed = cards
+            .iter()
+            .map(|card| details_width(card, window))
+            .fold(0., f32::max);
+        let width = self.home_width.get();
+        let mut target = prefs.target_size;
+        let layout = loop {
+            let layout = Layout::compute(
+                &vec![1.; cards.len()],
+                width,
+                target,
+                prefs.gap,
+                ViewMode::Grid,
+                TEXT_ROWS,
+            );
+            let side = layout.tiles.first().map_or(f32::MAX, |tile| tile.w);
+            if side >= needed || target >= width {
+                break layout;
             }
-            grid.into_any_element()
+            target += 50.;
         };
+        let mut grid = div()
+            .id("subscription-cards")
+            .a11y_presentational()
+            .relative()
+            .w_full()
+            .h(px(layout.total_height))
+            .child(measure(self.home_width.clone(), window))
+            // A click between tiles clears the selection.
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.selected.clear();
+                cx.notify();
+            }));
+        if cards.is_empty() {
+            grid = grid.child(
+                div()
+                    .p(px(16.))
+                    .text_color(theme::theme(cx).text_tertiary())
+                    .child(t("Create a subscription, then add the artists, tags, or accounts it should follow.")),
+            );
+        }
+        for (index, (card, tile)) in cards.iter().zip(&layout.tiles).enumerate() {
+            grid = grid.child(self.card(index, card, *tile, order.clone(), window, cx));
+        }
         div()
             .relative()
             .flex_1()
             .min_h_0()
+            .flex()
+            .flex_col()
+            .children(self.gallery_jobs(cx))
             .child(
                 div()
-                    .id("subscriptions-home")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.home_scroll)
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
                     .child(
                         div()
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .gap(px(12.))
-                            .pt(px(12.))
-                            .pb(px(24.))
-                            .pl(px(16.))
-                            // The scrollbar's gutter is kept, scrolling or not.
-                            .pr(px(16. + ui::scrollbar::GUTTER))
-                            // Out of the flow, so it adds no gap.
-                            .child(measure(self.home_width.clone(), window))
-                            .child(header)
-                            .child(content),
-                    ),
+                            .id("subscriptions-home")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.home_scroll)
+                            .child(grid),
+                    )
+                    .child(ui::scrollbar(
+                        "subscriptions-home-scrollbar",
+                        &self.home_scroll,
+                        window,
+                        cx,
+                    )),
             )
-            .child(ui::scrollbar(
-                "subscriptions-home-scrollbar",
-                &self.home_scroll,
-                window,
-                cx,
-            ))
     }
 
-    fn header(&mut self, count: usize, width: f32, cx: &mut Context<Self>) -> Div {
-        let theme = theme::theme(cx);
-        let selected = self.selected.len();
-        let subtitle = if count == 0 {
-            t("No subscriptions yet").to_owned()
-        } else if selected > 1 {
-            crate::tf!("{value0} of {value1} selected", selected, count)
-        } else {
-            crate::tf!(
-                "{value0} subscription{value1}",
-                count,
-                crate::i18n::plural_s(count as i128)
-            )
-        };
-        let narrow = width <= 720.;
-        let narrower = width <= 600.;
+    /// The gallery downloads that have run, as a bar over the tiles, as the
+    /// filter bar sits over the grid.
+    fn gallery_jobs(&self, cx: &mut Context<Self>) -> Option<Div> {
         let jobs: Vec<data::Subscription> = self
             .list
             .iter()
@@ -228,111 +258,25 @@ impl SubscriptionsScreen {
             })
             .cloned()
             .collect();
-        let gallery_running = jobs.iter().any(|job| job.active_run_id.is_some());
-        let (basis, min, max) = match (jobs.is_empty(), narrow, narrower) {
-            (true, _, true) => (20., 12., 400.),
-            (true, true, _) => (48., 20., 260.),
-            (true, false, _) => (72., 32., 400.),
-            (false, _, true) => (160., 88., 260.),
-            (false, true, _) => (160., 104., 260.),
-            (false, false, _) => (220., 120., 400.),
-        };
-        let mut strip = div()
-            .flex_grow(1.)
-            .flex_shrink(1.)
-            .flex_basis(px(basis))
-            .min_w(px(min))
-            .max_w(px(max))
-            .min_h(px(38.))
+        if jobs.is_empty() {
+            return None;
+        }
+        let theme = theme::theme(cx);
+        let mut bar = div()
+            .flex_none()
+            .px(px(16.))
+            .py(px(4.))
             .flex()
             .flex_col()
-            .justify_center()
-            .overflow_hidden();
-        if !jobs.is_empty() {
-            for job in &jobs {
-                strip = strip.child(self.gallery_job(job, cx));
-            }
+            .border_b_1()
+            .border_color(theme.border_secondary());
+        for job in &jobs {
+            bar = bar.child(self.gallery_job(job, cx));
         }
-        let padding = clamp_cqi(width, 10., 1.8, 20.);
-        let gap = clamp_cqi(width, 5., 0.7, 8.);
-        div()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(if narrow { 8. } else { 12. }))
-            .child(
-                div()
-                    .flex_grow_0()
-                    .flex_shrink(1.)
-                    .flex_basis(px(if narrower { 112. } else { 150. }))
-                    .min_w(px(if narrower { 92. } else { 104. }))
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    // `.heroTitle`: `letter-spacing: -0.01em`.
-                    .child(div().overflow_hidden().child(ui::tracked(
-                        t("Subscriptions"),
-                        Font {
-                            weight: FontWeight::SEMIBOLD,
-                            ..font(theme::FONT_UI)
-                        },
-                        theme::TEXT_TITLE,
-                        24.,
-                        theme.text(),
-                        theme::TEXT_TITLE * -0.01,
-                    )))
-                    .child(
-                        div()
-                            .text_size(px(theme::TEXT_SM))
-                            .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
-                            .text_color(theme.text_secondary())
-                            .whitespace_nowrap()
-                            .child(subtitle),
-                    ),
-            )
-            .child(strip)
-            .child(
-                div()
-                    .flex_grow_0()
-                    .flex_shrink(1.)
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(clamp_cqi(width, 4., 0.8, 8.)))
-                    .child(
-                        ui::action_button("subscription-add", Look::Primary)
-                            .label(t("Add"))
-                            .icon("plus", 14.)
-                            .padding(padding)
-                            .gap(gap)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_create(cx))),
-                    )
-                    // One gallery downloads at a time, so the button waits
-                    // while one runs.
-                    .child(
-                        ui::action_button("subscription-add-gallery", Look::Standard)
-                            .label(t("Add Gallery"))
-                            .icon("library-plus", 14.)
-                            .padding(padding)
-                            .gap(gap)
-                            .disabled(gallery_running)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_gallery(cx))),
-                    )
-                    .child(
-                        ui::action_button("subscription-accounts", Look::Standard)
-                            .label(t("Accounts"))
-                            .icon("shield-lock", 14.)
-                            .padding(padding)
-                            .gap(gap)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_accounts(None, cx))),
-                    ),
-            )
+        Some(bar)
     }
 
-    /// One gallery download in the header (`.galleryJob`): its name, how far
+    /// One gallery download (`.galleryJob`): its name, how far
     /// it has got or why it stopped, a 2px progress line, and its controls.
     fn gallery_job(&self, job: &data::Subscription, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
@@ -441,60 +385,49 @@ impl SubscriptionsScreen {
             )
     }
 
+    /// One tile: the cover in the tile's picture, ringed and selected as a
+    /// grid tile is, the name centred under it, then the state and counts.
     fn card(
         &self,
         index: usize,
         card: &data::Subscription,
+        tile: Tile,
         order: std::rc::Rc<Vec<i64>>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = theme::theme(cx);
         let id = card.id;
         let selected = self.selected.contains(&id);
-        let (hover, set_hover) = motion::hover_fade(
-            ("subscription-card-hover", id as usize),
-            motion::CARD_HOVER,
-            motion::EASE,
-            window,
-            cx,
-        );
+        let side = tile.w;
         let (tone, label) = format::card_status(card);
-        let accent = rgb(theme::ACCENT);
-        let border = if selected {
-            accent
-        } else {
-            theme::blend(theme.border_secondary(), theme.border(), hover)
-        };
-        let mut cover = cover(
+        let extent = layout::SELECTION_EXTENT;
+        let picture = cover(
             ("subscription-cover", id as usize),
             card.cover.as_ref(),
-            CARD,
-            theme::RADIUS_SM,
+            side,
+            theme::TILE_RADIUS,
             28.,
             &self.covers,
             cx,
         )
+        .absolute()
+        .top_0()
+        .left_0()
+        .when(card.cover.is_some(), |picture| {
+            picture.bg(theme.surface_2())
+        })
+        // The hairline ring over the picture, as a grid tile has.
         .child(
-            // The border over the image, so a framed image keeps it.
             div()
                 .absolute()
                 .inset_0()
-                .rounded(px(theme::RADIUS_SM))
+                .rounded(px(theme::TILE_RADIUS))
                 .border_1()
-                .border_color(border),
+                .border_color(theme.border()),
         );
-        if card.cover.is_some() {
-            cover = cover.bg(theme.surface_2());
-        }
-        let name = div()
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .text_color(if selected { accent } else { theme.text() })
-            .child(card.name.clone());
         let (click_order, menu_order) = (order.clone(), order);
-        // A card is a button named by its subscription; assistive
+        // A tile is a button named by its subscription; assistive
         // technology's press opens it, as a double-click does.
         div()
             .id(("subscription-card", id as usize))
@@ -507,13 +440,12 @@ impl SubscriptionsScreen {
                     let _ = view.update(cx, |this, cx| this.open(id, cx));
                 }
             })
-            .w(px(CARD))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(4.))
+            .absolute()
+            .left(px(tile.x))
+            .top(px(tile.y))
+            .w(px(tile.w))
+            .h(px(tile.h))
             .cursor_pointer()
-            .on_hover(set_hover)
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 cx.stop_propagation();
                 if event.click_count() >= 2 {
@@ -529,40 +461,84 @@ impl SubscriptionsScreen {
                     this.card_menu(index, &menu_order, event.position, window, cx);
                 }),
             )
-            .child(div().relative().child(cover).children(selected.then(|| {
-                // `outline: 2px` one pixel outside the border.
+            .when(selected, |cell| {
+                // The grid's selection stroke outside the picture, with a
+                // hairline of the background between it and the picture.
+                cell.child(
+                    div()
+                        .absolute()
+                        .left(px(-extent))
+                        .top(px(-extent))
+                        .w(px(side + 2. * extent))
+                        .h(px(side + 2. * extent))
+                        .rounded(px(theme::TILE_RADIUS + extent))
+                        .border_2()
+                        .border_color(rgb(theme::GRID_SELECTION)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(-1.))
+                        .top(px(-1.))
+                        .w(px(side + 2.))
+                        .h(px(side + 2.))
+                        .rounded(px(theme::TILE_RADIUS + 1.))
+                        .border_1()
+                        .border_color(theme.background()),
+                )
+            })
+            .child(picture)
+            .child(
+                // The name, as a grid tile's: centred, cut short to the tile
+                // less 8px, white on a pill of the selection colour when
+                // selected.
                 div()
                     .absolute()
-                    .top(px(-3.))
-                    .left(px(-3.))
-                    .right(px(-3.))
-                    .bottom(px(-3.))
-                    .rounded(px(theme::RADIUS_SM + 3.))
-                    .border_2()
-                    .border_color(accent)
-            })))
+                    .left_0()
+                    .right_0()
+                    .top(px(side + 7.))
+                    .h(px(15.))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .max_w(px(side - 2.))
+                            .px(px(3.))
+                            .rounded(px(2.))
+                            .when(selected, |pill| {
+                                pill.bg(rgb(theme::GRID_SELECTION))
+                                    .text_color(rgb(theme::BADGE_STRONG_TEXT))
+                            })
+                            .line_height(px(15.))
+                            .truncate()
+                            .child(card.name.clone()),
+                    ),
+            )
             .child(
+                // The details row: the state, then the items and sources.
                 div()
-                    .min_w_0()
+                    .absolute()
+                    .left(px(DETAILS_INSET))
+                    .right(px(DETAILS_INSET))
+                    .top(px(side + layout::TEXT_ROW_HEIGHT + 3.))
+                    .h(px(18.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .text_size(px(theme::TEXT_MD))
-                    .line_height(px(theme::TEXT_MD * theme::LINE_HEIGHT_BODY))
-                    .child(name)
+                    .justify_center()
+                    .gap(px(DETAILS_GAP))
                     .child(ui::status_badge(
                         ("subscription-card-status", id as usize),
                         tone,
                         label,
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(theme::TEXT_CAPTION))
-                    .line_height(px(theme::TEXT_CAPTION * theme::LINE_HEIGHT_BODY))
-                    .text_color(theme.text_tertiary())
-                    .text_center()
-                    .child(format::card_meta(card.items, card.queries.len())),
+                    ))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text(theme::TEXT_CAPTION)
+                            .text_color(theme.text_tertiary())
+                            .child(format::card_meta(card.items, card.queries.len())),
+                    ),
             )
     }
 }

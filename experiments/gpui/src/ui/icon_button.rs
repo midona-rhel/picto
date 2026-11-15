@@ -55,10 +55,6 @@ pub enum Look {
     /// 26px, at half strength until hovered (opacity, 200 ms on
     /// `--ease-default`).
     TagAdd,
-    /// `SubscriptionsScreen.module.css` `.subscriptionDestinationAdd`: 26px
-    /// on the hover surface, the active surface under the pointer with the
-    /// glyph turning from the secondary to the primary text colour.
-    ChipAdd,
     /// `InspectorField.module.css` `.urlActionBtn`: a 31 × 32 segment at the
     /// end of a source row, ruled off on its left, its glyph at half
     /// strength until hovered over the control surface.
@@ -95,7 +91,6 @@ impl Look {
             Look::Condition => (motion::CONDITION_BUTTON, motion::EASE),
             Look::TagAdd => (motion::TAG_ADD_BUTTON, motion::EASE_DEFAULT),
             Look::Filter
-            | Look::ChipAdd
             | Look::UrlAction
             | Look::Task
             | Look::Close
@@ -232,17 +227,6 @@ impl Look {
                 radius: theme::RADIUS_MD,
                 glyph: 15.,
                 opacity: 0.5,
-                ..base
-            },
-            Look::ChipAdd => Paint {
-                width: theme::CONTROL_SM,
-                height: theme::CONTROL_SM,
-                radius: theme::RADIUS_MD,
-                glyph: 14.,
-                fill: theme.surface_hover(),
-                fill_hover: theme.surface_active(),
-                fill_press: theme.surface_active(),
-                glyph_color: theme.text_secondary(),
                 ..base
             },
             Look::Task => Paint {
@@ -792,7 +776,6 @@ mod tests {
         assert_eq!(ms(Look::Condition), 120);
         assert_eq!(ms(Look::TagAdd), 200);
         assert_eq!(ms(Look::Filter), 0);
-        assert_eq!(ms(Look::ChipAdd), 0);
         assert_eq!(ms(Look::UrlAction), 0);
     }
 

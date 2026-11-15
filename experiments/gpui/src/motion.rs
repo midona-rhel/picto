@@ -119,8 +119,6 @@ pub const CONDITION_BUTTON: Duration = Duration::from_millis(120);
 /// `.tagAddBtn`: the "+" after a row of chips brightening, on
 /// `--ease-default`.
 pub const TAG_ADD_BUTTON: Duration = Duration::from_millis(200);
-/// `.followCover`: a subscription card's border on hover, on `ease`.
-pub const CARD_HOVER: Duration = Duration::from_millis(120);
 /// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
 pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
