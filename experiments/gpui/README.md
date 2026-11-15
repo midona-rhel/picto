@@ -698,6 +698,9 @@ reading production's code, seen in this app).
   marker where reordering cannot work, Export on a folder's inspector, a
   rendered cover crop shown.
 - Files promised by a drag are imported on macOS (production imports none).
+- The Export dialog's formats end with ZIP Archive: the original files in
+  one archive, `Picto Export.zip`, in the chosen folder (`media.export`
+  with the `zip` format, which production's dialog does not list).
 - The grid reads no original while it scrolls: a large tile's dwell starts
   over with every movement, so originals arrive once the grid has rested
   (production counts only the time a tile has been in view).

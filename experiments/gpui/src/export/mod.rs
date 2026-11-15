@@ -52,16 +52,20 @@ pub enum Format {
     Png,
     Webp,
     Avif,
+    /// The original files in one zip archive, which production does not
+    /// offer.
+    Zip,
 }
 
 impl Format {
-    /// `FORMAT_OPTIONS`, in their order.
-    pub const ALL: [Format; 5] = [
+    /// `FORMAT_OPTIONS`, in their order, then the archive.
+    pub const ALL: [Format; 6] = [
         Format::Original,
         Format::Jpeg,
         Format::Png,
         Format::Webp,
         Format::Avif,
+        Format::Zip,
     ];
 
     pub fn value(self) -> &'static str {
@@ -71,6 +75,7 @@ impl Format {
             Format::Png => "png",
             Format::Webp => "webp",
             Format::Avif => "avif",
+            Format::Zip => "zip",
         }
     }
 
@@ -81,6 +86,7 @@ impl Format {
             Format::Png => t("PNG"),
             Format::Webp => t("WebP"),
             Format::Avif => t("AVIF"),
+            Format::Zip => crate::i18n::en("ZIP Archive"),
         }
     }
 
@@ -90,12 +96,12 @@ impl Format {
 
     /// The quality slider shows for the lossy formats only.
     pub fn has_quality(self) -> bool {
-        !matches!(self, Format::Original | Format::Png)
+        !matches!(self, Format::Original | Format::Png | Format::Zip)
     }
 
     /// Resizing needs the file to be converted.
     pub fn resizes(self) -> bool {
-        self != Format::Original
+        !matches!(self, Format::Original | Format::Zip)
     }
 }
 
