@@ -32,9 +32,21 @@ pub struct HoverPreview {
     show: Option<Task<()>>,
     hide: Option<Task<()>>,
     pub shown: Option<Shown>,
+    /// How long the pointer rests before the preview opens, when not the
+    /// grid's magnifier delay.
+    delay: Option<Duration>,
 }
 
 impl HoverPreview {
+    /// A preview that opens after the pointer rests `delay` on a whole
+    /// tile rather than on its magnifier.
+    pub fn after(delay: Duration) -> Self {
+        Self {
+            delay: Some(delay),
+            ..Self::default()
+        }
+    }
+
     /// The pointer rests on the magnifier of the file `hash` (`None`: one
     /// that is not previewed, such as a video). Its preview opens after the
     /// hover delay, unless one is already on its way; `resolve` then finds
@@ -55,10 +67,9 @@ impl HoverPreview {
         let Some(hash) = hash else {
             return;
         };
+        let delay = self.delay.unwrap_or(motion::HOVER_PREVIEW_DELAY);
         self.show = Some(cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(motion::HOVER_PREVIEW_DELAY)
-                .await;
+            cx.background_executor().timer(delay).await;
             let _ = this.update(cx, |this, cx| {
                 of(this).show = None;
                 let path = resolve(cx);

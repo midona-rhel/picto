@@ -20,7 +20,7 @@ pub struct PropertyRow {
 }
 
 /// The value is set in `--inspector-mono-font-family` (Fira Mono), as it is
-/// inside the inspector; [`PropertyRow::mono`] picks another face.
+/// inside the inspector.
 pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedString>) -> PropertyRow {
     PropertyRow {
         label: label.into(),
@@ -44,12 +44,6 @@ pub fn spinner(since: Instant, window: &mut Window, cx: &mut App) -> Svg {
 }
 
 impl PropertyRow {
-    /// The value's face, e.g. `--font-family-mono` outside the inspector.
-    pub fn mono(mut self, family: &'static str) -> Self {
-        self.mono = family;
-        self
-    }
-
     /// `loading`: the value is on its way, loading since `since`.
     pub fn loading(mut self, since: Instant) -> Self {
         self.loading = Some(since);

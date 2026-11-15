@@ -5,7 +5,6 @@ use gpui::*;
 use std::rc::Rc;
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
-type HoverHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
 
 /// Which of the shared text buttons this is.
 #[derive(Clone, Copy, PartialEq)]
@@ -61,7 +60,6 @@ pub struct ActionButton {
     disabled: bool,
     tip: Option<Tip>,
     on_click: Option<ClickHandler>,
-    on_hover: Option<HoverHandler>,
 }
 
 pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
@@ -86,7 +84,6 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         disabled: false,
         tip: None,
         on_click: None,
-        on_hover: None,
     }
 }
 
@@ -145,11 +142,6 @@ impl ActionButton {
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(handler));
-        self
-    }
-    /// Told when the pointer enters or leaves the button.
-    pub fn on_hover(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
-        self.on_hover = Some(Box::new(handler));
         self
     }
 }
@@ -305,18 +297,14 @@ impl RenderOnce for ActionButton {
             ));
         }
         let duration = motion::BUTTON_HOVER;
-        let on_hover = self.on_hover;
         button = button
             .cursor_pointer()
-            .on_hover(move |hovered, window, cx| {
+            .on_hover(move |hovered, _, cx| {
                 fade.update(cx, |fade, cx| {
                     fade.set(*hovered, duration);
                     cx.notify();
                 });
                 hint.update(cx, |hint, cx| hint.set(*hovered, cx));
-                if let Some(handler) = &on_hover {
-                    handler(*hovered, window, cx);
-                }
             });
         if let Some(handler) = self.on_click {
             let handler: Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)> = Rc::from(handler);

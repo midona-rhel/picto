@@ -65,13 +65,7 @@ Run interrupted
 Select one of the images downloaded that has been added to the library.
 Sign in again
 This query stops syncing. Downloaded files stay in your library.
-Left candidate
-No clear quality winner. Choose left or right, or keep both.
-No duplicate pairs
-Review complete
-Right candidate
 Scan complete - no new review pairs
-Scan the library to find similar images.
 Auto
 Blue
 Check for a newer version of Picto.
@@ -145,3 +139,65 @@ Syncing library changes
 Estimating time remaining…
 The library is still in use; nothing was restored.
 The dropped files did not arrive.
+Twice the resolution or more
+Higher resolution
+Same resolution
+Lower resolution
+Half the resolution or less
+the others are
+1 tag
+tags
+the most
+the fewest
+Added first
+Added last
+Same picture
+Keeping this one
+Kept when the set is merged
+Merged away when the set is merged
+This file
+Keep this, merge the rest
+Keep the shown file and merge the others into it
+Keep all, related
+Skip to the next set
+You have no identical items.
+You have no similar items at this similarity.
+Enjoy your day
+identical files
+similar files
+the best one is chosen
+look before merging
+saves
+Merge
+Include in merge
+Compare the files one at a time
+Keep the marked file and merge the rest into it
+Remove from This Set
+Merge every checked set, keeping each marked file
+set, merging saves
+sets, merging saves
+More sets follow once these are settled.
+Similarity
+kept
+Verify Before Merge
+files
+merged into the marked one
+The most descriptive name is kept.
+Links
+Every link is kept.
+The kept file is placed in every folder.
+The kept file has every tag. These are not on every file:
+more
+The notes are joined.
+You have no duplicated items.
+Identical
+Similar
+Largest saving
+Most files
+Most alike
+Sort sets
+Set
+of
+file
+sets differ
+Compare

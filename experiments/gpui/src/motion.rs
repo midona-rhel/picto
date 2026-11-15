@@ -121,8 +121,6 @@ pub const CONDITION_BUTTON: Duration = Duration::from_millis(120);
 pub const TAG_ADD_BUTTON: Duration = Duration::from_millis(200);
 /// `.followCover`: a subscription card's border on hover, on `ease`.
 pub const CARD_HOVER: Duration = Duration::from_millis(120);
-/// Smart merge's survivor ring fading in and out (`.mediaCard::after`).
-pub const SURVIVOR_RING: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
 const STATUS_PULSE: Duration = Duration::from_millis(2400);
 
@@ -208,6 +206,10 @@ pub const STACK_ENTER_LEFT: Duration = Duration::from_millis(200);
 pub const STACK_ENTER_RIGHT: Duration = Duration::from_millis(250);
 pub const STACK_EXIT_FADE: Duration = Duration::from_millis(200);
 pub const STACK_EXIT_REMOVE: Duration = Duration::from_millis(220);
+
+/// Eagle's `data-hover-delay="500"`: how long the pointer rests on a
+/// duplicate's tile before its larger preview opens.
+pub const DUPLICATE_PREVIEW_DELAY: Duration = Duration::from_millis(500);
 
 /// The grid's hover preview (`HoverPreviewPortal.tsx`):
 /// `HOVER_PREVIEW_DELAY_MS`, how long the pointer rests on the magnifier;
