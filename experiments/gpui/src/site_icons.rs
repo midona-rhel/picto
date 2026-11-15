@@ -211,24 +211,15 @@ fn read_cached(cache: &Path, domain: &str) -> Option<(ImageFormat, Vec<u8>)> {
 }
 
 /// The record production writes (`{ mime, data }`), through a temporary
-/// file so a reader never sees half of one.
+/// file so a reader never sees half of one (`state::write_file`).
 fn write_cached(cache: &Path, domain: &str, mime: &str, bytes: &[u8]) {
     let record = serde_json::json!({
         "mime": mime,
         "data": base64::engine::general_purpose::STANDARD.encode(bytes),
     })
     .to_string();
-    let destination = cache.join(format!("{}.json", cache_name(domain)));
-    let temporary = cache.join(format!(
-        "{}.json.{}.tmp",
-        cache_name(domain),
-        std::process::id()
-    ));
-    let written = std::fs::create_dir_all(cache)
-        .and_then(|_| std::fs::write(&temporary, record))
-        .and_then(|_| std::fs::rename(&temporary, &destination));
-    if let Err(error) = written {
-        let _ = std::fs::remove_file(&temporary);
+    let name = format!("{}.json", cache_name(domain));
+    if let Err(error) = crate::state::write_file(cache, &name, record.as_bytes()) {
         eprintln!("picto: the icon of {domain} could not be kept: {error}");
     }
 }

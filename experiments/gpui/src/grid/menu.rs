@@ -9,6 +9,7 @@
 //! [`Action`].
 use crate::grid::format::grouped;
 use crate::i18n::t;
+pub use crate::search_by_image::{ENGINES, Engine};
 use crate::ui::menu;
 use picto_library::ContentSortField;
 
@@ -62,25 +63,6 @@ pub enum OpenWith {
 // `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
 // system that offers "Open With Other..." as a chooser.
 const OPEN_WITH_CHOOSER_BUILT: bool = cfg!(target_os = "windows");
-
-/// The reverse image search providers (`REVERSE_IMAGE_SEARCH_ENGINES`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Engine {
-    TinEye,
-    SauceNao,
-    Yandex,
-    Sogou,
-    Bing,
-}
-
-// i18n: translated where drawn (menu rows)
-pub const ENGINES: [(Engine, &str); 5] = [
-    (Engine::TinEye, "TinEye"),
-    (Engine::SauceNao, "SauceNAO"),
-    (Engine::Yandex, "Yandex Images"),
-    (Engine::Sogou, "Sogou"),
-    (Engine::Bing, "Bing Visual Search"),
-];
 
 /// `CONTENT_SORT_OPTIONS`: a folder's own order, rewritten by one field.
 // i18n: translated where drawn (menu rows)

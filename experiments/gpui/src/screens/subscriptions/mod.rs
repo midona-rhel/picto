@@ -411,9 +411,7 @@ impl SubscriptionsScreen {
                 let Ok(answer) = this.update(cx, |this, cx| this.send(request, cx)) else {
                     return;
                 };
-                outcome = answer
-                    .await
-                    .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+                outcome = crate::application::answer(answer).await;
                 if outcome.is_err() {
                     break;
                 }

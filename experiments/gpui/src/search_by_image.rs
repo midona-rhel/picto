@@ -19,7 +19,6 @@
 //! ahead of that. Under a check, the engines' addresses are the local
 //! fixtures' (`crate::net`), and the results address is written on
 //! standard error instead of being opened.
-use crate::grid::menu::Engine;
 use crate::i18n::t;
 use crate::platform::login_window::{Event, LoginWindow, Options};
 use base64::Engine as _;
@@ -52,6 +51,38 @@ const WAIT_FOR: &str = r#"
     }
 "#;
 
+/// The reverse image search providers (`REVERSE_IMAGE_SEARCH_ENGINES`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    TinEye,
+    SauceNao,
+    Yandex,
+    Sogou,
+    Bing,
+}
+
+// i18n: translated where drawn (menu rows)
+pub const ENGINES: [(Engine, &str); 5] = [
+    (Engine::TinEye, "TinEye"),
+    (Engine::SauceNao, "SauceNAO"),
+    (Engine::Yandex, "Yandex Images"),
+    (Engine::Sogou, "Sogou"),
+    (Engine::Bing, "Bing Visual Search"),
+];
+
+impl Engine {
+    /// Production's key for the engine.
+    pub fn key(self) -> &'static str {
+        match self {
+            Engine::TinEye => "tineye",
+            Engine::SauceNao => "saucenao",
+            Engine::Yandex => "yandex",
+            Engine::Sogou => "sogou",
+            Engine::Bing => "bing",
+        }
+    }
+}
+
 /// One engine as production configures it (`createReverseSearchConfigs`).
 struct Config {
     key: &'static str,
@@ -66,7 +97,7 @@ struct Config {
 fn config(engine: Engine) -> Config {
     match engine {
         Engine::TinEye => Config {
-            key: "tineye",
+            key: engine.key(),
             url: "https://tineye.com/",
             pre_setup: "await __waitFor('#upload-box');",
             file_input: "input[type='file']",
@@ -75,7 +106,7 @@ fn config(engine: Engine) -> Config {
             portable_result: None,
         },
         Engine::SauceNao => Config {
-            key: "saucenao",
+            key: engine.key(),
             url: "https://saucenao.com/",
             pre_setup: "await __waitFor('#searchForm');",
             file_input: "#fileInput",
@@ -92,7 +123,7 @@ fn config(engine: Engine) -> Config {
             ),
         },
         Engine::Yandex => Config {
-            key: "yandex",
+            key: engine.key(),
             url: "https://yandex.com/images/",
             pre_setup: r#"await __waitFor('.input__cbir-button, [data-bem*="cbir"], .HeaderDesktopForm-CbirButton, button[aria-label*="image"]');
         const btn = document.querySelector('.input__cbir-button')
@@ -111,7 +142,7 @@ fn config(engine: Engine) -> Config {
             portable_result: None,
         },
         Engine::Sogou => Config {
-            key: "sogou",
+            key: engine.key(),
             url: "https://pic.sogou.com/",
             pre_setup: r#"await __waitFor('#cameraIco, .camera-ico, [class*="camera"]');
         const btn = document.querySelector('#cameraIco') || document.querySelector('.camera-ico') || document.querySelector('[class*="camera"]');
@@ -123,7 +154,7 @@ fn config(engine: Engine) -> Config {
             portable_result: None,
         },
         Engine::Bing => Config {
-            key: "bing",
+            key: engine.key(),
             url: "https://www.bing.com/images",
             pre_setup: r#"const btn = await __waitFor('#sb_sbi, #sb_sbip');
         btn.click();

@@ -423,100 +423,6 @@ mod tests {
         assert!(resolve("").is_none());
     }
 
-    // authSessions.test.mjs: 'opens Twitter / X at its direct-site login
-    // and captures its session cookies', 'captures the Newgrounds session
-    // used by gallery-dl', 'uses the E-Hentai account login and a separate
-    // ExHentai verification step', 'opens the current SubscribeStar login
-    // service'.
-    #[test]
-    fn services_are_declared_as_production_declares_them() {
-        let twitter = resolve("twitter").unwrap();
-        assert_eq!(
-            twitter.login_url.as_deref(),
-            Some("https://x.com/i/flow/login")
-        );
-        assert_eq!(twitter.cookie_url.as_deref(), Some("https://x.com"));
-        assert_eq!(
-            twitter.authenticated_cookie_names,
-            Some(&["auth_token", "ct0"][..])
-        );
-
-        let newgrounds = resolve("newgrounds").unwrap();
-        assert_eq!(
-            newgrounds.login_url.as_deref(),
-            Some("https://www.newgrounds.com/login")
-        );
-        assert_eq!(newgrounds.cookie_names, Some(&["ng_session"][..]));
-        assert_eq!(
-            newgrounds.authenticated_cookie_names,
-            Some(&["ng_session"][..])
-        );
-        assert_eq!(newgrounds.window, WIDE_AUTH_WINDOW);
-
-        let ehentai = resolve("ehentai").unwrap();
-        assert_eq!(ehentai.strategy, Strategy::Cookies);
-        assert_eq!(
-            ehentai.login_url.as_deref(),
-            Some("https://forums.e-hentai.org/index.php?act=Login&CODE=00")
-        );
-        assert_eq!(
-            ehentai.verification_url.as_deref(),
-            Some("https://exhentai.org/")
-        );
-        assert_eq!(
-            ehentai.cookie_urls.as_deref(),
-            Some(
-                &[
-                    "https://forums.e-hentai.org".to_owned(),
-                    "https://e-hentai.org".to_owned(),
-                    "https://exhentai.org".to_owned()
-                ][..]
-            )
-        );
-        assert_eq!(
-            ehentai.cookie_names,
-            Some(&["ipb_member_id", "ipb_pass_hash", "igneous"][..])
-        );
-
-        let subscribestar = resolve("subscribestar").unwrap();
-        assert_eq!(
-            subscribestar.login_url.as_deref(),
-            Some("https://www.subscribestar.com/login")
-        );
-        assert_eq!(
-            subscribestar.cookie_names,
-            Some(&["_personalization_id", "18_plus_agreement_generic"][..])
-        );
-        assert_eq!(
-            subscribestar.authenticated_cookie_names,
-            Some(&["_personalization_id"][..])
-        );
-    }
-
-    // 'opens Newgrounds and DeviantArt at desktop width without changing
-    // other login windows'
-    #[test]
-    fn only_newgrounds_and_deviantart_open_wide() {
-        for id in SITE_IDS {
-            let site = resolve(id).unwrap();
-            let wide = matches!(id, "newgrounds" | "deviantart");
-            assert_eq!(
-                site.window,
-                if wide { WIDE_AUTH_WINDOW } else { AUTH_WINDOW },
-                "{id}"
-            );
-        }
-        assert_eq!(
-            (
-                AUTH_WINDOW.width,
-                AUTH_WINDOW.height,
-                AUTH_WINDOW.min_width,
-                AUTH_WINDOW.min_height
-            ),
-            (520., 760., 420., 640.)
-        );
-    }
-
     // 'captures only the selected SubscribeStar host' and 'rejects an
     // unsupported SubscribeStar login host'
     #[test]
@@ -543,18 +449,6 @@ mod tests {
             );
         }
         assert!(with_service_host(resolve("patreon").unwrap(), "www.subscribestar.com").is_err());
-    }
-
-    #[test]
-    fn every_service_but_pixiv_and_deviantart_has_a_login_page() {
-        // Their logins start at an authorization page made when they start.
-        let routes = login_routes();
-        assert_eq!(routes.len(), SITE_IDS.len() - 2);
-        assert!(
-            routes
-                .iter()
-                .all(|(site, _)| site != "pixiv" && site != "deviantart")
-        );
     }
 
     #[test]

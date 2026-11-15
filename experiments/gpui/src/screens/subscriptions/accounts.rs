@@ -418,11 +418,9 @@ impl Accounts {
         let answer = self
             .session
             .read(cx)
-            .dispatch("auth.credentials.delete", json!({ "site_id": owner }));
+            .call("auth.credentials.delete", json!({ "site_id": owner }));
         cx.spawn(async move |this, cx| {
-            let removed = answer
-                .await
-                .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+            let removed = answer.await;
             let _ = this.update(cx, |this, cx| match removed {
                 Ok(_) => {
                     crate::logins::report_local_login(&this.session, owner, cx);

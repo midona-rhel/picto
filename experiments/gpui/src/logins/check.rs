@@ -324,10 +324,8 @@ async fn dispatch(
     args: Value,
     cx: &mut AsyncApp,
 ) -> Result<Value, String> {
-    let answer = cx.update(|cx| session.read(cx).dispatch(command.to_owned(), args));
-    answer
-        .await
-        .unwrap_or_else(|_| Err("the application stopped".to_owned()))
+    let answer = cx.update(|cx| session.read(cx).call(command.to_owned(), args));
+    answer.await
 }
 
 async fn until(cx: &mut AsyncApp, seconds: u64, mut done: impl FnMut(&App) -> bool) -> bool {

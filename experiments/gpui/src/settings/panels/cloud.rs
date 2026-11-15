@@ -329,7 +329,7 @@ impl SettingsWindow {
                             .text(theme::TEXT_SM)
                             .text_color(theme.text_secondary())
                             .font_features(theme::tabular_figures())
-                            .child(cloud::bytes(point.size_bytes as i64)),
+                            .child(crate::text::size_to_terabytes(point.size_bytes)),
                     )
                     .child(
                         ui::action_button(("cloud-restore", index), Look::Settings)

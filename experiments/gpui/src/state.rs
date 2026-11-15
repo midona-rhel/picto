@@ -628,30 +628,36 @@ pub fn load(folder: &Path) -> (State, Map<String, Value>) {
 /// replaces a later one.
 static WRITTEN: Mutex<u64> = Mutex::new(0);
 
-/// Writes `text` as the file in `folder` through a temporary file, unless a
-/// later write has already landed. The temporary file reaches the disk
-/// before it replaces the old one, so a crash or a power cut leaves the old
-/// file or the new one, never a part of either; a write that fails removes
-/// it.
+/// Writes `text` as the file in `folder` through [`write_file`], unless a
+/// later write has already landed.
 fn write(folder: &Path, text: &str, sequence: u64) -> std::io::Result<()> {
-    use std::io::Write as _;
     let mut written = WRITTEN.lock().unwrap_or_else(|poison| poison.into_inner());
     if sequence < *written {
         return Ok(());
     }
+    write_file(folder, FILE, text.as_bytes())?;
+    *written = sequence;
+    Ok(())
+}
+
+/// Writes `bytes` as the file `name` in `folder` (made if missing) through a
+/// temporary file. The temporary file reaches the disk before it replaces
+/// the old one, so a crash or a power cut leaves the old file or the new
+/// one, never a part of either; a write that fails removes it.
+pub fn write_file(folder: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
     std::fs::create_dir_all(folder)?;
-    let temporary = folder.join(format!("{FILE}.{}.tmp", std::process::id()));
+    let temporary = folder.join(format!("{name}.{}.tmp", std::process::id()));
     let replaced = std::fs::File::create(&temporary)
         .and_then(|mut file| {
-            file.write_all(text.as_bytes())?;
+            file.write_all(bytes)?;
             file.sync_all()
         })
-        .and_then(|()| std::fs::rename(&temporary, folder.join(FILE)));
+        .and_then(|()| std::fs::rename(&temporary, folder.join(name)));
     if let Err(error) = replaced {
         let _ = std::fs::remove_file(&temporary);
         return Err(error);
     }
-    *written = sequence;
     Ok(())
 }
 

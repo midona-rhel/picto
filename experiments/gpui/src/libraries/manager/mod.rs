@@ -11,7 +11,7 @@
 //! listed library's folder and cover and nothing else; statistics are read
 //! for the open library only, through its application, as production reads
 //! them.
-use super::admission::{Decision, Origin};
+use super::admission::Origin;
 use super::{Kind, history, host};
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -23,6 +23,8 @@ use gpui::*;
 use std::path::{Path, PathBuf};
 
 mod cloud;
+mod dialogs;
+mod panes;
 
 const WIDTH: f32 = 700.;
 const HEIGHT: f32 = 550.;
@@ -107,7 +109,7 @@ pub fn rows(
 }
 
 /// What the actions menu does to a library that is not open, each only
-/// once `host::check` lets it (asking the user's consent first, as opening
+/// once `host::permit` lets it (asking the user's consent first, as opening
 /// does, for a library not yet agreed to): rename and Show in File Manager
 /// act on a library the user has not opened here, so they are asked about
 /// as opening is.
@@ -399,29 +401,30 @@ impl Manager {
         cx.notify();
     }
 
-    /// Runs `act` on the library at `path` if `host::check` lets it now,
-    /// asking the user's consent first where opening would; the open
-    /// library was let through when it opened.
+    /// Runs `act` on the library at `path` if `host::permit` lets it now,
+    /// asking the user's consent first where opening would.
     fn guarded(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         self.message = None;
-        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
-        if open {
-            return self.perform(path, act, window, cx);
+        match host::permit(Path::new(&path), cx) {
+            Ok(()) => self.perform(path, act, window, cx),
+            Err(denied) => self.denied(denied, Some(act), cx),
         }
-        match host::check(Path::new(&path), cx) {
-            Decision::Real { .. } => self.perform(path, act, window, cx),
-            Decision::Ask { root, identity } => {
-                self.asking = Some((identity, root, act, ui::modal::Presence::new()));
-                cx.notify();
+    }
+
+    /// What the host refused: the consent asked for (then `act` run), or
+    /// its words shown. A copy that is not open is never listed.
+    fn denied(&mut self, denied: host::Denied, act: Option<Act>, cx: &mut Context<Self>) {
+        match denied {
+            host::Denied::Ask { root, identity } => {
+                if let Some(act) = act {
+                    self.asking = Some((identity, root, act, ui::modal::Presence::new()));
+                }
             }
-            // Never a copy that is not open: only the open one is listed.
-            Decision::Copy(_) => {}
-            Decision::Refused(refusal) => {
-                self.error = Some(refusal.words().1);
-                cx.notify();
-            }
+            host::Denied::Error(error) => self.error = Some(error),
+            host::Denied::Copy => {}
         }
+        cx.notify();
     }
 
     fn perform(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
@@ -458,7 +461,12 @@ impl Manager {
                 match super::files::destination(&from, &folder) {
                     Ok(super::files::Moved::To(target)) => {
                         this.selected = Some(target.to_string_lossy().into_owned());
-                        cx.defer(move |cx| host::move_library(from, target, cx));
+                        let manager = cx.entity().downgrade();
+                        cx.defer(move |cx| {
+                            host::move_library(from.clone(), target, cx, move |result, cx| {
+                                let _ = manager.update(cx, |this, cx| this.relocated(from, result, cx));
+                            })
+                        });
                     }
                     Ok(super::files::Moved::Unchanged) => {}
                     Err(error) => {
@@ -471,29 +479,22 @@ impl Manager {
         .detach();
     }
 
-    /// The user confirmed Delete…: checked again, as the moment may have
-    /// changed (the Electron app started, the library was opened), then
-    /// removed.
+    /// A rename or move the host finished: on failure the library keeps
+    /// its row selected under its old path, and the reason is shown.
+    fn relocated(&mut self, from: PathBuf, result: Result<(), host::Denied>, cx: &mut Context<Self>) {
+        if let Err(denied) = result {
+            self.selected = Some(from.to_string_lossy().into_owned());
+            self.denied(denied, None, cx);
+        }
+        self.read(cx);
+    }
+
+    /// The user confirmed Delete…: the host checks it again, as the moment
+    /// may have changed, then removes it. A consent withdrawn meanwhile
+    /// leaves it as it is.
     fn delete(&mut self, path: String, cx: &mut Context<Self>) {
         self.deleting = None;
         cx.notify();
-        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
-        if open {
-            self.error = Some(
-                "Cannot delete the currently open library. Switch to a different library first."
-                    .to_owned(),
-            );
-            return;
-        }
-        match host::check(Path::new(&path), cx) {
-            Decision::Real { .. } => {}
-            Decision::Refused(refusal) => {
-                self.error = Some(refusal.words().1);
-                return;
-            }
-            // The consent was withdrawn meanwhile, or this is a copy.
-            Decision::Ask { .. } | Decision::Copy(_) => return,
-        }
         let manager = cx.entity().downgrade();
         host::delete(PathBuf::from(&path), cx, move |result, cx| {
             let _ = manager.update(cx, |this, cx| {
@@ -502,7 +503,7 @@ impl Manager {
                         this.selected = None;
                         this.message = Some(t("Library deleted.").to_owned());
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(denied) => this.denied(denied, None, cx),
                 }
                 this.read(cx);
             });
@@ -624,7 +625,12 @@ impl Manager {
             Ok(renamed) => {
                 self.selected = Some(renamed.to_string_lossy().into_owned());
                 let from = PathBuf::from(&row.path);
-                cx.defer(move |cx| host::rename(from, renamed, cx));
+                let manager = cx.entity().downgrade();
+                cx.defer(move |cx| {
+                    host::rename(from.clone(), renamed, cx, move |result, cx| {
+                        let _ = manager.update(cx, |this, cx| this.relocated(from, result, cx));
+                    })
+                });
             }
             Err(error) => self.error = Some(error),
         }
@@ -745,725 +751,6 @@ impl Manager {
             self.selected = None;
         }
         self.read(cx);
-    }
-
-    fn header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme::theme(cx);
-        ui::drag_region("library-manager-header", window, cx)
-            .h(px(HEADER))
-            .flex_none()
-            .pl(px(16.))
-            .pr(px(12.))
-            .flex()
-            .items_center()
-            .border_b_1()
-            .border_color(theme.border_secondary())
-            .child(
-                div()
-                    .flex_1()
-                    .text(theme::TEXT_LG)
-                    .font_weight(FontWeight::BOLD)
-                    .child(t("Library Manager")),
-            )
-            .child(ui::window_chrome::close_button(
-                "library-manager-close",
-                |_, window, _| window.remove_window(),
-            ))
-    }
-
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme::theme(cx);
-        let mut list = div().flex().flex_col().gap(px(2.));
-        if self.rows.is_empty() {
-            list = list.child(
-                div()
-                    .px(px(8.))
-                    .py(px(12.))
-                    .text(theme::TEXT_SM)
-                    .text_color(theme.text_tertiary())
-                    .child(t("No libraries yet.")),
-            );
-        }
-        for (index, row) in self.rows.iter().enumerate() {
-            let selected = self.selected.as_deref() == Some(row.path.as_str());
-            let status = if row.current {
-                Some(ui::icon("check", 13., theme.text()))
-            } else if row.pinned {
-                Some(ui::icon("pin", 12., theme.text_tertiary()))
-            } else if row.missing {
-                Some(ui::icon("alert-circle", 12., theme.negative()))
-            } else {
-                None
-            };
-            let path = row.path.clone();
-            let open = row.path.clone();
-            let can_open = !row.current && !row.missing;
-            list = list.child(
-                div()
-                    .id(("library-row", index))
-                    .role(Role::Button)
-                    .aria_label(row.name.clone())
-                    .aria_selected(selected)
-                    .h(px(ROW))
-                    .px(px(8.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .rounded(px(theme::RADIUS_MD))
-                    .cursor_pointer()
-                    .when(selected, |row| row.bg(theme.surface_active()))
-                    .when(!selected, |row| {
-                        row.hover(move |style| style.bg(theme.surface_hover()))
-                    })
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                        if event.click_count() >= 2 && can_open {
-                            this.open_row(open.clone(), cx);
-                        } else {
-                            this.choose(path.clone(), cx);
-                        }
-                    }))
-                    .child(
-                        ui::library_avatar(("library-row-avatar", index), row.cover.clone(), 42.)
-                            .appearance(row.look.icon.clone(), look_color(&row.look))
-                            .highlighted(selected),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text(theme::TEXT_MD)
-                                    .truncate()
-                                    .child(row.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text(theme::TEXT_CAPTION)
-                                    .text_color(theme.text_tertiary())
-                                    .truncate()
-                                    .child(row.dir.clone()),
-                            ),
-                    )
-                    .children(row.current.then(|| self.row_sync_dot(cx)).flatten())
-                    .children(status),
-            );
-        }
-        div()
-            .w(px(SIDEBAR))
-            .flex_none()
-            .h_full()
-            .px(px(8.))
-            .py(px(14.))
-            .border_r_1()
-            .border_color(theme.border_secondary())
-            // A further 3% of the contrast colour over the window's.
-            .bg(theme.rail_raised())
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .mx(px(8.))
-                    .mb(px(7.))
-                    .text(theme::TEXT_CAPTION)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_tertiary())
-                    .child(t("On this device")),
-            )
-            .child(
-                div()
-                    .id("library-rows")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
-            )
-    }
-
-    fn card(title: &'static str, cx: &App) -> Div {
-        let theme = theme::theme(cx);
-        div()
-            .p(px(14.))
-            .border_1()
-            .border_color(theme.border_secondary())
-            .rounded(px(theme::RADIUS_LG))
-            .bg(theme.control_surface())
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .text(theme::TEXT_MD)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(t(title)),
-            )
-    }
-
-    fn library_pane(&self, row: &Row, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = theme::theme(cx);
-        let can_open = !row.current && !row.missing;
-        let open_path = row.path.clone();
-        let mut actions = div().flex().items_center().gap(px(8.));
-        if can_open {
-            actions = actions.child(
-                ui::action_button::action_button("library-open", ui::action_button::Look::Primary)
-                    .label(t("Open Library"))
-                    .disabled(self.busy)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.open_row(open_path.clone(), cx)),
-                    ),
-            );
-        }
-        actions = actions.child(
-            ui::icon_button("library-actions", "dots-vertical")
-                .name(t("Library actions"))
-                .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                    this.open_actions(event.position(), window, cx)
-                })),
-        );
-        let title = match &self.renaming {
-            Some(field) => div()
-                .flex()
-                .items_center()
-                .gap(px(6.))
-                .child(
-                    div()
-                        // `width: min(240px, 100%)`.
-                        .flex_none()
-                        .w(relative(1.))
-                        .max_w(px(240.))
-                        .h(px(28.))
-                        .px(px(8.))
-                        .rounded(px(theme::RADIUS_MD))
-                        .border_1()
-                        .border_color(theme.primary_at(60.))
-                        .flex()
-                        .items_center()
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            match event.keystroke.key.as_str() {
-                                "escape" => {
-                                    this.renaming = None;
-                                    cx.notify();
-                                }
-                                _ => {}
-                            }
-                        }))
-                        .child(field.clone()),
-                )
-                .child(
-                    ui::action_button::action_button(
-                        "library-rename-save",
-                        ui::action_button::Look::Primary,
-                    )
-                    .label(t("Save"))
-                    .on_click(cx.listener(|this, _, _, cx| this.save_rename(cx))),
-                )
-                .child(
-                    ui::action_button::action_button(
-                        "library-rename-cancel",
-                        ui::action_button::Look::Standard,
-                    )
-                    .label(t("Cancel"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.renaming = None;
-                        cx.notify();
-                    })),
-                )
-                .into_any_element(),
-            None => div()
-                .text(theme::TEXT_XL)
-                .font_weight(FontWeight::BOLD)
-                .truncate()
-                .child(row.name.clone())
-                .into_any_element(),
-        };
-        let hero = div()
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .child(
-                ui::library_avatar("library-hero-avatar", row.cover.clone(), 84.)
-                    .appearance(row.look.icon.clone(), look_color(&row.look))
-                    .highlighted(true),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(title)
-                    .child(
-                        div()
-                            .text(theme::TEXT_CAPTION)
-                            .text_color(theme.text_tertiary())
-                            .truncate()
-                            .child(row.path.clone()),
-                    ),
-            )
-            .child(actions);
-        let mut status = div()
-            .min_h(px(32.))
-            .flex()
-            .items_center()
-            .gap(px(14.))
-            .text(theme::TEXT_CAPTION)
-            .text_color(theme.text_secondary());
-        if row.current {
-            status = status.child(t("Current library"));
-        }
-        if row.kind == Kind::Copy {
-            status = status.child(en("Library copy"));
-        }
-        if row.pinned {
-            status = status.child(t("Pinned"));
-        }
-        if row.missing {
-            status = status.child(
-                div()
-                    .text_color(theme.negative())
-                    .child(t("Missing on disk")),
-            );
-        }
-        // `Appearance`: the colour and icon (kept in this app's state, as
-        // production keeps them in its `config.json`), and the cover,
-        // chosen in the main window's cover dialog for the open library.
-        let current = row.current;
-        let label = |text: &'static str| {
-            div()
-                .w(px(64.))
-                .flex_none()
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_secondary())
-                .child(t(text))
-        };
-        let colored = row.path.clone();
-        let colors = ui::color_picker::color_picker("library-color", row.look.color.clone())
-            .on_pick({
-                let manager = cx.entity().downgrade();
-                move |color, _, cx| {
-                    let path = colored.clone();
-                    let _ = manager.update(cx, |this, cx| {
-                        this.set_look(path, |look| look.color = color.map(str::to_owned), cx)
-                    });
-                }
-            });
-        let (iconed, icon) = (row.path.clone(), row.look.icon.clone());
-        // i18n: translated where drawn
-        let appearance = Self::card("Appearance", cx)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(label("Color"))
-                    .child(div().w(px(260.)).child(colors)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(label("Icon"))
-                    .child(
-                        ui::action_button::action_button(
-                            "library-icon",
-                            ui::action_button::Look::Standard,
-                        )
-                        .label(if self.icons.is_some() {
-                            t("Done")
-                        } else {
-                            t("Change…")
-                        })
-                        .disabled(self.busy)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_icons(iconed.clone(), icon.clone(), cx)
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(label("Cover"))
-                    .child(
-                        ui::action_button::action_button(
-                            "library-cover",
-                            ui::action_button::Look::Standard,
-                        )
-                        .label(t("Choose…"))
-                        .disabled(self.busy || !current)
-                        .tip(ui::tip(if current {
-                            t("Choose a media item and crop the library cover")
-                        } else {
-                            t("Open this library before choosing its media")
-                        }))
-                        .on_click(|_, _, cx| cx.defer(choose_cover)),
-                    ),
-            )
-            .children(self.icons.clone().map(|icons| {
-                div()
-                    .mt(px(2.))
-                    .rounded(px(theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(theme.border_secondary())
-                    .w(px(ui::icon_picker::WIDTH))
-                    .child(icons)
-            }));
-        // i18n: translated where drawn
-        let statistics = Self::card("Library", cx)
-            .mt(px(12.))
-            .child(self.statistics(row, cx));
-        // i18n: translated where drawn
-        let cloud = Self::card("Cloud Sync", cx).mt(px(12.)).child(if current {
-            self.cloud_card(cx)
-        } else {
-            div()
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_tertiary())
-                .child(t("Open this library to configure its cloud location."))
-                .into_any_element()
-        });
-        let _ = window;
-        div()
-            .flex()
-            .flex_col()
-            .child(hero)
-            .child(status)
-            .child(appearance)
-            .child(statistics)
-            .child(cloud)
-            .into_any_element()
-    }
-
-    fn statistics(&self, row: &Row, cx: &App) -> AnyElement {
-        let theme = theme::theme(cx);
-        let line = |text: &str| {
-            div()
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_tertiary())
-                .child(text.to_owned())
-                .into_any_element()
-        };
-        if !row.current {
-            return line(t("Open this library to view its statistics."));
-        }
-        let Some(stats) = &self.stats else {
-            return line(t("Loading library statistics…"));
-        };
-        let count =
-            |key: &str| crate::i18n::format::grouped(i128::from(stats[key].as_i64().unwrap_or(0)));
-        // i18n: translated where drawn
-        let fields = [
-            ("All", count("active_items")),
-            ("Inbox", count("inbox_items")),
-            ("Trash", count("trash_items")),
-            ("Media", count("media_assets")),
-            ("Images", count("image_assets")),
-            ("Tags", count("tags")),
-            ("Subscriptions", count("subscriptions")),
-            (
-                "Size",
-                crate::text::size_to_terabytes(stats["original_bytes"].as_u64().unwrap_or(0)),
-            ),
-        ];
-
-        let mut grid = div().flex().flex_wrap().gap_y(px(12.));
-        for (label, value) in fields {
-            grid = grid.child(
-                div()
-                    .w(relative(0.25))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text(theme::TEXT_LG)
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(value),
-                    )
-                    .child(
-                        div()
-                            .text(theme::TEXT_CAPTION)
-                            .text_color(theme.text_tertiary())
-                            .child(t(label)),
-                    ),
-            );
-        }
-        grid.into_any_element()
-    }
-
-    fn create_pane(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = theme::theme(cx);
-        let field = self.name.focus_handle(cx);
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(ui::icon("library-plus", 18., theme.text()))
-                    .child(
-                        div()
-                            .text(theme::TEXT_XL)
-                            .font_weight(FontWeight::BOLD)
-                            .child(t("Create a new library")),
-                    ),
-            )
-            .child(
-                div()
-                    .text(theme::TEXT_MD)
-                    .text_color(theme.text_secondary())
-                    .child(t(
-                        "Choose a name now; Picto will ask where the library should be stored.",
-                    )),
-            )
-            .child(
-                div()
-                    .mt(px(6.))
-                    .text(theme::TEXT_SM)
-                    .text_color(theme.text_secondary())
-                    .child(t("Library name")),
-            )
-            .child(
-                div()
-                    .w(px(360.))
-                    .h(px(30.))
-                    .px(px(10.))
-                    .rounded(px(theme::RADIUS_MD))
-                    .border_1()
-                    .border_color(theme.border_secondary())
-                    .bg(theme.control_surface())
-                    .flex()
-                    .items_center()
-                    .cursor(CursorStyle::IBeam)
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        window.focus(&field, cx)
-                    })
-                    .child(self.name.clone()),
-            )
-            .child(
-                div().mt(px(4.)).child(
-                    ui::action_button::action_button(
-                        "library-create",
-                        ui::action_button::Look::Primary,
-                    )
-                    .label(if self.busy {
-                        t("Creating…")
-                    } else {
-                        t("Choose Location…")
-                    })
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
-                ),
-            )
-            .into_any_element()
-    }
-
-    fn feedback(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = theme::theme(cx);
-        if let Some(error) = &self.error {
-            return Some(
-                div()
-                    .mt(px(14.))
-                    .px(px(12.))
-                    .py(px(10.))
-                    .rounded(px(theme::RADIUS_LG))
-                    .border_1()
-                    .border_color(theme.negative_at(45.))
-                    .bg(theme.control_surface())
-                    .flex()
-                    .items_start()
-                    .gap(px(8.))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text(theme::TEXT_SM)
-                            .text_color(theme.text())
-                            .child(error.clone()),
-                    )
-                    .child(
-                        // i18n: an icon's name
-                        ui::icon_button("library-error-dismiss", "x")
-                            .name(t("Dismiss notification"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.error = None;
-                                cx.notify();
-                            })),
-                    )
-                    .into_any_element(),
-            );
-        }
-        self.message.as_ref().map(|message| {
-            div()
-                .mt(px(14.))
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_secondary())
-                .child(message.clone())
-                .into_any_element()
-        })
-    }
-
-    fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme::theme(cx);
-        div()
-            .h(px(FOOTER))
-            .flex_none()
-            .px(px(14.))
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(8.))
-            .border_t_1()
-            .border_color(theme.border_secondary())
-            .bg(theme.footer_surface())
-            .child(
-                ui::action_button::action_button("library-new", ui::action_button::Look::Standard)
-                    .icon("plus", 14.)
-                    .label(t("New Library…"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.pane = Pane::Create;
-                        this.error = None;
-                        window.focus(&this.name.focus_handle(cx), cx);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                ui::action_button::action_button(
-                    "library-open-existing",
-                    ui::action_button::Look::Standard,
-                )
-                .icon("library-folder-open", 14.)
-                .label(t("Open Existing…"))
-                .on_click(|_, _, cx| cx.defer(host::open_dialog)),
-            )
-            .child(
-                ui::action_button::action_button(
-                    "library-open-cloud",
-                    ui::action_button::Look::Standard,
-                )
-                .icon("IconCloud", 14.)
-                .label(t("Open from Cloud…"))
-                .disabled(self.busy || self.working.is_some())
-                .on_click(cx.listener(|this, _, _, cx| this.show_cloud_open(cx))),
-            )
-    }
-
-    /// `deleteLibrary`'s question, as production's message box words it,
-    /// naming the full path.
-    fn deletion(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (path, presence) = self.deleting.as_ref()?;
-        let name = super::name(path);
-        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.deleting = None;
-            cx.notify();
-        });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.deleting = None;
-            cx.notify();
-        });
-        let deleted = path.clone();
-        let accept =
-            cx.listener(move |this: &mut Self, _: &(), _, cx| this.delete(deleted.clone(), cx));
-        // Production's main process writes these in English, without keys.
-        let message = format!(
-            "Delete library \"{name}\"?\n\nThis will permanently delete all files in:\n{path}\n\nThis cannot be undone."
-        );
-        Some(
-            ui::confirm::confirm(
-                "library-delete",
-                en("Delete Library"),
-                message,
-                t("Delete"),
-                *presence,
-            )
-            .danger(true)
-            .busy(self.busy)
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
-            .on_confirm(move |window, cx| accept(&(), window, cx))
-            .into_any_element(),
-        )
-    }
-
-    /// The consent question, asked here before Rename, Show in File
-    /// Manager, Move… or Delete… on a library the user has not agreed to.
-    fn consent(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (_, root, _, presence) = self.asking.as_ref()?;
-        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.asking = None;
-            cx.notify();
-        });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.asking = None;
-            cx.notify();
-        });
-        let accept = cx.listener(|this: &mut Self, _: &(), window, cx| {
-            if let Some((identity, root, act, _)) = this.asking.take() {
-                host::agree(&identity, cx);
-                cx.notify();
-                // After the question has let the keyboard go, so a rename's
-                // field keeps it.
-                cx.defer_in(window, move |this, window, cx| {
-                    this.perform(root.to_string_lossy().into_owned(), act, window, cx)
-                });
-            }
-        });
-        Some(
-            ui::confirm::confirm(
-                "library-manager-consent",
-                en("Open this library directly?"),
-                host::consent_message(root),
-                en("Continue"),
-                *presence,
-            )
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
-            .on_confirm(move |window, cx| accept(&(), window, cx))
-            .into_any_element(),
-        )
-    }
-
-    fn removal(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (path, presence) = self.removing.as_ref()?;
-        let name = super::name(path);
-        let path = path.clone();
-        let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.removing = None;
-            cx.notify();
-        });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.removing = None;
-            cx.notify();
-        });
-        let accept =
-            cx.listener(move |this: &mut Self, _: &(), _, cx| this.remove(path.clone(), cx));
-        Some(
-            ui::confirm::confirm(
-                "library-remove",
-                t("Remove from List"),
-                crate::tf!(
-                    "Remove \"{value0}\" from this list?\n\nThe library and its files remain on disk.",
-                    name
-                ),
-                t("Remove"),
-                *presence,
-            )
-            .danger(true)
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
-            .on_confirm(move |window, cx| accept(&(), window, cx))
-            .into_any_element(),
-        )
     }
 }
 

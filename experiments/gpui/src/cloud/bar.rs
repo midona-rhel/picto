@@ -21,8 +21,8 @@ fn detail(status: &Status) -> Option<String> {
     Some(if status.phase == "blobs" {
         format!(
             "{} / {}",
-            super::bytes(status.completed_units),
-            super::bytes(total)
+            crate::text::size_to_terabytes(status.completed_units.max(0) as u64),
+            crate::text::size_to_terabytes(total as u64)
         )
     } else {
         format!("{} / {}", status.completed_units, total)

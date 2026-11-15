@@ -87,20 +87,6 @@ unsafe fn read(cookie: &ICoreWebView2Cookie) -> Option<Cookie> {
     }
 }
 
-/// Removes a sign-in window's user data folder once WebView2's browser
-/// process, which outlives the window by a moment, has let go of it.
-pub fn remove_later(data: tempfile::TempDir) {
-    let path = data.keep();
-    std::thread::spawn(move || {
-        for _ in 0..20 {
-            if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-    });
-}
-
 /// Reports a main-frame load that did not complete as [`Event::Failed`]:
 /// one with no answer from the server (a page the server answered, a 404,
 /// loads as Electron loads it), and not one stopped by a newer one or

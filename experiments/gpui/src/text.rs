@@ -156,7 +156,7 @@ pub fn size_to_megabytes(bytes: i64) -> String {
     }
 }
 
-/// `formatBytes` in Settings and the Picto Pack dialog: bytes, then the largest binary unit up to TB,
+/// `formatBytes` in Settings, the cloud sync bar and the Picto Pack dialog: bytes, then the largest binary unit up to TB,
 /// with two decimals under ten and one above.
 pub fn size_to_terabytes(value: u64) -> String {
     if value < 1024 {

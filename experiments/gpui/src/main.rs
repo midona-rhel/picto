@@ -197,18 +197,6 @@ fn remember_window(window: &Window, cx: &mut App) {
     state::update(cx, |state| state.window = Some(place));
 }
 
-/// What the main window opens first.
-enum Initial {
-    /// A disposable copy from the command line, with this process holding
-    /// its instance.
-    Copy(std::path::PathBuf, opening::instance::Instance),
-    /// A library named on the command line with `--allow-real-libraries`.
-    Named(std::path::PathBuf),
-    /// No library named: the one this app had open last, if it may be
-    /// opened, else the gate.
-    Last,
-}
-
 fn main() {
     logins::keep_credentials_in_process();
     diagnostics::install_logger();
@@ -245,7 +233,7 @@ fn main() {
     // the same library, and the system (macOS `application:openURLs:`).
     let (incoming, arrived) = futures::channel::mpsc::unbounded::<opening::Incoming>();
     let (initial, rest) = match launch {
-        None => (Initial::Last, Vec::new()),
+        None => (libraries::host::Launch::Last, Vec::new()),
         // `--make-copy <library>`: make a disposable copy of the library,
         // print where it is, and stop; the copy is then opened by passing
         // that path. The library is only read.
@@ -279,7 +267,10 @@ fn main() {
                 args: rest.clone(),
             };
             let instance = copy_instance(&copy, &request, &incoming);
-            (Initial::Copy(copy, instance), rest)
+            (
+                libraries::host::Launch::Copy(copy, Some(std::sync::Arc::new(instance))),
+                rest,
+            )
         }
         // A library the user keeps, named with the flag: opened if the
         // rules let it, after the user's consent.
@@ -287,7 +278,7 @@ fn main() {
             if flag && files.len() == 1 && files[0].to_lowercase().ends_with(".library") =>
         {
             (
-                Initial::Named(working_directory.join(&files[0])),
+                libraries::host::Launch::Named(working_directory.join(&files[0])),
                 Vec::new(),
             )
         }
@@ -344,7 +335,7 @@ fn copy_instance(
 
 /// Runs the app: the main window, the gate or the first library in it.
 fn run(
-    initial: Initial,
+    initial: libraries::host::Launch,
     rest: Vec<String>,
     working_directory: std::path::PathBuf,
     incoming: futures::channel::mpsc::UnboundedSender<opening::Incoming>,
@@ -426,24 +417,7 @@ fn run(
                 },
             )
             .unwrap();
-        app_menu::set_main_window(window.into(), cx);
-        libraries::host::attach(window, incoming, cx);
-        app_menu::set_menus(cx);
-        match initial {
-            Initial::Copy(root, instance) => libraries::host::start(
-                root,
-                libraries::Kind::Copy,
-                Some(std::sync::Arc::new(instance)),
-                window,
-                cx,
-            ),
-            Initial::Named(path) => {
-                libraries::host::request(&path, libraries::Origin::CommandLine { flag: true }, cx)
-            }
-            // Only a library this process may open is even looked at.
-            Initial::Last => libraries::host::start_last(cx),
-        }
-        libraries::host::launched(cx);
+        libraries::host::boot(window, incoming, initial, cx);
         // Stop the workers and checkpoint the library before the process
         // ends, as the Electron app closes its library before quitting.
         // Registered after the window opened, so the session's own quit

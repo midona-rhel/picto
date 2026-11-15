@@ -22,7 +22,7 @@ Issue: https://github.com/midona-rhel/picto/issues/163
 ### The safety boundary
 
 The app writes, imports and deletes files, so it opens only a folder it can
-prove is a throwaway copy (`application::guard` in `src/application.rs`). A
+prove is a throwaway copy (`application::guard` in `src/application/copy.rs`). A
 copy is accepted only when all of these hold:
 
 - it holds the marker file `.gpui-disposable`, whose first line names the
@@ -247,10 +247,13 @@ colour and icon are kept in this app's `state.json` (`libraryMeta`, as
 production keeps them in its `config.json`) and drawn on its avatar; they
 follow a rename, move or Locate…. The actions menu's Rename, Show in File
 Manager, Move… and Delete… on a library that is not open first run
-`admission::admit` as an open from the manager would (`host::check`), and
+`admission::admit` as an open from the manager would (`host::permit`), and
 ask the consent question when the user has not agreed to that library yet;
 a refusal (Picto running, an older schema, a debug build without the flag)
-stops them with its words. Move… (`relocateLibrary`) asks for a folder,
+stops them with its words. The host checks again when it renames, moves or
+deletes, and answers the manager with the outcome, which shows a failure
+in production's words ("Failed to rename library: …", "A library operation
+is already in progress."). Move… (`relocateLibrary`) asks for a folder,
 refuses one inside a library or holding a library of that name, closes the
 library first if it is open, renames the folder, or across volumes copies
 it beside the target, compares every file, renames the copy into place and
@@ -545,12 +548,15 @@ above the working directory or the executable
 About 112,000 lines of Rust in `src/`. The map below says what each area
 owns, its main types, and the one rule to know there.
 
-**Application and library thread** (`application.rs`, `backend.rs`).
-`Application` runs `picto_core` on a Tokio runtime of its own: it sets the
-application data root, registers the core's event callback, opens the copy
-with `picto_core::state::open_library_reporting` and answers
-`dispatch("command", json)` exactly as the renderer's `invoke` is answered
-(`core/src/ipc.rs`). `backend::start` runs one library thread that borrows
+**Application and library thread** (`application/`, `backend.rs`).
+`Application` (`application/mod.rs`) runs `picto_core` on a Tokio runtime of
+its own: it sets the application data root, registers the core's event
+callback, opens the copy with `picto_core::state::open_library_reporting`
+and answers `dispatch("command", json)` exactly as the renderer's `invoke`
+is answered (`core/src/ipc.rs`); `call` is the same answer as a future,
+"The application has stopped" if it never comes. `application/copy.rs`
+holds the disposable-copy rules: which folder opens as a copy (`guard`),
+`--make-copy` and `detach`. `backend::start` runs one library thread that borrows
 the application's own `Library`, so the database is opened once; grid
 results and the sidebar are read as soon as the database is readable, while
 the core's recovery passes still run (10–30 s on a million items), and
@@ -790,11 +796,13 @@ the sign-in window or OnlyFans' browser and its profile with it, whether
 or not the Accounts dialog is open; an answer that comes back for a login
 that has since ended (a save, the outside browser's ending) changes
 nothing.
-`sites.rs` is the service table; `adapters.rs` holds production's rules for
-when a login has finished (the session cookies a service's login sets, read
-for that service's addresses only; the page showing a signed-in session; a
-booru's API key on its options page; an OAuth callback, which never loads;
-ExHentai's check page; FANBOX's API answering); `machine.rs` is the session
+`sites.rs` is the service table; `adapters/` holds production's rules for
+when a login has finished, one file per kind of service (`cookie.rs`: the
+session cookies a service's login sets, read for that service's addresses
+only, the page showing a signed-in session, ExHentai's check page,
+FANBOX's API answering; `account_api.rs`: a booru's API key on its options
+page; `oauth.rs`: an OAuth callback, which never loads, Pixiv's flow, and
+OAuth 1.0a signing; `scripts.rs`: the scripts run in the page); `machine.rs` is the session
 (one at a time, every state and message the Accounts dialog shows, a look at
 the page every 750 ms bounded to 4 s, cancel, the window closed by the user)
 as a pure state machine; `Logins` (`mod.rs`) performs what it asks for and
@@ -838,11 +846,17 @@ away from the keychain.
 **Libraries** (`src/libraries/`). Which library opens (`admission.rs`, the
 rules above), this app's list of libraries and the consents in
 `state.json` (`mod.rs`, production's `globalConfig.mjs` rules), the main
-window's content (`host.rs`: the gate or the library's shell, opening,
-switching as production's `switchLibrary`, the consent dialog and the
-blocking notice), the Library Manager window (`manager.rs`), and the
-platform leaves for the process probe (`platform/`). Rule: every open goes
-through `host::request` (or `host::create` for New Library).
+window's content (`host/`: opening, switching as production's
+`switchLibrary` and closing in `mod.rs`, rename, move, delete and the
+consent in `disk.rs`, a cloud restore or join in `cloud.rs`, and the view,
+the gate or the library's shell with the consent dialog and the blocking
+notice, in `view.rs`), the Library Manager window (`manager/`: its actions
+in `mod.rs`, its panes in `panes.rs`, its questions in `dialogs.rs`, cloud
+sync in `cloud.rs`), and the platform leaves for the process probe
+(`platform/`). Rule: every open goes
+through `host::request` (or `host::create` for New Library), and every
+change on disk through `host::rename`, `move_library` or `delete`, which
+decide whether it may happen now (`host::permit`).
 
 **Desktop** (`src/desktop/`). What production's main process does around the
 window: the Inbox badge, the "Subscriptions finished" system notification,
@@ -993,7 +1007,7 @@ name:
 | Test | Needs |
 | --- | --- |
 | `real_copy_answers_commands_and_reports_changes`, `real_snapshot_query_details_rating_undo_redo`, `real_snapshot_subscriptions_read`, `real_snapshot_tags_browse_rename_and_groups` | `PICTO_GPUI_TEST_LIBRARY` naming a copy; they write to it |
-| `window_reads_stay_flat_across_the_library`, `time_each_stage` | the same; they time every grid read and each stage of opening (use `--nocapture`) |
+| `window_reads_stay_flat_across_the_library` | the same; it times every grid read (use `--nocapture`) |
 | `offscreen::plays_a_script` | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` (below) |
 | `viewers_render_off_screen` | a GPU; pictures saved when `PICTO_GPUI_MATRIX_OUT` is set |
 | `renders_a_real_file` | `PICTO_GPUI_MEDIA=<file>` (type from the extension, or `PICTO_GPUI_MEDIA_MIME`) |
@@ -1005,7 +1019,7 @@ name:
 ```sh
 PICTO_GPUI_TEST_LIBRARY="$(PICTO_GPUI_COPY_ONLY=1 ./run.sh /path/to/Main.library)" \
   cargo test --locked -- --ignored --test-threads=1 --nocapture \
-  real_copy real_snapshot window_reads_stay_flat time_each_stage
+  real_copy real_snapshot window_reads_stay_flat
 PICTO_GPUI_TEST_WEBM=/path/to/video.webm PICTO_GPUI_TEST_AUDIO=/path/to/audio.mp3 \
   cargo test --locked -- --ignored real_webm decodes_and_seeks plays_through
 PICTO_GPUI_TEST_VIDEO=/path/to/video.mov cargo test --locked --test avfoundation_frames
