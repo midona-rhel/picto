@@ -308,6 +308,8 @@ impl Imports {
                 return;
             }
             let _ = this.update_in(cx, |this, window, cx| match settled {
+                // An import started while the files were arriving.
+                Ok(_) if !this.allow(cx) => drop::discard_promised(&folder),
                 Ok(arrived) => {
                     let params = Params {
                         delete_after_ingest: true,
