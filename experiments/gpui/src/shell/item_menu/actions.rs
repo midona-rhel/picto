@@ -430,8 +430,23 @@ impl Shell {
                     });
                 }
             }
-            // TODO: reverse image search (the rows stay disabled until then).
-            Action::SearchByImage(_) => {}
+            // The user chose an engine: the original goes to it.
+            Action::SearchByImage(engine) => {
+                if let Some(file) = file {
+                    let mime = file.mime.clone();
+                    self.with_path(
+                        file,
+                        move |path, cx| {
+                            crate::search_by_image::search(
+                                engine,
+                                crate::search_by_image::Upload { path, mime },
+                                cx,
+                            )
+                        },
+                        cx,
+                    );
+                }
+            }
             Action::SetLibraryCover => {
                 // The shown file, framed at once (`initialCandidate`).
                 if let (Some(item), Some(file)) = (target.items.first(), file) {
@@ -600,6 +615,11 @@ impl Shell {
     ) {
         self.library_cover
             .update(cx, |dialog, cx| dialog.open(candidate, cx));
+    }
+
+    /// The update dialog (`menu:show-updates`, a notification's View).
+    pub fn open_updates(&mut self, cx: &mut Context<Self>) {
+        self.updates.update(cx, |dialog, cx| dialog.open(cx));
     }
 
     /// Sends an action for another part of the app from the shell, which

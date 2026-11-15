@@ -159,11 +159,10 @@ fn offers_every_reverse_image_provider_for_images_only() {
         find(search, "Sogou").unwrap().action,
         Action::SearchByImage(Engine::Sogou)
     );
-    // Drawn as production draws them, disabled until the search is built.
     assert!(
         labels(search)
             .iter()
-            .all(|label| find(search, label).unwrap().disabled)
+            .all(|label| !find(search, label).unwrap().disabled)
     );
     d.single_mime = Some("video/mp4".into());
     assert!(!has_submenu(&tile(&d), "Search by Image"));

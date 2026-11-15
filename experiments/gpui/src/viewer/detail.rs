@@ -597,10 +597,16 @@ impl DetailWindow {
                     crate::app_menu::bring_forward(cx);
                 }
             }
-            _ => {
-                // TODO: Search by Image, which uploads the file to the
-                // engine from a hidden browser window (`runReverseImageSearch`).
-            }
+            // The user chose an engine: the shown original goes to it.
+            Action::SearchByImage(engine) => crate::search_by_image::search(
+                engine,
+                crate::search_by_image::Upload {
+                    path: std::path::PathBuf::from(path),
+                    mime,
+                },
+                cx,
+            ),
+            _ => {}
         }
     }
 

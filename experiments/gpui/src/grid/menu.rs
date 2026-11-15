@@ -58,10 +58,6 @@ pub enum OpenWith {
 // yet: they are drawn where production draws them, disabled, as the
 // application menu's rows for the same features are (`.todo()`).
 
-// TODO: production uploads the original to the engine from a hidden browser
-// window and shows the results page (`runReverseImageSearch`); search by
-// image needs that upload.
-const SEARCH_BY_IMAGE_BUILT: bool = false;
 // Windows' own application chooser on the file (`desktop::open_with_chooser`,
 // `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
 // system that offers "Open With Other..." as a chooser.
@@ -849,12 +845,7 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             ENGINES
                 .iter()
                 .map(|(engine, label)| {
-                    item(
-                        Action::SearchByImage(*engine),
-                        *label,
-                        SEARCH_BY_IMAGE_BUILT,
-                    )
-                    .into()
+item(Action::SearchByImage(*engine), *label, true).into()
                 })
                 .collect(),
         ));
