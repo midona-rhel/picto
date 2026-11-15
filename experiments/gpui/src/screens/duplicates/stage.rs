@@ -707,7 +707,7 @@ impl DuplicatesScreen {
         );
         let merge_tip = if smart {
             ui::tip(t("Keep the stronger file and preserve item metadata"))
-                .shortcut("dup.merge", cx)
+                .shortcut("dup.smartMerge", cx)
         } else {
             ui::tip(en("Keep the shown file and merge the others into it")).shortcut("dup.merge", cx)
         };

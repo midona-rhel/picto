@@ -2,7 +2,7 @@
 //! the queue beside the stage, and the titlebar controls.
 use super::{
     ActualPixels, CONTEXT, DuplicatesScreen, DuplicatesToolbar, FitPair, Merge, NextFile, NextSet,
-    NotDuplicate, PreviousFile, PreviousSet, ShowDifference, Skip, SmartMerge, KeepFirst, KeepSecond,
+    NotDuplicate, PreviousFile, PreviousSet, ShowDifference, Skip, SmartMerge,
 };
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -101,8 +101,6 @@ impl Render for DuplicatesScreen {
             .on_action(cx.listener(|this, _: &NextSet, _, cx| this.step_set(1, cx)))
             .on_action(cx.listener(|this, _: &Merge, _, cx| this.merge(cx)))
             .on_action(cx.listener(|this, _: &SmartMerge, _, cx| this.smart_merge(cx)))
-            .on_action(cx.listener(|this, _: &KeepFirst, _, cx| this.keep_file(0, cx)))
-            .on_action(cx.listener(|this, _: &KeepSecond, _, cx| this.keep_file(1, cx)))
             // The difference shows from its key going down until a key
             // comes up.
             .on_action(cx.listener(|this, _: &ShowDifference, _, cx| {

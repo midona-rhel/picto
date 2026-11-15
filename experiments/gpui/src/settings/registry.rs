@@ -229,16 +229,15 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
         .about("Enter or leave fullscreen playback"),
     def("dup.merge", "Keep and Merge", DUPLICATES, "Enter")
         .about("Keep the file shown and merge the rest of the set into it"),
-    def("dup.smartMerge", "Smart Merge", DUPLICATES, "S")
+    def("dup.smartMerge", "Smart Merge", DUPLICATES, "Z")
+        .or("S")
         .about("Auto-merge keeping the better file"),
-    def("dup.keepLeft", "Keep First", DUPLICATES, "Z")
-        .about("Keep the set's first file and merge the rest into it"),
-    def("dup.keepRight", "Keep Second", DUPLICATES, "X")
-        .about("Keep the set's second file and merge the rest into it"),
     def("dup.difference", "Show Difference", DUPLICATES, "D")
         .about("Show the pixel difference while the key is held"),
     def("dup.skip", "Skip Set", DUPLICATES, "Space").about("Leave this set for later"),
-    def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "N").about("Mark the set as not duplicates"),
+    def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "X")
+        .or("N")
+        .about("Mark the set as not duplicates"),
     def("dup.previous", "Previous File", DUPLICATES, "ArrowLeft")
         .about("Show the set's previous file in place"),
     def("dup.next", "Next File", DUPLICATES, "ArrowRight")

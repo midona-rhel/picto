@@ -42,8 +42,6 @@ actions!(
         NextSet,
         Merge,
         SmartMerge,
-        KeepFirst,
-        KeepSecond,
         ShowDifference,
         Skip,
         NotDuplicate,
@@ -608,7 +606,8 @@ impl DuplicatesScreen {
         self.resolve(steps, true, cx);
     }
 
-    /// S (`dup.smartMerge`): keeps the file the library suggests and merges
+    /// Z or S (`dup.smartMerge`), the accept beside X's reject as in the
+    /// Inbox: keeps the file the library suggests and merges
     /// the rest into it, whichever file is shown. A set it cannot settle
     /// says so and is left for the user to choose.
     fn smart_merge(&mut self, cx: &mut Context<Self>) {
@@ -625,18 +624,6 @@ impl DuplicatesScreen {
                 en("No clear quality winner. Choose the file to keep, or mark the set as not duplicates."),
                 cx,
             ),
-        }
-    }
-
-    /// Z and X (`dup.keepLeft`, `dup.keepRight`): keeps the set's first or
-    /// second file and merges the rest into it, without showing it first.
-    fn keep_file(&mut self, file: usize, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        if file < self.entries[index].set.files.len() {
-            let steps = self.entries[index].set.merge_steps(file);
-            self.resolve(steps, true, cx);
         }
     }
 
@@ -660,7 +647,7 @@ impl DuplicatesScreen {
             .is_some_and(|index| self.entries[index].set.suggested == Some(self.shown))
     }
 
-    /// N: the set's files are different pictures; none is touched, and a
+    /// X or N: the set's files are different pictures; none is touched, and a
     /// later scan does not bring the pairs back.
     fn not_duplicates(&mut self, cx: &mut Context<Self>) {
         let Some(index) = self.current_index() else {

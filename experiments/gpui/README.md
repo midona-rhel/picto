@@ -365,9 +365,10 @@ place in the tab over the picture (↑ ↓ go to the set before and after).
 The set's files flip in place with ← → at one zoom, so what differs
 blinks; under the picture, centred, each file with its size, format and
 bytes, bright where the files differ, and the library's suggestion, on
-which a set opens. Enter keeps the file shown (Smart merge on the suggested
-one; S does it whichever is shown), Z and X keep the first or second file
-outright, N says they are not duplicates, Space skips. The pixel
+which a set opens. Z accepts and X rejects, as in the Inbox: Z (or S) is
+Smart merge, keeping the suggested file whichever is shown, and X (or N)
+says the files are not duplicates. Enter keeps the file shown instead;
+Space skips. The pixel
 difference shows while D is held or the pointer rests on Show Difference,
 beside what comparing the pixels measured, in words; the wheel moves about
 in the picture and never changes the file. In the inspector's place, the
