@@ -111,6 +111,12 @@ impl Options {
         }
     }
 
+    /// How long it stays (`duration`), instead of the usual time.
+    pub fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
+
     /// A button after the text.
     pub fn action(
         mut self,

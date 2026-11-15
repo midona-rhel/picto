@@ -422,6 +422,16 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
+/// A file this app downloaded for the user (an update's installer) shown
+/// in the file manager.
+pub fn reveal_download(path: &Path, cx: &mut App) {
+    if live(cx) {
+        cx.reveal_path(&system_path(path));
+    } else {
+        record(format!("reveal {}", path.display()));
+    }
+}
+
 /// Show in File Manager for a library in the Library Manager: its folder,
 /// only when it is the open library or one the list of libraries holds.
 pub fn reveal_library(path: &Path, cx: &mut App) {

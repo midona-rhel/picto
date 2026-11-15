@@ -31,14 +31,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Files that draw no interface text of their own: the test tool, the
-/// tests, the application menu, which production leaves in English
+/// network check, the tests, the application menu, which production leaves in English
 /// (`electron/windows/menu.mjs` is not localized), and the shortcut
 /// registry, data whose labels, groups and descriptions Settings draws
 /// through `t()` and whose key names stay English as production writes
 /// them; and this module's own data (the languages' number and date
 /// words, the English plural suffix).
-const NOT_SHOWN: [&str; 7] = [
+const NOT_SHOWN: [&str; 8] = [
     "offscreen.rs",
+    "net_check.rs",
     "i18n/tests.rs",
     "i18n/guard.rs",
     "i18n/format.rs",

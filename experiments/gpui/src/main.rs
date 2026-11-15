@@ -19,6 +19,9 @@ mod libraries;
 mod logins;
 mod meter;
 mod motion;
+mod net;
+#[cfg(debug_assertions)]
+mod net_check;
 // Pictures of the app drawn off-screen, for checks without a screen.
 #[cfg(test)]
 mod offscreen;
@@ -29,16 +32,19 @@ mod platform;
 mod pointer;
 mod prompt;
 mod screens;
+mod search_by_image;
 mod seams;
 mod session;
 mod settings;
 mod shell;
+mod site_icons;
 mod state;
 mod stats;
 mod tags;
 mod text;
 mod theme;
 mod ui;
+mod updates;
 mod viewer;
 mod zoom;
 
@@ -453,6 +459,11 @@ fn run(
         // The sign-in window's check, a debug build's only (`seams.rs`).
         #[cfg(debug_assertions)]
         logins::check::start(cx);
+        // A new version's release notes and the automatic update checks.
+        updates::start(cx);
+        // The network features' check, a debug build's only (`seams.rs`).
+        #[cfg(debug_assertions)]
+        net_check::start(cx);
         // Opened as production's `drainAssociatedFiles` opens them, once
         // the window is up.
         cx.spawn(async move |cx| {

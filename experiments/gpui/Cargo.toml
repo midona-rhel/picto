@@ -101,6 +101,9 @@ hmac = "0.12"
 sha1 = "0.10"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
+# The site icons' cache names and the update download's check (SHA-256 and
+# SHA-512), the version the application core already builds.
+sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "cookies", "http2", "json", "rustls-tls", "stream", "system-proxy"] }
 # The sign-in window's web view: WKWebView on macOS, WebView2 on Windows,
 # WebKitGTK on Linux (`src/platform/login_window/`). Pinned exactly, as its

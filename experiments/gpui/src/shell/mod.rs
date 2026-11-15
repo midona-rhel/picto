@@ -117,6 +117,8 @@ pub struct Shell {
     batch_rename: Entity<batch_rename::BatchRename>,
     /// The library cover dialog.
     library_cover: Entity<library_cover::LibraryCover>,
+    /// The update dialog (`ApplicationUpdateHost`).
+    updates: Entity<crate::updates::dialog::UpdateDialog>,
     /// Files dragged from the system over the window, until they are
     /// dropped or leave it.
     file_drag: Option<Vec<PathBuf>>,
@@ -318,6 +320,7 @@ impl Shell {
             cx.new(|cx| batch_rename::BatchRename::new(session.clone(), focus.clone(), cx));
         let library_cover =
             cx.new(|cx| library_cover::LibraryCover::new(session.clone(), focus.clone(), cx));
+        let updates = cx.new(|cx| crate::updates::dialog::UpdateDialog::new(focus.clone(), cx));
         let mut subscriptions = subscriptions;
         // The rails as the user left them.
         let kept = crate::state::get(cx).clone();
@@ -407,6 +410,7 @@ impl Shell {
             exports,
             batch_rename,
             library_cover,
+            updates,
             file_drag: None,
             reviewer: Default::default(),
             review_flash: None,
@@ -1119,6 +1123,7 @@ impl Render for Shell {
         root = root.child(self.exports.clone());
         root = root.child(self.batch_rename.clone());
         root = root.child(self.library_cover.clone());
+        root = root.child(self.updates.clone());
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);

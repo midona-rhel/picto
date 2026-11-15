@@ -46,12 +46,9 @@ const THEMES: [(&str, &str, Option<u32>); 7] = [
     (en("Purple"), "purple", Some(0x463275)),
 ];
 
-/// The installed version, from the app's `package.json`.
+/// The installed version (`crate::updates::VERSION`).
 fn version() -> String {
-    serde_json::from_str::<serde_json::Value>(include_str!("../../../../package.json"))
-        .ok()
-        .and_then(|package| package.get("version")?.as_str().map(str::to_owned))
-        .unwrap_or_default()
+    crate::updates::VERSION.to_owned()
 }
 
 impl SettingsWindow {
@@ -198,14 +195,45 @@ impl SettingsWindow {
         ]
     }
 
+    /// `UpdatesPanel`: the installed version, what the last check found
+    /// and Check Now, with the step that follows a found update.
     fn updates(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use crate::updates::Status;
         let theme = theme::theme(cx);
-        let description = if cfg!(target_os = "macos") {
+        let state = crate::updates::state(cx);
+        let found = state.version.clone().unwrap_or_default();
+        // Production writes these in English.
+        let status = match state.status {
+            Status::Checking => en("Checking…").to_owned(),
+            Status::Downloading => format!(
+                "{} {}",
+                en("Downloading"),
+                state
+                    .progress
+                    .map(|progress| format!("{}%", progress.percent.round()))
+                    .unwrap_or_default()
+            ),
+            Status::Downloaded => format!("Picto {found} {}", en("is ready to install")),
+            Status::Available => format!("Picto {found} {}", en("is available")),
+            Status::Current => en("Picto is up to date").to_owned(),
+            _ => state
+                .error
+                .clone()
+                .unwrap_or_else(|| en("Check for a newer version of Picto.").to_owned()),
+        };
+        let description = if state.mac() {
             t(
                 "On macOS, Picto opens the release download because this build is not signed for automatic installation.",
             )
         } else {
-            t("Updates download in the background and install after Picto closes.")
+            en(
+                "Updates download in the background. This version cannot install them itself: Show Installer shows the downloaded installer in the file manager.",
+            )
+        };
+        let next = match state.status {
+            Status::Downloaded if !state.mac() => Some(en("Show Installer")),
+            Status::Downloaded | Status::Available if state.mac() => Some(t("Open Download Page")),
+            _ => None,
         };
         vec![
             block()
@@ -216,15 +244,21 @@ impl SettingsWindow {
                         .child(separator(theme))
                         .child(row(
                             theme,
-                            en("Check for a newer version of Picto."),
-                            div().flex().gap(px(8.)).child(
-                                // TODO: check the release feed and offer the
-                                // download; disabled until then, as the
-                                // application menu's Check for Updates is.
-                                ui::action_button("check-updates", Look::Settings)
-                                    .label(t("Check Now"))
-                                    .disabled(true),
-                            ),
+                            status,
+                            div()
+                                .flex()
+                                .gap(px(8.))
+                                .child(
+                                    ui::action_button("check-updates", Look::Settings)
+                                        .label(t("Check Now"))
+                                        .disabled(state.busy())
+                                        .on_click(|_, _, cx| crate::updates::check(cx)),
+                                )
+                                .children(next.map(|label| {
+                                    ui::action_button("install-update", Look::SettingsPrimary)
+                                        .label(label)
+                                        .on_click(|_, _, cx| crate::updates::install(cx))
+                                })),
                         ))
                         .child(
                             div()

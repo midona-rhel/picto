@@ -73,6 +73,10 @@ pub struct Options {
     /// [`Event::Callback`] instead of loading.
     pub intercept: Rc<dyn Fn(&str) -> bool>,
     pub events: mpsc::UnboundedSender<Event>,
+    /// A check's loopback origin, outside which the window loads nothing
+    /// (`PICTO_GPUI_LOGIN_ORIGIN` for a sign-in, `PICTO_GPUI_NET_ORIGIN`
+    /// for Search by Image); `None` in a real run.
+    pub local_origin: Option<String>,
 }
 
 /// An open sign-in window, hidden until it is shown.
@@ -209,6 +213,8 @@ fn load_into(view: &wry::WebView, url: &str) {
 /// that a login does not need, and its storage its own.
 fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::WebViewBuilder<'a> {
     let intercept = options.intercept.clone();
+    let local = options.local_origin.clone();
+    let local_for_windows = options.local_origin.clone();
     let events = options.events.clone();
     let started = options.events.clone();
     let titled = options.events.clone();
@@ -226,7 +232,7 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
                 let _ = events.unbounded_send(Event::Callback(url));
                 return false;
             }
-            allowed(&url)
+            allowed(&url, local.as_deref())
         })
         .with_on_page_load_handler(move |event, url| {
             let _ = started.unbounded_send(match event {
@@ -240,7 +246,9 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         // `setWindowOpenHandler`: a page's new window opens in this one
         // when it is HTTPS, and never as a window of its own.
         .with_new_window_req_handler(move |url, _| {
-            if url.to_ascii_lowercase().starts_with("https://") || under_local_origin(&url) {
+            if url.to_ascii_lowercase().starts_with("https://")
+                || under_local_origin(&url, local_for_windows.as_deref())
+            {
                 let _ = opened.unbounded_send(Event::OpenHere(url));
             }
             wry::NewWindowResponse::Deny
@@ -251,25 +259,25 @@ fn configure<'a>(builder: wry::WebViewBuilder<'a>, options: &Options) -> wry::We
         .with_permission_handler(|_| wry::PermissionResponse::Deny)
 }
 
-/// Whether the window may load `url`. With `PICTO_GPUI_LOGIN_ORIGIN` set (a
-/// debug build's local login), nothing outside that origin loads, so a
-/// check never reaches a real site.
-fn allowed(url: &str) -> bool {
-    match crate::seams::login_origin() {
+/// Whether the window may load `url`. With a check's local origin (a
+/// debug build's local login or local search engines), nothing outside it
+/// loads, so a check never reaches a real site.
+fn allowed(url: &str, local: Option<&str>) -> bool {
+    match local {
         Some(_) if url == "about:blank" => true,
-        Some(_) if !under_local_origin(url) => {
-            eprintln!("picto: the sign-in window refused {url} (outside the local login)");
+        Some(_) if !under_local_origin(url, local) => {
+            eprintln!("picto: the web view refused {url} (outside the local origin)");
             false
         }
         _ => true,
     }
 }
 
-fn under_local_origin(url: &str) -> bool {
-    crate::seams::login_origin().is_some_and(|origin| {
+fn under_local_origin(url: &str, local: Option<&str>) -> bool {
+    local.is_some_and(|origin| {
         url::Url::parse(url)
             .ok()
-            .zip(url::Url::parse(&origin).ok())
+            .zip(url::Url::parse(origin).ok())
             .is_some_and(|(url, origin)| url.origin() == origin.origin())
     })
 }
