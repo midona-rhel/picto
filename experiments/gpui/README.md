@@ -247,10 +247,13 @@ colour and icon are kept in this app's `state.json` (`libraryMeta`, as
 production keeps them in its `config.json`) and drawn on its avatar; they
 follow a rename, move or Locate…. The actions menu's Rename, Show in File
 Manager, Move… and Delete… on a library that is not open first run
-`admission::admit` as an open from the manager would (`host::check`), and
+`admission::admit` as an open from the manager would (`host::permit`), and
 ask the consent question when the user has not agreed to that library yet;
 a refusal (Picto running, an older schema, a debug build without the flag)
-stops them with its words. Move… (`relocateLibrary`) asks for a folder,
+stops them with its words. The host checks again when it renames, moves or
+deletes, and answers the manager with the outcome, which shows a failure
+in production's words ("Failed to rename library: …", "A library operation
+is already in progress."). Move… (`relocateLibrary`) asks for a folder,
 refuses one inside a library or holding a library of that name, closes the
 library first if it is open, renames the folder, or across volumes copies
 it beside the target, compares every file, renames the copy into place and
@@ -842,7 +845,9 @@ window's content (`host.rs`: the gate or the library's shell, opening,
 switching as production's `switchLibrary`, the consent dialog and the
 blocking notice), the Library Manager window (`manager.rs`), and the
 platform leaves for the process probe (`platform/`). Rule: every open goes
-through `host::request` (or `host::create` for New Library).
+through `host::request` (or `host::create` for New Library), and every
+change on disk through `host::rename`, `move_library` or `delete`, which
+decide whether it may happen now (`host::permit`).
 
 **Desktop** (`src/desktop/`). What production's main process does around the
 window: the Inbox badge, the "Subscriptions finished" system notification,

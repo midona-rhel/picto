@@ -11,7 +11,7 @@
 //! listed library's folder and cover and nothing else; statistics are read
 //! for the open library only, through its application, as production reads
 //! them.
-use super::admission::{Decision, Origin};
+use super::admission::Origin;
 use super::{Kind, history, host};
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -107,7 +107,7 @@ pub fn rows(
 }
 
 /// What the actions menu does to a library that is not open, each only
-/// once `host::check` lets it (asking the user's consent first, as opening
+/// once `host::permit` lets it (asking the user's consent first, as opening
 /// does, for a library not yet agreed to): rename and Show in File Manager
 /// act on a library the user has not opened here, so they are asked about
 /// as opening is.
@@ -399,29 +399,30 @@ impl Manager {
         cx.notify();
     }
 
-    /// Runs `act` on the library at `path` if `host::check` lets it now,
-    /// asking the user's consent first where opening would; the open
-    /// library was let through when it opened.
+    /// Runs `act` on the library at `path` if `host::permit` lets it now,
+    /// asking the user's consent first where opening would.
     fn guarded(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         self.message = None;
-        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
-        if open {
-            return self.perform(path, act, window, cx);
+        match host::permit(Path::new(&path), cx) {
+            Ok(()) => self.perform(path, act, window, cx),
+            Err(denied) => self.denied(denied, Some(act), cx),
         }
-        match host::check(Path::new(&path), cx) {
-            Decision::Real { .. } => self.perform(path, act, window, cx),
-            Decision::Ask { root, identity } => {
-                self.asking = Some((identity, root, act, ui::modal::Presence::new()));
-                cx.notify();
+    }
+
+    /// What the host refused: the consent asked for (then `act` run), or
+    /// its words shown. A copy that is not open is never listed.
+    fn denied(&mut self, denied: host::Denied, act: Option<Act>, cx: &mut Context<Self>) {
+        match denied {
+            host::Denied::Ask { root, identity } => {
+                if let Some(act) = act {
+                    self.asking = Some((identity, root, act, ui::modal::Presence::new()));
+                }
             }
-            // Never a copy that is not open: only the open one is listed.
-            Decision::Copy(_) => {}
-            Decision::Refused(refusal) => {
-                self.error = Some(refusal.words().1);
-                cx.notify();
-            }
+            host::Denied::Error(error) => self.error = Some(error),
+            host::Denied::Copy => {}
         }
+        cx.notify();
     }
 
     fn perform(&mut self, path: String, act: Act, window: &mut Window, cx: &mut Context<Self>) {
@@ -458,7 +459,12 @@ impl Manager {
                 match super::files::destination(&from, &folder) {
                     Ok(super::files::Moved::To(target)) => {
                         this.selected = Some(target.to_string_lossy().into_owned());
-                        cx.defer(move |cx| host::move_library(from, target, cx));
+                        let manager = cx.entity().downgrade();
+                        cx.defer(move |cx| {
+                            host::move_library(from.clone(), target, cx, move |result, cx| {
+                                let _ = manager.update(cx, |this, cx| this.relocated(from, result, cx));
+                            })
+                        });
                     }
                     Ok(super::files::Moved::Unchanged) => {}
                     Err(error) => {
@@ -471,29 +477,22 @@ impl Manager {
         .detach();
     }
 
-    /// The user confirmed Delete…: checked again, as the moment may have
-    /// changed (the Electron app started, the library was opened), then
-    /// removed.
+    /// A rename or move the host finished: on failure the library keeps
+    /// its row selected under its old path, and the reason is shown.
+    fn relocated(&mut self, from: PathBuf, result: Result<(), host::Denied>, cx: &mut Context<Self>) {
+        if let Err(denied) = result {
+            self.selected = Some(from.to_string_lossy().into_owned());
+            self.denied(denied, None, cx);
+        }
+        self.read(cx);
+    }
+
+    /// The user confirmed Delete…: the host checks it again, as the moment
+    /// may have changed, then removes it. A consent withdrawn meanwhile
+    /// leaves it as it is.
     fn delete(&mut self, path: String, cx: &mut Context<Self>) {
         self.deleting = None;
         cx.notify();
-        let open = host::current(cx).is_some_and(|(root, _)| root == Path::new(&path));
-        if open {
-            self.error = Some(
-                "Cannot delete the currently open library. Switch to a different library first."
-                    .to_owned(),
-            );
-            return;
-        }
-        match host::check(Path::new(&path), cx) {
-            Decision::Real { .. } => {}
-            Decision::Refused(refusal) => {
-                self.error = Some(refusal.words().1);
-                return;
-            }
-            // The consent was withdrawn meanwhile, or this is a copy.
-            Decision::Ask { .. } | Decision::Copy(_) => return,
-        }
         let manager = cx.entity().downgrade();
         host::delete(PathBuf::from(&path), cx, move |result, cx| {
             let _ = manager.update(cx, |this, cx| {
@@ -502,7 +501,7 @@ impl Manager {
                         this.selected = None;
                         this.message = Some(t("Library deleted.").to_owned());
                     }
-                    Err(error) => this.error = Some(error),
+                    Err(denied) => this.denied(denied, None, cx),
                 }
                 this.read(cx);
             });
@@ -624,7 +623,12 @@ impl Manager {
             Ok(renamed) => {
                 self.selected = Some(renamed.to_string_lossy().into_owned());
                 let from = PathBuf::from(&row.path);
-                cx.defer(move |cx| host::rename(from, renamed, cx));
+                let manager = cx.entity().downgrade();
+                cx.defer(move |cx| {
+                    host::rename(from.clone(), renamed, cx, move |result, cx| {
+                        let _ = manager.update(cx, |this, cx| this.relocated(from, result, cx));
+                    })
+                });
             }
             Err(error) => self.error = Some(error),
         }

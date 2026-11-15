@@ -218,17 +218,72 @@ pub fn create(path: PathBuf, cx: &mut App) {
     begin(root, Kind::Real, cx);
 }
 
+/// Why the host did not change a library on disk ([`rename`],
+/// [`move_library`], [`delete`]) or would not let the Library Manager
+/// reveal it ([`permit`]).
+pub enum Denied {
+    /// Every rule held but the user has not agreed to this library yet:
+    /// ask, keep the answer, and try again.
+    Ask {
+        root: PathBuf,
+        identity: super::Identity,
+    },
+    /// Refused or failed, in production's words.
+    Error(String),
+    /// A disposable copy that is not open, which the manager never lists.
+    Copy,
+}
+
+/// What a second change is told while one runs (production's words).
+const BUSY: &str = "A library operation is already in progress.";
+
+/// Whether the library at `path` may be changed on disk or revealed from
+/// the Library Manager right now. The open library was let through when it
+/// opened; any other is what `admission::admit` decides for an open from
+/// the manager, so a library the user has not agreed to yet is asked about
+/// first, as opening does.
+pub fn permit(path: &Path, cx: &mut App) -> Result<(), Denied> {
+    if current(cx).is_some_and(|(root, _)| root == path) {
+        return Ok(());
+    }
+    let probes = host(cx).read(cx).probes.clone();
+    let decision = admission::admit(
+        path,
+        Origin::Manager,
+        &super::facts(),
+        &super::consents(cx),
+        &*probes,
+    );
+    match decision {
+        Decision::Real { .. } => Ok(()),
+        Decision::Ask { root, identity } => Err(Denied::Ask { root, identity }),
+        Decision::Copy(_) => Err(Denied::Copy),
+        Decision::Refused(refusal) => Err(Denied::Error(refusal.words().1)),
+    }
+}
+
 /// Rename (`renameLibrary`): the folder renamed beside itself, keeping its
 /// place in the list, its colour and icon and the user's consent; the open
-/// library is closed first and opened again after.
-pub fn rename(from: PathBuf, to: PathBuf, cx: &mut App) {
-    relocate(from, to, Relocation::Rename, cx);
+/// library is closed first and opened again after. Hands the outcome to
+/// `done`.
+pub fn rename(
+    from: PathBuf,
+    to: PathBuf,
+    cx: &mut App,
+    done: impl FnOnce(Result<(), Denied>, &mut App) + 'static,
+) {
+    relocate(from, to, Relocation::Rename, cx, done);
 }
 
 /// Move… (`relocateLibrary`): the folder moved into another (`files`), as
 /// a rename is.
-pub fn move_library(from: PathBuf, to: PathBuf, cx: &mut App) {
-    relocate(from, to, Relocation::Move, cx);
+pub fn move_library(
+    from: PathBuf,
+    to: PathBuf,
+    cx: &mut App,
+    done: impl FnOnce(Result<(), Denied>, &mut App) + 'static,
+) {
+    relocate(from, to, Relocation::Move, cx, done);
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -237,20 +292,29 @@ enum Relocation {
     Move,
 }
 
-fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
+fn relocate(
+    from: PathBuf,
+    to: PathBuf,
+    how: Relocation,
+    cx: &mut App,
+    done: impl FnOnce(Result<(), Denied>, &mut App) + 'static,
+) {
     if host(cx).read(cx).busy {
-        return;
+        return done(Err(Denied::Error(BUSY.to_owned())), cx);
     }
     let probes = host(cx).read(cx).probes.clone();
     // Production renames only what it has closed; this app cannot see
     // what the Electron app has open.
-    match probes.picto_process() {
-        Ok(None) => {}
-        Ok(Some(process)) => return refuse(&Refusal::PictoRunning(process), cx),
-        Err(error) => return refuse(&Refusal::ProbeFailed(error), cx),
+    let refused = match probes.picto_process() {
+        Ok(None) => super::facts().permits_library(&from).err(),
+        Ok(Some(process)) => Some(Refusal::PictoRunning(process)),
+        Err(error) => Some(Refusal::ProbeFailed(error)),
+    };
+    if let Some(refusal) = refused {
+        return done(Err(Denied::Error(refusal.words().1)), cx);
     }
-    if let Err(refusal) = super::facts().permits_library(&from) {
-        return refuse(&refusal, cx);
+    if let Err(denied) = permit(&from, cx) {
+        return done(Err(denied), cx);
     }
     let is_open = current(cx).is_some_and(|(root, _)| root == from);
     let main = host(cx).read(cx).main;
@@ -266,7 +330,7 @@ fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
             close_application(previous, cx).await;
         }
         let (source, target) = (from.clone(), to.clone());
-        let done = cx
+        let moved = cx
             .background_executor()
             .spawn(async move {
                 match how {
@@ -281,7 +345,7 @@ fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
                 host.busy = false;
                 cx.notify();
             });
-            match done {
+            match moved {
                 Ok(()) => {
                     let (from_text, to_text) = (
                         from.to_string_lossy().into_owned(),
@@ -310,12 +374,15 @@ fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
                     if is_open {
                         request(&to, Origin::Manager, cx);
                     }
+                    done(Ok(()), cx);
                 }
+                // Reported where it was asked for, in production's words
+                // ("Failed to rename library: …", the move's own).
                 Err(error) => {
-                    fail(en("Could not open Picto Library").to_owned(), error, cx);
                     if is_open {
                         request(&from, Origin::Manager, cx);
                     }
+                    done(Err(Denied::Error(error)), cx);
                 }
             }
         });
@@ -323,16 +390,21 @@ fn relocate(from: PathBuf, to: PathBuf, how: Relocation, cx: &mut App) {
     .detach();
 }
 
-/// Delete… (`deleteLibrary`), once the user confirmed: the library's
-/// folder removed for good (`files::delete`), never the open one, and
-/// taken out of the list. Hands the outcome to `done`.
+/// Delete… (`deleteLibrary`), once the user confirmed: checked again
+/// ([`permit`]), as the moment may have changed (the Electron app started,
+/// the consent was withdrawn), then the library's folder removed for good
+/// (`files::delete`), never the open one, and taken out of the list. Hands
+/// the outcome to `done`.
 pub fn delete(
     path: PathBuf,
     cx: &mut App,
-    done: impl FnOnce(Result<(), String>, &mut App) + 'static,
+    done: impl FnOnce(Result<(), Denied>, &mut App) + 'static,
 ) {
     if host(cx).read(cx).busy {
-        return;
+        return done(Err(Denied::Error(BUSY.to_owned())), cx);
+    }
+    if let Err(denied) = permit(&path, cx) {
+        return done(Err(denied), cx);
     }
     let open = current(cx).map(|(root, _)| root);
     host(cx).update(cx, |host, _| host.busy = true);
@@ -361,25 +433,10 @@ pub fn delete(
                 });
                 crate::set_app_menus(cx);
             }
-            done(result, cx);
+            done(result.map_err(Denied::Error), cx);
         });
     })
     .detach();
-}
-
-/// Whether the library at `path` may be changed on disk or revealed from
-/// the Library Manager right now: what `admission::admit` decides for an
-/// open from the manager. A library the user has not agreed to yet comes
-/// back as `Ask`, so the manager asks first, as opening does.
-pub fn check(path: &Path, cx: &mut App) -> Decision {
-    let probes = host(cx).read(cx).probes.clone();
-    admission::admit(
-        path,
-        Origin::Manager,
-        &super::facts(),
-        &super::consents(cx),
-        &*probes,
-    )
 }
 
 /// The consent question's message for the library at `root`.
