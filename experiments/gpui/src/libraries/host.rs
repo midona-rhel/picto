@@ -108,8 +108,41 @@ impl Probes for TestProbe {
     }
 }
 
+/// What a launch opens in the main window.
+pub enum Launch {
+    /// A disposable copy, with the instance this process holds for it (the
+    /// app's own launch) or none (the off-screen tool).
+    Copy(PathBuf, Option<Arc<crate::opening::instance::Instance>>),
+    /// A library named on the command line with `--allow-real-libraries`.
+    Named(PathBuf),
+    /// No library named: the one this app had open last, if it may be
+    /// opened, else the gate.
+    Last,
+}
+
+/// Starts the host in the main window at launch, as the app and the
+/// off-screen tool both do: the window known to the application menu and
+/// the host, the menus set, `launch` opened, and the launch noted.
+pub fn boot(
+    main: WindowHandle<Main>,
+    incoming: futures::channel::mpsc::UnboundedSender<crate::opening::Incoming>,
+    launch: Launch,
+    cx: &mut App,
+) {
+    crate::app_menu::set_main_window(main.into(), cx);
+    attach(main, incoming, cx);
+    crate::set_app_menus(cx);
+    match launch {
+        Launch::Copy(root, instance) => start(root, Kind::Copy, instance, main, cx),
+        Launch::Named(path) => request(&path, Origin::CommandLine { flag: true }, cx),
+        // Only a library this process may open is even looked at.
+        Launch::Last => start_last(cx),
+    }
+    launched(cx);
+}
+
 /// Hands the host the main window and where later launches' files go.
-pub fn attach(
+fn attach(
     main: WindowHandle<Main>,
     incoming: futures::channel::mpsc::UnboundedSender<crate::opening::Incoming>,
     cx: &mut App,

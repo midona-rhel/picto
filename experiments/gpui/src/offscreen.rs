@@ -161,16 +161,12 @@ fn plays_a_script() {
     let main: AnyWindowHandle = window.into();
     let (incoming, _arrived) = futures::channel::mpsc::unbounded();
     cx.update(|cx| {
-        crate::app_menu::set_main_window(main, cx);
-        crate::libraries::host::attach(window, incoming, cx);
-        match root {
-            Some(root) => {
-                crate::libraries::host::start(root, crate::libraries::Kind::Copy, None, window, cx)
-            }
+        let launch = match root {
+            Some(root) => crate::libraries::host::Launch::Copy(root, None),
             // As a launch with no library named: the one last open, if any.
-            None => crate::libraries::host::start_last(cx),
-        }
-        crate::libraries::host::launched(cx);
+            None => crate::libraries::host::Launch::Last,
+        };
+        crate::libraries::host::boot(window, incoming, launch, cx);
     });
     // The frame the app's main window asks for, so its own chrome shows as
     // on the platform (the window's buttons and edges on Linux).
