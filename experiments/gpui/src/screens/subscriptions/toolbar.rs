@@ -59,13 +59,24 @@ pub fn note(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     .into()
 }
 
-/// A subscription's rail, for the shell to show in the inspector's place.
-pub fn rail(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
-    cx.new(|cx| SubscriptionRail {
-        screen: screen.downgrade(),
-        _observing: cx.observe(screen, |_, _, cx| cx.notify()),
-    })
-    .into()
+/// A subscription's rail, for the shell to show in the inspector's place
+/// while a subscription's page shows.
+pub fn rail(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> crate::shell::ScreenRail {
+    let view = cx
+        .new(|cx| SubscriptionRail {
+            screen: screen.downgrade(),
+            _observing: cx.observe(screen, |_, _, cx| cx.notify()),
+        })
+        .into();
+    let screen = screen.downgrade();
+    crate::shell::ScreenRail {
+        view,
+        shows: Box::new(move |cx| {
+            screen
+                .upgrade()
+                .is_some_and(|screen| screen.read(cx).showing_page())
+        }),
+    }
 }
 
 impl Render for SubscriptionsToolbar {

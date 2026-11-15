@@ -16,8 +16,6 @@ use crate::ui::action_button::Look;
 use crate::{theme, ui};
 use gpui::*;
 
-/// The facts column, as wide as the spec draws it.
-const COLUMN: f32 = 210.;
 /// The strip of the set's files under the picture.
 const STRIP: f32 = 64.;
 const STRIP_TILE: f32 = 44.;
@@ -153,8 +151,9 @@ fn statements(entry: &Entry, shown: usize) -> Vec<Statement> {
 }
 
 impl DuplicatesScreen {
-    /// Compare's whole view: the picture and its strip, the facts beside
-    /// them, and the footer.
+    /// Compare's view: the picture, its strip and the footer. The facts are
+    /// in the rail the shell shows in the inspector's place
+    /// ([`DuplicatesScreen::compare_rail`]).
     pub(super) fn compare_view(
         &mut self,
         key: u32,
@@ -162,43 +161,38 @@ impl DuplicatesScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = theme::theme(cx);
         let Some(index) = self.entry_index(key) else {
             return div().into_any_element();
         };
         let keeper = self.keeper(index);
         let picture = self.picture(index, shown, keeper, window, cx);
         let strip = self.strip(index, shown, keeper, window, cx);
-        let column = self.facts_column(index, shown, keeper, window, cx);
         let footer = self.compare_footer(cx);
         div()
             .size_full()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(picture)
-                            .child(strip),
-                    )
-                    .child(
-                        div()
-                            .w(px(COLUMN))
-                            .flex_none()
-                            .border_l_1()
-                            .border_color(theme.border_secondary())
-                            .child(column),
-                    ),
-            )
+            .child(picture)
+            .child(strip)
             .child(footer)
+            .into_any_element()
+    }
+
+    /// Compare's rail: the shown file's name, its statements and its
+    /// properties, while Compare shows.
+    pub(super) fn compare_rail(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let super::Mode::Compare { set, shown } = self.mode else {
+            return div().into_any_element();
+        };
+        let Some(index) = self.entry_index(set) else {
+            return div().into_any_element();
+        };
+        let keeper = self.keeper(index);
+        self.facts_column(index, shown, keeper, window, cx)
             .into_any_element()
     }
 
@@ -560,8 +554,11 @@ impl DuplicatesScreen {
             .id("duplicate-facts")
             .size_full()
             .overflow_y_scroll()
-            .px(px(12.))
-            .pt(px(12.))
+            // As a subscription's rail sits in the same place.
+            .pl(px(16.))
+            .pr(px(16. + ui::scrollbar::GUTTER))
+            .pt(px(16.))
+            .pb(px(48.))
             .flex()
             .flex_col()
             .child(
@@ -599,8 +596,8 @@ impl DuplicatesScreen {
     /// "Keep all, related" and "Not duplicates"; each keeps its tooltip.
     fn compare_footer(&self, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
-        let width = f32::from(self.compare.pane.size.width) + COLUMN;
-        let words = |needed: f32| width <= COLUMN || width >= needed;
+        let width = f32::from(self.compare.pane.size.width);
+        let words = |needed: f32| width <= 0. || width >= needed;
         let button =
             |id: &'static str, look: Look, icon: &'static str, label: &'static str, full: bool| {
                 let button = ui::action_button(id, look)
@@ -612,7 +609,7 @@ impl DuplicatesScreen {
                     button.width(theme::ACTION_BUTTON).padding(0.)
                 }
             };
-        let (decisions, rest) = (words(640.), words(780.));
+        let (decisions, rest) = (words(620.), words(740.));
         div()
             .h(px(FOOTER))
             .flex_none()

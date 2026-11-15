@@ -1363,6 +1363,42 @@ fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
         .spawn(async move { load.await.ok() })
 }
 
+/// Compare's rail, for the shell to show in the inspector's place while
+/// Compare shows: between Compare and the grid or the viewer it stays in
+/// place, and only what is in it changes.
+pub fn rail(screen: &Entity<DuplicatesScreen>, cx: &mut App) -> crate::shell::ScreenRail {
+    let view = cx
+        .new(|cx| DuplicatesRail {
+            screen: screen.downgrade(),
+            _observing: cx.observe(screen, |_, _, cx| cx.notify()),
+        })
+        .into();
+    let screen = screen.downgrade();
+    crate::shell::ScreenRail {
+        view,
+        shows: Box::new(move |cx| {
+            screen
+                .upgrade()
+                .is_some_and(|screen| matches!(screen.read(cx).mode, Mode::Compare { .. }))
+        }),
+    }
+}
+
+/// Compare's rail; it follows the screen.
+pub struct DuplicatesRail {
+    screen: WeakEntity<DuplicatesScreen>,
+    _observing: Subscription,
+}
+
+impl Render for DuplicatesRail {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(screen) = self.screen.upgrade() else {
+            return div().into_any_element();
+        };
+        screen.update(cx, |screen, cx| screen.compare_rail(window, cx))
+    }
+}
+
 /// The screen's titlebar controls: the tabs and the order in the list, the
 /// set and its file in Compare.
 pub struct DuplicatesToolbar {

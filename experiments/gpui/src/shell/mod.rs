@@ -65,6 +65,14 @@ actions!(
     ]
 );
 
+/// A screen's rail: a view the shell shows in the inspector's place, with
+/// the inspector's width, resize edge, toggle and titlebar, while `shows`
+/// says the screen is showing what it belongs to.
+pub struct ScreenRail {
+    pub view: AnyView,
+    pub shows: Box<dyn Fn(&App) -> bool>,
+}
+
 pub struct Shell {
     session: Entity<Session>,
     sidebar: Entity<Sidebar>,
@@ -76,9 +84,9 @@ pub struct Shell {
     quick_look: Entity<QuickLook>,
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
-    /// A subscription's rail, which takes the inspector's place while a
-    /// subscription's page shows.
-    subscription_rail: AnyView,
+    /// The screens' rails, each taking the inspector's place while its
+    /// screen says so (a subscription's page, Compare).
+    screen_rails: Vec<(Screen, ScreenRail)>,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
     focus: FocusHandle,
     sidebar_collapsed: bool,
@@ -335,6 +343,7 @@ impl Shell {
             )
         });
         let subscription_rail = screens::subscriptions::rail(&subscriptions_screen, cx);
+        let duplicates_rail = screens::duplicates::rail(&duplicates, cx);
         let subscription_controls = screens::subscriptions::controls(&subscriptions_screen, cx);
         let subscription_note = screens::subscriptions::note(&subscriptions_screen, cx);
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
@@ -415,7 +424,10 @@ impl Shell {
             quick_look,
             tags,
             subscriptions: subscriptions_screen,
-            subscription_rail,
+            screen_rails: vec![
+                (Screen::Subscriptions, subscription_rail),
+                (Screen::Duplicates, duplicates_rail),
+            ],
             duplicates,
             grid,
             session,
@@ -782,14 +794,19 @@ impl Render for Shell {
         };
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`),
-        // except a subscription's page, whose rail takes the inspector's
-        // place, width and toggle. The page the Subscriptions screen shows
-        // stays while it fades out, so between a page and the grid or the
-        // viewer the rail stays in place and only what is in it changes.
-        let subscription_rail = screen == Some(Screen::Subscriptions)
-            && !viewer_open
-            && self.subscriptions.read(cx).showing_page();
-        let inspector_available = screen.is_none() || viewer_open || subscription_rail;
+        // except where a screen shows a rail of its own (a subscription's
+        // page, Compare), which takes the inspector's place, width and
+        // toggle. A screen keeps what it shows while it fades out, so
+        // between such a view and the grid or the viewer the rail stays in
+        // place and only what is in it changes.
+        let screen_rail = screen
+            .filter(|_| !viewer_open)
+            .and_then(|screen| self.screen_rails.iter().find(|(owner, _)| *owner == screen))
+            .map(|(_, rail)| rail)
+            .filter(|rail| (rail.shows)(cx))
+            .map(|rail| rail.view.clone());
+        let rail_shown = screen_rail.is_some();
+        let inspector_available = screen.is_none() || viewer_open || rail_shown;
         match self.inspector_available {
             Some(was) if was != inspector_available => self
                 .inspector_presence
@@ -946,7 +963,7 @@ impl Render for Shell {
                         .flex()
                         .items_center()
                         .justify_end()
-                        .children((!subscription_rail).then(|| {
+                        .children((!rail_shown).then(|| {
                             // While pinned, the inspector keeps showing what
                             // it had instead of following the selection.
                             ui::icon_button(
@@ -977,13 +994,9 @@ impl Render for Shell {
                             window,
                         )),
                 )
-                .child(div().flex_1().min_h_0().child(if subscription_rail {
-                    self.subscription_rail
-                        .clone()
-                        .cached(fill())
-                        .into_any_element()
-                } else {
-                    self.inspector.clone().cached(fill()).into_any_element()
+                .child(div().flex_1().min_h_0().child(match screen_rail {
+                    Some(rail) => rail.cached(fill()).into_any_element(),
+                    None => self.inspector.clone().cached(fill()).into_any_element(),
                 }))
                 // The rail's edge is its resize handle: 5px wide over the
                 // content, so it takes no width itself.
