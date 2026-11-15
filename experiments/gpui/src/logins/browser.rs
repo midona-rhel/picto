@@ -13,7 +13,6 @@
 //! the little of RFC 6455 a client needs (`websocket` below).
 use super::Credential;
 use futures::channel::oneshot;
-use gpui::App;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead as _, BufReader, Read, Write};
@@ -74,7 +73,7 @@ type Finished = oneshot::Receiver<Result<Credential, String>>;
 
 /// `launchExternalOnlyFansAuth`: opens the browser, or says why it could
 /// not, and hands back what its login captures.
-pub fn launch(_: &mut App) -> (Result<ExternalLogin, String>, Finished) {
+pub fn launch() -> (Result<ExternalLogin, String>, Finished) {
     let (sender, finished) = oneshot::channel();
     let launched = (|| {
         let executable = find_chromium(&candidates())

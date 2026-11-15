@@ -498,7 +498,7 @@ impl Logins {
             self.perform(effects, cx);
             return;
         }
-        let (launched, finished) = browser::launch(cx);
+        let (launched, finished) = browser::launch();
         match launched {
             Ok(external) => {
                 self.external = Some(external);
