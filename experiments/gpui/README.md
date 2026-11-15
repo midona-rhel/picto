@@ -22,7 +22,7 @@ Issue: https://github.com/midona-rhel/picto/issues/163
 ### The safety boundary
 
 The app writes, imports and deletes files, so it opens only a folder it can
-prove is a throwaway copy (`application::guard` in `src/application.rs`). A
+prove is a throwaway copy (`application::guard` in `src/application/copy.rs`). A
 copy is accepted only when all of these hold:
 
 - it holds the marker file `.gpui-disposable`, whose first line names the
@@ -548,12 +548,15 @@ above the working directory or the executable
 About 112,000 lines of Rust in `src/`. The map below says what each area
 owns, its main types, and the one rule to know there.
 
-**Application and library thread** (`application.rs`, `backend.rs`).
-`Application` runs `picto_core` on a Tokio runtime of its own: it sets the
-application data root, registers the core's event callback, opens the copy
-with `picto_core::state::open_library_reporting` and answers
-`dispatch("command", json)` exactly as the renderer's `invoke` is answered
-(`core/src/ipc.rs`). `backend::start` runs one library thread that borrows
+**Application and library thread** (`application/`, `backend.rs`).
+`Application` (`application/mod.rs`) runs `picto_core` on a Tokio runtime of
+its own: it sets the application data root, registers the core's event
+callback, opens the copy with `picto_core::state::open_library_reporting`
+and answers `dispatch("command", json)` exactly as the renderer's `invoke`
+is answered (`core/src/ipc.rs`); `call` is the same answer as a future,
+"The application has stopped" if it never comes. `application/copy.rs`
+holds the disposable-copy rules: which folder opens as a copy (`guard`),
+`--make-copy` and `detach`. `backend::start` runs one library thread that borrows
 the application's own `Library`, so the database is opened once; grid
 results and the sidebar are read as soon as the database is readable, while
 the core's recovery passes still run (10–30 s on a million items), and
