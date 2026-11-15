@@ -351,7 +351,12 @@ sound) and documents (`document/`). Three hosts: the media view, Quick Look
 and detail windows. Collections open in the reader or the editor. Rule:
 decoding never runs on the thread that draws.
 
-**Screens** (`screens/`): Tags, Subscriptions, Duplicates. Duplicates
+**Screens** (`screens/`): Tags, Subscriptions, Duplicates. A screen's
+actions go in the titlebar (`Toolbar::set_screen_controls`). Subscriptions
+lays its subscriptions out as grid tiles (`grid::layout`), and a
+subscription's page puts its counters, schedule and destination in a rail
+the shell shows in the inspector's place, with the inspector's width,
+toggle and sections (`ui::panel_section`, `ui::property_row`). Duplicates
 gathers the core's matching pairs into sets of files that match one another
 (`duplicates/sets.rs`), each with the file Smart merge would keep marked,
 in Identical and Similar tabs; a set is merged, compared one file at a time

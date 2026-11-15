@@ -508,8 +508,6 @@ pub const VISUALIZER_PINK: u32 = 0xff4fa3;
 /// A set star in `StarRating.module.css`.
 pub const RATING: u32 = 0xff9f0a;
 
-/// `--color-accent`, which no theme defines: its `#3297ff` fallback.
-pub const ACCENT: u32 = 0x3297ff;
 /// `--color-warning`, `--color-danger` and `--color-success`, which no theme
 /// defines: the fallbacks the subscription styles give them.
 pub const WARNING: u32 = 0xe8a33d;
@@ -838,8 +836,6 @@ pub const LINE_HEIGHT_MD: f32 = 20.;
 pub const LINE_HEIGHT_BODY: f32 = 1.55;
 /// `--font-size-xl`
 pub const TEXT_XL: f32 = 16.;
-/// `--font-size-title`
-pub const TEXT_TITLE: f32 = 18.;
 
 // ── Shape and size ──────────────────────────────────────────────
 /// `--radius-sm`

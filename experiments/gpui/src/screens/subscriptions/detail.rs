@@ -1,6 +1,8 @@
-//! One subscription's workspace (`SubscriptionDetail.tsx`): a fixed rail
-//! with its cover, name, status, actions and properties, beside a data plane
-//! of tabbed tables: its sources, its runs and its problems.
+//! One subscription's page (`SubscriptionDetail.tsx`): a compact header
+//! with its cover, name and state, over its sources, runs and problems as
+//! full-width tables. Its counters, schedule and where new files go are in
+//! the right rail, built as the inspector is; Run now, Hold and the overflow
+//! menu are in the titlebar (`toolbar.rs`).
 use super::data::{self, Detail};
 use super::format::{self, Track};
 use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure, place_of};
@@ -12,80 +14,160 @@ use crate::{motion, theme};
 use gpui::{prelude::FluentBuilder as _, *};
 use picto_library::query::ItemScope;
 
-/// `.subscriptionRail`
-const RAIL: f32 = 280.;
-/// The rail's content: its width less the left padding and the gutter.
-const RAIL_CONTENT: f32 = RAIL - 8. - ui::scrollbar::GUTTER;
-/// A table row's and the header's height.
+/// The page's side padding, the grid's.
+const INSET: f32 = 16.;
+/// A row's own padding inside the table, so the hover surface reaches past
+/// its text while the text lines up with the header's.
+const ROW_INSET: f32 = 8.;
+/// The cover in the header.
+const COVER: f32 = 48.;
+/// A table row's and the column header's height.
 const ROW: f32 = 32.;
-const HEADER: f32 = 28.;
-/// `.subscriptionTableViewport`'s top padding, which the sticky header
-/// starts below and scrolls up into.
-const VIEWPORT_TOP: f32 = 8.;
-/// The data plane narrower than this drops the Source column.
-const NARROW_PLANE: f32 = 440.;
+const HEADING: f32 = 28.;
+/// The space between columns.
+const COLUMN_GAP: f32 = 12.;
+/// The add-source row under the sources.
+const ADD_ROW: f32 = 44.;
 
-/// The square add button after a list of chips (`.subscriptionDestinationAdd`).
-fn add_square(id: &'static str) -> ui::icon_button::IconButton {
-    ui::icon_button(id, "plus").look(ui::icon_button::Look::ChipAdd)
+/// A table column: its track, and when it gives way as the page narrows
+/// (the lowest rank first; `0` never).
+#[derive(Clone, Copy)]
+struct Column {
+    track: Track,
+    drops: u8,
 }
 
-/// One row of a table, with its cells at the given widths.
-fn table_row(cells: Vec<(f32, AnyElement)>) -> Div {
+const fn column(track: Track, drops: u8) -> Column {
+    Column { track, drops }
+}
+
+fn minimum(track: Track) -> f32 {
+    match track {
+        Track::Fixed(size) | Track::Flex(size, _) => size,
+    }
+}
+
+/// Each column's width across `width`, or `None` for one that gave way:
+/// columns are dropped, lowest rank first, until the rest fit at their
+/// minimums.
+fn fit(width: f32, columns: &[Column]) -> Vec<Option<f32>> {
+    let mut shown = vec![true; columns.len()];
+    loop {
+        let count = shown.iter().filter(|shown| **shown).count();
+        let needed: f32 = columns
+            .iter()
+            .zip(&shown)
+            .filter(|(_, shown)| **shown)
+            .map(|(column, _)| minimum(column.track))
+            .sum::<f32>()
+            + COLUMN_GAP * count.saturating_sub(1) as f32;
+        if needed <= width {
+            break;
+        }
+        let next = columns
+            .iter()
+            .enumerate()
+            .filter(|(index, column)| shown[*index] && column.drops > 0)
+            .min_by_key(|(_, column)| column.drops)
+            .map(|(index, _)| index);
+        match next {
+            Some(index) => shown[index] = false,
+            None => break,
+        }
+    }
+    let tracks: Vec<Track> = columns
+        .iter()
+        .zip(&shown)
+        .filter(|(_, shown)| **shown)
+        .map(|(column, _)| column.track)
+        .collect();
+    let mut widths = format::tracks(width, COLUMN_GAP, &tracks).into_iter();
+    shown
+        .into_iter()
+        .map(|shown| if shown { widths.next() } else { None })
+        .collect()
+}
+
+/// The widest of `texts` in the table's face, at least `floor`: a column
+/// sized to what it holds.
+fn widest<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+    floor: f32,
+    size: f32,
+    window: &Window,
+) -> f32 {
+    texts
+        .into_iter()
+        .map(|text| {
+            f32::from(
+                ui::shape_line(text.to_owned(), font(theme::FONT_UI), size, black(), window).width,
+            )
+        })
+        .fold(floor, f32::max)
+        .ceil()
+        // The cells draw their figures tabular, a little wider than shaped.
+        + 8.
+}
+
+/// The widest badge among `labels`, at least `floor`.
+fn widest_badge<'a>(labels: impl IntoIterator<Item = &'a str>, floor: f32, window: &Window) -> f32 {
+    labels
+        .into_iter()
+        .map(|label| home::badge_width(label, window))
+        .fold(floor, f32::max)
+        .ceil()
+}
+
+/// One row of a table, the cells of the columns shown at their widths.
+fn table_row(widths: &[Option<f32>], cells: Vec<AnyElement>) -> Div {
     let mut row = div()
         .w_full()
-        .px(px(12.))
+        .px(px(ROW_INSET))
         .flex()
         .items_center()
-        .gap(px(10.));
-    for (width, cell) in cells {
-        row = row.child(
-            div()
-                .w(px(width))
-                .flex_none()
-                .min_w_0()
-                .overflow_hidden()
-                .child(cell),
-        );
+        .gap(px(COLUMN_GAP));
+    for (width, cell) in widths.iter().zip(cells) {
+        if let Some(width) = width {
+            row = row.child(
+                div()
+                    .w(px(*width))
+                    .flex_none()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(cell),
+            );
+        }
     }
     row
 }
 
-/// A header cell's text (`.subscriptionTableHeader`): bold caption
-/// capitals with `letter-spacing: 0.05em`.
-fn heading(label: &'static str, right: bool, cx: &App) -> AnyElement {
-    let text = ui::tracked(
-        label.to_uppercase(),
-        Font {
-            weight: FontWeight::SEMIBOLD,
-            ..font(theme::FONT_UI)
-        },
-        theme::TEXT_CAPTION,
-        theme::TEXT_CAPTION,
-        theme::theme(cx).text_tertiary(),
-        theme::TEXT_CAPTION * 0.05,
-    );
+/// A column's heading.
+fn heading(label: &'static str, right: bool) -> AnyElement {
     div()
         .w_full()
         .flex()
         .when(right, |cell| cell.justify_end())
-        .child(text)
+        .truncate()
+        .child(label)
         .into_any_element()
 }
 
-/// A number cell (`.qCellNum`): right-aligned tabular figures.
+/// A number cell: right-aligned figures in the face the sidebar's and the
+/// inspector's numbers use.
 fn number(value: i64, cx: &App) -> AnyElement {
     div()
         .w_full()
         .text_right()
+        .font_family(theme::FONT_INSPECTOR_MONO)
         .font_features(theme::tabular_figures())
+        .text(theme::TEXT_SM)
         .text_color(theme::theme(cx).text_secondary())
         .child(crate::i18n::format::grouped(value))
         .into_any_element()
 }
 
-/// A time cell (`.qCellTime`).
-fn time(text: String, cx: &App) -> AnyElement {
+/// A time or a note.
+fn quiet(text: String, cx: &App) -> AnyElement {
     div()
         .w_full()
         .truncate()
@@ -94,17 +176,31 @@ fn time(text: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// Text centred in the data plane (`.subscriptionWorkspaceEmpty`).
-fn plane_message(text: &'static str, cx: &App) -> Div {
+/// A line of the table that says there is nothing (yet) to show.
+fn table_note(text: &'static str, cx: &App) -> AnyElement {
     div()
-        .absolute()
-        .inset_0()
+        .h(px(ROW))
+        .px(px(ROW_INSET))
         .flex()
         .items_center()
-        .justify_center()
-        .text(theme::TEXT_MD)
         .text_color(theme::theme(cx).text_tertiary())
         .child(text)
+        .into_any_element()
+}
+
+/// A row of the rail's Properties holding a control: the property's label
+/// column, the control at the right.
+fn control_row(label: &'static str, control: impl IntoElement) -> Div {
+    div()
+        .h(px(theme::CONTROL_SM))
+        .mt(px(4.))
+        .flex()
+        .items_center()
+        .gap(px(12.))
+        .whitespace_nowrap()
+        .text(theme::TEXT_CAPTION)
+        .child(div().min_w(px(88.)).flex_none().child(label))
+        .child(div().flex_1().min_w_0().flex().justify_end().child(control))
 }
 
 impl SubscriptionsScreen {
@@ -114,29 +210,55 @@ impl SubscriptionsScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let rail = self.rail(subscription, window, cx);
-        let plane = self.plane(subscription, window, cx);
+        let header = self.header(subscription, window, cx);
+        let tabs = ui::segmented::segmented(
+            "subscription-tabs",
+            ui::segmented::Look::Tabs,
+            TABS.iter().map(|tab| ui::segmented::tab(t(tab))).collect(),
+            Some(self.tab),
+        )
+        .name(t("Subscription details"))
+        .on_select({
+            let view = cx.entity().downgrade();
+            move |tab, _, cx| {
+                let _ = view.update(cx, |this, cx| {
+                    this.tab = tab;
+                    this.table_scroll.set_offset(point(px(0.), px(0.)));
+                    cx.notify();
+                });
+            }
+        });
+        let table = self.plane(subscription, window, cx);
         div()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
+            .relative()
+            .size_full()
             .flex()
-            .gap(px(12.))
-            .pr(px(8.))
+            .flex_col()
             .overflow_hidden()
             .font_family(theme::FONT_UI)
-            .child(rail)
-            .child(plane)
+            .child(measure(self.plane_width.clone(), window))
+            .child(header)
+            .child(
+                div()
+                    .flex_none()
+                    .mt(px(16.))
+                    .px(px(INSET))
+                    .flex()
+                    .child(tabs),
+            )
+            .child(div().relative().flex_1().min_h_0().mt(px(8.)).child(table))
     }
 
-    // ── The rail ────────────────────────────────────────────────
+    // ── The header ──────────────────────────────────────────────
 
-    fn rail(
+    /// The cover, the name (double-click renames), the state with what is
+    /// wrong in its tooltip, and the progress of a run while one is active.
+    fn header(
         &mut self,
         subscription: &data::Subscription,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Div {
         let theme = theme::theme(cx);
         let id = subscription.id;
         let (tone, label) = format::detail_status(subscription);
@@ -157,271 +279,116 @@ impl SubscriptionsScreen {
                 })
                 .unwrap_or_else(|| crate::i18n::en("Run interrupted").to_owned())
         });
-
-        let cover_size = RAIL_CONTENT - 32.;
         let cover = home::cover(
-            "subscription-rail-cover",
+            "subscription-header-cover",
             subscription.cover.as_ref(),
-            cover_size,
-            theme::RADIUS_LG,
-            30.,
+            COVER,
+            theme::RADIUS_MD,
+            20.,
             &self.covers,
             cx,
         )
-        .bg(theme.rail())
-        .shadow(vec![
-            BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_10).into()).spread_radius(px(1.)),
-        ])
         .child(
             div()
                 .absolute()
                 .inset_0()
-                .rounded(px(theme::RADIUS_LG))
+                .rounded(px(theme::RADIUS_MD))
                 .border_1()
-                .border_color(theme.border_secondary()),
+                .border_color(theme.border()),
         );
         let name = ui::tooltip::attach(
             ui::a11y::text(
-                div().id("subscription-rail-name"),
+                div().id("subscription-header-name"),
                 subscription.name.clone(),
             )
             .max_w_full()
-            .mb(px(8.))
             .text(theme::TEXT_XL)
-            .line_height(px(24.))
+            .line_height(px(22.))
             .font_weight(FontWeight::SEMIBOLD)
             .truncate()
-            .text_center()
             .child(subscription.name.clone())
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() == 2 {
                     this.open_rename(id, window, cx);
                 }
             })),
-            "subscription-rail-name-tip",
+            "subscription-header-name-tip",
             ui::tip(t("Double-click to rename")),
-            24.,
+            22.,
             window,
             cx,
-        )
-        .into_any_element();
-        let identity = div()
-            .w_full()
+        );
+        let state = div()
+            .h(px(18.))
+            .mt(px(4.))
             .min_w_0()
-            .pt(px(36.))
-            .px(px(16.))
-            .pb(px(20.))
             .flex()
-            .flex_col()
             .items_center()
-            .child(div().mb(px(16.)).child(cover))
-            .child(name)
+            .gap(px(8.))
             .child(
-                div()
-                    .min_h(px(18.))
-                    .max_w(px(RAIL_CONTENT - 32. - 24.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        ui::status_badge("subscription-rail-status", tone, label)
-                            .tip(problem.map(ui::tip)),
-                    ),
-            );
-
-        let content = div()
-            .w(px(RAIL_CONTENT))
-            .flex()
-            .flex_col()
-            .text(theme::TEXT_SM)
-            .child(identity)
-            .child(self.rail_actions(subscription, cx))
-            .child(Self::run_progress(subscription, cx))
-            .child(Self::properties(subscription, cx))
-            .child(self.destination(subscription, cx));
+                ui::status_badge("subscription-header-status", tone, label)
+                    .tip(problem.map(ui::tip)),
+            )
+            .children(Self::run_progress(subscription, cx));
         div()
-            .relative()
-            .w(px(RAIL))
             .flex_none()
-            .h_full()
-            .child(
-                div()
-                    .id("subscription-rail")
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.rail_scroll)
-                    .child(div().pt(px(8.)).pb(px(8.)).pl(px(8.)).child(content)),
-            )
-            .child(ui::scrollbar(
-                "subscription-rail-scrollbar",
-                &self.rail_scroll,
-                window,
-                cx,
-            ))
-            .into_any_element()
-    }
-
-    /// Run or pause, hold or stop, and the overflow menu, in the columns
-    /// `minmax(0, 1fr) auto 24px`.
-    fn rail_actions(
-        &mut self,
-        subscription: &data::Subscription,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let id = subscription.id;
-        let active = subscription.active_run_id.is_some();
-        let running = format::running(subscription);
-        let paused_run = subscription.run_status.as_deref() == Some("paused");
-        let run_failed = active
-            && !running
-            && !matches!(
-                subscription.run_status.as_deref(),
-                Some("paused" | "inbox_full")
-            );
-        // Run Now, Pause, Resume and Retry (`subscriptions.run`,
-        // `subscriptions.run.pause`, `subscriptions.run.resume`).
-        let acting = self.acting.contains(&id);
-        let primary = if active {
-            let (variant, icon, label) = if running {
-                (Look::Standard, "player-pause", t("Pause"))
-            } else if run_failed {
-                (Look::Primary, "refresh", t("Retry"))
-            } else {
-                (
-                    Look::Primary,
-                    "player-play",
-                    if paused_run { t("Resume") } else { t("Retry") },
-                )
-            };
-            ui::action_button("subscription-run", variant)
-                .label(label)
-                .icon(icon, 14.)
-                .disabled(acting)
-        } else {
-            ui::action_button("subscription-run", Look::Primary)
-                .label(t("Run now"))
-                .icon("player-play", 14.)
-                .disabled(acting || subscription.paused || subscription.queries.is_empty())
-        }
-        .on_click(cx.listener(move |this, _, _, cx| this.run_control(id, cx)));
-        // Stop the run (`subscriptions.cancel`), or hold and release future
-        // runs (`subscriptions.hold`).
-        let (hold_icon, hold_label, hold_tip) = if active {
-            (
-                "player-stop",
-                t("Stop"),
-                t("Stop this run and keep the posts already added"),
-            )
-        } else if subscription.paused {
-            ("player-play", t("Release"), t("Allow future runs again"))
-        } else {
-            ("hand-stop", t("Hold"), t("Put future runs on hold"))
-        };
-        let overflow = self.overflow.clone();
-        let bounds = self.overflow.clone();
-        div()
-            .mx(px(16.))
-            .mb(px(20.))
+            .pt(px(INSET))
+            .px(px(INSET))
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(px(12.))
+            .child(cover)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .child(primary.padding(10.).full_width()),
-            )
-            .child(
-                // In production this button sits in its tooltip's span, so
-                // `.subscriptionActions > button` and its 10px padding do
-                // not reach it: it keeps the button's own 20px.
-                ui::action_button("subscription-hold", Look::Standard)
-                    .label(hold_label)
-                    .icon(hold_icon, 14.)
-                    .tip(ui::tip(hold_tip))
-                    .disabled(acting)
-                    .on_click(cx.listener(move |this, _, _, cx| this.hold_control(id, cx))),
-            )
-            .child(
-                // The 30px button overhangs its 24px column, as it does in
-                // the Electron rail.
-                div()
-                    .relative()
-                    .w(px(24.))
-                    .h(px(30.))
-                    .flex_none()
-                    .child(
-                        canvas(move |bounds, _, _| overflow.set(bounds), |_, _, _, _| {})
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size(px(30.)),
-                    )
-                    .child(
-                        ui::small_button("subscription-more", "dots-vertical")
-                            .glyph(16.)
-                            .size(30.)
-                            .radius(theme::RADIUS_MD)
-                            .tip(ui::tip(t("More actions")))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let at = bounds.get();
-                                let position = point(at.left(), at.bottom() + px(4.));
-                                this.open_menu(vec![id], position, window, cx);
-                            })),
-                    ),
+                    .flex_col()
+                    .child(name)
+                    .child(state)
+                    .child(Self::run_bar(subscription, cx)),
             )
     }
 
-    /// The current run's progress (`.subscriptionRunProgress`), kept in the
-    /// layout and hidden while no run is active.
-    fn run_progress(subscription: &data::Subscription, cx: &App) -> Div {
+    /// While a run is active, how far it has got, after the state.
+    fn run_progress(subscription: &data::Subscription, cx: &App) -> Option<Div> {
+        subscription.active_run_id?;
+        let progress = subscription.progress;
+        let settled = progress.posts_added + progress.posts_skipped;
+        Some(
+            div()
+                .min_w_0()
+                .truncate()
+                .text(theme::TEXT_CAPTION)
+                .font_features(theme::tabular_figures())
+                .text_color(theme::theme(cx).text_tertiary())
+                .child(format!(
+                    "{} / {} {} · {} {}",
+                    crate::i18n::format::grouped(settled),
+                    crate::i18n::format::grouped(format::run_target(subscription)),
+                    t("posts processed"),
+                    crate::i18n::format::grouped(progress.downloaded),
+                    t("files downloaded")
+                )),
+        )
+    }
+
+    /// The run's progress line under the state, kept in the layout and
+    /// hidden while no run is active.
+    fn run_bar(subscription: &data::Subscription, cx: &App) -> Div {
         let theme = theme::theme(cx);
         let active = subscription.active_run_id.is_some();
-        let settled = if active {
-            subscription.progress.posts_added + subscription.progress.posts_skipped
-        } else {
-            0
-        };
-        let downloaded = if active {
-            subscription.progress.downloaded
-        } else {
-            0
-        };
+        let settled = subscription.progress.posts_added + subscription.progress.posts_skipped;
         let target = format::run_target(subscription);
-        let share = if target > 0 {
+        let share = if active && target > 0 {
             (settled as f32 / target as f32).min(1.)
         } else {
             0.
         };
         div()
-            .min_h(px(38.))
-            .mt(px(-8.))
-            .mx(px(16.))
-            .mb(px(12.))
+            .mt(px(3.))
+            .max_w(px(280.))
             .opacity(if active { 1. } else { 0. })
-            .child(
-                div()
-                    .h(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(8.))
-                    .text(theme::TEXT_CAPTION)
-                    .text_color(theme.text_tertiary())
-                    .whitespace_nowrap()
-                    .child(format!(
-                        "{} / {} {}",
-                        crate::i18n::format::grouped(settled),
-                        crate::i18n::format::grouped(target),
-                        t("posts processed")
-                    ))
-                    .child(format!(
-                        "{} {}",
-                        crate::i18n::format::grouped(downloaded),
-                        t("files downloaded")
-                    )),
-            )
             .child(
                 ui::progress_bar()
                     .height(3.)
@@ -434,10 +401,72 @@ impl SubscriptionsScreen {
             )
     }
 
-    /// The run's counts, the last check, and the schedule and run limit
-    /// (`.subscriptionProperties`).
-    fn properties(subscription: &data::Subscription, cx: &mut Context<Self>) -> Div {
-        let theme = theme::theme(cx);
+    // ── The rail ────────────────────────────────────────────────
+
+    /// The rail beside the page, built as the inspector's: its scrolling
+    /// column, sections and property rows.
+    pub(super) fn rail(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(subscription) = self.opened().cloned() else {
+            return div().into_any_element();
+        };
+        let properties = self.properties(&subscription, cx);
+        let destination = self.destination(&subscription, cx);
+        let content = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(
+                self.rail_section(t("Properties"), properties, cx)
+                    .leading(true),
+            )
+            .child(self.rail_section(t("New files"), destination, cx));
+        div()
+            .relative()
+            .size_full()
+            .child(place_of(self.rail_bounds.clone()))
+            .child(
+                div()
+                    .id("subscription-rail")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.rail_scroll)
+                    .pl(px(16.))
+                    .pr(px(16. + ui::scrollbar::GUTTER))
+                    .pt(px(16.))
+                    .pb(px(48.))
+                    .font_family(theme::FONT_INSPECTOR)
+                    .child(content),
+            )
+            .child(ui::scrollbar(
+                "subscription-rail-scrollbar",
+                &self.rail_scroll,
+                window,
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    /// A section of the rail, folded as the inspector's are.
+    fn rail_section(
+        &self,
+        title: &'static str,
+        content: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> ui::PanelSection {
+        ui::panel_section(title, title)
+            .expanded(!self.collapsed.contains(title))
+            .content(Some(content))
+            .on_toggle(cx.listener(move |this, _, _, cx| {
+                if !this.collapsed.remove(title) {
+                    this.collapsed.insert(title);
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The run's counts and the last check as property rows, then the
+    /// schedule and the run limit.
+    fn properties(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> AnyElement {
         let id = subscription.id;
         let view = cx.entity().downgrade();
         let posts_view = view.clone();
@@ -445,90 +474,63 @@ impl SubscriptionsScreen {
         let progress = subscription.progress;
         let stored_posts: i64 = subscription.queries.iter().map(|query| query.posts).sum();
         let of_run = |value: i64| crate::i18n::format::grouped(if has_run { value } else { 0 });
-        let row = |label: &'static str, value: AnyElement| {
-            div()
-                .h(px(26.))
-                .mb(px(2.))
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(12.))
-                .text(theme::TEXT_SM)
-                .line_height(px(26.))
-                .text_color(theme.text_secondary())
-                .child(div().whitespace_nowrap().child(label))
-                .child(value)
-        };
-        let value = |text: String| {
-            div()
-                .min_w_0()
-                .truncate()
-                .text_right()
-                .text_color(theme.text())
-                .child(text)
-                .into_any_element()
-        };
         div()
-            .mx(px(16.))
-            .pt(px(16.))
-            .border_t_1()
-            .border_color(theme.border())
             .flex()
             .flex_col()
-            .child(row(
+            .child(ui::property_row(
                 t("Posts traversed"),
-                value(of_run(progress.posts_traversed)),
+                of_run(progress.posts_traversed),
             ))
-            .child(row(
+            .child(ui::property_row(
                 t("Posts added"),
-                value(crate::i18n::format::grouped(if has_run {
+                crate::i18n::format::grouped(if has_run {
                     progress.posts_added
                 } else {
                     stored_posts
-                })),
+                }),
             ))
-            .child(row(
+            .child(ui::property_row(
                 t("Posts skipped"),
-                value(of_run(progress.posts_skipped)),
+                of_run(progress.posts_skipped),
             ))
-            .child(row(
+            .child(ui::property_row(
                 t("Files downloaded"),
-                value(of_run(progress.downloaded)),
+                of_run(progress.downloaded),
             ))
-            .child(row(
+            .child(ui::property_row(
                 t("Files already in library"),
-                value(of_run(progress.files_already_in_library)),
+                of_run(progress.files_already_in_library),
             ))
-            .child(row(
+            .child(ui::property_row(
                 t("Last check"),
-                value(format::relative_time(
-                    format::last_check(subscription),
-                    chrono::Local::now(),
-                )),
+                format::relative_time(format::last_check(subscription), chrono::Local::now()),
             ))
             // `setSchedule`
-            .child(row(
-                t("Schedule"),
-                ui::select(
-                    "subscription-schedule",
-                    subscription.schedule.clone(),
-                    vec![
-                        ui::choice("manual", "Manual"),
-                        ui::choice("daily", "Daily"),
-                        ui::choice("weekly", "Weekly"),
-                        ui::choice("monthly", "Monthly"),
-                    ],
+            .child(
+                control_row(
+                    t("Schedule"),
+                    ui::select(
+                        "subscription-schedule",
+                        subscription.schedule.clone(),
+                        vec![
+                            ui::choice("manual", "Manual"),
+                            ui::choice("daily", "Daily"),
+                            ui::choice("weekly", "Weekly"),
+                            ui::choice("monthly", "Monthly"),
+                        ],
+                    )
+                    .width(100.)
+                    .name(t("Schedule"))
+                    .on_change(move |schedule, _, cx| {
+                        let _ = view.update(cx, |this, cx| {
+                            this.perform(vec![id], |_| super::Command::Schedule(schedule), cx)
+                        });
+                    }),
                 )
-                .width(100.)
-                .on_change(move |schedule, _, cx| {
-                    let _ = view.update(cx, |this, cx| {
-                        this.perform(vec![id], |_| super::Command::Schedule(schedule), cx)
-                    });
-                })
-                .into_any_element(),
-            ))
+                .mt(px(8.)),
+            )
             // `setPostsPerRun`
-            .child(row(
+            .child(control_row(
                 t("Posts per run"),
                 ui::number_input(
                     "subscription-posts-per-run",
@@ -542,16 +544,57 @@ impl SubscriptionsScreen {
                     let _ = posts_view.update(cx, |this, cx| {
                         this.perform(vec![id], |_| super::Command::PostsPerRun(posts), cx)
                     });
-                })
-                .into_any_element(),
+                }),
             ))
+            .into_any_element()
+    }
+
+    /// The inspector's "+" after a list of chips, or its wide add row when
+    /// the list is empty; the picker opens beside the rail at it.
+    fn add_control(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        empty: bool,
+        place: std::rc::Rc<std::cell::Cell<Bounds<Pixels>>>,
+        open: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = std::rc::Rc::new(open);
+        let listener = cx.listener(move |this, _: &ClickEvent, window, cx| open(this, window, cx));
+        if empty {
+            div()
+                .id(id)
+                .role(Role::Button)
+                .aria_label(label)
+                .relative()
+                .w_full()
+                .child(place_of(place))
+                .child(ui::action_row(
+                    SharedString::from(format!("{id}-action")),
+                    "inspector-add",
+                    label,
+                ))
+                .on_click(listener)
+                .into_any_element()
+        } else {
+            div()
+                .relative()
+                .child(place_of(place))
+                .child(
+                    ui::icon_button(id, "inspector-add")
+                        .look(ui::icon_button::Look::TagAdd)
+                        .tip(ui::tip(label))
+                        .on_click(listener),
+                )
+                .into_any_element()
+        }
     }
 
     /// Where new files go (`.subscriptionDestination`): the folders and tags
     /// every downloaded file receives, each removed with its chip's button
-    /// and added through the folder and tag pickers, which open above the
-    /// add buttons.
-    fn destination(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> Div {
+    /// and added through the folder and tag pickers.
+    fn destination(&self, subscription: &data::Subscription, cx: &mut Context<Self>) -> AnyElement {
         let theme = theme::theme(cx);
         let id = subscription.id;
         let nav = &self.session.read(cx).nav;
@@ -565,12 +608,7 @@ impl SubscriptionsScreen {
                 })
                 .map(|entry| entry.label.clone())
         };
-        let mut folders = div()
-            .min_h(px(26.))
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(4.));
+        let mut folders = div().flex().flex_wrap().items_center().gap(px(4.));
         // `selectedFolders`: the folders the library still has.
         let mut shown = 0;
         for folder in &subscription.folder_ids {
@@ -588,40 +626,16 @@ impl SubscriptionsScreen {
                 .on_remove(cx.listener(move |this, _, _, cx| this.remove_folder(id, folder, cx))),
             );
         }
-        let add_folder =
-            cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_folders(id, window, cx));
-        folders = if shown == 0 {
-            folders.child(
-                div()
-                    .relative()
-                    .w_full()
-                    .text_color(theme.text_secondary())
-                    .child(place_of(self.add_folder.clone()))
-                    .child(
-                        ui::action_row("subscription-add-folders", "plus", t("Add to folders"))
-                            .glyph(14.)
-                            .on_click(add_folder),
-                    ),
-            )
-        } else {
-            folders.child(
-                div()
-                    .relative()
-                    .child(place_of(self.add_folder.clone()))
-                    .child(
-                        add_square("subscription-add-folder")
-                            .name(t("Add to folders"))
-                            .on_click(add_folder),
-                    ),
-            )
-        };
+        folders = folders.child(self.add_control(
+            "subscription-add-folders",
+            t("Add to folders"),
+            shown == 0,
+            self.add_folder.clone(),
+            move |this, window, cx| this.pick_folders(id, window, cx),
+            cx,
+        ));
         let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
-        let mut tags = div()
-            .min_h(px(26.))
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(4.));
+        let mut tags = div().flex().flex_wrap().items_center().gap(px(4.));
         for (index, tag) in subscription.automatic_tags.iter().enumerate() {
             let (namespace, subtag) = crate::tags::split(tag);
             let namespace = namespace.unwrap_or("general");
@@ -639,75 +653,34 @@ impl SubscriptionsScreen {
                 .on_remove(cx.listener(move |this, _, _, cx| this.remove_tag(id, &removed, cx))),
             );
         }
-        let add_tag =
-            cx.listener(move |this, _: &ClickEvent, window, cx| this.pick_tags(id, window, cx));
-        tags = if subscription.automatic_tags.is_empty() {
-            tags.child(
-                div()
-                    .relative()
-                    .w_full()
-                    .text_color(theme.text_tertiary())
-                    .child(place_of(self.add_tag.clone()))
-                    .child(
-                        ui::action_row("subscription-add-tags", "plus", t("Add tags"))
-                            .glyph(14.)
-                            .on_click(add_tag),
-                    ),
-            )
-        } else {
-            tags.child(
-                div()
-                    .relative()
-                    .child(place_of(self.add_tag.clone()))
-                    .child(
-                        add_square("subscription-add-tag")
-                            .name(t("Add tags"))
-                            .on_click(add_tag),
-                    ),
-            )
+        tags = tags.child(self.add_control(
+            "subscription-add-tags",
+            t("Add tags"),
+            subscription.automatic_tags.is_empty(),
+            self.add_tag.clone(),
+            move |this, window, cx| this.pick_tags(id, window, cx),
+            cx,
+        ));
+        let caption = |text: &'static str| {
+            div()
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .text(theme::TEXT_CAPTION)
+                .text_color(theme.text_secondary())
+                .child(text)
         };
         div()
-            .mx(px(16.))
-            .mt(px(16.))
-            .pt(px(16.))
-            .border_t_1()
-            .border_color(theme.border())
             .flex()
             .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .text_size(px(theme::TEXT_SM))
-                    .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(t("New files")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(5.))
-                    .text_size(px(theme::TEXT_SM))
-                    .line_height(px(theme::TEXT_SM * theme::LINE_HEIGHT_BODY))
-                    .text_color(theme.text_tertiary())
-                    .child(t("Automatically add to folders"))
-                    .child(folders),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .text(theme::TEXT_MD)
-                    // `TagAssignmentControl`'s `line-height: var(--line-height-md)`.
-                    .line_height(px(theme::LINE_HEIGHT_MD))
-                    .text_color(theme.text())
-                    .child(t("Automatically add tags"))
-                    .child(tags),
-            )
+            .child(caption(t("Automatically add to folders")))
+            .child(div().mt(px(4.)).child(folders))
+            .child(caption(t("Automatically add tags")).mt(px(10.)))
+            .child(div().mt(px(4.)).child(tags))
+            .into_any_element()
     }
 
-    // ── The data plane ──────────────────────────────────────────
+    // ── The tables ──────────────────────────────────────────────
 
     fn plane(
         &mut self,
@@ -715,111 +688,26 @@ impl SubscriptionsScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = theme::theme(cx);
         let detail = self
             .detail
             .as_ref()
             .filter(|detail| detail.subscription == subscription.id)
             .cloned();
-        let body = match self.tab {
-            SOURCES if subscription.queries.is_empty() => {
-                plane_message(t("No sources yet."), cx).into_any_element()
-            }
-            SOURCES => self.sources(subscription, window, cx).into_any_element(),
-            HISTORY => match &detail {
-                None => plane_message(t("Loading history…"), cx).into_any_element(),
-                Some(detail) => self.history(detail, window, cx).into_any_element(),
-            },
-            _ => match &detail {
-                None => plane_message(t("Checking for problems…"), cx).into_any_element(),
-                Some(detail) if detail.issues.total == 0 => {
-                    plane_message(t("No problems found."), cx).into_any_element()
-                }
-                Some(detail) => self.problems(detail, window, cx).into_any_element(),
-            },
-        };
-        let footer = (self.tab == SOURCES).then(|| self.add_query_bar(cx));
-        div()
-            .relative()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .my(px(8.))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .rounded(px(theme::RADIUS_LG))
-            .border_1()
-            .border_color(theme.border())
-            .bg(theme.rail())
-            .shadow(vec![
-                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_25).into()).spread_radius(px(1.)),
-                BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).blur_radius(px(12.)),
-            ])
-            .child(measure(self.plane_width.clone(), window))
-            .child(
-                div()
-                    .h(px(48.))
-                    .flex_none()
-                    .px(px(12.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        ui::segmented::segmented(
-                            "subscription-tabs",
-                            ui::segmented::Look::Tabs,
-                            TABS.iter().map(|tab| ui::segmented::tab(t(tab))).collect(),
-                            Some(self.tab),
-                        )
-                        .name(t("Subscription details"))
-                        .on_select({
-                            let view = cx.entity().downgrade();
-                            move |tab, _, cx| {
-                                let _ = view.update(cx, |this, cx| {
-                                    this.tab = tab;
-                                    this.table_scroll.set_offset(point(px(0.), px(0.)));
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(body),
-            )
-            .child(
-                div()
-                    .h(px(52.))
-                    .flex_none()
-                    .px(px(16.))
-                    .flex()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(theme.border_secondary())
-                    .children(footer),
-            )
-            .into_any_element()
+        match self.tab {
+            SOURCES => self.sources(subscription, window, cx),
+            HISTORY => self.history(detail.as_ref(), window, cx),
+            _ => self.problems(detail.as_ref(), window, cx),
+        }
     }
 
-    /// The width a table row's cells share: the plane's inside (which the
-    /// measure, laid out inside the border, already is) less the viewport's
-    /// padding and gutter and the row's own padding.
+    /// The width the cells of a row share.
     fn row_width(&self) -> f32 {
-        (self.plane_width.get() - 32. - ui::scrollbar::GUTTER - 24.).max(0.)
+        (self.plane_width.get() - 2. * (INSET - ROW_INSET) - ui::scrollbar::GUTTER - 2. * ROW_INSET)
+            .max(0.)
     }
 
-    fn narrow(&self) -> bool {
-        self.plane_width.get() <= NARROW_PLANE
-    }
-
-    /// A scrolling table (`.subscriptionTableViewport`) whose header stays at
-    /// the top once the rows scroll under it.
+    /// A table across the page: its column headings, then the rows, which
+    /// scroll under them, and whatever follows the rows.
     fn table(
         &self,
         id: &'static str,
@@ -830,62 +718,62 @@ impl SubscriptionsScreen {
         cx: &mut App,
     ) -> AnyElement {
         let theme = theme::theme(cx);
-        let scrolled = -f32::from(self.table_scroll.offset().y);
-        let header_top = (VIEWPORT_TOP - scrolled).max(0.);
-        let header = header
-            .h(px(HEADER))
-            .bg(theme.footer_surface())
-            .text(theme::TEXT_CAPTION)
-            .line_height(px(theme::TEXT_CAPTION))
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.text_tertiary());
-        let mut column = div()
-            .pt(px(VIEWPORT_TOP))
-            .pb(px(16.))
-            .pl(px(16.))
-            .pr(px(16. + ui::scrollbar::GUTTER))
-            .flex()
-            .flex_col()
-            // The header's place in the flow; it is drawn over the rows.
-            .child(div().h(px(HEADER)).flex_none());
-        for row in rows {
-            column = column.child(row);
-        }
-        column = column.children(after);
+        let side = |element: Div| {
+            element
+                .pl(px(INSET - ROW_INSET))
+                .pr(px(INSET - ROW_INSET + ui::scrollbar::GUTTER))
+        };
+        let header = side(div().flex_none()).child(
+            header
+                .h(px(HEADING))
+                .border_b_1()
+                .border_color(theme.border())
+                .text(theme::TEXT_CAPTION)
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_tertiary()),
+        );
+        let column = side(div().pb(px(INSET)).flex().flex_col().text(theme::TEXT_MD))
+            .children(rows)
+            .children(after);
         div()
             .absolute()
             .inset_0()
-            .text(theme::TEXT_MD)
+            .flex()
+            .flex_col()
+            .child(header)
             .child(
                 div()
-                    .id(id)
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.table_scroll)
-                    .child(column),
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id(id)
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.table_scroll)
+                            .child(column),
+                    )
+                    .child(ui::scrollbar((id, 1usize), &self.table_scroll, window, cx)),
             )
-            .child(
-                div()
-                    .absolute()
-                    .top(px(header_top))
-                    .left(px(16.))
-                    .right(px(16. + ui::scrollbar::GUTTER))
-                    .child(header),
-            )
-            .child(ui::scrollbar((id, 1usize), &self.table_scroll, window, cx))
             .into_any_element()
     }
 
-    /// A body row: 32px or taller, its hover surface, and a rule above it.
+    /// A body row: 32px or taller, a hairline under it, and its hover
+    /// surface.
     fn body_row(&self, id: ElementId, row: Div, cx: &App) -> Stateful<Div> {
         let theme = theme::theme(cx);
         row.id(id)
             .min_h(px(ROW))
-            .border_t_1()
+            .border_b_1()
             .border_color(theme.border_secondary())
             .hover(move |style| style.bg(theme.surface_hover()))
     }
 
+    /// Sources: the site, the query with what is wrong with it, and the
+    /// counts at the right edge; the row's actions show under the pointer
+    /// over the end of the query's cell. When narrow the media count gives
+    /// way first, then the posts count, then the site.
     fn sources(
         &self,
         subscription: &data::Subscription,
@@ -893,42 +781,43 @@ impl SubscriptionsScreen {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = theme::theme(cx);
-        let narrow = self.narrow();
-        let columns = if narrow {
+        let widths = fit(
+            self.row_width(),
+            &[
+                column(Track::Flex(84., 0.35), 3),
+                column(Track::Flex(140., 1.), 0),
+                column(Track::Fixed(64.), 2),
+                column(Track::Fixed(64.), 1),
+            ],
+        );
+        // The hover surface over the background, opaque, for the actions
+        // to cover the end of the query's cell with.
+        let hovered = theme.surface_hover();
+        let under_actions = theme::blend(
+            theme.background(),
+            Rgba {
+                a: 1.,
+                ..hovered
+            },
+            hovered.a,
+        );
+        let header = table_row(
+            &widths,
             vec![
-                Track::Flex(0., 1.),
-                Track::Fixed(44.),
-                Track::Fixed(44.),
-                Track::Fixed(128.),
-            ]
-        } else {
-            vec![
-                Track::Flex(90., 0.28),
-                Track::Flex(0., 1.),
-                Track::Fixed(76.),
-                Track::Fixed(76.),
-                Track::Fixed(128.),
-            ]
-        };
-        let widths = format::tracks(self.row_width(), 10., &columns);
-        let cells = |mut values: Vec<AnyElement>| -> Vec<(f32, AnyElement)> {
-            if narrow {
-                values.remove(0);
-            }
-            widths.iter().copied().zip(values).collect()
-        };
-        let header = table_row(cells(vec![
-            heading(t("Source"), false, cx),
-            heading(t("Query"), false, cx),
-            heading(t("Posts"), true, cx),
-            heading(t("Media"), true, cx),
-            div().into_any_element(),
-        ]));
+                heading(t("Source"), false),
+                heading(t("Query"), false),
+                heading(t("Posts"), true),
+                heading(t("Media"), true),
+            ],
+        );
         let active = subscription.active_run_id.is_some();
         let running = format::running(subscription);
         // `busy || subscriptionRunning`: the row's buttons wait.
         let waiting = self.busy() || active;
         let mut rows = Vec::new();
+        if subscription.queries.is_empty() {
+            rows.push(table_note(t("No sources yet."), cx));
+        }
         for query in &subscription.queries {
             let query_id = query.id as usize;
             let id = query.id;
@@ -947,7 +836,15 @@ impl SubscriptionsScreen {
                 .items_center()
                 .gap(px(6.))
                 .overflow_hidden()
-                .child(div().min_w_0().truncate().child(query.text.clone()));
+                .child(
+                    // The query keeps up to two thirds of the cell; what is
+                    // wrong with it is cut short first.
+                    div()
+                        .flex_shrink_0()
+                        .max_w(relative(0.67))
+                        .truncate()
+                        .child(query.text.clone()),
+                );
             if query.history_complete && query.initial_run_complete {
                 name = name.child(ui::tooltip::attach(
                     div()
@@ -974,6 +871,7 @@ impl SubscriptionsScreen {
                         .max_w(px(140.))
                         .truncate()
                         .cursor_pointer()
+                        .text(theme::TEXT_SM)
                         .text_color(rgb(theme::FAILURE_TEXT))
                         .child(warning)
                         // `onOpenAuth`: the Accounts dialog on the service
@@ -1016,10 +914,20 @@ impl SubscriptionsScreen {
             let actions = div()
                 .id(("subscription-query-actions", query_id))
                 .a11y_presentational()
-                .w_full()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .pl(px(16.))
                 .flex()
+                .items_center()
                 .justify_end()
                 .gap(px(2.))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(theme::clear(under_actions), 0.),
+                    linear_color_stop(under_actions, 16. / 140.),
+                ))
                 .opacity(hover)
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
@@ -1080,18 +988,25 @@ impl SubscriptionsScreen {
                         })),
                 );
             let source = format::site_label(&query.site_id);
-            let row = table_row(cells(vec![
-                div()
-                    .w_full()
-                    .truncate()
-                    .text_color(theme.text_secondary())
-                    .child(source.clone())
-                    .into_any_element(),
-                name.into_any_element(),
-                number(query.posts, cx),
-                number(query.media, cx),
-                actions.into_any_element(),
-            ]));
+            let row = table_row(
+                &widths,
+                vec![
+                    div()
+                        .w_full()
+                        .truncate()
+                        .text_color(theme.text_secondary())
+                        .child(source.clone())
+                        .into_any_element(),
+                    div()
+                        .relative()
+                        .w_full()
+                        .child(name)
+                        .child(actions)
+                        .into_any_element(),
+                    number(query.posts, cx),
+                    number(query.media, cx),
+                ],
+            );
             let details = query.clone();
             let opened = query.clone();
             let row_name = format!(
@@ -1124,99 +1039,163 @@ impl SubscriptionsScreen {
                     .into_any_element(),
             );
         }
-        self.table("subscription-sources", header, rows, None, window, cx)
+        let add = self.add_query_bar(cx).into_any_element();
+        self.table("subscription-sources", header, rows, Some(add), window, cx)
     }
 
-    fn history(&self, detail: &Detail, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        if detail.runs.is_empty() {
-            return div()
-                .pt(px(VIEWPORT_TOP + 4.))
-                .px(px(16.))
-                .text(theme::TEXT_MD)
-                .text_color(theme::theme(cx).text_tertiary())
-                .child(t("No runs yet."))
-                .into_any_element();
-        }
-        let widths = format::tracks(
+    /// History: the start and the state as wide as what they hold, the
+    /// counts, and the notes in the rest. When narrow the reused count
+    /// gives way first, then the fetched count, then the notes.
+    fn history(
+        &self,
+        detail: Option<&Detail>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let runs = detail.map_or(&[][..], |detail| &detail.runs[..]);
+        let started: Vec<String> = runs
+            .iter()
+            .map(|run| format::date_time(Some(&run.started_at)))
+            .collect();
+        let states: Vec<String> = runs.iter().map(|run| format::run_status(run).1).collect();
+        let widths = fit(
             self.row_width(),
-            10.,
             &[
-                Track::Fixed(150.),
-                Track::Fixed(150.),
-                Track::Fixed(90.),
-                Track::Fixed(70.),
-                Track::Flex(120., 1.),
+                column(
+                    Track::Fixed(widest(
+                        started.iter().map(String::as_str),
+                        60.,
+                        theme::TEXT_MD,
+                        window,
+                    )),
+                    0,
+                ),
+                column(
+                    Track::Fixed(widest_badge(states.iter().map(String::as_str), 48., window)),
+                    0,
+                ),
+                column(Track::Fixed(56.), 2),
+                column(Track::Fixed(56.), 1),
+                column(Track::Flex(80., 1.), 3),
             ],
         );
-        let cells = |values: Vec<AnyElement>| -> Vec<(f32, AnyElement)> {
-            widths.iter().copied().zip(values).collect()
+        let header = table_row(
+            &widths,
+            vec![
+                heading(t("Started"), false),
+                heading(t("Status"), false),
+                heading(t("Fetched"), true),
+                heading(t("Reused"), true),
+                heading(t("Notes"), false),
+            ],
+        );
+        let rows = match detail {
+            None => vec![table_note(t("Loading history…"), cx)],
+            Some(detail) if detail.runs.is_empty() => vec![table_note(t("No runs yet."), cx)],
+            Some(detail) => detail
+                .runs
+                .iter()
+                .map(|run| {
+                    let (tone, label) = format::run_status(run);
+                    let row = table_row(
+                        &widths,
+                        vec![
+                            div()
+                                .w_full()
+                                .truncate()
+                                .font_features(theme::tabular_figures())
+                                .child(format::date_time(Some(&run.started_at)))
+                                .into_any_element(),
+                            div()
+                                .flex()
+                                .child(
+                                    ui::status_badge(("run-status", run.id as usize), tone, label)
+                                        .tip(run.error_message.clone().map(ui::tip)),
+                                )
+                                .into_any_element(),
+                            number(run.downloaded, cx),
+                            number(run.already_in_library, cx),
+                            quiet(run.error_message.clone().unwrap_or_default(), cx),
+                        ],
+                    );
+                    self.body_row(("subscription-run", run.id as usize).into(), row, cx)
+                        .into_any_element()
+                })
+                .collect(),
         };
-        let header = table_row(cells(vec![
-            heading(t("Started"), false, cx),
-            heading(t("Status"), false, cx),
-            heading(t("Fetched"), true, cx),
-            heading(t("Reused"), true, cx),
-            heading(t("Notes"), false, cx),
-        ]));
-        let rows = detail
-            .runs
-            .iter()
-            .map(|run| {
-                let (tone, label) = format::run_status(run);
-                let row = table_row(cells(vec![
-                    time(format::date_time(Some(&run.started_at)), cx),
-                    div()
-                        .flex()
-                        .child(
-                            ui::status_badge(("run-status", run.id as usize), tone, label)
-                                .tip(run.error_message.clone().map(ui::tip)),
-                        )
-                        .into_any_element(),
-                    number(run.downloaded, cx),
-                    number(run.already_in_library, cx),
-                    time(run.error_message.clone().unwrap_or_default(), cx),
-                ]));
-                self.body_row(("subscription-run", run.id as usize).into(), row, cx)
-                    .into_any_element()
-            })
-            .collect();
         self.table("subscription-history", header, rows, None, window, cx)
     }
 
-    fn problems(&self, detail: &Detail, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// Problems: the state and when it was last seen as wide as what they
+    /// hold, the post, and why it failed in the rest; the fix's column only
+    /// while a problem has one. When narrow the time gives way first, then
+    /// the post; the state, why it failed and the fix stay.
+    fn problems(
+        &self,
+        detail: Option<&Detail>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = theme::theme(cx);
-        let narrow = self.narrow();
-        let columns = if narrow {
-            vec![
-                Track::Flex(80., 0.35),
-                Track::Flex(0., 1.),
-                Track::Flex(0., 1.),
-                Track::Fixed(52.),
-            ]
-        } else {
-            vec![
-                Track::Flex(92., 0.25),
-                Track::Flex(140., 0.8),
-                Track::Flex(180., 1.),
-                Track::Between(82., 110.),
-                Track::Fixed(52.),
-            ]
-        };
-        let widths = format::tracks(self.row_width(), 10., &columns);
-        let cells = |mut values: Vec<AnyElement>| -> Vec<(f32, AnyElement)> {
-            if narrow {
-                values.remove(3);
-            }
-            widths.iter().copied().zip(values).collect()
-        };
-        let header = table_row(cells(vec![
-            heading(t("Status"), false, cx),
-            heading(t("Post"), false, cx),
-            heading(t("Why it failed"), false, cx),
-            heading(t("Last seen"), false, cx),
-            div().into_any_element(),
-        ]));
         let now = chrono::Local::now();
+        let issues = detail.map_or(&[][..], |detail| &detail.issues.items[..]);
+        let fixable = |kind: &str| {
+            kind.contains("auth") || kind.contains("credential") || kind == "unauthorized"
+        };
+        let any_fix = issues.iter().any(|issue| fixable(&issue.kind));
+        let labels: Vec<String> = issues
+            .iter()
+            .map(|issue| format::issue_label(&issue.kind))
+            .collect();
+        let seen: Vec<String> = issues
+            .iter()
+            .map(|issue| format::relative_time(Some(&issue.last_seen_at), now))
+            .collect();
+        let mut columns = vec![
+            column(
+                Track::Fixed(widest_badge(labels.iter().map(String::as_str), 48., window)),
+                0,
+            ),
+            column(Track::Flex(100., 1.), 2),
+            column(Track::Flex(120., 2.), 0),
+            column(
+                Track::Fixed(widest(
+                    seen.iter().map(String::as_str),
+                    60.,
+                    theme::TEXT_MD,
+                    window,
+                )),
+                1,
+            ),
+        ];
+        if any_fix {
+            columns.push(column(Track::Fixed(28.), 0));
+        }
+        let mut widths = fit(self.row_width(), &columns);
+        if !any_fix {
+            widths.push(None);
+        }
+        let header = table_row(
+            &widths,
+            vec![
+                heading(t("Status"), false),
+                heading(t("Post"), false),
+                heading(t("Why it failed"), false),
+                heading(t("Last seen"), false),
+                div().into_any_element(),
+            ],
+        );
+        let detail = match detail {
+            None => {
+                let rows = vec![table_note(t("Checking for problems…"), cx)];
+                return self.table("subscription-problems", header, rows, None, window, cx);
+            }
+            Some(detail) if detail.issues.total == 0 => {
+                let rows = vec![table_note(t("No problems found."), cx)];
+                return self.table("subscription-problems", header, rows, None, window, cx);
+            }
+            Some(detail) => detail,
+        };
         let rows = detail
             .issues
             .items
@@ -1249,10 +1228,7 @@ impl SubscriptionsScreen {
                 // (`mapIssue`: Retry now and Review source never appear).
                 // Fix login opens the Accounts dialog on the service of the
                 // problem's source (none: the first service).
-                let fix = (issue.kind.contains("auth")
-                    || issue.kind.contains("credential")
-                    || issue.kind == "unauthorized")
-                    .then(|| {
+                let fix = fixable(&issue.kind).then(|| {
                         let site = issue.query.and_then(|query| {
                             self.subscription(detail.subscription)?
                                 .queries
@@ -1289,42 +1265,44 @@ impl SubscriptionsScreen {
                     window,
                     cx,
                 );
-                let row = table_row(cells(vec![
-                    div()
-                        .flex()
-                        .child(ui::status_badge(
-                            ("issue-status", issue.id as usize),
-                            Tone::Attention,
-                            format::issue_label(&issue.kind),
-                        ))
-                        .into_any_element(),
-                    target,
-                    message.into_any_element(),
-                    time(format::relative_time(Some(&issue.last_seen_at), now), cx),
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_end()
-                        .children(fix)
-                        .into_any_element(),
-                ]));
+                let row = table_row(
+                    &widths,
+                    vec![
+                        div()
+                            .flex()
+                            .child(ui::status_badge(
+                                ("issue-status", issue.id as usize),
+                                Tone::Attention,
+                                format::issue_label(&issue.kind),
+                            ))
+                            .into_any_element(),
+                        target,
+                        message.into_any_element(),
+                        quiet(format::relative_time(Some(&issue.last_seen_at), now), cx),
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_end()
+                            .children(fix)
+                            .into_any_element(),
+                    ],
+                );
                 self.body_row(("subscription-issue", issue.id as usize).into(), row, cx)
                     .into_any_element()
             })
             .collect();
         let more = detail.issues.next.is_some().then(|| {
             div()
-                .min_h(px(40.))
-                .px(px(12.))
+                .h(px(ADD_ROW))
+                .px(px(ROW_INSET))
                 .flex()
                 .items_center()
                 .justify_end()
-                .gap(px(6.))
-                .border_t_1()
-                .border_color(theme.border_secondary())
                 .child(
                     ui::action_button("issues-more", Look::Standard)
                         .label(t("Load more"))
+                        .height(theme::CONTROL_SM)
+                        .padding(10.)
                         .disabled(self.loading_more)
                         .on_click(cx.listener(|this, _, _, cx| this.load_more_issues(cx))),
                 )
@@ -1333,7 +1311,7 @@ impl SubscriptionsScreen {
         self.table("subscription-problems", header, rows, more, window, cx)
     }
 
-    /// The add-query bar under the sources (`AddQueryBar.tsx`): the source,
+    /// The add-query row under the sources (`AddQueryBar.tsx`): the source,
     /// its query, and Add, which Enter also presses.
     fn add_query_bar(&self, cx: &mut Context<Self>) -> Div {
         let sites = format::query_sites()
@@ -1343,13 +1321,15 @@ impl SubscriptionsScreen {
         let typed = !self.add_query.read(cx).value().trim().is_empty();
         let view = cx.entity().downgrade();
         div()
-            .w_full()
+            .h(px(ADD_ROW))
+            .px(px(ROW_INSET))
             .flex()
             .items_center()
             .gap(px(8.))
             .child(
+                // The site's select gives up width before the query does.
                 ui::select("add-query-site", self.add_site, sites)
-                    .width(140.)
+                    .width((self.row_width() * 0.3).clamp(120., 140.))
                     .on_change(move |site, _, cx| {
                         let _ = view.update(cx, |this, cx| this.choose_add_site(site, cx));
                     }),
@@ -1357,14 +1337,13 @@ impl SubscriptionsScreen {
             .child(div().flex_1().min_w_0().child(ui::field(
                 "add-query-text",
                 &self.add_query,
-                ui::field::Look::Modal,
+                ui::field::Look::ModalSmall,
             )))
             .child(
-                // `compact` asks for the small height, but the shared
-                // button's own height and padding win in production's
-                // stylesheet order, so it is the standard button.
                 ui::action_button("add-query", Look::Standard)
                     .label(t("Add"))
+                    .height(theme::CONTROL_SM)
+                    .padding(12.)
                     .disabled(self.busy() || !typed)
                     .on_click(cx.listener(|this, _, _, cx| this.submit_query(cx))),
             )

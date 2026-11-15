@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 const SPIN: Duration = Duration::from_millis(650);
 
 /// A label and its value on one 20px line (`PropertyRow.tsx`): the label in
-/// an 88px column, the value right-aligned after a 12px gap, in a monospace
-/// face with tabular figures at 80%, ending in an ellipsis when too long;
-/// while the value loads, a spinner in its place.
+/// an 88px column (a longer label widens it), the value right-aligned after
+/// a 12px gap, in a monospace face with tabular figures at 80%, ending in an
+/// ellipsis when too long; while the value loads, a spinner in its place.
 #[derive(IntoElement)]
 pub struct PropertyRow {
     label: SharedString,
@@ -87,7 +87,7 @@ impl RenderOnce for PropertyRow {
         .gap(px(12.))
         .whitespace_nowrap()
         .text(theme::TEXT_CAPTION)
-        .child(div().w(px(88.)).flex_none().child(self.label))
+        .child(div().min_w(px(88.)).flex_none().child(self.label))
         .child(value)
     }
 }

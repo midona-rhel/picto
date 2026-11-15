@@ -33,6 +33,11 @@ pub struct Toolbar {
     viewer_exit: bool,
     /// The controls a screen puts in the titlebar in place of the grid's.
     screen_controls: Vec<(Screen, AnyView)>,
+    /// What a screen shows after its title at its top (a count).
+    screen_notes: Vec<(Screen, AnyView)>,
+    /// The toolbar's width when last painted, which decides how much of a
+    /// screen place's path the title has room for.
+    width: Rc<Cell<f32>>,
     /// Where the "View options" button was painted.
     view_button: Rc<Cell<Bounds<Pixels>>>,
     /// The width the grid's controls (zoom, view options, filter, search)
@@ -99,6 +104,8 @@ impl Toolbar {
             search,
             zoom,
             screen_controls: Vec::new(),
+            screen_notes: Vec::new(),
+            width: Rc::new(Cell::new(f32::MAX)),
             view_button: Rc::new(Cell::new(Bounds::default())),
             controls_width: Rc::new(Cell::new(px(f32::MAX))),
             view_menu: None,
@@ -131,6 +138,13 @@ impl Toolbar {
         self.screen_controls.retain(|(owner, _)| *owner != screen);
         self.screen_controls.push((screen, controls));
     }
+
+    /// Shows `note` after the scope title while `screen` is the
+    /// destination shown; the note itself says nothing on a place of it.
+    pub fn set_screen_note(&mut self, screen: Screen, note: AnyView) {
+        self.screen_notes.retain(|(owner, _)| *owner != screen);
+        self.screen_notes.push((screen, note));
+    }
 }
 
 impl Toolbar {
@@ -139,9 +153,9 @@ impl Toolbar {
     /// name is a link too, back to the destination unnarrowed, followed by
     /// "Search results · N". It runs from 72px in to the toolbar's middle and
     /// fades out over its last 40px rather than ending in an ellipsis.
-    fn title(&self, opacity: f32, cx: &mut Context<Self>) -> Div {
+    fn title(&self, opacity: f32, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
-        let (crumbs, results) = {
+        let (mut crumbs, results, place, note) = {
             let session = self.session.read(cx);
             let results = (session.place().is_none()
                 && (!session.search_text().is_empty() || session.filters.count() > 0))
@@ -161,8 +175,43 @@ impl Toolbar {
             if let Some(label) = session.place().and(session.place_label.clone()) {
                 crumbs.push((usize::MAX, label.to_string()));
             }
-            (crumbs, results)
+            let note = session.screen().and_then(|screen| {
+                self.screen_notes
+                    .iter()
+                    .find(|(owner, _)| *owner == screen)
+                    .map(|(_, note)| note.clone())
+            });
+            (crumbs, results, session.place().is_some(), note)
         };
+        // A screen's open place keeps its own name whole: when the path does
+        // not fit the title's room, the screen's name before it goes, and
+        // only then is the place's name cut short with an ellipsis.
+        let room = (self.width.get() * 0.5 - (8. + 72.)).max(0.);
+        let shortened = place && crumbs.len() > 1 && {
+            let width = |text: &str| {
+                f32::from(
+                    ui::shape_line(
+                        crate::i18n::t(text).to_owned(),
+                        font(theme::FONT_UI),
+                        theme::TEXT_MD,
+                        theme.text(),
+                        window,
+                    )
+                    .width,
+                )
+            };
+            let path: f32 = crumbs.iter().map(|(_, label)| width(label)).sum::<f32>()
+                + (crumbs.len() - 1) as f32 * (10. + width("/"));
+            path > room
+        };
+        // With no room for even a few letters of it, the place's name is
+        // left out rather than shown as an ellipsis alone.
+        if shortened && room < 40. {
+            crumbs.clear();
+        }
+        if shortened && !crumbs.is_empty() {
+            crumbs.drain(..crumbs.len() - 1);
+        }
         let last = crumbs.len().saturating_sub(1);
         let mut path = div().flex().items_center().whitespace_nowrap();
         let separator = || div().mx(px(5.)).opacity(0.4).child("/");
@@ -171,7 +220,11 @@ impl Toolbar {
             // of the moment.
             let label = crate::i18n::t(&label).to_owned();
             if position == last && results.is_none() {
-                path = path.child(div().child(label));
+                path = path.child(if shortened {
+                    div().min_w_0().truncate().child(label)
+                } else {
+                    div().child(label)
+                });
                 continue;
             }
             let clears = position == last;
@@ -197,6 +250,17 @@ impl Toolbar {
         if let Some(results) = results {
             path = path.child(separator()).child(div().child(results));
         }
+        if let Some(note) = note {
+            path = path.child(
+                div()
+                    .ml(px(8.))
+                    .text_color(theme.text_secondary())
+                    .child(note),
+            );
+        }
+        if shortened {
+            path = path.min_w_0().overflow_hidden();
+        }
         let background = theme.background();
         div()
             .absolute()
@@ -209,7 +273,7 @@ impl Toolbar {
             .overflow_hidden()
             .opacity(opacity)
             .child(path)
-            .child(
+            .children((!shortened).then(|| {
                 div()
                     .absolute()
                     .top_0()
@@ -220,8 +284,8 @@ impl Toolbar {
                         90.,
                         linear_color_stop(theme::clear(background), 0.),
                         linear_color_stop(background, 1.),
-                    )),
-            )
+                    ))
+            }))
     }
 }
 
@@ -309,7 +373,23 @@ impl Render for Toolbar {
             .pr(px(16.))
             .flex()
             .items_center()
-            .child(self.title(opacity, cx))
+            .child({
+                let painted = self.width.clone();
+                let view = window.current_view();
+                canvas(
+                    move |bounds, window, cx| {
+                        let width = f32::from(bounds.size.width);
+                        if (painted.replace(width) - width).abs() > 0.5 {
+                            cx.notify(view);
+                            window.request_animation_frame();
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+            })
+            .child(self.title(opacity, window, cx))
             .child(history(
                 "history-back",
                 "history-back",
@@ -336,10 +416,12 @@ impl Render for Toolbar {
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
             // `.titlebarToolbar`: the controls take the rest of the row and
-            // sit at its right end, clear of the scope title.
+            // sit at its right end, clear of the scope title. They belong to
+            // the screen, so they fade with it as the title does.
             return toolbar
                 .child(
                     div()
+                        .opacity(opacity)
                         .flex_1()
                         .min_w_0()
                         .h_full()

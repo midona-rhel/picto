@@ -24,6 +24,7 @@ pub struct PanelSection {
     on_toggle: Option<ClickHandler>,
     on_menu: Option<MenuHandler>,
     content: Option<AnyElement>,
+    leading: bool,
 }
 
 pub fn panel_section(id: impl Into<ElementId>, title: impl Into<SharedString>) -> PanelSection {
@@ -34,6 +35,7 @@ pub fn panel_section(id: impl Into<ElementId>, title: impl Into<SharedString>) -
         on_toggle: None,
         on_menu: None,
         content: None,
+        leading: false,
     }
 }
 
@@ -56,6 +58,11 @@ impl PanelSection {
         handler: impl Fn(&Point<Pixels>, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_menu = Some(Box::new(handler));
+        self
+    }
+    /// The first thing in its rail: no rule or space above it.
+    pub fn leading(mut self, leading: bool) -> Self {
+        self.leading = leading;
         self
     }
     /// What the section shows while open; `None` shows the header alone.
@@ -144,10 +151,6 @@ impl RenderOnce for PanelSection {
             .role(Role::Group)
             .aria_label(title)
             .w_full()
-            .mt(px(10.))
-            .pt(px(10.))
-            .border_t_1()
-            .border_color(theme.border_secondary())
             .on_hover(move |hovered, _, cx| {
                 section_state.update(cx, |state, cx| {
                     state.section.set(*hovered, motion::NORMAL);
@@ -155,6 +158,13 @@ impl RenderOnce for PanelSection {
                 })
             })
             .child(header);
+        if !self.leading {
+            section = section
+                .mt(px(10.))
+                .pt(px(10.))
+                .border_t_1()
+                .border_color(theme.border_secondary());
+        }
         if let Some(handler) = self.on_menu {
             section = section.on_mouse_down(MouseButton::Right, move |event, window, cx| {
                 cx.stop_propagation();
