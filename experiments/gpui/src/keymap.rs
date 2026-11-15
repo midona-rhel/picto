@@ -328,10 +328,7 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    (
-        "file.addToLastFolder",
-        "deferred in production; no last-folder memory",
-    ),
+    ("file.addToLastFolder", "deferred in production"),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
     ("view.slideshow", "deferred in production"),
