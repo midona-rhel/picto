@@ -48,6 +48,9 @@ pub struct ActionButton {
     look: Look,
     icon: Option<(&'static str, f32)>,
     label: Option<SharedString>,
+    /// A smaller tertiary text at the end, the label then filling the
+    /// width from the left (`.cloudProviderButton`'s `<small>`).
+    caption: Option<SharedString>,
     height: f32,
     width: Option<f32>,
     full_width: bool,
@@ -68,6 +71,7 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         look,
         icon: None,
         label: None,
+        caption: None,
         height: if settings { 36. } else { theme::ACTION_BUTTON },
         width: None,
         full_width: false,
@@ -93,6 +97,12 @@ impl ActionButton {
     }
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+    /// A small tertiary text after the label, at the button's end; the
+    /// label is left-aligned and cut short with an ellipsis.
+    pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
+        self.caption = Some(caption.into());
         self
     }
     pub fn height(mut self, height: f32) -> Self {
@@ -255,8 +265,23 @@ impl RenderOnce for ActionButton {
         if let Some(name) = name {
             button = button.aria_label(name);
         }
-        if let Some(label) = self.label {
-            button = button.child(label);
+        match (self.label, self.caption) {
+            (Some(label), Some(caption)) => {
+                button = button.justify_start().child(
+                    div().flex_1().min_w_0().truncate().child(label),
+                );
+                button = button.child(
+                    div()
+                        .flex_none()
+                        .max_w(relative(0.5))
+                        .truncate()
+                        .text(theme::TEXT_CAPTION)
+                        .text_color(theme.text_tertiary())
+                        .child(caption),
+                );
+            }
+            (Some(label), None) => button = button.child(label),
+            (None, _) => {}
         }
         if self.disabled {
             // CSS fades the button as one layer; GPUI fades its border and

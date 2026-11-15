@@ -24,6 +24,9 @@ pub const MARKER: &str = ".gpui-disposable";
 const SCRATCH_PREFIX: &str = "picto-gpui-";
 /// Written once the copy has been cut loose the first time.
 const DETACHED: &str = ".gpui-detached";
+/// Written once the copy has a cloud identity of its own.
+const CLOUD_IDENTITY: &str = ".gpui-cloud-identity";
+
 
 /// What the application says happened, as the Electron renderer receives it.
 #[derive(Clone, Debug, PartialEq)]
@@ -224,7 +227,7 @@ pub fn make_copy(source: &Path) -> Result<PathBuf, String> {
         }
         std::fs::write(copy.join(MARKER), format!("{}\n", source.display()))
             .map_err(|error| format!("write the marker: {error}"))?;
-        detach(&copy)
+        detach(&copy, false)
     })();
     if let Err(error) = made {
         // `scratch` removes the new folder as it drops.
@@ -321,10 +324,17 @@ fn first_link(root: &Path) -> Option<PathBuf> {
 ///   copied or dragged out before the application repairs them is a file of
 ///   the real library.
 ///
+/// - the copy has a cloud identity of its own (a new library and device
+///   id, once, kept in `.gpui-cloud-identity`), so a copy connected to a
+///   cloud folder never writes into, or purges from, the folder of the
+///   library it was copied from.
+///
 /// Each step is idempotent; the copy is detached again on every launch.
+/// `keep_cloud` keeps the cloud folder the user connected the copy to in
+/// this run: a copy opened again after a restore (`host::restore`).
 /// A folder without the marker is a library the user keeps: it is refused
 /// before anything is opened.
-pub fn detach(root: &Path) -> Result<(), String> {
+pub fn detach(root: &Path, keep_cloud: bool) -> Result<(), String> {
     if !root.join(MARKER).is_file() {
         return Err(format!(
             "{} is not a disposable copy (no {MARKER}); it is not detached",
@@ -339,16 +349,30 @@ pub fn detach(root: &Path) -> Result<(), String> {
         .ok()
         .map(|marker| marker.trim().to_owned())
         .filter(|source| Path::new(source).is_absolute());
+    let identified = root.join(CLOUD_IDENTITY).is_file();
     let detached = (|| -> rusqlite::Result<()> {
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if !keep_cloud {
+            transaction.execute_batch(
+                "UPDATE cloud_state
+                    SET provider = NULL, account_label = NULL, remote_root = NULL,
+                        paused = 1, state = 'disabled', phase = 'idle', blocking = 0,
+                        message = ''
+                  WHERE provider IS NOT NULL OR remote_root IS NOT NULL;",
+            )?;
+        }
+        if !identified {
+            transaction.execute(
+                "UPDATE cloud_state SET library_id = ?1, device_id = ?2 WHERE singleton = 1",
+                [
+                    uuid::Uuid::new_v4().to_string(),
+                    uuid::Uuid::new_v4().to_string(),
+                ],
+            )?;
+        }
         transaction.execute_batch(
-            "UPDATE cloud_state
-                SET provider = NULL, account_label = NULL, remote_root = NULL,
-                    paused = 1, state = 'disabled', phase = 'idle', blocking = 0,
-                    message = ''
-              WHERE provider IS NOT NULL OR remote_root IS NOT NULL;
-             UPDATE folder_definition SET watch_enabled = 0 WHERE watch_enabled = 1;
+            "UPDATE folder_definition SET watch_enabled = 0 WHERE watch_enabled = 1;
              UPDATE subscription SET next_run_at = NULL WHERE next_run_at IS NOT NULL;
              UPDATE ingest_job SET delete_after_ingest = 0 WHERE delete_after_ingest = 1;",
         )?;
@@ -383,6 +407,10 @@ pub fn detach(root: &Path) -> Result<(), String> {
         transaction.commit()
     })();
     detached.map_err(|error| format!("detach the copy: {error}"))?;
+    if !identified {
+        std::fs::write(root.join(CLOUD_IDENTITY), format!("{now}\n"))
+            .map_err(|error| format!("mark the copy's cloud identity: {error}"))?;
+    }
     if first {
         std::fs::write(root.join(DETACHED), format!("{now}\n"))
             .map_err(|error| format!("mark the copy detached: {error}"))?;
@@ -428,6 +456,13 @@ pub struct Application {
     /// `None` while the library opens, then whether it opened.
     opened: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     report: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    /// Set once this app holds none of the library's connections any more
+    /// (the library's thread has ended): a restore may then replace its
+    /// database.
+    released: tokio::sync::watch::Sender<bool>,
+    /// A copy opened again right after a restore keeps the cloud folder the
+    /// user connected it to in this run (`detach`).
+    keep_cloud: std::sync::atomic::AtomicBool,
 }
 
 impl Application {
@@ -468,7 +503,60 @@ impl Application {
             retired: std::sync::atomic::AtomicBool::new(false),
             opened,
             report,
+            released: tokio::sync::watch::channel(false).0,
+            keep_cloud: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Opened again after a restore: a copy keeps its cloud folder.
+    pub fn keep_cloud(&self) {
+        self.keep_cloud
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The library's thread has let the library go.
+    pub fn release(&self) {
+        self.released.send_replace(true);
+    }
+
+    /// Waits until this app holds none of the library's connections, at
+    /// most `limit`; whether it does. Blocks the calling thread.
+    pub fn wait_released(&self, limit: std::time::Duration) -> bool {
+        let mut released = self.released.subscribe();
+        self.runtime.block_on(async move {
+            tokio::time::timeout(limit, released.wait_for(|released| *released))
+                .await
+                .is_ok_and(|result| result.is_ok())
+        })
+    }
+
+    /// Runs one command on a library that is not open here, and closes
+    /// whatever the command left open in the core, on this application's
+    /// runtime (`cloud.library.join`, which opens the library it makes).
+    /// Blocks the calling thread.
+    pub fn run_unopened(&self, command: &str, args: Value) -> Result<Value, String> {
+        let result = self.run_blocking(command, args);
+        if let Err(error) = self.runtime.block_on(picto_core::state::close_library()) {
+            eprintln!("picto: closing after {command}: {error}");
+        }
+        result
+    }
+
+    /// Runs one command on this application's runtime and waits for its
+    /// answer, on a thread that may block (a restore).
+    pub fn run_blocking(&self, command: &str, args: Value) -> Result<Value, String> {
+        let started = std::time::Instant::now();
+        let result = self.runtime.block_on(async {
+            picto_core::state::invoke(command, &args.to_string())
+                .await
+                .and_then(|json| serde_json::from_str(&json).map_err(|error| error.to_string()))
+        });
+        crate::diagnostics::record_ipc(
+            command,
+            started.elapsed().as_secs_f64() * 1000.,
+            result.as_ref().err().map(String::as_str),
+        );
+        result
     }
 
     /// The library's folder.
@@ -498,7 +586,10 @@ impl Application {
         readable: impl FnOnce(Arc<Library>) + Send + 'static,
     ) -> Result<Arc<Library>, String> {
         let detached = match self.kind {
-            Kind::Copy => detach(&self.root),
+            Kind::Copy => detach(
+                &self.root,
+                self.keep_cloud.load(std::sync::atomic::Ordering::SeqCst),
+            ),
             Kind::Real => Ok(()),
         };
         let opened = detached.and_then(|()| {
@@ -901,9 +992,59 @@ mod tests {
             )
             .unwrap();
         let before = crate::libraries::admission::tests::snapshot(&root);
-        assert!(detach(&root).is_err());
+        assert!(detach(&root, false).is_err());
         assert_eq!(crate::libraries::admission::tests::snapshot(&root), before);
         assert!(!root.join(super::DETACHED).exists());
+    }
+
+    /// A copy synced to a cloud folder writes, and purges, only under an
+    /// identity of its own: never the library's it was copied from, whose
+    /// snapshots and originals in that folder it could otherwise replace or
+    /// remove. The identity stays across launches, and a copy opened again
+    /// after a restore keeps the folder the user connected it to.
+    #[test]
+    fn a_copy_never_syncs_as_the_library_it_was_copied_from() {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join(MARKER), "synthetic:test\n").unwrap();
+        let mut connection =
+            rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
+        picto_library::schema::create(&mut connection).unwrap();
+        let identity = |connection: &rusqlite::Connection| -> (String, String) {
+            connection
+                .query_row("SELECT library_id, device_id FROM cloud_state", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap()
+        };
+        let source = identity(&connection);
+        drop(connection);
+        detach(scratch.path(), false).unwrap();
+        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
+        let own = identity(&connection);
+        assert_ne!(own.0, source.0);
+        assert_ne!(own.1, source.1);
+        connection
+            .execute_batch(
+                "UPDATE cloud_state SET provider = 'dropbox', account_label = 'Dropbox',
+                        remote_root = '/fake/Dropbox', state = 'idle', paused = 0;",
+            )
+            .unwrap();
+        drop(connection);
+        detach(scratch.path(), true).unwrap();
+        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
+        assert_eq!(identity(&connection), own);
+        let root: Option<String> = connection
+            .query_row("SELECT remote_root FROM cloud_state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(root.as_deref(), Some("/fake/Dropbox"));
+        drop(connection);
+        detach(scratch.path(), false).unwrap();
+        let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
+        assert_eq!(identity(&connection), own);
+        let root: Option<String> = connection
+            .query_row("SELECT remote_root FROM cloud_state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(root, None);
     }
 
     #[test]
@@ -963,7 +1104,7 @@ mod tests {
                 .unwrap();
         }
         drop(connection);
-        detach(scratch.path()).unwrap();
+        detach(scratch.path(), false).unwrap();
         // An import started in the copy and cut short by quitting is the
         // user's own: the next launch leaves it queued, but still deletes
         // nothing it imports from.
@@ -976,7 +1117,7 @@ mod tests {
             )
             .unwrap();
         // Again, on the next launch.
-        detach(scratch.path()).unwrap();
+        detach(scratch.path(), false).unwrap();
         let connection = rusqlite::Connection::open(scratch.path().join("library.sqlite")).unwrap();
         let one = |sql: &str| -> String {
             connection
@@ -1042,7 +1183,7 @@ mod open_stages {
         }
         let root = std::env::var("PICTO_GPUI_TEST_LIBRARY").unwrap();
         let root = super::guard(std::path::Path::new(&root)).unwrap();
-        timed("detach", || super::detach(&root).unwrap());
+        timed("detach", || super::detach(&root, false).unwrap());
         let opening = Instant::now();
         let application = timed("open the database and its resident indexes", || {
             picto_core::library_application::LibraryApplication::open_with(

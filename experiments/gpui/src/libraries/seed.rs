@@ -158,6 +158,7 @@ mod tests {
                 crate::state::LibraryLook {
                     color: Some("#40C057".into()),
                     icon: Some("IconStar".into()),
+                    cloud_library_id: None,
                 }
             )]
         );

@@ -5,6 +5,7 @@ mod assets;
 mod atlas;
 mod backend;
 mod cover;
+mod cloud;
 mod covered;
 mod desktop;
 mod diagnostics;
@@ -266,7 +267,7 @@ fn main() {
         Some(opening::Launch::Open {
             copy, detach: true, ..
         }) => {
-            if let Err(error) = application::detach(&copy) {
+            if let Err(error) = application::detach(&copy, false) {
                 eprintln!("picto: {error}");
                 std::process::exit(2);
             }

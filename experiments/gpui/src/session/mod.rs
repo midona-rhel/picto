@@ -354,6 +354,8 @@ pub struct Session {
     /// The library the application opened: a disposable copy or one the
     /// user keeps.
     root: PathBuf,
+    /// The library's cloud sync state, which the shell keeps.
+    pub cloud: Option<Entity<crate::cloud::Cloud>>,
     /// The library the copy was made from, which the recents are kept under.
     library_key: String,
     /// Whether `root` passed the guard when the session began. The root
@@ -555,6 +557,7 @@ impl Session {
             view_patch: None,
             blobs,
             root,
+            cloud: None,
             disposable,
             library_key,
             library_cover: None,

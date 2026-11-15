@@ -2,7 +2,7 @@
 # language. Nearly all are texts production also writes in English without
 # t(); this app's own include Could not copy file, Could not copy file path,
 # This font cannot be previewed, This is not the library open here and the
-# Cloud section's two notes on what is not available. One per line, as written in the code
+# Cloud section's notes. One per line, as written in the code
 # (a line break as \n). The guard (guard.rs) keeps this list exact.
 
 Edit Rules
@@ -127,8 +127,6 @@ queries
 Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.
 Sign in with your E-Hentai account. Picto verifies ExHentai access before saving the browser session.
 Waiting for the site…
-Sync now, Pause and Create snapshot are not available in this version.
-Recovery snapshots are not listed in this version.
 Login saved for this session; it is not kept after the app quits.
 Checking…
 is ready to install
@@ -143,3 +141,10 @@ Its installer has been downloaded and verified.
 The update could not be downloaded.
 The installer has been downloaded and verified. This version cannot install it itself: Show Installer shows it in the file manager.
 What’s new in
+Picto is updating your library.
+Your library is up to date.
+Working…
+Recovery snapshot created
+Syncing library changes
+Estimating time remaining…
+The library is still in use; nothing was restored.

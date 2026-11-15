@@ -136,6 +136,12 @@ pub struct Shell {
     notifications: Entity<ui::notify::Host>,
     /// The log window while it is open, and what it says.
     diagnostics: Option<(Entity<crate::diagnostics::panel::Panel>, [Subscription; 2])>,
+    /// The library's cloud sync state, its bar and its blocking dialog,
+    /// which holds the keyboard here.
+    cloud: Entity<crate::cloud::Cloud>,
+    cloud_focus: FocusHandle,
+    /// The rails the cloud bar keeps clear of, as last laid out.
+    cloud_rails: (f32, f32),
     _subscriptions: Vec<Subscription>,
 }
 
@@ -143,6 +149,11 @@ impl Shell {
     /// The library's session.
     pub fn session(&self) -> &Entity<Session> {
         &self.session
+    }
+
+    /// The library's cloud sync state.
+    pub fn cloud(&self) -> &Entity<crate::cloud::Cloud> {
+        &self.cloud
     }
 
     pub fn new(
@@ -360,6 +371,18 @@ impl Shell {
             }),
             cx.observe(&imports, |this, _, cx| this.sync_menu(cx)),
         ]);
+        let cloud = cx.new(|cx| crate::cloud::Cloud::new(session.clone(), cx));
+        session.update(cx, |session, _| session.cloud = Some(cloud.clone()));
+        subscriptions.push(cx.observe_in(&cloud, window, |this, cloud, window, cx| {
+            // The keyboard comes back once a blocking sync has let it go.
+            let blocking = cloud.read(cx).status.as_ref().is_some_and(|status| {
+                status.state == "reconciling" && status.blocking
+            });
+            if !blocking && this.cloud_focus.is_focused(window) {
+                window.focus(&this.focus, cx);
+            }
+            cx.notify();
+        }));
         crate::app_menu::set_main_window(window.window_handle(), cx);
         // A screen's titlebar controls take the grid's place in the toolbar.
         let controls = duplicates.read(cx).toolbar();
@@ -419,6 +442,9 @@ impl Shell {
             review_focus: None,
             notifications: cx.new(ui::notify::Host::new),
             diagnostics: None,
+            cloud,
+            cloud_focus: cx.focus_handle(),
+            cloud_rails: (0., 0.),
             _subscriptions: subscriptions,
         }
     }
@@ -774,6 +800,7 @@ impl Render for Shell {
         let inspector_hidden = self.rails.value(("inspector", 0));
         let fill = || StyleRefinement::default().size_full();
         self.place_task_bar(left, if inspector_available { right } else { 0. }, cx);
+        self.cloud_rails = (left, if inspector_available { right } else { 0. });
         let drop_overlay = self.drop_overlay(cx);
 
         let center = div()
@@ -1124,6 +1151,15 @@ impl Render for Shell {
         root = root.child(self.batch_rename.clone());
         root = root.child(self.library_cover.clone());
         root = root.child(self.updates.clone());
+        // The cloud sync bar along the bottom, and the dialog a blocking
+        // sync holds the window with.
+        root = root.children(crate::cloud::bar::bar(
+            &self.cloud,
+            self.cloud_rails,
+            &self.cloud_focus,
+            window,
+            cx,
+        ));
         // The registry's shortcuts that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);

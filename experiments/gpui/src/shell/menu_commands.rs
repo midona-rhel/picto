@@ -184,6 +184,13 @@ impl Shell {
     }
 
     /// Opens a screen destination (`menu:navigate`).
+    /// Opens the log window if it is not open (`picto:open-diagnostics`).
+    pub(crate) fn show_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.diagnostics.is_none() {
+            self.toggle_diagnostics(window, cx);
+        }
+    }
+
     /// View › Log Window: opens the log window, or closes it.
     pub(crate) fn toggle_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.diagnostics.is_some() {

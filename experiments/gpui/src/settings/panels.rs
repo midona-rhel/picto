@@ -22,7 +22,7 @@ mod cloud;
 mod controls;
 
 pub use catalog::{PANELS, matched_panels};
-pub use cloud::cloud_info;
+pub use cloud::CloudPanel;
 
 /// `ZOOM_OPTIONS`
 const ZOOM: [(&str, &str); 7] = [

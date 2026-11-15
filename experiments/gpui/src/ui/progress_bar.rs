@@ -36,6 +36,10 @@ pub struct ProgressBar {
     height: f32,
     /// A known share, and the id its fill's movement is kept under.
     filled: Option<(ElementId, f32)>,
+    /// A rounder track and its own colour, where a caller restyles
+    /// `[role='progressbar']` (the cloud bar and the progress dialog).
+    radius: f32,
+    track: Option<Rgba>,
 }
 
 /// A bar of unknown progress (`<ProgressBar indeterminate />`).
@@ -44,6 +48,8 @@ pub fn progress_bar() -> ProgressBar {
     ProgressBar {
         height: 3.,
         filled: None,
+        radius: 2.,
+        track: None,
     }
 }
 
@@ -65,6 +71,16 @@ impl Fill {
 impl ProgressBar {
     pub fn height(mut self, height: f32) -> Self {
         self.height = height;
+        self
+    }
+    /// The track's and the fill's corners.
+    pub fn radius(mut self, radius: f32) -> Self {
+        self.radius = radius;
+        self
+    }
+    /// The track's colour instead of the subtle overlay.
+    pub fn track(mut self, color: Rgba) -> Self {
+        self.track = Some(color);
         self
     }
     /// A bar of known progress (`done` and `total`), filled to `share`; a
@@ -119,7 +135,7 @@ impl RenderOnce for ProgressBar {
                     .left_0()
                     .h_full()
                     .w(relative(fill.at(now)))
-                    .rounded(px(2.))
+                    .rounded(px(self.radius))
                     .bg(theme.primary())
             }
             None => {
@@ -130,7 +146,7 @@ impl RenderOnce for ProgressBar {
                     .h_full()
                     .left(relative(sweep_offset(motion::loop_clock())))
                     .w(relative(SEGMENT))
-                    .rounded(px(2.))
+                    .rounded(px(self.radius))
                     .bg(theme.primary())
             }
         };
@@ -138,9 +154,9 @@ impl RenderOnce for ProgressBar {
             .w_full()
             .h(px(self.height))
             .flex_none()
-            .rounded(px(2.))
+            .rounded(px(self.radius))
             .overflow_hidden()
-            .bg(theme.subtle_overlay())
+            .bg(self.track.unwrap_or_else(|| theme.subtle_overlay()))
             .child(fill)
     }
 }
