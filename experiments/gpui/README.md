@@ -698,6 +698,9 @@ reading production's code, seen in this app).
   marker where reordering cannot work, Export on a folder's inspector, a
   rendered cover crop shown.
 - Files promised by a drag are imported on macOS (production imports none).
+- The grid reads no original while it scrolls: a large tile's dwell starts
+  over with every movement, so originals arrive once the grid has rested
+  (production counts only the time a tile has been in view).
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge
