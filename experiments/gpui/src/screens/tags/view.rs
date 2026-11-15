@@ -38,7 +38,7 @@ impl TagsScreen {
         active: bool,
         cx: &App,
     ) -> Stateful<Div> {
-        let name = format!("{label} {}", crate::grid::format::grouped(count));
+        let name = format!("{label} {}", crate::i18n::format::grouped(count));
         ui::rail_item::rail_item(id, ui::rail_item::Look::Namespace, label, count.to_string())
             .accessible_name(name)
             .mark(ui::icon(icon, 16., icon_color).flex_none())
@@ -171,7 +171,7 @@ impl TagsScreen {
             .aria_label(format!(
                 "{} {}",
                 t("Delete Unused"),
-                crate::grid::format::grouped(self.unused)
+                crate::i18n::format::grouped(self.unused)
             ))
             .aria_disabled(!enabled)
             .h(px(theme::CONTROL_SM))

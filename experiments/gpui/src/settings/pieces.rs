@@ -87,13 +87,7 @@ pub(super) fn row(
 }
 
 /// `.rowSep`
-pub(super) fn separator(theme: theme::Theme) -> Div {
-    div()
-        .h(px(1.))
-        .my(px(12.))
-        .flex_none()
-        .bg(theme.border_secondary())
-}
+pub(super) use crate::ui::form::separator;
 
 /// `.settingHint`
 pub(super) fn hint(theme: theme::Theme, text: &'static str) -> Div {

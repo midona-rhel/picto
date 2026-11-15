@@ -26,8 +26,8 @@ pub fn system() -> Locale {
 }
 
 /// `count.toLocaleString()`.
-pub fn grouped(count: i128) -> String {
-    grouped_in(system(), count)
+pub fn grouped(count: impl Into<i128>) -> String {
+    grouped_in(system(), count.into())
 }
 
 pub fn grouped_in(locale: Locale, count: i128) -> String {

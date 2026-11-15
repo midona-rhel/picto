@@ -3,7 +3,7 @@
 //! keeps its name, cover, order, folders and lifecycle ("Choose the Group to
 //! Keep"); with none, the new group's name ("Create Group"). Either way the
 //! notes the selection carries, which the group takes.
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use crate::i18n::{en, t};
 use crate::session::{Report, Reread, Session};
 use crate::theme;

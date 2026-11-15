@@ -5,7 +5,6 @@
 use super::stack::{self, Pose, Stack};
 use super::turned::{self, Shape, Turned};
 use super::{Inspector, Mode, PREVIEW, Rate, fitted};
-use crate::grid::format;
 use crate::i18n::t;
 use crate::session::{Report, Reread};
 use crate::theme;
@@ -672,7 +671,7 @@ impl Inspector {
                     .child(
                         div()
                             .text_color(theme.primary())
-                            .child(format::grouped(count)),
+                            .child(crate::i18n::format::grouped(count)),
                     )
                     .child(t("items selected")),
             )
@@ -733,7 +732,7 @@ impl Inspector {
             properties = properties
                 .child(Self::property(
                     t("Media"),
-                    format::grouped(summary.media_count as u64),
+                    crate::i18n::format::grouped(summary.media_count as u64),
                     cx,
                 ))
                 .child(Self::property(

@@ -7,7 +7,7 @@
 //! is shown disabled, or left out, exactly where production does either. The
 //! shell turns the rows into a [`menu::Entry`] list and performs the chosen
 //! [`Action`].
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::ui::menu;
 use picto_library::ContentSortField;
@@ -82,15 +82,16 @@ pub const ENGINES: [(Engine, &str); 5] = [
     (Engine::Bing, "Bing Visual Search"),
 ];
 
-/// `CONTENT_SORT_OPTIONS`: a folder's own order, rewritten by one field.
+/// `CONTENT_SORT_OPTIONS`: a folder's own order, rewritten by one field,
+/// its label, and the value production's menu row carries.
 // i18n: translated where drawn (menu rows)
-pub const CONTENT_SORT: [(ContentSortField, &str); 6] = [
-    (ContentSortField::Name, "Name"),
-    (ContentSortField::ImportedAt, "Import Date"),
-    (ContentSortField::CreatedAt, "Date Created"),
-    (ContentSortField::ModifiedAt, "Date Modified"),
-    (ContentSortField::Size, "Size"),
-    (ContentSortField::Notes, "Notes"),
+pub const CONTENT_SORT: [(ContentSortField, &str, &str); 6] = [
+    (ContentSortField::Name, "Name", "name"),
+    (ContentSortField::ImportedAt, "Import Date", "imported_at"),
+    (ContentSortField::CreatedAt, "Date Created", "created_at"),
+    (ContentSortField::ModifiedAt, "Date Modified", "modified_at"),
+    (ContentSortField::Size, "Size", "size"),
+    (ContentSortField::Notes, "Notes", "notes"),
 ];
 
 /// One of the view panels production draws in the menu as custom
@@ -1010,8 +1011,8 @@ fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
         Some("menu-sort"),
         CONTENT_SORT
             .iter()
-            .filter(|(field, _)| fields.is_none_or(|fields| fields.contains(field)))
-            .map(|(field, label)| item(Action::SortContents(*field), *label, true).into())
+            .filter(|(field, ..)| fields.is_none_or(|fields| fields.contains(field)))
+            .map(|(field, label, _)| item(Action::SortContents(*field), *label, true).into())
             .collect(),
     )
 }

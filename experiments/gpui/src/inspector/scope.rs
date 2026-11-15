@@ -642,7 +642,7 @@ impl Inspector {
         };
 
         let mut properties = div()
-            .child(Self::property(t("Items"), format::grouped(view.total), cx))
+            .child(Self::property(t("Items"), crate::i18n::format::grouped(view.total), cx))
             .child(Self::property(
                 t("Size"),
                 crate::text::size_to_gigabytes(view.size as u64),

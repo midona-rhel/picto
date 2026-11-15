@@ -11,7 +11,7 @@ use crate::ui::{
     overlay_shell::{self},
     rail_item::Look as RailLook,
 };
-use crate::{grid::format, motion, theme};
+use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::TagRecord;
@@ -30,7 +30,7 @@ impl TagPicker {
         view: View,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let item = ui::rail_item::rail_item((id, index), RailLook::Picker, label, format::grouped(count))
+        let item = ui::rail_item::rail_item((id, index), RailLook::Picker, label, crate::i18n::format::grouped(count))
             .active(self.view == view);
         let mark = mark(item.group());
         item.mark(mark)
@@ -203,7 +203,7 @@ impl TagPicker {
         // A check box named by the tag and its count: ticked while the tag
         // is chosen, mixed while a filter excludes it; the row the keys are
         // on reads as focused.
-        let name = format!("{label} ({})", format::grouped(tag.active_count));
+        let name = format!("{label} ({})", crate::i18n::format::grouped(tag.active_count));
         let text = overlay_shell::search_match(label, query, cx);
         let row_tag = tag.clone();
         let menu_tag = tag.clone();
@@ -263,7 +263,7 @@ impl TagPicker {
                     .text_color(theme.text_tertiary())
                     .opacity(0.7 * dim)
                     .group_hover(group, move |style| style.opacity(dim))
-                    .child(format!("({})", format::grouped(tag.active_count))),
+                    .child(format!("({})", crate::i18n::format::grouped(tag.active_count))),
             );
         }
         if let Some(outline) = outline {

@@ -1,7 +1,7 @@
 //! Permanent deletion of items: the confirmation that says whether it can
 //! be undone, Empty Trash, and the delete through the library.
 use super::item_menu::{Run, Target};
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::session::{Report, Reread, edit_then_in};
 use crate::shell::Shell;

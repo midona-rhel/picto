@@ -199,7 +199,7 @@ impl Imports {
                     .children((task.existing > 0).then(|| {
                         div().child(crate::tf!(
                             "{value0} already in library",
-                            crate::grid::format::grouped(task.existing)
+                            crate::i18n::format::grouped(task.existing)
                         ))
                     }))
                     .children((task.failed > 0).then(|| {
@@ -207,7 +207,7 @@ impl Imports {
                             .text_color(rgb(theme::TASK_WARNING_GLYPH))
                             .child(crate::tf!(
                                 "{value0} failed",
-                                crate::grid::format::grouped(task.failed)
+                                crate::i18n::format::grouped(task.failed)
                             ))
                     })),
             );
@@ -226,7 +226,7 @@ impl Imports {
                     } else {
                         crate::tf!(
                             "Show {value0} failed",
-                            crate::grid::format::grouped(task.failed)
+                            crate::i18n::format::grouped(task.failed)
                         )
                     })
                     .on_click(on_click(this, |imports, cx| imports.toggle_failures(cx))),
@@ -324,8 +324,8 @@ impl Imports {
                 crate::tf!("Stop importing “{value0}”?", task.title),
                 crate::tf!(
                     "{value0} of {value1} files are done so far",
-                    crate::grid::format::grouped(task.done),
-                    crate::grid::format::grouped(task.total)
+                    crate::i18n::format::grouped(task.done),
+                    crate::i18n::format::grouped(task.total)
                 ),
                 false,
                 &theme,

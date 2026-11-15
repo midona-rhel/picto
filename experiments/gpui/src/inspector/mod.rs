@@ -636,7 +636,7 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let label = if count > 1 {
-            crate::tf!("Auto Tag {value0} Images", format::grouped(count))
+            crate::tf!("Auto Tag {value0} Images", crate::i18n::format::grouped(count))
         } else {
             t("Auto Tag").to_owned()
         };
@@ -1245,7 +1245,7 @@ impl Inspector {
             .child(self.rating(Rate::Item(id), details.rating.bitmap_key() as usize, cx))
             .child(Self::property(
                 t("Items"),
-                format::grouped(root.media_count as u64),
+                crate::i18n::format::grouped(root.media_count as u64),
                 cx,
             ));
         if let Some((width, height)) = cover

@@ -480,7 +480,7 @@ fn sections_chips_progress_and_dates_describe_themselves() {
     chip.find(Role::Button, "Remove");
     let folders = tree.find(
         Role::Button,
-        &format!("Folders ({})", crate::grid::format::grouped(1234u64)),
+        &format!("Folders ({})", crate::i18n::format::grouped(1234u64)),
     );
     assert_eq!(folders.expanded(), Some(false));
     let progress = tree.with_role(Role::ProgressIndicator);
