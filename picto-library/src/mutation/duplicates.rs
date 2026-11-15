@@ -128,10 +128,24 @@ impl Library {
     }
 
     pub fn duplicate_candidates(&self, limit: usize) -> Result<Vec<crate::DuplicateCandidate>> {
+        self.duplicate_candidates_from(0, limit)
+    }
+
+    /// The pairs still to review at least `min_distance` apart, least
+    /// apart first: with 1, the similar pairs past every identical one,
+    /// which the first window of [`Library::duplicate_candidates`] may
+    /// not reach.
+    pub fn duplicate_candidates_from(
+        &self,
+        min_distance: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::DuplicateCandidate>> {
         self.database.read_consistent(
             WorkPriority::VisibleRead,
             |revision| self.capture_revision(revision),
-            |connection, snapshot| crate::duplicate::list_candidates(connection, &snapshot, limit),
+            |connection, snapshot| {
+                crate::duplicate::list_candidates(connection, &snapshot, min_distance, limit)
+            },
         )
     }
 
