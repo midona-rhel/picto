@@ -36,12 +36,21 @@ impl DuplicatesScreen {
     /// or at the head of the stage while the queue is narrow.
     pub(super) fn tabs(&self, screen: WeakEntity<Self>) -> ui::segmented::Segmented {
         let (identical, similar) = self.tab_counts();
+        // Across the narrowest stage the tabs drop their counts.
+        let counted = !self.queue_narrow() || f32::from(self.stage.pane.size.width) >= 300.;
+        let label = |name: &'static str, count: usize| {
+            if counted {
+                format!("{name} {count}")
+            } else {
+                name.to_owned()
+            }
+        };
         ui::segmented::segmented(
             "duplicates-tabs",
             ui::segmented::Look::FilledTabs,
             vec![
-                ui::segmented::tab(format!("{} {identical}", en("Identical"))),
-                ui::segmented::tab(format!("{} {similar}", en("Similar"))),
+                ui::segmented::tab(label(en("Identical"), identical)),
+                ui::segmented::tab(label(en("Similar"), similar)),
             ],
             Some(if self.tab == Tab::Identical { 0 } else { 1 }),
         )

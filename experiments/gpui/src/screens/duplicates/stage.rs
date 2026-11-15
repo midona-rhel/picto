@@ -15,6 +15,7 @@ use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look;
 use crate::{theme, ui};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 /// The strip of the set's files under the picture.
@@ -168,13 +169,16 @@ impl DuplicatesScreen {
                     .flex_col()
                     .text(theme::TEXT_SM)
                     .line_height(px(16.))
+                    // In the narrowest stage the verdict takes both lines
+                    // and the detail goes.
                     .child(
                         div()
-                            .truncate()
+                            .when(wide, |verdict| verdict.truncate())
+                            .when(!wide, |verdict| verdict.line_clamp(2))
                             .text_color(theme.text())
                             .child(format!("{}{verdict}", against.unwrap_or_default())),
                     )
-                    .children(detail.map(|detail| {
+                    .children(detail.filter(|_| wide).map(|detail| {
                         div()
                             .truncate()
                             .text(theme::TEXT_CAPTION)
