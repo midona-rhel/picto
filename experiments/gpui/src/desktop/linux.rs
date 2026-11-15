@@ -72,7 +72,7 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
     let written = child
         .stdin
         .take()
-        .map(|mut input| input.write_all(list.as_bytes()));
+        .map(|mut input| input.write_all(&list));
     // The tool keeps serving the clipboard in the background once it has
     // read the list; the process started here ends soon after.
     std::thread::spawn(move || {

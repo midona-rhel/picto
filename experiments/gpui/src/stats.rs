@@ -107,23 +107,8 @@ fn thread_cpu_micros() -> u64 {
 /// user times, which Windows counts in 100-nanosecond steps.
 #[cfg(windows)]
 fn thread_cpu_micros() -> u64 {
-    #[repr(C)]
-    #[derive(Default)]
-    struct FileTime {
-        low: u32,
-        high: u32,
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetCurrentThread() -> *mut std::ffi::c_void;
-        fn GetThreadTimes(
-            thread: *mut std::ffi::c_void,
-            creation: *mut FileTime,
-            exit: *mut FileTime,
-            kernel: *mut FileTime,
-            user: *mut FileTime,
-        ) -> i32;
-    }
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
     let (mut creation, mut exit, mut kernel, mut user) = Default::default();
     // SAFETY: the pseudo-handle of the current thread, and four FILETIMEs
     // for the call to fill.
@@ -136,10 +121,11 @@ fn thread_cpu_micros() -> u64 {
             &mut user,
         )
     };
-    if read == 0 {
+    if read.is_err() {
         return 0;
     }
-    let ticks = |time: FileTime| (u64::from(time.high) << 32) | u64::from(time.low);
+    let ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
     (ticks(kernel) + ticks(user)) / 10
 }
 
