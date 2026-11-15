@@ -28,17 +28,22 @@ use popup::close_window;
 pub(crate) use popup::without_system_shadow;
 pub use popup::{adopt, is_pop_up, release};
 
-actions!(menu, [Up, Down, Confirm, Cancel, OpenSubmenu, CloseSubmenu]);
-
+/// The menu's keys: the arrows move and open or close a submenu, Enter
+/// chooses, Escape closes.
 pub fn bind(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", Up, Some("Menu")),
-        KeyBinding::new("down", Down, Some("Menu")),
-        KeyBinding::new("enter", Confirm, Some("Menu")),
-        KeyBinding::new("escape", Cancel, Some("Menu")),
-        KeyBinding::new("right", OpenSubmenu, Some("Menu")),
-        KeyBinding::new("left", CloseSubmenu, Some("Menu")),
-    ]);
+    use super::keys::{self, Key};
+    keys::bind(
+        cx,
+        "Menu",
+        &[
+            Key::Up,
+            Key::Down,
+            Key::Enter,
+            Key::Escape,
+            Key::Right,
+            Key::Left,
+        ],
+    );
 }
 
 /// How menus are shown.

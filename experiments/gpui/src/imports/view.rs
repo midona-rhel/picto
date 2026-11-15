@@ -93,10 +93,7 @@ impl Imports {
             self.task_view(&task, &this, window, cx)
         };
         // `role="dialog"` named by the task's title.
-        let panel = ui::glass_panel("task-dialog", DIALOG_RADIUS, cx)
-            .role(Role::Dialog)
-            .aria_modal(true)
-            .aria_label(task.heading())
+        let panel = ui::modal::dialog_panel("task-dialog", DIALOG_RADIUS, task.heading(), cx)
             .w(px(width))
             .overflow_hidden()
             .opacity(eased)
@@ -107,7 +104,6 @@ impl Imports {
             .font_family(theme::FONT_UI)
             .text_size(px(theme::TEXT_MD))
             .line_height(line(theme::TEXT_MD))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(body)
             .child(foot);
         let open = task.open();
@@ -115,7 +111,7 @@ impl Imports {
         let escape = this.clone();
         let layer = ui::modal::backdrop("task-backdrop", eased, Some(&self.focus), window)
             // Escape sends a working import to the task bar.
-            .on_action(move |_: &ui::modal::Close, _, cx| {
+            .on_action(move |_: &ui::keys::Dismiss, _, cx| {
                 if open {
                     let _ = escape.update(cx, |imports, cx| imports.minimize(id, cx));
                 }

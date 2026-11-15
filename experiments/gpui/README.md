@@ -605,7 +605,14 @@ every view relies on:
   `PICTO_GPUI_MENU=window`, panels are drawn in the window.
 - *Dialogs* (`ui/modal.rs`, `ui/confirm.rs`, `ui/form.rs`): the centred glass
   dialog with its backdrop and motion, the confirmation production calls
-  `ConfirmModal`, and the form pieces.
+  `ConfirmModal`, and the form pieces. `modal::backdrop` is the one dimmed
+  (or clear) layer every dialog and floating panel's backdrop is, and
+  `modal::dialog_panel` the one dialog panel, which the progress dialog and
+  the import task dialog lay their own contents in.
+- *Keys* (`ui/keys.rs`): Escape, the arrows, Enter and Tab as one set of
+  actions, which each floating surface (dialog, popover, picker panel,
+  selection dialog, menu) binds in its own key context; the innermost one
+  holding the keyboard takes them.
 - *Text input* (`ui/text_input/`): one `TextInput` with builder options,
   split into keys per platform, editing commands, pointer, input method,
   layout and pure editing rules. It edits as Chromium does on each platform.

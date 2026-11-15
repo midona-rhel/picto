@@ -15,24 +15,22 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
-actions!(
-    overlay_shell,
-    [Dismiss, Up, Down, Left, Right, Confirm, NextView]
-);
+use super::keys::{self, Confirm, Dismiss, Down, Key, Left, NextView, Right, Up};
 
 pub fn bind(cx: &mut App) {
-    let context = Some("OverlayShell");
-    cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, context),
-        KeyBinding::new("up", Up, context),
-        KeyBinding::new("down", Down, context),
-        KeyBinding::new("left", Left, context),
-        KeyBinding::new("right", Right, context),
-        KeyBinding::new("enter", Confirm, context),
-        KeyBinding::new("tab", NextView, context),
-        // Production reads only the key, so Shift-Tab turns the same way.
-        KeyBinding::new("shift-tab", NextView, context),
-    ]);
+    keys::bind(
+        cx,
+        "OverlayShell",
+        &[
+            Key::Escape,
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::Enter,
+            Key::Tab,
+        ],
+    );
 }
 
 /// A key the panel's owner can act on, from the search field or the panel.

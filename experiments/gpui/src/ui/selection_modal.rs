@@ -10,19 +10,16 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::rc::Rc;
 
-actions!(selection_modal, [Up, Down, NextView]);
+use super::keys::{self, Down, NextView, Up};
 
 /// The keys the dialogs take from their search field. Enter and Escape are
 /// the field's own, which the search bar catches before it.
 pub fn bind(cx: &mut App) {
-    let context = Some("SelectionModal");
-    cx.bind_keys([
-        KeyBinding::new("up", Up, context),
-        KeyBinding::new("down", Down, context),
-        KeyBinding::new("tab", NextView, context),
-        // Production reads only the key, so Shift-Tab turns the same way.
-        KeyBinding::new("shift-tab", NextView, context),
-    ]);
+    keys::bind(
+        cx,
+        "SelectionModal",
+        &[keys::Key::Up, keys::Key::Down, keys::Key::Tab],
+    );
 }
 
 /// `--control-height-md`: a rail item and a row of the list.

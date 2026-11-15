@@ -23,6 +23,7 @@ pub mod form;
 mod glass;
 pub mod icon_button;
 pub mod icon_picker;
+pub mod keys;
 pub mod layer;
 pub mod menu;
 pub mod modal;
