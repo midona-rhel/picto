@@ -655,7 +655,7 @@ impl Manager {
                     t("Add to Quick Access")
                 },
             )
-            .icon("menu-pin")
+            .icon("pin")
             .disabled(!real)
             .into(),
             menu::item("rename", t("Rename"))
