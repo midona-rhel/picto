@@ -1,9 +1,10 @@
 //! Duplicate sets: the library reports pairs of matching files; files that
 //! match each other, directly or through another file, are reviewed
-//! together as one set with one file to keep. This module builds the sets,
-//! chooses the file Smart merge keeps (`smartMergeWinner`, extended from a
-//! pair to a set), and turns a decision on a set into the pairs the library
-//! settles.
+//! together as one set and merged into the one file kept. This module
+//! builds the sets, reads the library's own suggestion of a file to keep
+//! (`compare_candidate_quality`: the larger picture, the lossless format,
+//! more bytes of the same format), and turns a decision on a set into the
+//! pairs the library settles.
 use picto_library::{
     DuplicateCandidate, DuplicateCandidateSide, DuplicateQualityDecision,
     DuplicateResolutionChoice, FileId,
@@ -21,34 +22,20 @@ pub struct Edge {
 }
 
 impl Edge {
-    /// The file the library judges better, when it can tell; a tie it
-    /// settles in a stable order counts, as it does for Smart merge.
+    /// The file the library judges better, when it can tell. A tie the
+    /// library settles by file order says nothing about the files and is
+    /// no suggestion.
     fn winner(&self) -> Option<(FileId, FileId)> {
         match self.decision {
-            DuplicateQualityDecision::LeftBetter | DuplicateQualityDecision::AutoTieLeft => {
-                Some((self.a, self.b))
-            }
-            DuplicateQualityDecision::RightBetter | DuplicateQualityDecision::AutoTieRight => {
-                Some((self.b, self.a))
-            }
-            DuplicateQualityDecision::NeedsChoice => None,
+            DuplicateQualityDecision::LeftBetter => Some((self.a, self.b)),
+            DuplicateQualityDecision::RightBetter => Some((self.b, self.a)),
+            _ => None,
         }
     }
 
     fn touches(&self, file: FileId) -> bool {
         self.a == file || self.b == file
     }
-}
-
-/// How sure the library is of the file to keep.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Verdict {
-    /// Every pair is the same picture.
-    Identical,
-    /// Similar pictures, one of them better than every other.
-    Clear,
-    /// Similar pictures and no clear best: the user looks first.
-    Unsure,
 }
 
 #[derive(Clone, Debug)]
@@ -58,9 +45,9 @@ pub struct Set {
     /// Its files, oldest file first.
     pub files: Vec<DuplicateCandidateSide>,
     pub edges: Vec<Edge>,
-    pub verdict: Verdict,
-    /// The file Smart merge keeps, or the largest when it cannot tell.
-    pub best: usize,
+    /// The file the library would keep, when one is better than every
+    /// other by its own rules; only ever offered as a suggestion.
+    pub suggested: Option<usize>,
 }
 
 /// The sets the pairs make: files linked by a pair, directly or through
@@ -113,63 +100,51 @@ pub fn build(pairs: &[DuplicateCandidate]) -> Vec<Set> {
         .filter_map(|at| grouped.remove(&at))
         .map(|(files, edges)| {
             let files = files.into_values().collect::<Vec<_>>();
-            let (verdict, best) = judge(&files, &edges);
+            let suggested = suggest(&files, &edges);
             Set {
                 key: files[0].file.file_id.0,
                 files,
                 edges,
-                verdict,
-                best,
+                suggested,
             }
         })
         .collect()
 }
 
-/// The verdict and the file to keep: the one file no pair finds worse than
-/// another, when there is exactly one and no pair needs a choice; else the
-/// largest picture, then the largest file.
-fn judge(files: &[DuplicateCandidateSide], edges: &[Edge]) -> (Verdict, usize) {
+/// The one file no pair rates worse and some pair rates better, when
+/// there is exactly one and no pair leaves the choice open.
+fn suggest(files: &[DuplicateCandidateSide], edges: &[Edge]) -> Option<usize> {
+    if edges
+        .iter()
+        .any(|edge| edge.decision == DuplicateQualityDecision::NeedsChoice)
+    {
+        return None;
+    }
     let beaten = |file: FileId| {
         edges
             .iter()
             .any(|edge| edge.winner().is_some_and(|(_, loser)| loser == file))
     };
-    let unbeaten = (0..files.len())
-        .filter(|&index| !beaten(files[index].file.file_id))
-        .collect::<Vec<_>>();
-    let undecided = edges
-        .iter()
-        .any(|edge| edge.decision == DuplicateQualityDecision::NeedsChoice);
-    let identical = edges.iter().all(|edge| edge.distance == 0);
-    if let [only] = unbeaten[..]
-        && !undecided
-    {
-        let verdict = if identical {
-            Verdict::Identical
-        } else {
-            Verdict::Clear
-        };
-        return (verdict, only);
-    }
-    let largest = (0..files.len())
-        .max_by_key(|&index| {
-            let file = &files[index].file;
-            let pixels =
-                file.pixel_width.unwrap_or(0) as u64 * file.pixel_height.unwrap_or(0) as u64;
-            (pixels, file.size_bytes, std::cmp::Reverse(file.file_id.0))
-        })
-        .unwrap_or(0);
-    let verdict = if identical {
-        Verdict::Identical
-    } else {
-        Verdict::Unsure
+    let wins = |file: FileId| {
+        edges
+            .iter()
+            .any(|edge| edge.winner().is_some_and(|(winner, _)| winner == file))
     };
-    (verdict, largest)
+    let mut best = (0..files.len()).filter(|&index| {
+        let file = files[index].file.file_id;
+        !beaten(file) && wins(file)
+    });
+    match (best.next(), best.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
 }
 
 impl Set {
+    /// Every pair has the same perceptual hash: identical to the eye of
+    /// the scan, not known to be the same pixels.
     pub fn identical(&self) -> bool {
-        self.verdict == Verdict::Identical
+        self.edges.iter().all(|edge| edge.distance == 0)
     }
 
     /// The least alike pair's distance.
@@ -179,16 +154,6 @@ impl Set {
             .map(|edge| edge.distance)
             .max()
             .unwrap_or(0)
-    }
-
-    /// The bytes merging frees: every file but the one kept.
-    pub fn saving(&self, keeper: usize) -> i64 {
-        self.files
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| *index != keeper)
-            .map(|(_, side)| side.file.size_bytes.max(0))
-            .sum()
     }
 
     pub fn index_of(&self, file: FileId) -> Option<usize> {
@@ -243,34 +208,9 @@ impl Set {
     }
 }
 
-/// How the shown file compares with the rest of its set, for Compare's
-/// statements.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lean {
-    Better,
-    Worse,
-    Same,
-}
-
-/// The shown file's area against the largest of the others: its share, in
-/// percent, rounded.
-pub fn resolution_share(set: &Set, shown: usize) -> Option<u32> {
-    let area = |index: usize| {
-        let file = &set.files[index].file;
-        Some(file.pixel_width? as f64 * file.pixel_height? as f64)
-    };
-    let mine = area(shown)?;
-    let others = (0..set.files.len())
-        .filter(|index| *index != shown)
-        .map(area)
-        .collect::<Option<Vec<_>>>()?;
-    let most = others.into_iter().fold(0., f64::max);
-    (most > 0.).then(|| (mine / most * 100.).round() as u32)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Verdict, build};
+    use super::build;
     use picto_library::{
         DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, DuplicateQualityDecision,
         DuplicateResolutionChoice, FileId,
@@ -332,32 +272,31 @@ mod tests {
     }
 
     #[test]
-    fn the_file_no_pair_finds_worse_is_kept() {
-        // 3 beats 2, 2 beats 1: 3 is clearly best.
+    fn the_library_suggests_the_one_file_better_than_every_other() {
+        // 3 beats 2, 2 beats 1: 3 is suggested.
         let sets = build(&[
             pair((1, 100), (2, 200), 1, RightBetter),
             pair((2, 200), (3, 300), 1, RightBetter),
         ]);
-        assert_eq!(sets[0].verdict, Verdict::Clear);
-        assert_eq!(sets[0].files[sets[0].best].file.file_id, FileId(3));
-        // Identical pictures keep the core's stable choice.
+        assert_eq!(
+            sets[0].suggested.map(|at| sets[0].files[at].file.file_id),
+            Some(FileId(3))
+        );
+        // A tie settled by file order is no suggestion.
         let sets = build(&[pair((4, 100), (6, 100), 0, AutoTieLeft)]);
-        assert_eq!(sets[0].verdict, Verdict::Identical);
-        assert_eq!(sets[0].best, 0);
+        assert_eq!(sets[0].suggested, None);
     }
 
     #[test]
-    fn two_unbeaten_files_or_an_open_choice_leave_the_set_unsure() {
+    fn two_unbeaten_files_or_an_open_choice_suggest_nothing() {
         // 1 and 3 both beat 2, and nothing compares 1 with 3.
         let sets = build(&[
             pair((1, 300), (2, 100), 40, LeftBetter),
             pair((2, 100), (3, 200), 40, RightBetter),
         ]);
-        assert_eq!(sets[0].verdict, Verdict::Unsure);
-        // The largest picture is offered.
-        assert_eq!(sets[0].files[sets[0].best].file.file_id, FileId(1));
+        assert_eq!(sets[0].suggested, None);
         let sets = build(&[pair((1, 300), (2, 100), 40, NeedsChoice)]);
-        assert_eq!(sets[0].verdict, Verdict::Unsure);
+        assert_eq!(sets[0].suggested, None);
     }
 
     #[test]
@@ -386,6 +325,5 @@ mod tests {
                 (FileId(2), FileId(3), keep(3)),
             ]
         );
-        assert_eq!(sets[0].saving(0), 2000 + 3000);
     }
 }
