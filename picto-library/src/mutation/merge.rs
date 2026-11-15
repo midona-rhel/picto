@@ -287,20 +287,7 @@ fn hand_over(
             merged.source_urls.push(url.clone());
         }
     }
-    let present = |notes: &Option<String>| {
-        notes
-            .as_deref()
-            .map(str::trim)
-            .filter(|notes| !notes.is_empty())
-            .map(str::to_owned)
-    };
-    if let Some(source_notes) = present(&source_text.notes) {
-        merged.notes = match present(&target_text.notes) {
-            None => Some(source_notes),
-            Some(target_notes) if target_notes.contains(&source_notes) => target_text.notes.clone(),
-            Some(target_notes) => Some(format!("{target_notes}\n\n{source_notes}")),
-        };
-    }
+    merged.notes = merged_notes(target_text.notes.as_deref(), source_text.notes.as_deref());
     if merged != target_text {
         merged.modified_at_ms = now_ms;
         changes.push(SemanticChange::RootText {
@@ -309,6 +296,32 @@ fn hand_over(
         });
     }
     Ok(changes)
+}
+
+/// The notes an item keeps when another's are handed to it: its own when
+/// the other has none or says nothing they do not, the other's when they
+/// say all its own do, else both, its own first. Whitespace and line breaks
+/// do not count in the comparison, so a note copied with other spacing is
+/// kept once.
+pub fn merged_notes(target: Option<&str>, source: Option<&str>) -> Option<String> {
+    fn present(notes: Option<&str>) -> Option<&str> {
+        notes.map(str::trim).filter(|notes| !notes.is_empty())
+    }
+    let Some(source_notes) = present(source) else {
+        return target.map(str::to_owned);
+    };
+    let Some(target_notes) = present(target) else {
+        return Some(source_notes.to_owned());
+    };
+    let words = |notes: &str| notes.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (target_words, source_words) = (words(target_notes), words(source_notes));
+    if target_words.contains(&source_words) {
+        target.map(str::to_owned)
+    } else if source_words.contains(&target_words) {
+        Some(source_notes.to_owned())
+    } else {
+        Some(format!("{target_notes}\n\n{source_notes}"))
+    }
 }
 
 fn root_text(transaction: &rusqlite::Transaction<'_>, root: RootId) -> Result<RootTextState> {
