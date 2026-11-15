@@ -221,18 +221,18 @@ impl SettingsWindow {
                 .clone()
                 .unwrap_or_else(|| en("Check for a newer version of Picto.").to_owned()),
         };
+        // `automaticInstall`
         let description = if state.mac() {
             t(
                 "On macOS, Picto opens the release download because this build is not signed for automatic installation.",
             )
         } else {
-            en(
-                "Updates download in the background. This version cannot install them itself: Show Installer shows the downloaded installer in the file manager.",
-            )
+            t("Updates download in the background and install after Picto closes.")
         };
         let next = match state.status {
-            Status::Downloaded if !state.mac() => Some(en("Show Installer")),
-            Status::Downloaded | Status::Available if state.mac() => Some(t("Open Download Page")),
+            Status::Downloaded if state.mac() => Some(t("Open Download Page")),
+            Status::Downloaded => Some(t("Restart and Install")),
+            Status::Available if state.mac() => Some(t("Open Download Page")),
             _ => None,
         };
         vec![

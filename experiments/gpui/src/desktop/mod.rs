@@ -422,14 +422,28 @@ pub fn reveal(path: &Path, cx: &mut App) {
     }
 }
 
-/// A file this app downloaded for the user (an update's installer) shown
-/// in the file manager.
-pub fn reveal_download(path: &Path, cx: &mut App) {
-    if live(cx) {
-        cx.reveal_path(&system_path(path));
-    } else {
-        record(format!("reveal {}", path.display()));
+/// An update's verified installer started as electron-updater's updater for
+/// this system starts it (`doInstall`; see each system's file). A test
+/// build writes it down instead.
+pub fn install_update(
+    installer: &Path,
+    silent: bool,
+    run_after: bool,
+    admin: bool,
+) -> Result<(), String> {
+    if cfg!(test) {
+        record(format!(
+            "install-update {} silent={silent} run-after={run_after} admin={admin}",
+            installer.display()
+        ));
+        return Ok(());
     }
+    platform::install_update(installer, silent, run_after, admin)
+}
+
+/// `$APPIMAGE` on Linux: the AppImage this process runs from.
+pub fn app_image() -> Option<PathBuf> {
+    platform::app_image()
 }
 
 /// Show in File Manager for a library in the Library Manager: its folder,

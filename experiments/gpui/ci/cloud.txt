@@ -52,7 +52,7 @@ down 588 385
 up 588 385
 wait 300
 window 0
-wait 6000
+wait 20000
 shot cloud-05-restored
 invoke navigation.get {}
 invoke cloud.restore.list {}

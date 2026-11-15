@@ -14,7 +14,7 @@ fn about_link(
     id: &'static str,
     icon: &'static str,
     text: &'static str,
-    url: &'static str,
+    open: impl Fn(&mut App) + 'static,
     cx: &App,
 ) -> impl IntoElement {
     let theme = theme::theme(cx);
@@ -43,7 +43,7 @@ fn about_link(
             13.,
             theme.text_tertiary(),
         ))
-        .on_click(move |_, _, cx| crate::desktop::open_link(url, cx))
+        .on_click(move |_, _, cx| open(cx))
 }
 
 impl SettingsWindow {
@@ -132,7 +132,12 @@ impl SettingsWindow {
                             "settings-brand-github",
                             // `{t("Project on GitHub ")}` before the link glyph
                             t("Project on GitHub ").trim_end(),
-                            "https://github.com/midona-rhel/picto",
+                            |cx| {
+                                crate::desktop::open_link(
+                                    "https://github.com/midona-rhel/picto",
+                                    cx,
+                                )
+                            },
                             cx,
                         ))
                         .child(about_link(
@@ -140,7 +145,9 @@ impl SettingsWindow {
                             "refresh",
                             // `{t("Release notes ")}` before the link glyph
                             t("Release notes ").trim_end(),
-                            "https://github.com/midona-rhel/picto/releases",
+                            // `openUpdateRelease`: the release found, else
+                            // the releases page.
+                            crate::updates::open_release,
                             cx,
                         ))
                         .child(about_link(
@@ -148,7 +155,12 @@ impl SettingsWindow {
                             "settings-scale",
                             // `{t("Open-source license ")}` before the link glyph
                             t("Open-source license ").trim_end(),
-                            "https://github.com/midona-rhel/picto/blob/main/LICENSE",
+                            |cx| {
+                                crate::desktop::open_link(
+                                    "https://github.com/midona-rhel/picto/blob/main/LICENSE",
+                                    cx,
+                                )
+                            },
                             cx,
                         )),
                 )

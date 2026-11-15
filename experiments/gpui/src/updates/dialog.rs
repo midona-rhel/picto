@@ -1,8 +1,8 @@
 //! The update dialog (`UpdateModal.tsx`): this version, what the last check
 //! found or the download under way, and the release's notes, with Check
-//! Again and the step that follows (the release page on macOS, the
-//! downloaded installer elsewhere). Closing it after a new version's first
-//! start marks its notes as read.
+//! Again and the step that follows (Open Download Page on macOS, Restart
+//! and Install elsewhere). Closing it after a new version's first start
+//! marks its notes as read.
 use super::{Status, VERSION};
 use crate::i18n::{en, t};
 use crate::theme::{self, Text as _};
@@ -184,10 +184,8 @@ impl Render for UpdateDialog {
                             .filled("update-download", (percent.unwrap_or(2.) / 100.) as f32),
                     )
             }
-            Status::Downloaded if state.mac() => summary,
             Status::Downloaded => summary.child(paragraph(
-                en("The installer has been downloaded and verified. This version cannot install it itself: Show Installer shows it in the file manager.")
-                    .into(),
+                t("The update is ready. Picto will close before the installer starts.").into(),
             )),
             Status::Installed => summary.child(paragraph(
                 t("Picto was updated successfully. Here’s what changed.").into(),
@@ -321,13 +319,15 @@ impl Render for UpdateDialog {
                     .disabled(state.busy())
                     .on_click(|_, _, cx| super::check(cx)),
             );
-            let next = match state.status {
-                Status::Downloaded if !state.mac() => Some(en("Show Installer")),
-                Status::Downloaded | Status::Available if state.mac() => {
-                    Some(t("Open Download Page"))
-                }
-                _ => None,
+            // `actionLabel`, which production's dialog leaves in English.
+            let label = if state.mac() {
+                "Open Download Page" // i18n: production keeps it in English
+            } else {
+                "Restart and Install" // i18n: production keeps it in English
             };
+            let next = (state.status == Status::Downloaded
+                || (state.status == Status::Available && state.mac()))
+            .then_some(label);
             if let Some(label) = next {
                 modal = modal.footer(
                     ui::action_button("update-install", Look::Primary)

@@ -91,11 +91,28 @@ pub fn block_on<F: Future>(work: F) -> Result<F::Output, String> {
 }
 
 /// A page for the user in the browser (a results page, a release page);
-/// under a check, written on standard error instead of opened.
+/// under a check, written on standard error (and kept for the check,
+/// [`opened`]) instead of opened.
 pub fn open_in_browser(url: &str, cx: &mut gpui::App) {
     if matches!(reach(), Reach::Local(_)) {
         eprintln!("picto: would open in the browser: {url}");
+        #[cfg(debug_assertions)]
+        if let Ok(mut opened) = OPENED.lock() {
+            opened.push(url.to_owned());
+        }
     } else {
         crate::desktop::open_link(url, cx);
     }
+}
+
+#[cfg(debug_assertions)]
+static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The pages a check would have opened in the browser, oldest first.
+#[cfg(debug_assertions)]
+pub fn opened() -> Vec<String> {
+    OPENED
+        .lock()
+        .map(|opened| opened.clone())
+        .unwrap_or_default()
 }
