@@ -1,6 +1,7 @@
-//! The stage: the set's files one at a time, flipping in place with ← → or
-//! the wheel while the zoom and the place in the picture stay, so what
-//! differs blinks. Over it, the difference button, which while the pointer
+//! The stage: the set's files one at a time, flipping in place with ← →
+//! while the zoom and the place in the picture stay, so what differs
+//! blinks, or two of them side by side, zoomed and moved together. Over it,
+//! the difference button, which while the pointer
 //! rests on it shows the pixel difference of the shown file and its
 //! partner (as the Electron screen's Show Difference does), and the
 //! sentence saying what comparing their pixels found. Under it, a strip of
@@ -188,13 +189,13 @@ impl DuplicatesScreen {
             )
     }
 
-    /// The shown file, zoomed and placed as the zoom says, or its
-    /// difference from its partner while the difference button is held.
+    /// The staged files, each zoomed and placed as the one zoom says. While
+    /// the difference button is held the difference of the shown file from
+    /// its partner takes the shown file's place, or side by side its
+    /// partner's, next to the shown file.
     fn picture(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         let entry = &self.entries[index];
-        let side = &entry.set.files[self.shown];
-        let id = side.file.file_id.0;
         let entity = cx.weak_entity();
         let measure = canvas(
             move |bounds, window, cx| {
@@ -214,49 +215,119 @@ impl DuplicatesScreen {
         )
         .absolute()
         .size_full();
-        let pane = super::pane_extent(self.stage.pane);
-        let image = Extent::new(
-            side.file.pixel_width.unwrap_or(0) as f32,
-            side.file.pixel_height.unwrap_or(0) as f32,
-        );
-        let mut layers =
-            if pane.width > 0. && pane.height > 0. && image.width > 0. && image.height > 0. {
-                let frame = self.stage.zoom.frame(pane, image);
-                div()
-                    .absolute()
-                    .left(px(frame.left))
-                    .top(px(frame.top))
-                    .w(px(frame.width))
-                    .h(px(frame.height))
-            } else {
-                div().absolute().inset_0()
-            };
-        let fill = |image: std::sync::Arc<RenderImage>| img(image).absolute().inset_0().size_full();
+        let staged = self.staged();
+        let side_by_side = staged.len() > 1;
+        let shown_id = entry.set.files[self.shown].file.file_id.0;
         let difference = self
             .stage
             .difference
             .as_ref()
-            .filter(|((shown, _), _, _)| *shown == id)
+            .filter(|((shown, _), _, _)| *shown == shown_id)
             .map(|(_, image, _)| image.clone());
-        if self.stage.difference_hovered {
-            // `.differenceComposite`: on black, the difference stretched
-            // over the shown file's place.
-            layers = layers
-                .bg(rgb(theme::DIFFERENCE_BACKGROUND))
-                .children(difference.map(|image| fill(image).object_fit(ObjectFit::Fill)));
-        } else {
-            let thumbnail = self.session.read(cx).thumbnail(&side.file.file_hash);
-            layers = layers.child(
-                img(thumbnail)
-                    .image_cache(&self.thumbnails)
+        // The file whose place the difference takes while it is held.
+        let differs_at = self.stage.difference_hovered.then(|| {
+            if side_by_side {
+                self.partner().unwrap_or(self.shown)
+            } else {
+                self.shown
+            }
+        });
+        let origin = self.stage.pane.origin;
+        let fill = |image: std::sync::Arc<RenderImage>| img(image).absolute().inset_0().size_full();
+        let mut panes = Vec::new();
+        for (file, bounds) in staged.into_iter().zip(self.panes()) {
+            let side = &entry.set.files[file];
+            let id = side.file.file_id.0;
+            let pane = super::pane_extent(bounds);
+            let image = Extent::new(
+                side.file.pixel_width.unwrap_or(0) as f32,
+                side.file.pixel_height.unwrap_or(0) as f32,
+            );
+            let mut layers =
+                if pane.width > 0. && pane.height > 0. && image.width > 0. && image.height > 0. {
+                    let frame = self.stage.zoom.frame(pane, image);
+                    div()
+                        .absolute()
+                        .left(px(frame.left))
+                        .top(px(frame.top))
+                        .w(px(frame.width))
+                        .h(px(frame.height))
+                } else {
+                    div().absolute().inset_0()
+                };
+            if differs_at == Some(file) {
+                // `.differenceComposite`: on black, the difference
+                // stretched over the file's place.
+                layers = layers.bg(rgb(theme::DIFFERENCE_BACKGROUND)).children(
+                    difference
+                        .clone()
+                        .map(|image| fill(image).object_fit(ObjectFit::Fill)),
+                );
+            } else {
+                let thumbnail = self.session.read(cx).thumbnail(&side.file.file_hash);
+                layers = layers.child(
+                    img(thumbnail)
+                        .image_cache(&self.thumbnails)
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .object_fit(ObjectFit::Contain),
+                );
+                if let Some(full) = self.stage.originals.get(&id).cloned() {
+                    layers = layers.child(fill(full).object_fit(ObjectFit::Contain));
+                }
+            }
+            let kept = file == self.shown;
+            // Side by side each file says which it is; the one a merge
+            // keeps carries the grid's selection stroke.
+            let caption = side_by_side.then(|| {
+                let mut words = vec![(file + 1).to_string()];
+                if kept {
+                    words.push(en("Kept").to_owned());
+                }
+                if entry.set.suggested == Some(file) {
+                    words.push(t("Suggested").to_owned());
+                }
+                div()
+                    .absolute()
+                    .left(px(8.))
+                    .top(px(8.))
+                    .px(px(6.))
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(theme::RADIUS_SM))
+                    .bg(theme.menu_glass())
+                    .text(theme::TEXT_CAPTION)
+                    .text_color(theme.text())
+                    .child(words.join(" · "))
+            });
+            let stroke = (side_by_side && kept).then(|| {
+                div()
                     .absolute()
                     .inset_0()
-                    .size_full()
-                    .object_fit(ObjectFit::Contain),
+                    .border_2()
+                    .border_color(rgb(theme::GRID_SELECTION))
+            });
+            panes.push(
+                div()
+                    .id(("duplicate-pane", file))
+                    .absolute()
+                    .left(bounds.origin.x - origin.x)
+                    .top(px(0.))
+                    .w(bounds.size.width)
+                    .h_full()
+                    .overflow_hidden()
+                    .child(layers)
+                    .children(stroke)
+                    .children(caption)
+                    // A press that moved nothing chooses the file.
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.stage.moved {
+                            this.show_file(file, cx);
+                        }
+                    })),
             );
-            if let Some(full) = self.stage.originals.get(&id).cloned() {
-                layers = layers.child(fill(full).object_fit(ObjectFit::Contain));
-            }
         }
         let dragging = self.stage.drag.is_some();
         div()
@@ -265,26 +336,31 @@ impl DuplicatesScreen {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .bg(theme.background())
+            .bg(if side_by_side {
+                theme.border_secondary()
+            } else {
+                theme.background()
+            })
             .cursor(if dragging {
                 CursorStyle::ClosedHand
             } else {
                 CursorStyle::OpenHand
             })
             .child(measure)
-            .child(layers)
+            .children(panes.into_iter().map(|pane| pane.bg(theme.background())))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus, cx);
+                    this.stage.moved = false;
                     if event.click_count == 2 {
                         this.stage.drag = None;
+                        this.stage.moved = true;
                         this.fit(cx);
                     } else {
                         this.stage.drag = Some((event.position, this.stage.zoom.center()));
                         cx.notify();
                     }
-                    cx.stop_propagation();
                 }),
             )
             .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
@@ -302,8 +378,11 @@ impl DuplicatesScreen {
             return;
         };
         let moved = position - from;
+        if f32::from(moved.x).abs() > 3. || f32::from(moved.y).abs() > 3. {
+            self.stage.moved = true;
+        }
         self.stage.zoom.pan(
-            super::pane_extent(self.stage.pane),
+            self.view_extent(),
             image,
             center,
             (f32::from(moved.x), f32::from(moved.y)),
@@ -353,6 +432,7 @@ impl DuplicatesScreen {
                 grayscale: false,
             };
             let art = tile_art(look, &prefs(), &mut self.art, &self.thumbnails, window, cx);
+            let suggested = entry.set.suggested == Some(file);
             let ring = (Some(file) == partner && count > 2).then(|| {
                 div()
                     .absolute()
@@ -399,7 +479,13 @@ impl DuplicatesScreen {
                                     this.open_file_menu(file, event.position, window, cx);
                                 }),
                             ),
-                    ),
+                    )
+                    .children(suggested.then(|| {
+                        div()
+                            .text(theme::TEXT_CAPTION)
+                            .text_color(theme.text_secondary())
+                            .child(t("Suggested"))
+                    })),
             );
         }
         div()
@@ -515,14 +601,25 @@ impl DuplicatesScreen {
                     button.width(theme::ACTION_BUTTON).padding(0.)
                 }
             };
+        // On the file the library suggests the merge is Smart merge; on any
+        // other it keeps that file instead.
+        let smart = self.shown_is_suggested();
         let merge = ui::action_button("duplicates-keep-this", Look::Primary)
             .icon("action-arrows-join", 16.);
-        let merge = if words(460.) {
-            merge.label(en("Keep this, merge the rest"))
-        } else if words(320.) {
-            merge.label(en("Keep this"))
-        } else {
+        let merge = if !words(320.) {
             merge.width(theme::ACTION_BUTTON).padding(0.)
+        } else if smart {
+            merge.label(t("Smart merge"))
+        } else if words(460.) {
+            merge.label(en("Keep this, merge the rest"))
+        } else {
+            merge.label(en("Keep this"))
+        };
+        let merge_tip = if smart {
+            ui::tip(t("Keep the stronger file and preserve item metadata"))
+                .shortcut("dup.smartMerge", cx)
+        } else {
+            ui::tip(en("Keep the shown file and merge the others into it")).shortcut("dup.merge", cx)
         };
         div()
             .h(px(FOOTER))
@@ -537,10 +634,7 @@ impl DuplicatesScreen {
             .child(
                 merge
                     .disabled(self.busy)
-                    .tip(
-                        ui::tip(en("Keep the shown file and merge the others into it"))
-                            .shortcut("dup.merge", cx),
-                    )
+                    .tip(merge_tip)
                     .on_click(cx.listener(|this, _, _, cx| this.merge(cx))),
             )
             .child(

@@ -360,12 +360,16 @@ toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
 may give the shell such a rail (`shell::ScreenRail`). Duplicates
 is one desk: the core's matching pairs gathered into sets of files that
 match one another (`duplicates/sets.rs`), queued most alike first in
-Identical and Similar tabs; the set's files flipping in place on the stage,
-the pixel difference while Show Difference is held and what comparing the
-pixels measured, in words; and in the inspector's place the files side by
-side and what the item left after the merge will hold, worked out with the
-library's own rules. The file shown is the one kept; each decision on a set
-is one undoable step (`Library::resolve_duplicates`).
+Identical and Similar tabs; the set's files flipping in place on the stage
+or two of them side by side under one zoom, the pixel difference while Show
+Difference is held and what comparing the pixels measured, in words; and in
+the inspector's place the files' facts side by side and what the item left
+after the merge will hold, worked out with the library's own rules. A set
+opens on the file the library suggests keeping, named as the suggestion;
+the file shown is the one kept, and on the suggested file that merge is
+Smart merge, which S does whichever file is shown. The wheel moves about in
+the picture and never changes the file. Each decision on a set is one
+undoable step (`Library::resolve_duplicates`).
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
@@ -701,9 +705,8 @@ reading production's code, seen in this app).
 - The Export dialog's formats end with ZIP Archive: the original files in
   one archive, `Picto Export.zip`, in the chosen folder (`media.export`
   with the `zip` format, which production's dialog does not list).
-- The grid reads no original while it scrolls: a large tile's dwell starts
-  over with every movement, so originals arrive once the grid has rested
-  (production counts only the time a tile has been in view).
+- A picture's original is read once it has been on screen for 200 ms, in
+  the viewers and the grid alike (production: 100 ms and 250 ms).
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge

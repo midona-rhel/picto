@@ -427,8 +427,7 @@ impl GridView {
             thumbnails.make_missing(&session, missing, cx)
         });
         // Tiles in the viewport that draw more pixels than their thumbnail
-        // holds ask for their original, which arrives once the grid has
-        // rested a moment.
+        // holds ask for their original, which arrives after a short dwell.
         let scale = window.scale_factor();
         let wants = {
             let session = self.session.read(cx);
@@ -454,7 +453,7 @@ impl GridView {
                 .collect::<Vec<_>>()
         };
         self.originals
-            .update(cx, |originals, cx| originals.plan(wants, top, cx));
+            .update(cx, |originals, cx| originals.plan(wants, cx));
         {
             let originals = self.originals.read(cx);
             for data in tiles.iter_mut() {

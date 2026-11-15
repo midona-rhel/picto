@@ -128,10 +128,11 @@ pub const FULL_IMAGE_FADE: Duration = Duration::from_millis(130);
 /// quick load shows none.
 pub const LOADING_MESSAGE_DELAY: Duration = Duration::from_millis(200);
 
-/// `fullResolutionDelayMs`: how long an image stays shown as its thumbnail
-/// before its original is read, so items passed through quickly cost no
-/// read of their originals.
-pub const ORIGINAL_DELAY: Duration = Duration::from_millis(100);
+/// How long a picture is on screen before its original is read, in the
+/// viewers and in the grid alike, so pictures passed through quickly cost
+/// no read of their originals. Production waits 100 ms in its viewers and
+/// 250 ms in its grid.
+pub const ORIGINAL_DELAY: Duration = Duration::from_millis(200);
 /// How long the viewer keeps the previous item on screen while a video
 /// opening waits for its first frame, or a document for its first page,
 /// before showing the new item without it.

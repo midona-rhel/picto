@@ -173,3 +173,6 @@ differs visibly
 differ at all
 sizes differ,
 compared stretched
+Side by Side
+equal quality, the older file
+No clear quality winner. Choose the file to keep, or mark the set as not duplicates.

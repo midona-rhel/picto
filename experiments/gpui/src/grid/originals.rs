@@ -1,9 +1,8 @@
 //! Originals for tiles too large for their thumbnail (`thumbnailPipeline.ts`,
 //! `thumbnailPlan.ts`). A thumbnail's long edge is 512 pixels; a tile that
-//! needs more than that, and has stayed in a viewport at rest for a quarter
-//! of a second, gets its original decoded to exactly the size the tile
-//! shows. While the grid scrolls, by wheel or by a key held down, no
-//! original is read.
+//! needs more than that, and has been on screen for a fifth of a second,
+//! whether the grid is moving or not, gets its original decoded to exactly
+//! the size the tile shows.
 use gpui::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,8 +11,9 @@ use std::time::{Duration, Instant};
 
 /// The long edge thumbnails are stored at.
 pub const THUMBNAIL_LONG_EDGE: f32 = 512.;
-/// `FULL_QUALITY_VIEWPORT_DWELL_MS`: how long a tile stays in view first.
-pub const DWELL: Duration = Duration::from_millis(250);
+/// How long a tile is on screen before its original is read: the same
+/// wait the viewers give an item ([`crate::motion::ORIGINAL_DELAY`]).
+pub const DWELL: Duration = crate::motion::ORIGINAL_DELAY;
 /// Originals decoded at once. They are large, and the grid stays responsive
 /// only if they do not crowd out everything else.
 const CONCURRENCY: usize = 2;
@@ -104,8 +104,6 @@ pub struct Originals {
     /// Since when each wanted tile has been in the viewport without leaving.
     seen: HashMap<String, Instant>,
     entries: HashMap<String, Entry>,
-    /// Where the grid was scrolled to when the tiles were last planned.
-    top: f32,
     /// Paints again when the next tile's dwell is over.
     wake: Option<Task<()>>,
 }
@@ -123,7 +121,6 @@ impl Originals {
         Self {
             seen: HashMap::new(),
             entries: HashMap::new(),
-            top: 0.,
             wake: None,
         }
     }
@@ -133,21 +130,13 @@ impl Originals {
         self.entries.get(hash)?.image()
     }
 
-    /// The tiles in the viewport, scrolled to `top`, that should show their
-    /// original. One that has left is let go and its dwell starts over when
-    /// it returns; a scroll starts every dwell over, so nothing is read
-    /// while the grid moves; one that has stayed long enough is decoded, a
-    /// couple at a time.
-    pub fn plan(&mut self, wants: Vec<Want>, top: f32, cx: &mut Context<Self>) {
+    /// The tiles in the viewport that should show their original. One that
+    /// has left is let go and its dwell starts over when it returns; one
+    /// that has stayed long enough is decoded, a couple at a time.
+    pub fn plan(&mut self, wants: Vec<Want>, cx: &mut Context<Self>) {
         let now = Instant::now();
         self.seen
             .retain(|hash, _| wants.iter().any(|want| want.hash == *hash));
-        if top != self.top {
-            self.top = top;
-            for since in self.seen.values_mut() {
-                *since = now;
-            }
-        }
         let gone = self
             .entries
             .keys()

@@ -220,7 +220,9 @@ fn reason(entry: &Entry, suggested: usize) -> &'static str {
             "image/png" | "image/bmp" | "image/tiff" | "image/gif"
         )
     };
-    if others.iter().all(|&other| area(suggested) > area(other)) {
+    if entry.set.equal_quality() {
+        en("equal quality, the older file")
+    } else if others.iter().all(|&other| area(suggested) > area(other)) {
         en("larger picture")
     } else if lossless(suggested) && others.iter().all(|&other| !lossless(other)) {
         en("lossless format")
@@ -336,12 +338,11 @@ impl DuplicatesScreen {
                         .child(label),
                 )
         };
-        // Each file's column heading: its number in the strip, whether the
-        // merge keeps it (the file shown) and the library's suggestion.
-        let mut heading = row("").h(px(36.));
+        // Each file's column heading: its number in the strip and whether
+        // the merge keeps it (the file shown).
+        let mut heading = row("").h(px(24.));
         for &at in &columns {
             let kept = at == self.shown;
-            let suggested = set.suggested == Some(at);
             heading = heading.child(
                 div()
                     .flex_1()
@@ -364,20 +365,24 @@ impl DuplicatesScreen {
                                 if kept { en("Kept") } else { en("Merged") }
                             )),
                     )
-                    .child(
-                        div()
-                            .text(theme::TEXT_CAPTION)
-                            .text_color(theme.text_tertiary())
-                            .truncate()
-                            .child(if suggested {
-                                format!("{}: {}", t("Suggested"), reason(entry, at))
-                            } else {
-                                String::new()
-                            }),
-                    ),
             );
         }
-        let mut table = div().flex().flex_col().child(heading);
+        // Which file the library would keep and by which of its rules, on
+        // a line of its own so the reason is read whole.
+        let suggestion = set.suggested.map(|at| {
+            div()
+                .pb(px(6.))
+                .text(theme::TEXT_CAPTION)
+                .line_height(px(16.))
+                .text_color(theme.text_tertiary())
+                .child(format!(
+                    "{} {}: {}",
+                    t("Suggested"),
+                    at + 1,
+                    reason(entry, at)
+                ))
+        });
+        let mut table = div().flex().flex_col().child(heading).children(suggestion);
         for (label, fact) in &facts {
             let values = columns.iter().map(|&at| fact(at)).collect::<Vec<_>>();
             let differ = values.windows(2).any(|pair| pair[0] != pair[1]);

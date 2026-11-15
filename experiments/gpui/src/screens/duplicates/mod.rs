@@ -42,6 +42,7 @@ actions!(
         PreviousSet,
         NextSet,
         Merge,
+        SmartMerge,
         Skip,
         NotDuplicate,
         FitPair,
@@ -51,6 +52,8 @@ actions!(
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
+/// The space between two files shown side by side.
+const SIDE_GAP: f32 = 1.;
 /// The library hands at most this many pairs at a time.
 const QUEUE_LIMIT: usize = 500;
 /// `scanDuplicates(distanceThreshold = 16)`.
@@ -115,8 +118,11 @@ struct StageState {
     difference_hovered: bool,
     pane: Bounds<Pixels>,
     drag: Option<(Point<Pixels>, (f32, f32))>,
-    /// The wheel's travel toward the next flip.
-    wheel: f32,
+    /// The press under way has moved the picture, so its release chooses
+    /// no file.
+    moved: bool,
+    /// Two files are shown next to each other rather than one in place.
+    side_by_side: bool,
 }
 
 pub struct DuplicatesScreen {
@@ -613,6 +619,77 @@ impl DuplicatesScreen {
         self.resolve(steps, true, cx);
     }
 
+    /// S (`dup.smartMerge`): keeps the file the library suggests and merges
+    /// the rest into it, whichever file is shown. A set it cannot settle
+    /// says so and is left for the user to choose.
+    fn smart_merge(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
+            return;
+        };
+        match self.entries[index].set.suggested {
+            Some(keeper) => {
+                let steps = self.entries[index].set.merge_steps(keeper);
+                self.resolve(steps, true, cx);
+            }
+            None => ui::notify::warning(
+                t("Smart merge needs a choice"),
+                en("No clear quality winner. Choose the file to keep, or mark the set as not duplicates."),
+                cx,
+            ),
+        }
+    }
+
+    /// Whether Enter on the shown file is what Smart merge would do.
+    fn shown_is_suggested(&self) -> bool {
+        self.current_index()
+            .is_some_and(|index| self.entries[index].set.suggested == Some(self.shown))
+    }
+
+    pub(super) fn side_by_side(&self) -> bool {
+        self.stage.side_by_side
+    }
+
+    pub(super) fn set_side_by_side(&mut self, on: bool, cx: &mut Context<Self>) {
+        if self.stage.side_by_side != on {
+            self.stage.side_by_side = on;
+            self.stage.zoom.fit();
+            self.changed(cx);
+        }
+    }
+
+    /// The files on the stage, left to right: the shown one alone, or side
+    /// by side a pair in its own order (so choosing one moves neither), and
+    /// of a larger set the shown file and the one it is measured against.
+    fn staged(&self) -> Vec<usize> {
+        let Some(index) = self.current_index() else {
+            return Vec::new();
+        };
+        match (self.stage.side_by_side, self.partner()) {
+            (true, Some(_)) if self.entries[index].set.files.len() == 2 => vec![0, 1],
+            (true, Some(partner)) => vec![self.shown, partner],
+            _ => vec![self.shown],
+        }
+    }
+
+    /// Where each staged file is drawn, in window coordinates.
+    fn panes(&self) -> Vec<Bounds<Pixels>> {
+        let whole = self.stage.pane;
+        let count = self.staged().len().max(1);
+        let gap = px(SIDE_GAP);
+        let width = (whole.size.width - gap * (count as f32 - 1.)) / count as f32;
+        (0..count)
+            .map(|at| Bounds {
+                origin: point(whole.origin.x + (width + gap) * at as f32, whole.origin.y),
+                size: size(width, whole.size.height),
+            })
+            .collect()
+    }
+
+    /// The size a picture is fitted and zoomed in: one pane's.
+    fn view_extent(&self) -> compare::Extent {
+        pane_extent(self.panes().first().copied().unwrap_or(self.stage.pane))
+    }
+
     /// N: the set's files are different pictures; none is touched, and a
     /// later scan does not bring the pairs back.
     fn not_duplicates(&mut self, cx: &mut Context<Self>) {
@@ -687,16 +764,18 @@ impl DuplicatesScreen {
         }
     }
 
-    /// Puts a set on the stage, its first file shown, at the fitted zoom.
+    /// Puts a set on the stage at the fitted zoom, showing the file the
+    /// library suggests keeping, or the first when it suggests none.
     fn show_set(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
         let key = index.map(|index| self.entries[index].set.key);
         if key == self.current {
             return;
         }
         self.current = key;
-        self.shown = 0;
+        self.shown = index
+            .and_then(|index| self.entries[index].set.suggested)
+            .unwrap_or(0);
         self.stage.zoom.fit();
-        self.stage.wheel = 0.;
         self.stage.drag = None;
         self.release_originals(cx);
         self.load_compared(cx);
@@ -837,6 +916,15 @@ impl DuplicatesScreen {
         ) else {
             return;
         };
+        // The same two files the other way round, at one size: their
+        // difference is the same picture and measures the same.
+        if left.size(0) == right.size(0)
+            && let Some((pair, _, _)) = self.stage.difference.as_mut()
+            && *pair == (partner, shown)
+        {
+            *pair = (shown, partner);
+            return;
+        }
         let work = cx
             .background_executor()
             .spawn(async move { difference::compute(&left, &right) });
@@ -865,11 +953,13 @@ impl DuplicatesScreen {
     /// What comparing the shown file with its partner measured, once it
     /// has.
     fn measure(&self) -> Option<difference::Measure> {
-        let pair = self.compared_pair()?;
+        let (shown, partner) = self.compared_pair()?;
+        // Flipping a pair asks about the same two files, so what was
+        // measured stays while the difference is made the other way round.
         self.stage
             .difference
             .as_ref()
-            .filter(|(made, _, _)| *made == pair)
+            .filter(|(made, _, _)| *made == (shown, partner) || *made == (partner, shown))
             .map(|(_, _, measure)| *measure)
     }
 
@@ -883,33 +973,39 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// The wheel over the picture: with Command (Control elsewhere) it
-    /// zooms about the pointer; otherwise it flips between the files, one
-    /// file per notch of travel.
+    /// The wheel over the picture moves about in it and never changes the
+    /// file: it zooms about the pointer, or, with the viewer's trackpad
+    /// gestures on, pans, and zooms with Command (Control elsewhere).
     fn wheel(&mut self, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
+        let Some(image) = self.shown_extent() else {
+            return;
+        };
         let delta = event.delta.pixel_delta(window.line_height());
-        if event.modifiers.secondary(cx) {
-            let Some(image) = self.shown_extent() else {
-                return;
-            };
-            let bounds = self.stage.pane;
-            let offset = event.position - bounds.center();
+        let pane = self.view_extent();
+        let pans = crate::settings::current(cx).viewer_trackpad_gestures;
+        if pans && !event.modifiers.secondary(cx) {
+            let center = self.stage.zoom.center();
+            self.stage.zoom.pan(
+                pane,
+                image,
+                center,
+                (f32::from(delta.x), f32::from(delta.y)),
+            );
+        } else {
+            let under = self
+                .panes()
+                .into_iter()
+                .find(|bounds| bounds.contains(&event.position))
+                .unwrap_or(self.stage.pane);
+            let offset = event.position - under.center();
             self.stage.zoom.wheel(
-                pane_extent(bounds),
+                pane,
                 image,
                 (f32::from(offset.x), f32::from(offset.y)),
                 -f32::from(delta.y),
             );
-            self.changed(cx);
-            return;
         }
-        const NOTCH: f32 = 60.;
-        self.stage.wheel += f32::from(delta.y) + f32::from(delta.x);
-        if self.stage.wheel.abs() >= NOTCH {
-            let step = if self.stage.wheel > 0. { -1 } else { 1 };
-            self.stage.wheel = 0.;
-            self.flip(step, cx);
-        }
+        self.changed(cx);
     }
 
     /// The shown file's size in pixels.

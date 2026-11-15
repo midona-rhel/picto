@@ -296,6 +296,7 @@ pub fn targets(id: &str) -> Vec<Target> {
         "view.grayscale" => vec![to!(Grid, ToggleGrayscale)],
         // Duplicates.
         "dup.merge" => vec![to!(Duplicates, duplicates::Merge)],
+        "dup.smartMerge" => vec![to!(Duplicates, duplicates::SmartMerge)],
         "dup.skip" => vec![to!(Duplicates, duplicates::Skip)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
         "dup.previous" => vec![to!(Duplicates, duplicates::PreviousFile)],

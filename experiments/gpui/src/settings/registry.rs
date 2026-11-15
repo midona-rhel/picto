@@ -229,6 +229,8 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
         .about("Enter or leave fullscreen playback"),
     def("dup.merge", "Keep and Merge", DUPLICATES, "Enter")
         .about("Keep the file shown and merge the rest of the set into it"),
+    def("dup.smartMerge", "Smart Merge", DUPLICATES, "S")
+        .about("Auto-merge keeping the better file"),
     def("dup.skip", "Skip Set", DUPLICATES, "Space").about("Leave this set for later"),
     def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "N").about("Mark the set as not duplicates"),
     def("dup.previous", "Previous File", DUPLICATES, "ArrowLeft")

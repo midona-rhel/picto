@@ -2,7 +2,7 @@
 //! the queue beside the stage, and the titlebar controls.
 use super::{
     ActualPixels, CONTEXT, DuplicatesScreen, DuplicatesToolbar, FitPair, Merge, NextFile, NextSet,
-    NotDuplicate, PreviousFile, PreviousSet, Skip,
+    NotDuplicate, PreviousFile, PreviousSet, Skip, SmartMerge,
 };
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
@@ -100,6 +100,7 @@ impl Render for DuplicatesScreen {
             .on_action(cx.listener(|this, _: &PreviousSet, _, cx| this.step_set(-1, cx)))
             .on_action(cx.listener(|this, _: &NextSet, _, cx| this.step_set(1, cx)))
             .on_action(cx.listener(|this, _: &Merge, _, cx| this.merge(cx)))
+            .on_action(cx.listener(|this, _: &SmartMerge, _, cx| this.smart_merge(cx)))
             .on_action(cx.listener(|this, _: &Skip, _, cx| this.skip(cx)))
             .on_action(cx.listener(|this, _: &NotDuplicate, _, cx| this.not_duplicates(cx)))
             .on_action(cx.listener(|this, _: &FitPair, _, cx| this.fit(cx)))
@@ -219,7 +220,20 @@ impl Render for DuplicatesToolbar {
         // The controls sit at the row's right end, as every screen's do, in
         // the half the scope title leaves them; the scan gives way first.
         let roomy = self.width == 0. || self.width / 2. >= 120.;
+        let side_by_side = this.side_by_side();
+        let toggle_side = {
+            let screen = self.screen.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                let _ = screen.update(cx, |this, cx| this.set_side_by_side(!side_by_side, cx));
+            }
+        };
         bar.child(div().flex_1())
+            .child(
+                ui::icon_button("duplicates-side-by-side", "toolbar-columns")
+                    .toggled(side_by_side)
+                    .tip(ui::tip(en("Side by Side")))
+                    .on_click(toggle_side),
+            )
             .child(
                 ui::icon_button("duplicates-fit", "toolbar-fit")
                     .toggled(zoom == super::compare::Mode::Fit)

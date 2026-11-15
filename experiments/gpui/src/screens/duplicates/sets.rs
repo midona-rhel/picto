@@ -22,14 +22,28 @@ pub struct Edge {
 }
 
 impl Edge {
-    /// The file the library judges better, when it can tell. A tie the
-    /// library settles by file order says nothing about the files and is
-    /// no suggestion.
+    /// The file the library judges better, when the files differ in
+    /// quality.
     fn winner(&self) -> Option<(FileId, FileId)> {
         match self.decision {
             DuplicateQualityDecision::LeftBetter => Some((self.a, self.b)),
             DuplicateQualityDecision::RightBetter => Some((self.b, self.a)),
             _ => None,
+        }
+    }
+
+    /// The file Smart merge keeps of the two (`smartMergeWinner`): the
+    /// better one, or of two the library finds equal the one it settles on,
+    /// the older file.
+    fn kept(&self) -> Option<(FileId, FileId)> {
+        match self.decision {
+            DuplicateQualityDecision::LeftBetter | DuplicateQualityDecision::AutoTieLeft => {
+                Some((self.a, self.b))
+            }
+            DuplicateQualityDecision::RightBetter | DuplicateQualityDecision::AutoTieRight => {
+                Some((self.b, self.a))
+            }
+            DuplicateQualityDecision::NeedsChoice => None,
         }
     }
 
@@ -45,8 +59,9 @@ pub struct Set {
     /// Its files, oldest file first.
     pub files: Vec<DuplicateCandidateSide>,
     pub edges: Vec<Edge>,
-    /// The file the library would keep, when one is better than every
-    /// other by its own rules; only ever offered as a suggestion.
+    /// The file Smart merge keeps, when the library's rules settle on one
+    /// file over every other. It is shown first and named as the
+    /// suggestion; the choice stays the user's.
     pub suggested: Option<usize>,
 }
 
@@ -111,29 +126,18 @@ pub fn build(pairs: &[DuplicateCandidate]) -> Vec<Set> {
         .collect()
 }
 
-/// The one file no pair rates worse and some pair rates better, when
-/// there is exactly one and no pair leaves the choice open.
+/// The one file Smart merge keeps in every pair it is in, when there is
+/// exactly one and no pair leaves the choice open.
 fn suggest(files: &[DuplicateCandidateSide], edges: &[Edge]) -> Option<usize> {
-    if edges
-        .iter()
-        .any(|edge| edge.decision == DuplicateQualityDecision::NeedsChoice)
-    {
+    if edges.iter().any(|edge| edge.kept().is_none()) {
         return None;
     }
-    let beaten = |file: FileId| {
+    let merged_away = |file: FileId| {
         edges
             .iter()
-            .any(|edge| edge.winner().is_some_and(|(_, loser)| loser == file))
+            .any(|edge| edge.kept().is_some_and(|(_, loser)| loser == file))
     };
-    let wins = |file: FileId| {
-        edges
-            .iter()
-            .any(|edge| edge.winner().is_some_and(|(winner, _)| winner == file))
-    };
-    let mut best = (0..files.len()).filter(|&index| {
-        let file = files[index].file.file_id;
-        !beaten(file) && wins(file)
-    });
+    let mut best = (0..files.len()).filter(|&index| !merged_away(files[index].file.file_id));
     match (best.next(), best.next()) {
         (Some(only), None) => Some(only),
         _ => None,
@@ -145,6 +149,12 @@ impl Set {
     /// the scan, not known to be the same pixels.
     pub fn identical(&self) -> bool {
         self.edges.iter().all(|edge| edge.distance == 0)
+    }
+
+    /// No pair finds one file better: the library rates the files equal,
+    /// and its suggestion is only the older file.
+    pub fn equal_quality(&self) -> bool {
+        self.edges.iter().all(|edge| edge.winner().is_none())
     }
 
     /// The least alike pair's distance.
@@ -282,9 +292,10 @@ mod tests {
             sets[0].suggested.map(|at| sets[0].files[at].file.file_id),
             Some(FileId(3))
         );
-        // A tie settled by file order is no suggestion.
+        // Of two files the library finds equal, the one it settles on.
         let sets = build(&[pair((4, 100), (6, 100), 0, AutoTieLeft)]);
-        assert_eq!(sets[0].suggested, None);
+        assert_eq!(sets[0].suggested, Some(0));
+        assert!(sets[0].equal_quality());
     }
 
     #[test]
