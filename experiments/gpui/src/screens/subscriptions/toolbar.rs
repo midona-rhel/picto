@@ -6,7 +6,6 @@
 use super::{SubscriptionsScreen, format, measure, place_of};
 use crate::i18n::t;
 use crate::theme;
-use crate::theme::Text as _;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
 
@@ -30,6 +29,12 @@ pub struct SubscriptionsToolbar {
     _observing: Subscription,
 }
 
+/// The count after the screen's title; it follows the screen.
+pub struct SubscriptionsNote {
+    screen: WeakEntity<SubscriptionsScreen>,
+    _observing: Subscription,
+}
+
 /// A subscription's rail, in the inspector's place; it follows the screen.
 pub struct SubscriptionRail {
     screen: WeakEntity<SubscriptionsScreen>,
@@ -39,6 +44,15 @@ pub struct SubscriptionRail {
 /// The screen's titlebar controls, for the toolbar.
 pub fn controls(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     cx.new(|cx| SubscriptionsToolbar {
+        screen: screen.downgrade(),
+        _observing: cx.observe(screen, |_, _, cx| cx.notify()),
+    })
+    .into()
+}
+
+/// The count after the screen's title, for the toolbar.
+pub fn note(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
+    cx.new(|cx| SubscriptionsNote {
         screen: screen.downgrade(),
         _observing: cx.observe(screen, |_, _, cx| cx.notify()),
     })
@@ -61,6 +75,17 @@ impl Render for SubscriptionsToolbar {
             return bar;
         };
         screen.update(cx, |screen, cx| screen.titlebar(bar, window, cx))
+    }
+}
+
+impl Render for SubscriptionsNote {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let text = self
+            .screen
+            .upgrade()
+            .filter(|screen| screen.read(cx).list.is_some())
+            .map(|screen| screen.read(cx).count_note());
+        div().whitespace_nowrap().children(text)
     }
 }
 
@@ -109,14 +134,11 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// The count, or how many are selected, in the middle (as the
-    /// Duplicates screen shows its place in the queue), then the add
-    /// actions.
-    fn home_titlebar(&mut self, bar: Div, cx: &mut Context<Self>) -> Div {
-        let theme = theme::theme(cx);
+    /// How many subscriptions there are, or how many are selected.
+    fn count_note(&self) -> String {
         let count = self.cards().len();
         let selected = self.selected.len();
-        let subtitle = if count == 0 {
+        if count == 0 {
             t("No subscriptions yet").to_owned()
         } else if selected > 1 {
             crate::tf!("{value0} of {value1} selected", selected, count)
@@ -126,26 +148,14 @@ impl SubscriptionsScreen {
                 count,
                 crate::i18n::plural_s(count as i128)
             )
-        };
+        }
+    }
+
+    /// The add actions; the count follows the title (`note`).
+    fn home_titlebar(&mut self, bar: Div, cx: &mut Context<Self>) -> Div {
         let gallery_running = self.gallery_running();
         let labelled = self.titlebar_width.get() >= HOME_LABELLED;
-        bar.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .px(px(8.))
-                .flex()
-                .justify_center()
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text(theme::TEXT_SM)
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_secondary())
-                        .child(subtitle),
-                ),
-        )
+        bar.child(div().flex_1())
         .child(
             div()
                 .flex_none()

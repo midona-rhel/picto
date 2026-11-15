@@ -336,6 +336,7 @@ impl Shell {
         });
         let subscription_rail = screens::subscriptions::rail(&subscriptions_screen, cx);
         let subscription_controls = screens::subscriptions::controls(&subscriptions_screen, cx);
+        let subscription_note = screens::subscriptions::note(&subscriptions_screen, cx);
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
         let filter_bar = cx.new(|cx| FilterBar::new(session.clone(), cx));
         let imports = cx.new(|cx| crate::imports::Imports::new(session.clone(), focus.clone(), cx));
@@ -404,6 +405,7 @@ impl Shell {
             toolbar.set_screen_controls(Screen::Duplicates, controls.into());
             toolbar.set_screen_controls(Screen::Tags, tag_controls.into());
             toolbar.set_screen_controls(Screen::Subscriptions, subscription_controls);
+            toolbar.set_screen_note(Screen::Subscriptions, subscription_note);
         });
         Self {
             sidebar,

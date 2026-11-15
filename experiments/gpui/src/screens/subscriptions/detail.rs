@@ -43,7 +43,7 @@ const fn column(track: Track, drops: u8) -> Column {
 
 fn minimum(track: Track) -> f32 {
     match track {
-        Track::Fixed(size) | Track::Between(size, _) | Track::Flex(size, _) => size,
+        Track::Fixed(size) | Track::Flex(size, _) => size,
     }
 }
 
@@ -740,9 +740,10 @@ impl SubscriptionsScreen {
             .hover(move |style| style.bg(theme.surface_hover()))
     }
 
-    /// Sources: the query, its actions (shown under the pointer) next to
-    /// it, and the counts at the right edge. When narrow the media count
-    /// gives way first, then the source.
+    /// Sources: the site, the query with what is wrong with it, and the
+    /// counts at the right edge; the row's actions show under the pointer
+    /// over the end of the query's cell. When narrow the media count gives
+    /// way first, then the posts count, then the site.
     fn sources(
         &self,
         subscription: &data::Subscription,
@@ -753,19 +754,28 @@ impl SubscriptionsScreen {
         let widths = fit(
             self.row_width(),
             &[
-                column(Track::Flex(84., 0.35), 2),
+                column(Track::Flex(84., 0.35), 3),
                 column(Track::Flex(140., 1.), 0),
-                column(Track::Fixed(128.), 0),
-                column(Track::Fixed(64.), 0),
+                column(Track::Fixed(64.), 2),
                 column(Track::Fixed(64.), 1),
             ],
+        );
+        // The hover surface over the background, opaque, for the actions
+        // to cover the end of the query's cell with.
+        let hovered = theme.surface_hover();
+        let under_actions = theme::blend(
+            theme.background(),
+            Rgba {
+                a: 1.,
+                ..hovered
+            },
+            hovered.a,
         );
         let header = table_row(
             &widths,
             vec![
                 heading(t("Source"), false),
                 heading(t("Query"), false),
-                div().into_any_element(),
                 heading(t("Posts"), true),
                 heading(t("Media"), true),
             ],
@@ -874,10 +884,20 @@ impl SubscriptionsScreen {
             let actions = div()
                 .id(("subscription-query-actions", query_id))
                 .a11y_presentational()
-                .w_full()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .pl(px(16.))
                 .flex()
+                .items_center()
                 .justify_end()
                 .gap(px(2.))
+                .bg(linear_gradient(
+                    90.,
+                    linear_color_stop(theme::clear(under_actions), 0.),
+                    linear_color_stop(under_actions, 16. / 140.),
+                ))
                 .opacity(hover)
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .child(
@@ -947,8 +967,12 @@ impl SubscriptionsScreen {
                         .text_color(theme.text_secondary())
                         .child(source.clone())
                         .into_any_element(),
-                    name.into_any_element(),
-                    actions.into_any_element(),
+                    div()
+                        .relative()
+                        .w_full()
+                        .child(name)
+                        .child(actions)
+                        .into_any_element(),
                     number(query.posts, cx),
                     number(query.media, cx),
                 ],

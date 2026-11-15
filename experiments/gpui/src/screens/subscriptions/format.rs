@@ -443,37 +443,19 @@ pub fn card_order(subscriptions: &mut [&Subscription]) {
 #[derive(Clone, Copy, Debug)]
 pub enum Track {
     Fixed(f32),
-    /// `minmax(min, max)` with lengths: as wide as the room allows.
-    Between(f32, f32),
     /// `minmax(min, <n>fr)`
     Flex(f32, f32),
 }
 
 /// The widths CSS grid gives these tracks across `width` with `gap` between
-/// them: fixed tracks first, bounded ones up to their maximum, and the rest
-/// shared by fraction, a flexible track never narrower than its minimum.
+/// them: fixed tracks first, and the rest shared by fraction, a flexible
+/// track never narrower than its minimum.
 pub fn tracks(width: f32, gap: f32, tracks: &[Track]) -> Vec<f32> {
     let gaps = gap * tracks.len().saturating_sub(1) as f32;
-    let minimum: f32 = tracks
-        .iter()
-        .map(|track| match *track {
-            Track::Fixed(size) => size,
-            Track::Between(min, _) | Track::Flex(min, _) => min,
-        })
-        .sum();
-    // Bounded tracks grow toward their maximum with whatever the minimums
-    // leave over, before the flexible tracks share what is left.
-    let mut spare = (width - gaps - minimum).max(0.);
     let mut sizes: Vec<f32> = tracks
         .iter()
         .map(|track| match *track {
-            Track::Fixed(size) => size,
-            Track::Between(min, max) => {
-                let grown = (max - min).min(spare);
-                spare -= grown;
-                min + grown
-            }
-            Track::Flex(min, _) => min,
+            Track::Fixed(size) | Track::Flex(size, _) => size,
         })
         .collect();
     let fixed: f32 = tracks
@@ -707,13 +689,6 @@ mod tests {
         let narrow = tracks(560., 10., &columns);
         assert_eq!(narrow[0], 90.);
         assert!((narrow[1] - 150.).abs() < 0.01);
-        // A bounded track takes its maximum when there is room.
-        let bounded = tracks(
-            800.,
-            10.,
-            &[Track::Flex(100., 1.), Track::Between(82., 110.)],
-        );
-        assert_eq!(bounded, vec![680., 110.]);
     }
 
     #[test]

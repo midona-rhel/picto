@@ -115,6 +115,39 @@ pub(super) fn empty_state(cx: &App) -> Div {
         )))
 }
 
+/// The space either side of a tile's details row.
+const DETAILS_INSET: f32 = 4.;
+const DETAILS_GAP: f32 = 6.;
+
+/// How wide a tile's details row is: the state badge (its spaced mono
+/// capitals, padding and border), the gap, and the items and sources.
+fn details_width(card: &data::Subscription, window: &Window) -> f32 {
+    let (_, label) = format::card_status(card);
+    let label = label.to_uppercase();
+    let badge = f32::from(
+        ui::shape_line(
+            label.clone(),
+            font(theme::FONT_MONO),
+            theme::TEXT_XS,
+            black(),
+            window,
+        )
+        .width,
+    ) + label.chars().count() as f32 * theme::TEXT_XS * 0.04
+        + 12.;
+    let meta = f32::from(
+        ui::shape_line(
+            format::card_meta(card.items, card.queries.len()),
+            font(theme::FONT_UI),
+            theme::TEXT_CAPTION,
+            black(),
+            window,
+        )
+        .width,
+    );
+    (badge + DETAILS_GAP + meta + 2. * DETAILS_INSET).ceil()
+}
+
 impl SubscriptionsScreen {
     /// The subscriptions the grid shows, gallery downloads aside, in its order.
     pub(super) fn cards(&self) -> Vec<&data::Subscription> {
@@ -136,16 +169,31 @@ impl SubscriptionsScreen {
         let order = std::rc::Rc::new(self.card_order());
         let cards: Vec<data::Subscription> = self.cards().into_iter().cloned().collect();
         // The grid's own layout at its default size and spacing, across the
-        // width the tiles have.
+        // width the tiles have, with the size setting raised a step at a
+        // time, as the grid's slider raises it, until every tile's details
+        // fit on their line.
         let prefs = ViewPrefs::default();
-        let layout = Layout::compute(
-            &vec![1.; cards.len()],
-            self.home_width.get(),
-            prefs.target_size,
-            prefs.gap,
-            ViewMode::Grid,
-            TEXT_ROWS,
-        );
+        let needed = cards
+            .iter()
+            .map(|card| details_width(card, window))
+            .fold(0., f32::max);
+        let width = self.home_width.get();
+        let mut target = prefs.target_size;
+        let layout = loop {
+            let layout = Layout::compute(
+                &vec![1.; cards.len()],
+                width,
+                target,
+                prefs.gap,
+                ViewMode::Grid,
+                TEXT_ROWS,
+            );
+            let side = layout.tiles.first().map_or(f32::MAX, |tile| tile.w);
+            if side >= needed || target >= width {
+                break layout;
+            }
+            target += 50.;
+        };
         let mut grid = div()
             .id("subscription-cards")
             .a11y_presentational()
@@ -470,14 +518,14 @@ impl SubscriptionsScreen {
                 // The details row: the state, then the items and sources.
                 div()
                     .absolute()
-                    .left(px(4.))
-                    .right(px(4.))
+                    .left(px(DETAILS_INSET))
+                    .right(px(DETAILS_INSET))
                     .top(px(side + layout::TEXT_ROW_HEIGHT + 3.))
                     .h(px(18.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .gap(px(6.))
+                    .gap(px(DETAILS_GAP))
                     .child(ui::status_badge(
                         ("subscription-card-status", id as usize),
                         tone,

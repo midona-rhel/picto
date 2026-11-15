@@ -14,7 +14,7 @@ pub mod requests;
 mod sync;
 mod toolbar;
 
-pub use toolbar::{controls, rail};
+pub use toolbar::{controls, note, rail};
 
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
