@@ -1,4 +1,5 @@
 use super::tooltip::{self, Tip};
+use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
 use std::time::Duration;
@@ -19,9 +20,9 @@ pub fn pulse(elapsed: Duration) -> f32 {
     0.58 + (1. - 0.58) * motion::pulse(elapsed)
 }
 
-/// The small uppercase status label of the subscription screens
-/// (`StatusBadge.tsx`): mono 10px text on a 10% tint of its colour inside a
-/// 25% border, the text mixed 45% toward the colour. A syncing badge pulses.
+/// The small status label of the subscription screens: caption text in
+/// sentence case on a 10% tint of its colour inside a 25% border, the text
+/// mixed 45% toward the colour. A syncing badge pulses.
 #[derive(IntoElement)]
 pub struct StatusBadge {
     id: ElementId,
@@ -52,12 +53,21 @@ impl StatusBadge {
         self
     }
 
-    /// The Accounts dialog's account state (`AuthWorkspace.module.css`
-    /// `.detailStatus`): a control's height, the UI font at the small size
-    /// spaced 0.035em, at most 112px wide.
+    /// The Accounts dialog's account state: a control's height, the small
+    /// text size, at most 112px wide.
     pub fn large(mut self) -> Self {
         self.large = true;
         self
+    }
+}
+
+/// A label as the badge writes it: its first letter a capital, the rest as
+/// given, so a state the library names in lower case reads as a word.
+pub fn sentence(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
@@ -100,29 +110,26 @@ impl RenderOnce for StatusBadge {
                 .px(px(8.))
                 .overflow_hidden()
                 .rounded(px(theme::RADIUS_MD))
-                // `letter-spacing: 0.035em`
-                .child(super::tracked(
-                    self.label.to_uppercase(),
-                    font(theme::FONT_UI),
-                    theme::TEXT_SM,
-                    theme::TEXT_SM,
-                    text,
-                    theme::TEXT_SM * 0.035,
-                ))
+                .child(
+                    div()
+                        .text(theme::TEXT_SM)
+                        .line_height(px(theme::TEXT_SM))
+                        .text_color(text)
+                        .truncate()
+                        .child(sentence(&self.label)),
+                )
         } else {
             badge
                 .h(px(18.))
                 .px(px(5.))
                 .rounded(px(theme::RADIUS_SM))
-                // `letter-spacing: 0.04em`
-                .child(super::tracked(
-                    self.label.to_uppercase(),
-                    font(theme::FONT_MONO),
-                    theme::TEXT_XS,
-                    theme::TEXT_XS,
-                    text,
-                    theme::TEXT_XS * 0.04,
-                ))
+                .child(
+                    div()
+                        .text(theme::TEXT_CAPTION)
+                        .line_height(px(theme::TEXT_CAPTION))
+                        .text_color(text)
+                        .child(sentence(&self.label)),
+                )
         };
         match self.tip {
             Some(tip) => tooltip::attach(

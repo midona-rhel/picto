@@ -261,21 +261,23 @@ impl SubscriptionsScreen {
     ) -> Div {
         let theme = theme::theme(cx);
         let id = subscription.id;
-        let (tone, label) = format::detail_status(subscription);
-        // A warning explains itself: the open problem, else the failure.
+        let (tone, label) = format::status(subscription);
+        // A warning explains itself: the source that fails, else the
+        // problem that stopped the run.
         let problem = (tone == Tone::Attention).then(|| {
-            self.detail
-                .as_ref()
-                .filter(|detail| detail.subscription == id)
-                .and_then(|detail| detail.issues.items.first())
-                .map(|issue| issue.message.clone())
+            format::failing(subscription)
+                .and_then(|query| {
+                    format::describe_failure(
+                        query.last_failure_kind.as_deref(),
+                        query.last_failure_message.as_deref(),
+                    )
+                })
                 .or_else(|| {
-                    format::latest_failure(subscription).and_then(|query| {
-                        format::describe_failure(
-                            query.last_failure_kind.as_deref(),
-                            query.last_failure_message.as_deref(),
-                        )
-                    })
+                    self.detail
+                        .as_ref()
+                        .filter(|detail| detail.subscription == id)
+                        .and_then(|detail| detail.issues.items.first())
+                        .map(|issue| issue.message.clone())
                 })
                 .unwrap_or_else(|| crate::i18n::en("Run interrupted").to_owned())
         });

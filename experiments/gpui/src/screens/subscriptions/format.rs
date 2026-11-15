@@ -35,68 +35,71 @@ pub fn subscription_completed(subscription: &Subscription) -> bool {
         && subscription.queries.iter().all(query_completed)
 }
 
-/// The badge on a card in the grid (`FollowCard`).
-pub fn card_status(subscription: &Subscription) -> (Tone, &'static str) {
-    let running = running(subscription);
+/// What a failure of this kind asks of the user, when it will not mend
+/// itself. The network, the site's rate limit, a full inbox and an
+/// interrupted run all pass on the next run and are no warning; one file
+/// that would not download is listed under Problems and is no warning
+/// either.
+fn lasting_failure(kind: &str) -> Option<&'static str> {
+    match kind {
+        "network" | "rate_limited" | "source_unavailable" | "interrupted" | "stale"
+        | "inbox_full" | "paused" => None,
+        "auth" | "access" | "unauthorized" | "expired" => Some(t("Login required")),
+        _ => Some(t("Failed")),
+    }
+}
+
+/// The source whose last run failed in a way that will not mend itself: the
+/// latest such failure, sources the user paused aside.
+pub fn failing(subscription: &Subscription) -> Option<&Query> {
+    subscription
+        .queries
+        .iter()
+        .filter(|query| !query.paused)
+        .filter(|query| {
+            query
+                .last_failure_kind
+                .as_deref()
+                .is_some_and(|kind| lasting_failure(kind).is_some())
+        })
+        .max_by(|left, right| left.last_failure_at.cmp(&right.last_failure_at))
+}
+
+/// The badge of a subscription, on its card and in its rail. It warns only
+/// when the subscription is not working and will stay that way: a run that
+/// stopped on a failure and waits for Retry, or a source whose last run
+/// failed for a reason that lasts. The label names the reason.
+pub fn status(subscription: &Subscription) -> (Tone, &'static str) {
     let active = subscription.active_run_id.is_some();
-    if subscription.run_status.as_deref() == Some("inbox_full") {
+    let running = running(subscription);
+    // Why a run that is kept is not going, when it is not.
+    let stopped = (active && !running)
+        .then_some(subscription.run_status.as_deref())
+        .flatten();
+    if stopped == Some("inbox_full") {
         (Tone::Paused, t("Inbox full"))
-    } else if subscription.paused || (active && !running) {
+    } else if subscription.paused || stopped == Some("paused") {
         (Tone::Paused, t("Paused"))
     } else if running {
         (Tone::Running, t("Syncing"))
-    } else if subscription.open_issues > 0 {
-        (Tone::Attention, t("Warning"))
-    } else if !active && subscription_completed(subscription) {
+    } else if let Some(kind) = stopped {
+        // The run waits for Retry whatever stopped it.
+        (
+            Tone::Attention,
+            lasting_failure(kind).unwrap_or(t("Failed")),
+        )
+    } else if let Some(label) = failing(subscription)
+        .and_then(|query| query.last_failure_kind.as_deref())
+        .and_then(lasting_failure)
+    {
+        (Tone::Attention, label)
+    } else if active {
+        (Tone::Running, t("Syncing"))
+    } else if subscription_completed(subscription) {
         (Tone::Success, t("Complete"))
     } else {
         (Tone::Idle, t("Idle"))
     }
-}
-
-/// The badge under the name in the detail rail (`SubscriptionDetail`). An
-/// active run that is neither going nor waiting for the user stopped on a
-/// failure.
-pub fn detail_status(subscription: &Subscription) -> (Tone, &'static str) {
-    let active = subscription.active_run_id.is_some();
-    let running = running(subscription);
-    let status = subscription.run_status.as_deref();
-    let waiting_for_inbox = active && status == Some("inbox_full");
-    let run_paused = active && !running;
-    let run_failed = run_paused && !matches!(status, Some("paused" | "inbox_full"));
-    let completed = !active && subscription_completed(subscription);
-    let tone = if run_failed {
-        Tone::Attention
-    } else if waiting_for_inbox {
-        Tone::Paused
-    } else if running {
-        Tone::Running
-    } else if subscription.paused || run_paused {
-        Tone::Paused
-    } else if active {
-        // An active run reports progress, which reads as syncing.
-        Tone::Running
-    } else if subscription.open_issues > 0 {
-        Tone::Attention
-    } else if completed {
-        Tone::Success
-    } else {
-        Tone::Idle
-    };
-    let label = if run_failed {
-        t("Warning")
-    } else if waiting_for_inbox {
-        t("Inbox full")
-    } else {
-        match tone {
-            Tone::Running => t("Syncing"),
-            Tone::Paused => t("Paused"),
-            Tone::Attention => t("Warning"),
-            Tone::Success => t("Complete"),
-            Tone::Idle => t("Idle"),
-        }
-    };
-    (tone, label)
 }
 
 /// The badge of a row in the History tab (`HistoryTab.tsx`).
@@ -137,15 +140,17 @@ pub fn issue_label(kind: &str) -> String {
 /// `describeFailure`: what to do about a query's recorded failure.
 pub fn describe_failure(kind: Option<&str>, message: Option<&str>) -> Option<String> {
     let text = match kind {
-        Some("not_found") => t("User/query not found — check the handle"),
-        Some("unauthorized") => t("Login rejected — check the account in Accounts"),
+        Some("not_found" | "invalid_query") => t("User/query not found — check the handle"),
+        Some("unauthorized" | "auth" | "access") => {
+            t("Login rejected — check the account in Accounts")
+        }
         Some("expired") => t("Session expired — log in again in Accounts"),
         Some("rate_limited") => {
             t("Rate limited by the site — resumes automatically when the limit resets")
         }
         Some("network") => t("Network error — check your connection"),
         Some("environment") => t("Local setup problem — check the logs"),
-        Some("stale") => t("Interrupted by app shutdown"),
+        Some("stale" | "interrupted") => t("Interrupted by app shutdown"),
         Some("inbox_full") => t("Paused — inbox is full"),
         _ => return message.map(str::to_owned),
     };
@@ -327,15 +332,6 @@ pub fn gallery_service(url: &str) -> Option<&'static str> {
     }
 }
 
-/// The query whose failure is the latest, for the warning's explanation.
-pub fn latest_failure(subscription: &Subscription) -> Option<&Query> {
-    subscription
-        .queries
-        .iter()
-        .filter(|query| query.last_failure_message.is_some())
-        .max_by(|left, right| left.last_failure_at.cmp(&right.last_failure_at))
-}
-
 /// What a card says under its name: items, then sources when there are any.
 pub fn card_meta(items: i64, sources: usize) -> String {
     // `{items} {t("item")}{items === 1 ? '' : t("s")}`
@@ -510,9 +506,9 @@ pub fn tracks(width: f32, gap: f32, tracks: &[Track]) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Login, Query, Run, Subscription, Tone, Track, auth_warning, card_meta, card_status,
-        date_time, describe_failure, detail_status, gallery_service, query_sites, query_state,
-        relative_time, run_status, run_target, site_label, tracks,
+        Login, Query, Run, Subscription, Tone, Track, auth_warning, card_meta, date_time,
+        describe_failure, gallery_service, query_sites, query_state, relative_time, run_status,
+        run_target, site_label, status, tracks,
     };
     use chrono::{Duration, Local, TimeZone};
 
@@ -527,46 +523,35 @@ mod tests {
     }
 
     #[test]
-    fn a_card_reads_its_state_in_the_order_the_grid_does() {
+    fn a_subscription_warns_only_when_it_will_stay_broken() {
         let mut subscription = Subscription {
             queries: vec![query(true)],
             ..Subscription::default()
         };
-        assert_eq!(card_status(&subscription), (Tone::Success, "Complete"));
+        assert_eq!(status(&subscription), (Tone::Success, "Complete"));
+        // Files that would not download are listed, not warned about.
         subscription.open_issues = 2;
-        assert_eq!(card_status(&subscription), (Tone::Attention, "Warning"));
+        assert_eq!(status(&subscription), (Tone::Success, "Complete"));
+        // What the next run mends is no warning; what it will not is named.
+        for (kind, expected) in [
+            ("network", (Tone::Idle, "Idle")),
+            ("inbox_full", (Tone::Idle, "Idle")),
+            ("auth", (Tone::Attention, "Login required")),
+            ("invalid_output", (Tone::Attention, "Failed")),
+        ] {
+            subscription.queries[0].last_failure_kind = Some(kind.into());
+            assert_eq!(status(&subscription), expected, "{kind}");
+        }
         subscription.active_run_id = Some(4);
         subscription.run_status = Some("running".into());
-        assert_eq!(card_status(&subscription), (Tone::Running, "Syncing"));
-        // An active run that is not going is paused, and a full inbox says so.
+        assert_eq!(status(&subscription), (Tone::Running, "Syncing"));
+        // A run that stopped waits for Retry, a pause or a full inbox aside.
+        subscription.run_status = Some("network".into());
+        assert_eq!(status(&subscription), (Tone::Attention, "Failed"));
         subscription.run_status = Some("paused".into());
-        assert_eq!(card_status(&subscription), (Tone::Paused, "Paused"));
+        assert_eq!(status(&subscription), (Tone::Paused, "Paused"));
         subscription.run_status = Some("inbox_full".into());
-        assert_eq!(card_status(&subscription), (Tone::Paused, "Inbox full"));
-        let idle = Subscription {
-            queries: vec![query(false)],
-            ..Subscription::default()
-        };
-        assert_eq!(card_status(&idle), (Tone::Idle, "Idle"));
-    }
-
-    #[test]
-    fn the_rail_calls_a_stopped_run_a_warning() {
-        let mut subscription = Subscription {
-            active_run_id: Some(1),
-            run_status: Some("network".into()),
-            ..Subscription::default()
-        };
-        assert_eq!(detail_status(&subscription), (Tone::Attention, "Warning"));
-        subscription.run_status = Some("paused".into());
-        assert_eq!(detail_status(&subscription), (Tone::Paused, "Paused"));
-        subscription.run_status = Some("inbox_full".into());
-        assert_eq!(detail_status(&subscription), (Tone::Paused, "Inbox full"));
-        subscription.run_status = Some("pending".into());
-        assert_eq!(detail_status(&subscription), (Tone::Running, "Syncing"));
-        subscription.active_run_id = None;
-        subscription.paused = true;
-        assert_eq!(detail_status(&subscription), (Tone::Paused, "Paused"));
+        assert_eq!(status(&subscription), (Tone::Paused, "Inbox full"));
     }
 
     #[test]

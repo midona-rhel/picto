@@ -119,27 +119,25 @@ pub(super) fn empty_state(cx: &App) -> Div {
 const DETAILS_INSET: f32 = 4.;
 const DETAILS_GAP: f32 = 6.;
 
-/// How wide a status badge with `label` is drawn: its spaced mono
-/// capitals, its padding and its border.
+/// How wide a status badge with `label` is drawn: its caption text, its
+/// padding and its border.
 pub(super) fn badge_width(label: &str, window: &Window) -> f32 {
-    let label = label.to_uppercase();
     f32::from(
         ui::shape_line(
-            label.clone(),
-            font(theme::FONT_MONO),
-            theme::TEXT_XS,
+            ui::status_badge::sentence(label),
+            font(theme::FONT_UI),
+            theme::TEXT_CAPTION,
             black(),
             window,
         )
         .width,
-    ) + label.chars().count() as f32 * theme::TEXT_XS * 0.04
-        + 12.
+    ) + 12.
 }
 
-/// How wide a tile's details row is: the state badge (its spaced mono
-/// capitals, padding and border), the gap, and the items and sources.
+/// How wide a tile's details row is: the state badge, the gap, and the
+/// items and sources.
 fn details_width(card: &data::Subscription, window: &Window) -> f32 {
-    let (_, label) = format::card_status(card);
+    let (_, label) = format::status(card);
     let badge = badge_width(label, window);
     let meta = f32::from(
         ui::shape_line(
@@ -406,7 +404,7 @@ impl SubscriptionsScreen {
         let id = card.id;
         let selected = self.selected.contains(&id);
         let side = tile.w;
-        let (tone, label) = format::card_status(card);
+        let (tone, label) = format::status(card);
         let extent = layout::SELECTION_EXTENT;
         let picture = cover(
             ("subscription-cover", id as usize),

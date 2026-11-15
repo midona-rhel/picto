@@ -698,6 +698,13 @@ reading production's code, seen in this app).
   marker where reordering cannot work, Export on a folder's inspector, a
   rendered cover crop shown.
 - Files promised by a drag are imported on macOS (production imports none).
+- A subscription's status reads in sentence case and warns only when the
+  subscription will stay broken: a run stopped on a failure and waiting for
+  Retry, or a source whose last run failed for a lasting reason (the badge
+  names it: Login required, Failed). A network error, a rate limit, a full
+  inbox and single files that would not download are no warning; the
+  Problems tab still lists them. Production warns for every open issue
+  until the subscription is looked at.
 
 ### Open
 
