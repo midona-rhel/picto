@@ -84,8 +84,26 @@ impl MediaSurface {
                     }
                 }));
             }
-            Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
-            Mode::Image => self.load_full(key, path, mime == "image/jpeg", cx),
+            Mode::Image => {
+                // The original is read only once the item has stayed: going
+                // through items with a key held down shows thumbnails and
+                // touches no original until the key is let go.
+                let jpeg_xl = kind == RendererKind::JpegXl;
+                let jpeg = mime == "image/jpeg";
+                self.full_wait = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(motion::ORIGINAL_DELAY).await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.key != key {
+                            return;
+                        }
+                        if jpeg_xl {
+                            this.decode_jpeg_xl(key, path, cx);
+                        } else {
+                            this.load_full(key, path, jpeg, cx);
+                        }
+                    });
+                }));
+            }
             Mode::Document => {
                 let document = Document::open(
                     kind,
@@ -163,6 +181,7 @@ impl MediaSurface {
             self.key = key.clone();
             self.natural = natural;
             self.full_task = None;
+            self.full_wait = None;
             self.whole = None;
             self.stop();
             if held.is_some() {

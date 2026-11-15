@@ -122,6 +122,8 @@ pub struct MediaSurface {
     full_key: String,
     thumbnail_task: Option<Task<()>>,
     full_task: Option<Task<()>>,
+    /// The wait before the original is read ([`motion::ORIGINAL_DELAY`]).
+    full_wait: Option<Task<()>>,
     flash: Option<super::flash::Flash>,
     flash_task: Option<Task<()>>,
     /// Flash's controls (`useMediaControlsVisibility`): their opacity, and a
@@ -1442,6 +1444,7 @@ mod tests {
         let window = cx.add_window(|_, cx| MediaSurface::new(Options::default(), cx));
         let handle: AnyWindowHandle = window.into();
         let draw = |cx: &mut TestAppContext| {
+            cx.executor().advance_clock(crate::motion::ORIGINAL_DELAY);
             cx.run_until_parked();
             cx.update_window(handle, |_, window, cx| {
                 window.refresh();
@@ -1505,6 +1508,7 @@ mod tests {
         let handle: AnyWindowHandle = window.into();
         let draw = |cx: &mut TestAppContext| {
             for _ in 0..2 {
+                cx.executor().advance_clock(crate::motion::ORIGINAL_DELAY);
                 cx.run_until_parked();
                 cx.update_window(handle, |_, window, cx| {
                     window.refresh();
