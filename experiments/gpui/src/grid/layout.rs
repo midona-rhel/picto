@@ -168,18 +168,29 @@ fn waterfall(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
     let width = geometry.column_width;
     let gap = geometry.item_gap;
     let mut heights = vec![0f64; geometry.column_count];
+    // Which column is the shortest is decided at the size the slider asks
+    // for, not at the width the columns have now: the text and the gaps do
+    // not scale with a column, so at the real width two columns nearly as
+    // tall trade places as the window is resized by a few pixels, and every
+    // tile after them with them. Decided this way a tile changes column only
+    // when the number of columns does. (Production decides at the real
+    // width and has the swap.)
+    let reference = geometry.snapped_size;
+    let mut decided = vec![0f64; geometry.column_count];
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
     for &aspect in aspect_ratios {
+        let aspect = safe_aspect_ratio(aspect);
         let mut shortest = 0;
-        for column in 1..heights.len() {
-            if heights[column] < heights[shortest] {
+        for column in 1..decided.len() {
+            if decided[column] < decided[shortest] {
                 shortest = column;
             }
         }
         let y = heights[shortest];
-        let h = width / safe_aspect_ratio(aspect) + text_height;
+        let h = width / aspect + text_height;
         tiles.push(Tile::new(shortest as f64 * (width + gap), y, width, h));
         heights[shortest] = y + h + gap;
+        decided[shortest] += reference / aspect + text_height + gap;
     }
     let tallest = heights.iter().copied().fold(0., f64::max);
     (tiles, (tallest - gap).max(0.))
