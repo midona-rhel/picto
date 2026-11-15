@@ -666,6 +666,19 @@ impl DuplicatesScreen {
         }
     }
 
+    /// The set `delta` sets after (or before) the set `key`, as the list
+    /// reads on screen, as an index of `entries`.
+    fn neighbour(&self, key: u32, delta: isize) -> Option<usize> {
+        let at = self
+            .order
+            .iter()
+            .position(|&index| self.entries[index].set.key == key)?;
+        let reading = self.layout().reading_order(&self.order, &self.entries);
+        let here = reading.iter().position(|&position| position == at)?;
+        let there = here.checked_add_signed(delta)?;
+        reading.get(there).map(|&position| self.order[position])
+    }
+
     fn entry(&self, key: u32) -> Option<&Entry> {
         self.entries.iter().find(|entry| entry.set.key == key)
     }
@@ -897,16 +910,7 @@ impl DuplicatesScreen {
 
     /// Moves the keyboard, and Compare, past a set about to go.
     fn advance_from(&mut self, key: u32, cx: &mut Context<Self>) {
-        let at = self
-            .order
-            .iter()
-            .position(|&index| self.entries[index].set.key == key);
-        let next = at.and_then(|at| {
-            self.order
-                .get(at + 1)
-                .or_else(|| at.checked_sub(1).and_then(|before| self.order.get(before)))
-                .copied()
-        });
+        let next = self.neighbour(key, 1).or_else(|| self.neighbour(key, -1));
         let next = next.map(|index| (self.entries[index].set.key, self.keeper(index)));
         if self.cursor.is_some_and(|(cursor, _)| cursor == key) {
             self.cursor = next;
@@ -997,11 +1001,7 @@ impl DuplicatesScreen {
         let Mode::Compare { set, .. } = self.mode else {
             return;
         };
-        let at = self
-            .order
-            .iter()
-            .position(|&index| self.entries[index].set.key == set);
-        match at.and_then(|at| self.order.get(at + 1)).copied() {
+        match self.neighbour(set, 1) {
             Some(index) => {
                 let key = self.entries[index].set.key;
                 let keeper = self.keeper(index);
@@ -1194,24 +1194,16 @@ impl DuplicatesScreen {
             self.reorder();
             return self.changed(cx);
         };
-        let Some(at) = self
-            .order
-            .iter()
-            .position(|&index| self.entries[index].set.key == key)
-        else {
+        let Some(index) = self.entry_index(key) else {
             return;
         };
-        let count = self.entries[self.order[at]].set.files.len();
+        let count = self.entries[index].set.files.len();
         let target = file as isize + delta;
         self.cursor = if (0..count as isize).contains(&target) {
             Some((key, target as usize))
         } else {
-            let next = at as isize + delta.signum();
-            match usize::try_from(next)
-                .ok()
-                .and_then(|next| self.order.get(next))
-            {
-                Some(&index) => {
+            match self.neighbour(key, delta.signum()) {
+                Some(index) => {
                     let files = self.entries[index].set.files.len();
                     Some((
                         self.entries[index].set.key,

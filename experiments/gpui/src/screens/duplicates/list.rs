@@ -86,43 +86,60 @@ impl Layout {
     /// takes the shelf's remaining columns, so no shelf ends in a hole.
     /// Each set is its count of files and its tallest picture; a shelf is
     /// as tall as the tallest picture in it, so a shelf of wide pictures
-    /// wastes no height on a square box.
+    /// wastes no height on a square box. Sets fill each shelf in order;
+    /// when the next set does not fit the room left, a set a little further
+    /// on that does is brought forward, and only when none does is the last
+    /// cell of the shelf widened to its end, so shelves seldom end in a
+    /// hole and the order stays close to the sort.
     pub fn places(&self, sets: impl Iterator<Item = (usize, f32)>) -> Vec<Place> {
+        const LOOK_AHEAD: usize = 12;
         let sets = sets.collect::<Vec<_>>();
         let spans = sets
             .iter()
             .map(|(files, _)| ((needed(*files) / self.cell).ceil() as usize).clamp(1, self.cols))
             .collect::<Vec<_>>();
-        let mut places = Vec::with_capacity(spans.len());
+        let blank = Place {
+            shelf: 0,
+            col: 0,
+            span: 0,
+            x: 0.,
+            width: 0.,
+            top: 0.,
+            band: 0.,
+        };
+        let mut places = vec![blank; spans.len()];
+        let mut pending = (0..spans.len()).collect::<std::collections::VecDeque<_>>();
         let (mut shelf, mut col) = (0, 0);
-        for span in spans {
-            if col + span > self.cols {
-                if let Some(last) = places.last_mut() {
-                    self.widen(last, self.cols);
+        let mut last_in_shelf: Option<usize> = None;
+        while !pending.is_empty() {
+            let room = self.cols - col;
+            let fits = pending
+                .iter()
+                .take(LOOK_AHEAD)
+                .position(|&set| spans[set] <= room);
+            match fits {
+                Some(at) => {
+                    let set = pending.remove(at).expect("a pending set");
+                    let place = &mut places[set];
+                    place.shelf = shelf;
+                    place.col = col;
+                    self.widen(place, col + spans[set]);
+                    col += spans[set];
+                    last_in_shelf = Some(set);
                 }
+                None => {
+                    if let Some(last) = last_in_shelf {
+                        self.widen(&mut places[last], self.cols);
+                    }
+                    shelf += 1;
+                    col = 0;
+                    last_in_shelf = None;
+                }
+            }
+            if col >= self.cols {
                 shelf += 1;
                 col = 0;
-            }
-            places.push(Place {
-                shelf,
-                col,
-                span,
-                x: 0.,
-                width: 0.,
-                top: 0.,
-                band: 0.,
-            });
-            col += span;
-        }
-        if let Some(last) = places.last_mut() {
-            // The last shelf keeps its columns: nothing follows to fill it.
-            let span = last.span;
-            self.widen(last, last.col + span);
-        }
-        for place in &mut places {
-            if place.width == 0. {
-                let span = place.span;
-                self.widen(place, place.col + span);
+                last_in_shelf = None;
             }
         }
         let shelves = Self::shelves(&places);
@@ -143,6 +160,14 @@ impl Layout {
         places
     }
 
+    /// The positions of `order` as they read on screen, shelf by shelf.
+    pub fn reading_order(&self, order: &[usize], entries: &[Entry]) -> Vec<usize> {
+        let places = self.places(order.iter().map(|&index| shape(&entries[index])));
+        let mut positions = (0..places.len()).collect::<Vec<_>>();
+        positions.sort_by_key(|&at| (places[at].shelf, places[at].col));
+        positions
+    }
+
     fn widen(&self, place: &mut Place, to: usize) {
         place.span = to - place.col;
         place.x = place.col as f32 * self.cell;
@@ -150,12 +175,19 @@ impl Layout {
     }
 
     pub fn shelves(places: &[Place]) -> usize {
-        places.last().map_or(0, |place| place.shelf + 1)
+        places
+            .iter()
+            .map(|place| place.shelf + 1)
+            .max()
+            .unwrap_or(0)
     }
 
     /// The height of every shelf together.
     pub fn height(places: &[Place]) -> f32 {
-        places.last().map_or(0., |place| place.top + place.height())
+        places
+            .iter()
+            .map(|place| place.top + place.height())
+            .fold(0., f32::max)
     }
 
     /// The place of the set `key` among the tab's sets.
