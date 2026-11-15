@@ -212,6 +212,18 @@ impl Theme {
             glass
         }
     }
+    /// The glass of a menu: more of what is behind shows through it than
+    /// through `--glass-bg` (the owner's choice; production's menus take
+    /// `--glass-bg` like every floating surface, which over a blur reads as
+    /// nearly opaque).
+    pub fn menu_glass(&self) -> Rgba {
+        let glass = translucent(self.background, if self.light { 76. } else { 78. });
+        if cfg!(target_os = "windows") {
+            crate::ui::fill_without_blur(glass)
+        } else {
+            glass
+        }
+    }
     /// `LibraryAvatar`: `color-mix(currentColor 10%, control-surface)` with
     /// the secondary text colour.
     pub fn avatar_surface(&self) -> Rgba {

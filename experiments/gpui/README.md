@@ -1603,6 +1603,10 @@ re-checked by reading the code; the rest were checked against it.
   docks its pickers. (Production docks it beside the inspector from every
   menu.) Its footer names what the models it ran ran on, each once, where
   production names the first loaded session's.
+- A menu's glass lets more through than the other floating surfaces'
+  (78% of the background colour over the blur, 76% in the light themes,
+  against `--glass-bg`'s 92% and 90%, which production's menus also take
+  and which reads as nearly opaque).
 - A window in full screen draws no rim, and looping indicators (the
   Subscriptions row's dot, a running badge, an indeterminate progress bar)
   are drawn thirty times a second rather than at the display's rate.

@@ -100,6 +100,7 @@ impl Menu {
         let (dx, dy, scaled_w, scaled_h) = motion::scaled_frame(w, h, scale, origin);
         // `.floatingGlassSurface`: the glass, with its edges.
         super::glass_panel(id, theme::RADIUS_LG, cx)
+            .bg(theme::theme(cx).menu_glass())
             .occlude()
             .absolute()
             .left(px(at.0 + dx))
@@ -136,9 +137,12 @@ impl Menu {
                         theme::RADIUS_LG,
                         opacity,
                     );
-                    crate::ui::fill_over_system_blur(theme.glass(), theme.glass_blur().brightness)
+                    crate::ui::fill_over_system_blur(
+                        theme.menu_glass(),
+                        theme.glass_blur().brightness,
+                    )
                 } else {
-                    crate::ui::fill_without_blur(theme.glass())
+                    crate::ui::fill_without_blur(theme.menu_glass())
                 };
                 panel.without_backdrop_blur().bg(fill)
             })
