@@ -303,7 +303,11 @@ change the session through its methods; no view owns another's state.
 by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
 (`focus.rs`), the context menu (`menu.rs`, `menu/`; pop-up windows on macOS,
 drawn in the window elsewhere), dialogs (`modal.rs` with its `Host`, which
-plays a dialog's exit and gives the keyboard back; `confirm.rs`, `form.rs`),
+plays a dialog's exit and gives the keyboard back, `modal::backdrop` and
+`modal::dialog_panel`, the one backdrop and panel; `confirm.rs`, `form.rs`),
+the keys of every floating surface (`keys.rs`: Escape, the arrows, Enter and
+Tab, taken by the innermost surface holding the keyboard), rail rows
+(`rail_item`),
 the text field (`text_input/`, editing as Chromium does per platform),
 notifications (`notify.rs`), glass (`glass.rs`) and accessibility
 (`a11y.rs`: roles, names, values, states and actions for AccessKit, built
@@ -334,7 +338,9 @@ height standing for every item); `selection.rs` keeps the selection by item
 (chosen items, Select All less exceptions, shift ranges as spans);
 `thumbnails.rs` loads and budgets thumbnails; `rendered.rs` draws the
 thumbnails the core cannot make; `menu.rs` holds the context menus' rows as
-pure functions; `drag.rs` drags items within the app and out of it. Rule:
+pure functions; `drag.rs` drags items within the app and out of it;
+`pointer.rs` is the pointer over tiles the collection editor shares; the
+frame reads the session and lays out in `frame.rs` and draws in `body.rs`. Rule:
 every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 

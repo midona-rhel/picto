@@ -10,19 +10,16 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::rc::Rc;
 
-actions!(selection_modal, [Up, Down, NextView]);
+use super::keys::{self, Down, NextView, Up};
 
 /// The keys the dialogs take from their search field. Enter and Escape are
 /// the field's own, which the search bar catches before it.
 pub fn bind(cx: &mut App) {
-    let context = Some("SelectionModal");
-    cx.bind_keys([
-        KeyBinding::new("up", Up, context),
-        KeyBinding::new("down", Down, context),
-        KeyBinding::new("tab", NextView, context),
-        // Production reads only the key, so Shift-Tab turns the same way.
-        KeyBinding::new("shift-tab", NextView, context),
-    ]);
+    keys::bind(
+        cx,
+        "SelectionModal",
+        &[keys::Key::Up, keys::Key::Down, keys::Key::Tab],
+    );
 }
 
 /// `--control-height-md`: a rail item and a row of the list.
@@ -126,74 +123,6 @@ pub fn rail(width: f32, cx: &App) -> Div {
         .flex_col()
         .border_r_1()
         .border_color(theme.border_secondary())
-}
-
-/// `.sidebarItem`: a view of the rail, with an optional group dot, its name
-/// and its count. The chosen one is filled and ringed; the count and dot
-/// brighten under the pointer.
-pub fn rail_item(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    count: impl Into<SharedString>,
-    active: bool,
-    dot: Option<u32>,
-    name_width: Option<f32>,
-    cx: &App,
-) -> Stateful<Div> {
-    let theme = theme::theme(cx);
-    let id = id.into();
-    let group = SharedString::from(format!("selection-rail-{id}"));
-    let (label, count) = (label.into(), count.into());
-    let mut name = div().flex_1().min_w_0().truncate().child(label.clone());
-    if let Some(width) = name_width {
-        name = name.max_w(px(width));
-    }
-    // A view of the list: a button read as its name and count, pressed
-    // while it is the one shown.
-    let mut row = div()
-        .id(id)
-        .role(Role::Button)
-        .aria_label(format!("{label} {count}"))
-        .aria_toggled(super::a11y::toggled(active))
-        .group(group.clone())
-        .relative()
-        .h(px(ROW))
-        .flex_none()
-        .px(px(10.))
-        .flex()
-        .items_center()
-        .gap(px(6.))
-        .rounded(px(theme::RADIUS_MD))
-        .cursor_pointer()
-        .text(theme::TEXT_MD)
-        .text_color(theme.text())
-        .whitespace_nowrap();
-    if active {
-        row = row.bg(theme.surface_active()).child(
-            // `outline: 1px solid var(--color-contrast-25)`, inside.
-            div()
-                .absolute()
-                .inset_0()
-                .rounded(px(theme::RADIUS_MD))
-                .border_1()
-                .border_color(theme.contrast(25.)),
-        );
-    } else {
-        row = row.hover(move |style| style.bg(theme.subtle_overlay()));
-    }
-    if let Some(color) = dot {
-        row = row.child(
-            div()
-                .size(px(10.))
-                .flex_none()
-                .rounded_full()
-                .bg(rgb(color))
-                .opacity(if active { 1. } else { 0.6 })
-                .group_hover(group.clone(), |style| style.opacity(1.)),
-        );
-    }
-    row.child(name)
-        .child(badge(group, active, cx).ml_auto().child(count))
 }
 
 /// `.sidebarBadge` and `.itemBadge`: a count in the monospaced caption, at

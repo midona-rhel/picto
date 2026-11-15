@@ -355,7 +355,7 @@ fn result_icon(name: &str) -> &'static str {
         "folder-down" => "settings-panel-folder-down",
         "trash" => "trash-2",
         "download" => "settings-panel-download",
-        "cloud" => "settings-panel-cloud",
+        "cloud" => "cloud-hero",
         "box" => "settings-panel-box",
         _ => "settings-panel-info-circle",
     }

@@ -337,31 +337,14 @@ impl LibraryPopover {
                     })
                     .child(self.search.clone()),
             )
-            // `.closeButton` is a `<button>`.
-            .child(ui::focus::stop(
-                "close-library-switcher",
-                div()
-                    .id("close-library-switcher")
-                    .role(Role::Button)
-                    .aria_label(t("Close library switcher"))
-                    .size(px(24.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(theme::RADIUS_SM))
-                    .cursor_pointer()
-                    .group("close-library-switcher")
-                    .hover(move |style| style.bg(theme.surface_hover()))
-                    .child(
-                        ui::icon("x", 14., theme.text_tertiary())
-                            .group_hover("close-library-switcher", move |style| {
-                                style.text_color(theme.text())
-                            }),
-                    )
+            // `.closeButton`
+            .child(
+                // i18n: an icon's name
+                ui::icon_button("close-library-switcher", "x")
+                    .look(ui::icon_button::Look::Close)
+                    .name(t("Close library switcher"))
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-                cx.listener(|this, _, window, cx| this.close(window, cx)),
-            ))
+            )
     }
 
     /// A known library chosen: the popover closes, and the app switches

@@ -341,7 +341,7 @@ pub fn card_meta(items: i64, sources: usize) -> String {
     // `{items} {t("item")}{items === 1 ? '' : t("s")}`
     let mut meta = format!(
         "{} {}{}",
-        crate::grid::format::grouped(items),
+        crate::i18n::format::grouped(items),
         t("item"),
         if items == 1 { "" } else { t("s") }
     );

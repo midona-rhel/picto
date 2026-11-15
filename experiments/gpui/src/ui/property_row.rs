@@ -31,9 +31,10 @@ pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedStrin
 }
 
 /// `.spinner`: a 10px ring open on its right, turning once every 650 ms
-/// from `since`, so spinners started together turn together.
-pub fn spinner(since: Instant, window: &mut Window, cx: &App) -> Svg {
-    window.request_animation_frame();
+/// from `since`, so spinners started together turn together. It is drawn
+/// again at [`crate::motion::LOOP_FRAME`], not at the display's rate.
+pub fn spinner(since: Instant, window: &mut Window, cx: &mut App) -> Svg {
+    crate::motion::loop_frame(window, cx);
     let turn = since.elapsed().as_secs_f32() / SPIN.as_secs_f32();
     let mut color = theme::theme(cx).text_secondary();
     color.a *= 0.65;

@@ -254,11 +254,24 @@ impl DerefMut for Stateful<Img> {
     }
 }
 
+/// How long frame `index` of an animated image is shown. As browsers do,
+/// a frame of 10 ms or less is shown for 100 ms.
+fn shown_for(data: &RenderImage, index: usize) -> Duration {
+    let delay = Duration::from(data.delay(index));
+    if delay <= Duration::from_millis(10) {
+        Duration::from_millis(100)
+    } else {
+        delay
+    }
+}
+
 /// The image state between frames
 struct ImgState {
     frame_index: usize,
     last_frame_time: Option<Instant>,
     started_loading: Option<(Instant, Task<()>)>,
+    /// The redraw when the frame shown has been shown for its delay.
+    next_frame: Option<Task<()>>,
 }
 
 /// The image layout state between frames
@@ -297,6 +310,7 @@ impl Element for Img {
                     frame_index: 0,
                     last_frame_time: None,
                     started_loading: None,
+                    next_frame: None,
                 })
             });
 
@@ -331,7 +345,7 @@ impl Element for Img {
                                     if let Some(last_frame_time) = state.last_frame_time {
                                         let elapsed = current_time - last_frame_time;
                                         let frame_duration =
-                                            Duration::from(data.delay(state.frame_index));
+                                            shown_for(&data, state.frame_index);
 
                                         if elapsed >= frame_duration {
                                             state.frame_index =
@@ -383,11 +397,22 @@ impl Element for Img {
                                 };
                             }
 
-                            if global_id.is_some()
-                                && data.frame_count() > 1
-                                && !cx.reduce_motion()
-                            {
-                                window.request_animation_frame();
+                            // The view is drawn again when the frame shown
+                            // has been shown for its delay, not every frame.
+                            if let Some(state) = &mut state {
+                                state.next_frame = None;
+                                if let Some(last_frame_time) = state.last_frame_time
+                                    && frame_count > 1
+                                    && !cx.reduce_motion()
+                                {
+                                    let remaining = shown_for(&data, state.frame_index)
+                                        .saturating_sub(last_frame_time.elapsed());
+                                    let current_view = window.current_view();
+                                    state.next_frame = Some(window.spawn(cx, async move |cx| {
+                                        cx.background_executor().timer(remaining).await;
+                                        cx.update(move |_, cx| cx.notify(current_view)).ok();
+                                    }));
+                                }
                             }
                         }
                         Some(_err) => {

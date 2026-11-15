@@ -26,7 +26,7 @@ impl Render for TagsToolbar {
 }
 
 impl TagsScreen {
-    /// `.namespaceItem`: one row of the rail.
+    /// `.namespaceItem`: one row of the rail, read as its label and count.
     #[allow(clippy::too_many_arguments)]
     fn rail_item(
         &self,
@@ -38,45 +38,12 @@ impl TagsScreen {
         active: bool,
         cx: &App,
     ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        // A button read as its label and count, pressed while it is the
-        // group shown.
-        div()
-            .id(id)
-            .role(Role::Button)
-            .aria_label(format!("{label} {}", crate::grid::format::grouped(count)))
-            .aria_toggled(ui::a11y::toggled(active))
-            .h(px(theme::CONTROL_SM))
-            .mx(px(8.))
-            .mb(px(1.))
-            .px(px(6.))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(8.))
-            .rounded(px(theme::RADIUS_MD))
-            .when(active, |row| row.bg(theme.surface_active()))
-            // `.namespaceItem:hover` outranks `.namespaceItemActive`.
-            .hover(move |style| style.bg(theme.surface_hover()))
-            .cursor_pointer()
-            .text(theme::TEXT_MD)
-            .line_height(px(theme::CONTROL_SM))
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(ui::icon(icon, 16., icon_color).flex_none())
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme.text())
-                            .child(label),
-                    ),
-            )
-            .child(count_label(count, cx))
+        let name = format!("{label} {}", crate::i18n::format::grouped(count));
+        ui::rail_item::rail_item(id, ui::rail_item::Look::Namespace, label, count.to_string())
+            .accessible_name(name)
+            .mark(ui::icon(icon, 16., icon_color).flex_none())
+            .active(active)
+            .build(cx)
     }
 
     fn rail(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -204,7 +171,7 @@ impl TagsScreen {
             .aria_label(format!(
                 "{} {}",
                 t("Delete Unused"),
-                crate::grid::format::grouped(self.unused)
+                crate::i18n::format::grouped(self.unused)
             ))
             .aria_disabled(!enabled)
             .h(px(theme::CONTROL_SM))
@@ -515,7 +482,12 @@ impl TagsScreen {
             };
             content = content.child(row);
         }
-        if shimmering || self.list_shown.elapsed() < motion::TAG_LIST_FADE {
+        // The shimmer loops for as long as pages load, so it is drawn at the
+        // looping rate; only the bounded fade asks for every frame.
+        if shimmering {
+            motion::loop_frame(window, cx);
+        }
+        if self.list_shown.elapsed() < motion::TAG_LIST_FADE {
             window.request_animation_frame();
         }
 

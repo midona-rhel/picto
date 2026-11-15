@@ -80,7 +80,7 @@ fn number(value: i64, cx: &App) -> AnyElement {
         .text_right()
         .font_features(theme::tabular_figures())
         .text_color(theme::theme(cx).text_secondary())
-        .child(crate::grid::format::grouped(value))
+        .child(crate::i18n::format::grouped(value))
         .into_any_element()
 }
 
@@ -412,28 +412,24 @@ impl SubscriptionsScreen {
                     .whitespace_nowrap()
                     .child(format!(
                         "{} / {} {}",
-                        crate::grid::format::grouped(settled),
-                        crate::grid::format::grouped(target),
+                        crate::i18n::format::grouped(settled),
+                        crate::i18n::format::grouped(target),
                         t("posts processed")
                     ))
                     .child(format!(
                         "{} {}",
-                        crate::grid::format::grouped(downloaded),
+                        crate::i18n::format::grouped(downloaded),
                         t("files downloaded")
                     )),
             )
             .child(
-                div()
-                    .h(px(3.))
-                    .rounded_full()
-                    .overflow_hidden()
-                    .bg(theme.surface_active())
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(share))
-                            .rounded_full()
-                            .bg(theme.primary()),
+                ui::progress_bar()
+                    .height(3.)
+                    .radius(9999.)
+                    .track(theme.surface_active())
+                    .filled(
+                        ElementId::NamedInteger("run-progress".into(), subscription.id as u64),
+                        share,
                     ),
             )
     }
@@ -448,7 +444,7 @@ impl SubscriptionsScreen {
         let has_run = subscription.run_status.is_some();
         let progress = subscription.progress;
         let stored_posts: i64 = subscription.queries.iter().map(|query| query.posts).sum();
-        let of_run = |value: i64| crate::grid::format::grouped(if has_run { value } else { 0 });
+        let of_run = |value: i64| crate::i18n::format::grouped(if has_run { value } else { 0 });
         let row = |label: &'static str, value: AnyElement| {
             div()
                 .h(px(26.))
@@ -485,7 +481,7 @@ impl SubscriptionsScreen {
             ))
             .child(row(
                 t("Posts added"),
-                value(crate::grid::format::grouped(if has_run {
+                value(crate::i18n::format::grouped(if has_run {
                     progress.posts_added
                 } else {
                     stored_posts

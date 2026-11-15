@@ -230,7 +230,7 @@ fn search_results_label(total: u64) -> String {
     format!(
         "{} · {}",
         crate::i18n::en("Search results"),
-        crate::grid::format::grouped(total)
+        crate::i18n::format::grouped(total)
     )
 }
 

@@ -746,7 +746,7 @@ impl Inspector {
         };
         let message = format!(
             "This will replace existing {what} on all {} selected items. Are you sure?",
-            crate::grid::format::grouped(confirm.content.count)
+            crate::i18n::format::grouped(confirm.content.count)
         );
         let this = cx.entity().downgrade();
         let (dismiss, accept) = (this.clone(), this);

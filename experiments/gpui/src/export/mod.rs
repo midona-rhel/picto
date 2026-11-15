@@ -159,7 +159,7 @@ fn export_outcome(result: &Value) -> (String, Option<String>) {
 fn files(count: u64) -> String {
     format!(
         "{} file{}",
-        crate::grid::format::grouped(count),
+        crate::i18n::format::grouped(count),
         // i18n: this app's own export report, in English
         if count == 1 { "" } else { "s" }
     )

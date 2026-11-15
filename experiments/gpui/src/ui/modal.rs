@@ -9,10 +9,10 @@ use std::{rc::Rc, time::Instant};
 mod host;
 pub use host::{Dialog, Host};
 
-actions!(modal, [Close]);
+use super::keys::{self, Dismiss, Key};
 
 pub fn bind(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Close, Some("Modal"))]);
+    keys::bind(cx, "Modal", &[Key::Escape]);
 }
 
 type Handler = Rc<dyn Fn(&mut Window, &mut App) + 'static>;
@@ -34,8 +34,13 @@ impl Default for Presence {
 
 impl Presence {
     pub fn new() -> Self {
+        Self::since(Instant::now())
+    }
+
+    /// Opened at `opened`.
+    pub fn since(opened: Instant) -> Self {
         Self {
-            opened: Instant::now(),
+            opened,
             closing: None,
         }
     }
@@ -77,7 +82,7 @@ impl Presence {
 
     /// The backdrop's opacity: `backdropIn` on `ease-out`, `backdropOut` on
     /// `ease-in`.
-    fn backdrop(&self) -> f32 {
+    pub(super) fn backdrop(&self) -> f32 {
         match self.closing {
             Some(since) => {
                 1. - motion::EASE_IN.ease(motion::progress(since.elapsed(), motion::MODAL_OUT))
@@ -382,23 +387,15 @@ impl RenderOnce for Modal {
                     .children(self.footer),
             );
         }
-        // `.panel`: the glass, with its edges; `role="dialog"` with
-        // `aria-modal` and its title as its name. While no control in it has
-        // the keyboard, the dialog is what assistive technology reads as
-        // focused.
-        let mut panel = super::glass_panel(self.id.clone(), theme::RADIUS_LG, cx)
-            .role(Role::Dialog)
-            .aria_modal(true)
-            .aria_label(self.title.clone())
+        // While no control in it has the keyboard, the dialog is what
+        // assistive technology reads as focused.
+        let mut panel = dialog_panel(self.id.clone(), theme::RADIUS_LG, self.title.clone(), cx)
             .when_some(self.focus.clone(), |panel, focus| panel.a11y_focus(&focus))
             .relative()
             .flex_none()
             .overflow_hidden()
             .top(px(drop))
-            .opacity(shown)
-            // A press inside the panel is not a press on the backdrop.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            .opacity(shown);
         panel = match frame {
             // Centred by the backdrop, so the smaller frame stays centred.
             Some((left, top, scaled_width, scaled_height)) => {
@@ -428,17 +425,36 @@ impl RenderOnce for Modal {
         if let Some(handler) = self.on_close.filter(|_| !self.presence.closing()) {
             let escape = handler.clone();
             layer = layer
-                .on_action(move |_: &Close, window, cx| escape(window, cx))
+                .on_action(move |_: &Dismiss, window, cx| escape(window, cx))
                 .on_click(move |_, window, cx| handler(window, cx));
         }
         over_window(layer.child(panel), self.priority).into_any_element()
     }
 }
 
+/// `.panel`: a dialog's glass with its edges and corner `radius`;
+/// `role="dialog"` with `aria-modal` and `label` as its name. A press
+/// inside it is not a press on the [`backdrop`]. [`Modal`] is one; a
+/// dialog with no title bar ([`super::progress_dialog`], the import task
+/// dialog) lays its own contents in one.
+pub fn dialog_panel(
+    id: impl Into<ElementId>,
+    radius: f32,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> super::GlassPanel {
+    super::glass_panel(id, radius, cx)
+        .role(Role::Dialog)
+        .aria_modal(true)
+        .aria_label(label)
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+
 /// `.backdrop`: the dimmed layer over the whole window that a dialog's
 /// panel sits centred on, at `strength` (0 to 1) of
 /// `--modal-backdrop`. It takes every press and scroll beneath it and
-/// holds the dialog's keys (`Modal`: Escape is [`Close`]); with `focus` it
+/// holds the dialog's keys (`Modal`: Escape is [`Dismiss`]); with `focus` it
 /// holds the keyboard while no field in the dialog has it and keeps Tab
 /// and Shift-Tab among the dialog's controls. The dialog adds what Escape
 /// and a click on it do.

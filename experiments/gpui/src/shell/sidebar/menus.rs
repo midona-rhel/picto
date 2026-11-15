@@ -4,6 +4,7 @@ use super::{
     ALWAYS_SHOWN, Preferences, SYSTEM_ROWS, Section, ShowMenu, Sidebar, Target, expandable, tree,
 };
 use crate::backend::Navigation;
+use crate::grid::menu::CONTENT_SORT;
 use crate::i18n::t;
 use crate::ui;
 use crate::ui::menu::{self, Menu};
@@ -101,29 +102,18 @@ fn content_sort() -> menu::Entry {
         t("Sort by"),
         CONTENT_SORT
             .iter()
-            .map(|(value, label, _)| menu::item("sort-contents", *label).value(*value).into())
+            .map(|(_, label, value)| menu::item("sort-contents", *label).value(*value).into())
             .collect(),
     )
     .icon("menu-sort")
     .into()
 }
 
-/// The content sort fields, with the value a menu row carries.
-// i18n: translated where drawn (menu rows)
-const CONTENT_SORT: [(&str, &str, ContentSortField); 6] = [
-    ("name", "Name", ContentSortField::Name),
-    ("imported_at", "Import Date", ContentSortField::ImportedAt),
-    ("created_at", "Date Created", ContentSortField::CreatedAt),
-    ("modified_at", "Date Modified", ContentSortField::ModifiedAt),
-    ("size", "Size", ContentSortField::Size),
-    ("notes", "Notes", ContentSortField::Notes),
-];
-
 pub(super) fn content_sort_field(value: &str) -> Option<ContentSortField> {
     CONTENT_SORT
         .iter()
-        .find(|(name, ..)| *name == value)
-        .map(|(.., field)| *field)
+        .find(|(.., name)| *name == value)
+        .map(|(field, ..)| *field)
 }
 
 /// `buildExportContextEntry`: the export submenu of a folder or smart

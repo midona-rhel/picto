@@ -2,7 +2,7 @@
 //! `historyMessages.ts` and `historyRuntime.ts` show it: "Undone — Moved 3
 //! items to Trash" after an undo, and a notification with an Undo button
 //! after a broad or destructive change.
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::session::Session;
 use crate::ui::notify;

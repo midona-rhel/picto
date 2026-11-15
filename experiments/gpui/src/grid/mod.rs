@@ -1,17 +1,20 @@
 //! The grid of results. Its own view, so scrolling, thumbnail reveals and
 //! fades repaint the grid and nothing else.
 pub mod art;
+mod body;
 pub mod drag;
 pub mod empty;
 pub mod filter_bar;
 pub mod filter_editors;
 pub mod filters;
 pub mod format;
+mod frame;
 pub mod layout;
 pub mod marquee;
 pub mod menu;
 pub mod nav;
 pub mod originals;
+pub mod pointer;
 pub mod prefs;
 pub mod preview;
 pub mod rendered;
@@ -22,17 +25,13 @@ pub mod thumbnails;
 pub mod tile;
 pub mod window;
 
-use crate::i18n::t;
 use crate::session::{Change, Session};
-use crate::theme::Text as _;
-use crate::{theme, ui};
+use crate::ui;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use layout::{Layout, ViewMode};
-use picto_library::query::ItemScope;
 use std::path::PathBuf;
-use thumbnails::{Thumb, Thumbnails};
-use tile::{TileData, TileLook, aspect, media_rect};
+use thumbnails::Thumbnails;
 
 /// A tile was right-clicked at this window position.
 pub struct MenuRequested(pub Point<Pixels>);
@@ -342,15 +341,10 @@ impl GridView {
             return;
         }
         let hit = self.image_at(position);
-        let hovered = hit.map(|(index, _, _)| index);
-        if hovered != self.hovered {
-            self.hovered = hovered;
+        if pointer::hover(&mut self.hovered, hit) {
             cx.notify();
         }
-        let magnifier = hit.filter(|&(index, x, y)| {
-            marquee::on_magnifier(&self.layout.tiles[index], x, y, self.text_height)
-        });
-        if let Some((index, _, _)) = magnifier {
+        if let Some(index) = pointer::magnifier(hit, &self.layout, self.text_height) {
             // The item under the magnifier when the pointer arrived is the
             // one previewed, as the Electron grid's timer captures it: the
             // item the tile was laid out for, if the session still holds it.
@@ -389,11 +383,17 @@ impl GridView {
 
     /// The pointer left the grid.
     fn pointer_left(&mut self, cx: &mut Context<Self>) {
-        self.pointer = None;
-        if self.marquee.is_none() && self.hovered.take().is_some() {
+        let banding = self.marquee.is_some();
+        if pointer::left(
+            &mut self.pointer,
+            &mut self.hovered,
+            banding,
+            &mut self.preview,
+            |this: &mut Self| &mut this.preview,
+            cx,
+        ) {
             cx.notify();
         }
-        self.preview.left(|this: &mut Self| &mut this.preview, cx);
     }
 
     /// A left press on empty space starts a rubber band. Shift, or the
@@ -527,10 +527,14 @@ impl GridView {
         let local = self.local(position);
         let top = self.scroll_top() - self.placement.top;
         let viewport = f32::from(self.bounds.size.height);
-        if let Some(marquee) = &mut self.marquee {
-            marquee.pointer = local;
-            marquee.speed = marquee::auto_scroll_speed(local.1, viewport);
-            marquee.track(top, &self.layout, self.text_height);
+        if pointer::band_moved(
+            self.marquee.as_mut(),
+            local,
+            top,
+            viewport,
+            &self.layout,
+            self.text_height,
+        ) {
             cx.notify();
         }
     }
@@ -664,335 +668,27 @@ impl Render for GridView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::stats::rendered(crate::stats::View::Grid);
         let build_started = crate::stats::Started::now();
-        // A rubber band near the top or bottom edge scrolls the grid each
-        // frame; the rectangle follows below.
-        if let Some(speed) = self
-            .marquee
-            .as_ref()
-            .map(|marquee| marquee.speed)
-            .filter(|speed| *speed != 0.)
-        {
-            let current = self.raw_scroll();
-            let limit = f32::from(self.scroll.max_offset().y).max(0.);
-            let next = (current + speed).clamp(0., limit);
-            if next != current {
-                self.scroll.set_offset(point(px(0.), px(-next)));
-            }
-            window.request_animation_frame();
-        }
-        // The session moves its scope change along, hears how far this grid
-        // is scrolled and where its window lies, and says where a restored
-        // grid should open.
-        let scrolled = self.raw_scroll();
-        let epoch = self.epoch;
-        let window_top = self.placement.top;
-        // A press, rubber band or drag in progress holds back a refresh of
-        // the results, which would move what it is on.
-        let busy = self.marquee.is_some() || self.dragging || self.press.is_some();
-        let restore = self.session.update(cx, |session, cx| {
-            session.advance_transition(cx);
-            session.pointer_busy = busy;
-            if session.results_epoch == epoch {
-                session.grid_scroll = scrolled;
-                session.window_top = window_top;
-                None
-            } else {
-                Some((
-                    session.restore_scroll.take().unwrap_or(0.),
-                    session.restore_window_top.take(),
-                ))
-            }
-        });
-        let mut restored_top = None;
-        if let Some((offset, top)) = restore {
-            self.scroll.set_offset(point(px(0.), px(-offset)));
-            restored_top = top;
-        }
-        let theme = theme::theme(cx);
+        let restored_top = self.prepare(window, cx);
         let now = self.clock.elapsed().as_secs_f64() * 1000.;
         // The scrollbar's gutter is not grid: tiles, and the subfolder
         // header above them, lay out beside it.
         let width = self.grid_width();
         self.sync_subfolders(width, window, cx);
         let viewport = f32::from(self.bounds.size.height);
-        let mut top = self.scroll_top();
-        // Any scroll ends the hover and closes the preview at once; the
-        // hover comes back 80 ms after the last one, where the pointer is.
-        let moved = top != self.last_top;
-        if moved {
-            self.last_top = top;
-            self.hovered = None;
-            // The anchor was for where the scroll was when it asked.
-            self.window_anchor = None;
-            self.preview.close(cx);
-            self.scrolled = std::time::Instant::now();
-            self.settle = Some(cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(crate::motion::MAGNIFIER_RESUME)
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    if let Some(pointer) = this.pointer {
-                        this.pointer_moved(pointer, cx);
-                    }
-                    cx.notify();
-                });
-            }));
-        }
+        let top = self.scroll_top();
+        let moved = self.follow_scroll(top, cx);
 
         // Everything the frame needs from the session, copied for the visible
         // tiles only, so the listeners below can borrow the context.
-        let mut measured = None;
-        let mut revealed = None;
-        let (fade, animating, prefs, surface, windowed, mut tiles) = {
-            let session = self.session.read(cx);
-            let fresh = session.results_epoch != self.epoch;
-            if fresh {
-                self.epoch = session.results_epoch;
-                self.layout_key = None;
-                self.window_anchor = None;
-                // Positions now mean other items.
-                self.marquee = None;
-                self.hovered = None;
-            }
-            let prefs = session.prefs.clone();
-            let text_height = prefs.text_height();
-            self.text_height = text_height;
-            let geometry = (
-                width as u32,
-                session.tile as u32,
-                prefs.gap as u32,
-                prefs.mode,
-                text_height as u32,
-            );
-            let key = Some((
-                geometry.0,
-                geometry.1,
-                geometry.2,
-                geometry.3,
-                geometry.4,
-                session.window_epoch,
-            ));
-            if key != self.layout_key {
-                let laying_out = crate::stats::Started::now();
-                let window_changed = self.layout_key.map(|key| key.5) != key.map(|key| key.5);
-                if window_changed {
-                    // Tiles of the window before mean other items now.
-                    self.marquee = None;
-                    self.hovered = None;
-                    self.reorder = None;
-                }
-                let aspects = session
-                    .items
-                    .iter()
-                    // `gridLayoutModel.ts`: an unknown shape lays out as 3:2.
-                    .map(|item| aspect(item).unwrap_or(1.5))
-                    .collect::<Vec<_>>();
-                let compute = |aspects: &[f64]| {
-                    Layout::compute(
-                        aspects,
-                        width,
-                        session.tile,
-                        prefs.gap,
-                        prefs.mode,
-                        text_height,
-                    )
-                };
-                let next = compute(&aspects);
-                // The height per item, measured on the first items of the
-                // window the destination opened with (or of the one held
-                // when the geometry changed), as `densityRef` keeps it.
-                let density = match session.density {
-                    Some((measured_for, density)) if measured_for == geometry => density,
-                    _ => {
-                        let count = aspects.len().min(window::SAMPLE);
-                        let height = if count == aspects.len() {
-                            next.total_height
-                        } else {
-                            compute(&aspects[..count]).total_height
-                        };
-                        let density = window::density(height, count).unwrap_or(1.);
-                        if count > 0 {
-                            measured = Some((geometry, density));
-                        }
-                        density
-                    }
-                };
-                let anchor = self.window_anchor.filter(|_| window_changed);
-                let mut placement = window::place(
-                    next.total_height,
-                    session.start,
-                    session.items.len(),
-                    session.total as usize,
-                    density,
-                    anchor,
-                    |offset| next.tiles.get(offset).map(|tile| tile.y),
-                );
-                // A restored window lies where it lay when it was left.
-                if let Some(restored) = restored_top {
-                    let span = (placement.height - next.total_height).max(0.);
-                    placement.top = restored.clamp(0., span);
-                    placement.bottom = placement.top + next.total_height;
-                }
-                let previous = std::mem::replace(&mut self.layout, next);
-                let previous_top = std::mem::replace(&mut self.placement, placement).top;
-                // The same results laid out anew (zoom, spacing, layout mode,
-                // labels, width), another window of them, or the window read
-                // again in place: the topmost visible tile, followed by its
-                // item, stays where it was on screen, as `CanvasGrid` keeps it.
-                let ids = session
-                    .items
-                    .iter()
-                    .map(|item| item.root_id.0)
-                    .collect::<Vec<_>>();
-                if self.layout_key.is_some() && !fresh {
-                    let now = ids
-                        .iter()
-                        .enumerate()
-                        .map(|(index, id)| (*id, index))
-                        .collect::<std::collections::HashMap<_, _>>();
-                    let shift = |tiles: &[layout::Tile], by: f32| {
-                        tiles
-                            .iter()
-                            .map(|tile| layout::Tile {
-                                y: tile.y + by,
-                                ..*tile
-                            })
-                            .collect::<Vec<_>>()
-                    };
-                    // In the content's own scroll, below the subfolder
-                    // header, so a header in view stays where it is.
-                    let header = self.subfolders.height();
-                    let before = shift(&previous.tiles, previous_top + header);
-                    let after = shift(&self.layout.tiles, self.placement.top + header);
-                    let selected = self
-                        .layout_ids
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, id)| {
-                            session
-                                .selection
-                                .contains(picto_library::RootId(**id), self.layout_start + index)
-                        })
-                        .map(|(index, _)| index)
-                        .collect();
-                    let moved = |index: usize| {
-                        self.layout_ids
-                            .get(index)
-                            .and_then(|id| now.get(id).copied())
-                    };
-                    let raw = top + header;
-                    if let Some(anchored) =
-                        layout::scroll_anchor(&before, &after, &selected, raw, viewport, moved)
-                        && anchored != raw
-                    {
-                        top = anchored - header;
-                        self.last_top = top;
-                        self.set_scroll_top(top);
-                    }
-                }
-                self.layout_ids = ids;
-                self.layout_start = session.start;
-                self.layout_key = key;
-                crate::stats::grid_part(crate::stats::GridPart::Layout, laying_out);
-            }
-            // An item moved to (a key, the viewer) comes into view once its
-            // window is laid out.
-            if let Some(ordinal) = session.reveal
-                && let Some(tile) = ordinal
-                    .checked_sub(session.start)
-                    .and_then(|index| self.placed(index))
-            {
-                if let Some(offset) = nav::scroll_into_view(&tile, top, viewport, prefs.gap) {
-                    top = offset.max(-self.subfolders.height());
-                    self.last_top = top;
-                    self.set_scroll_top(top);
-                }
-                revealed = Some(ordinal);
-            }
-            if let Some(marquee) = &mut self.marquee {
-                marquee.track(top - self.placement.top, &self.layout, text_height);
-            }
-            // `GridScreen.tsx`: an error first, then the tiles, and only a
-            // scope known to be empty says so; a loading one shows nothing.
-            let surface = if let Some(error) = &session.error {
-                Surface::Error(error.clone())
-            } else if !session.items.is_empty()
-                || (!self.subfolders.children.is_empty() && !session.loading)
-            {
-                Surface::Tiles
-            } else if session.loading && !session.refreshing {
-                Surface::Loading
-            } else {
-                let scope = session
-                    .nav
-                    .get(session.displayed)
-                    .map_or(ItemScope::All, |entry| entry.scope.clone());
-                Surface::Empty(empty::copy(
-                    &scope,
-                    session.searching(),
-                    session.filter.is_some(),
-                ))
-            };
-            // Only the window's tiles are laid out; the rest of the height
-            // is the destination's other items, drawn once their window
-            // arrives.
-            let local_top = top - self.placement.top;
-            let marquee_base = self.marquee.as_ref().map(|_| {
-                (0..self.layout.tiles.len())
-                    .filter(|index| session.is_selected(session.start + index))
-                    .collect::<std::collections::BTreeSet<_>>()
-            });
-            let tiles = self
-                .layout
-                .visible(
-                    local_top - reveal::MARGIN,
-                    local_top + viewport + reveal::MARGIN,
-                )
-                .into_iter()
-                .filter_map(|index| {
-                    let item = session.items.get(index)?;
-                    let ordinal = session.start + index;
-                    let selected = match (&self.marquee, &marquee_base) {
-                        (Some(marquee), Some(base)) => marquee.shows_selected(index, base),
-                        _ => session.selection.contains(item.root_id, ordinal),
-                    };
-                    Some(TileData {
-                        index,
-                        ordinal,
-                        look: TileLook {
-                            tile: self.placed(index)?,
-                            item: item.clone(),
-                            thumbnail: session.thumbnail(&item.content_hash),
-                            selected,
-                            thumb: Thumb::Pending,
-                            original: None,
-                            // Set as the tile is drawn.
-                            alphas: (0., 0.),
-                            magnifier: false,
-                            grayscale: false,
-                        },
-                    })
-                })
-                .collect::<Vec<_>>();
-            (
-                session.transition.opacity(),
-                session.transition.animating(),
-                prefs,
-                surface,
-                (session.total as usize) > session.items.len() && !session.loading,
-                tiles,
-            )
-        };
-        if measured.is_some() || revealed.is_some() {
-            self.session.update(cx, |session, _| {
-                if measured.is_some() {
-                    session.density = measured;
-                }
-                if revealed.is_some() && session.reveal == revealed {
-                    session.reveal = None;
-                }
-            });
-        }
+        let (top, frame) = self.snapshot(width, viewport, top, restored_top, cx);
+        let frame::Frame {
+            fade,
+            animating,
+            prefs,
+            surface,
+            windowed,
+            mut tiles,
+        } = frame;
         // `CanvasGrid`'s window requests: after a scroll, and whenever the
         // viewport's middle has no tile of the window (a restored or
         // revealed scroll position, a thumb dragged far away).
@@ -1003,299 +699,20 @@ impl Render for GridView {
         }
 
         let tile_count = tiles.len();
-        // Thumbnails load from the middle of the viewport outward.
-        let spans = tiles
-            .iter()
-            .map(|data| (data.look.tile.y, data.look.tile.h))
-            .collect::<Vec<_>>();
-        // The subfolder covers first while the header is in view.
-        let header_wanted = if self.raw_scroll() < self.subfolders.height() {
-            self.subfolders.wanted()
-        } else {
-            Vec::new()
-        };
-        let wanted = header_wanted
-            .into_iter()
-            .chain(
-                thumbnails::load_order(&spans, top, viewport)
-                    .into_iter()
-                    .map(|at| Resource::Path(tiles[at].look.thumbnail.clone().into())),
-            )
-            .collect();
-        self.thumbnails
-            .update(cx, |thumbnails, cx| thumbnails.plan(wanted, window, cx));
-        let mut missing = Vec::new();
-        let decoded = {
-            let thumbnails = self.thumbnails.read(cx);
-            tiles
-                .iter_mut()
-                .map(|data| {
-                    let resource = Resource::Path(data.look.thumbnail.clone().into());
-                    data.look.thumb = thumbnails.thumb(&resource, &data.look.item.mime);
-                    if data.look.thumb == Thumb::Failed {
-                        missing.push(thumbnails::Missing {
-                            hash: data.look.item.content_hash.clone(),
-                            mime: data.look.item.mime.clone(),
-                            jpeg: data.look.thumbnail.clone(),
-                        });
-                    }
-                    (data.look.item.root_id.0, data.look.thumb == Thumb::Loaded)
-                })
-                .collect::<Vec<_>>()
-        };
-        let session = self.session.clone();
-        self.thumbnails.update(cx, |thumbnails, cx| {
-            thumbnails.make_missing(&session, missing, cx)
-        });
-        // Tiles in the viewport that draw more pixels than their thumbnail
-        // holds ask for their original, which arrives after a short dwell.
-        let scale = window.scale_factor();
-        let wants = {
-            let session = self.session.read(cx);
-            tiles
-                .iter()
-                .filter(|data| {
-                    data.look.thumb == Thumb::Loaded
-                        && data.look.tile.y + data.look.tile.h > top
-                        && data.look.tile.y < top + viewport
-                })
-                .filter_map(|data| {
-                    let (contain, (_, _, w, h)) =
-                        media_rect(&data.look.tile, &data.look.item, &prefs);
-                    let source = data.look.item.width.zip(data.look.item.height);
-                    originals::wants_original(&data.look.item.mime, (w, h), source, contain, scale)
-                        .then(|| originals::Want {
-                            hash: data.look.item.content_hash.clone(),
-                            path: session
-                                .original(&data.look.item.content_hash, &data.look.item.mime),
-                            size: originals::decode_size((w, h), source, contain, scale),
-                        })
-                })
-                .collect::<Vec<_>>()
-        };
-        self.originals
-            .update(cx, |originals, cx| originals.plan(wants, cx));
-        {
-            let originals = self.originals.read(cx);
-            for data in &mut tiles {
-                data.look.original = originals.get(&data.look.item.content_hash);
-            }
-        }
-        self.reveal.update(&decoded, now);
-        // Keep painting while a fade or a thumbnail reveal is in motion.
-        if animating || self.reveal.active(now) {
-            window.request_animation_frame();
-        }
+        self.load_pictures(
+            &mut tiles, &prefs, top, viewport, now, animating, window, cx,
+        );
 
-        let entity = cx.entity().downgrade();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                let _ = entity.update(cx, |this, cx| {
-                    if this.bounds != bounds {
-                        this.bounds = bounds;
-                        cx.notify();
-                        // A notification made while a frame is being drawn
-                        // does not by itself bring another frame.
-                        window.request_animation_frame();
-                    }
-                });
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
+        let measure = pointer::measure(cx.entity().downgrade(), |this: &mut Self| &mut this.bounds)
+            .absolute()
+            .size_full();
 
         // Only the tiles scroll: an empty or failed grid has no scrollbar,
         // whatever the last results left in the scroll handle.
         let scrolls = matches!(surface, Surface::Tiles);
-        let body = match surface {
-            Surface::Error(error) => div()
-                .id("grid-error")
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(8.))
-                .opacity(fade)
-                .text(theme::TEXT_MD)
-                .text_color(theme.negative())
-                .child(error)
-                .child(
-                    div()
-                        .id("grid-retry")
-                        .role(Role::Button)
-                        .aria_label(t("Retry"))
-                        .px(px(12.))
-                        .py(px(4.))
-                        .rounded(px(theme::RADIUS_SM))
-                        .border_1()
-                        .border_color(theme.border())
-                        .text(theme::TEXT_SM)
-                        .text_color(theme.text_secondary())
-                        .cursor_pointer()
-                        .hover(move |style| {
-                            style.text_color(theme.text()).bg(theme.surface_hover())
-                        })
-                        .child(t("Retry"))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.session.update(cx, |session, cx| session.reload(cx));
-                        })),
-                ),
-            Surface::Loading => div().id("grid-loading").size_full(),
-            Surface::Empty(copy) => {
-                let actions = if copy.import {
-                    // `chooseAndImportFiles` / `chooseAndImportFolder` into
-                    // this destination, held while an import runs.
-                    let destination = {
-                        let session = self.session.read(cx);
-                        session
-                            .nav
-                            .get(session.displayed)
-                            .map(|entry| crate::imports::plan::Destination::for_scope(&entry.scope))
-                            .unwrap_or_default()
-                    };
-                    let blocked = crate::imports::blocked(cx);
-                    let start = move |folder: bool| {
-                        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                            if let Some(imports) = crate::imports::get(cx) {
-                                imports.update(cx, |imports, cx| {
-                                    if folder {
-                                        imports.choose_folder(destination, window, cx)
-                                    } else {
-                                        imports.choose_files(destination, window, cx)
-                                    }
-                                });
-                            }
-                        }
-                    };
-                    vec![
-                        ui::empty_state_action("grid-import-files", "upload", t("Import Files"))
-                            .disabled(blocked.is_some())
-                            .on_click(start(false))
-                            .into_any_element(),
-                        ui::empty_state_action(
-                            "grid-import-folder",
-                            "folder-plus",
-                            t("Import Folder"),
-                        )
-                        .disabled(blocked.is_some())
-                        .on_click(start(true))
-                        .into_any_element(),
-                    ]
-                } else {
-                    Vec::new()
-                };
-                div()
-                    .id("grid-empty")
-                    .size_full()
-                    .opacity(fade)
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|_, event: &MouseDownEvent, _, cx| {
-                            cx.emit(EmptyMenuRequested(event.position))
-                        }),
-                    )
-                    .child(ui::empty_state(
-                        "empty-photo",
-                        copy.title,
-                        copy.description,
-                        actions,
-                        cx,
-                    ))
-            }
-            Surface::Tiles => {
-                // The whole destination's height, so the scrollbar stands
-                // for every item, loaded or not.
-                // The subfolder header, then the whole destination's height
-                // below it.
-                let header = self.subfolders.height();
-                let mut content = div()
-                    .absolute()
-                    .left_0()
-                    .top(px(header))
-                    .w_full()
-                    .h(px(self.placement.height));
-                let building = crate::stats::Started::now();
-                for data in tiles {
-                    content = content.child(self.tile(data, &prefs, now, window, cx));
-                }
-                crate::stats::grid_part(crate::stats::GridPart::Tiles, building);
-                if let Some(marker) = self.reorder_marker(&prefs) {
-                    content = content.child(marker);
-                }
-                // `.marquee`: square corners, over the tiles.
-                if let Some(rect) = self.marquee.as_ref().and_then(|marquee| marquee.rect) {
-                    content = content.child(
-                        div()
-                            .absolute()
-                            .left(px(rect.left))
-                            .top(px(rect.top + self.placement.top))
-                            .w(px(rect.width))
-                            .h(px(rect.height))
-                            .bg(rgba(theme::MARQUEE_FILL))
-                            .border_1()
-                            .border_color(rgba(theme::MARQUEE_BORDER)),
-                    );
-                }
-                // The tiles' list: several can be selected.
-                div()
-                    .id("media-grid")
-                    .role(Role::ListBox)
-                    .aria_multiselectable(true)
-                    .size_full()
-                    .opacity(fade)
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    // The frame that follows a scroll notices the new position.
-                    .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                        this.pointer_moved(event.position, cx)
-                    }))
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        if !*hovered {
-                            this.pointer_left(cx);
-                        }
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            this.pressed(event, window, cx)
-                        }),
-                    )
-                    // A right-click no image took is on empty space.
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            this.empty_menu(event.position, window, cx)
-                        }),
-                    )
-                    // A click that no image took is a click on empty space,
-                    // unless it ends a rubber band or was a secondary click.
-                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                        if std::mem::take(&mut this.swallow_click)
-                            || selection::Press::here(event.modifiers()) == selection::Press::Menu
-                        {
-                            return;
-                        }
-                        this.session
-                            .update(cx, |session, cx| session.clear_selection(cx));
-                        window.focus(&this.focus, cx);
-                    }))
-                    .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .h(px(header + self.placement.height))
-                            .when(header > 0., |all| {
-                                all.child(self.subfolder_header(window, cx))
-                            })
-                            .child(content),
-                    )
-            }
-        };
+        let body = self.body(surface, tiles, &prefs, fade, now, window, cx);
         crate::stats::grid_built(build_started, tile_count);
-        let mut root = div()
+        let root = div()
             .relative()
             .size_full()
             .child(measure)
@@ -1311,73 +728,7 @@ impl Render for GridView {
                 window,
                 cx,
             ));
-        // While a rubber band is out, or after a press on a tile (which can
-        // become a drag), the pointer is followed and the release heard
-        // anywhere in the window, as pointer capture does.
-        if self.marquee.is_some() {
-            root = root.child(capture_pointer(
-                cx.entity().downgrade(),
-                |this, position, _, cx| this.marquee_moved(position, cx),
-                |this, window, cx| this.marquee_released(window, cx),
-            ));
-        }
-        if self.press.is_some() || self.dragging {
-            root = root.child(capture_pointer(
-                cx.entity().downgrade(),
-                |this, position, window, cx| this.drag_moved(position, window, cx),
-                |this, _, cx| this.drag_released(cx),
-            ));
-        }
-        // Settings › Controls "Mouse wheel: Zoom" (`onGridWheel`): the wheel
-        // over the tiles changes the tile size instead of scrolling. The
-        // setting is read when the wheel turns, so a change applies at once.
-        if scrolls {
-            let entity = cx.entity().downgrade();
-            root = root.child(
-                canvas(
-                    |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
-                    move |_, hitbox, window, _| {
-                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
-                            if phase != DispatchPhase::Capture
-                                || !hitbox.is_hovered_at(event.position, window)
-                                || crate::settings::current(cx).grid_wheel_action != "zoom"
-                            {
-                                return;
-                            }
-                            // The browser's `deltaY` is positive scrolling
-                            // down; GPUI's is the other way round.
-                            let delta_y =
-                                -f32::from(event.delta.pixel_delta(window.line_height()).y);
-                            cx.stop_propagation();
-                            let _ = entity.update(cx, |this, cx| {
-                                this.session.update(cx, |session, cx| {
-                                    if let Some(size) = nav::wheel_zoom(session.tile, delta_y) {
-                                        session.set_tile(size, cx);
-                                    }
-                                })
-                            });
-                        });
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            );
-        }
-        if self.dragging
-            && let Some(items) = drag::model(cx).read(cx).items.clone()
-        {
-            root = root.child(drag::ghost(&items, &self.thumbnails, cx));
-        }
-        if let Some(shown) = &self.preview.shown {
-            let (overlay, fading) = preview::overlay(shown, window);
-            if fading {
-                window.request_animation_frame();
-            }
-            root = root.children(overlay);
-        }
-        root
+        self.overlays(root, scrolls, window, cx)
     }
 }
 

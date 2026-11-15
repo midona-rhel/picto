@@ -2,6 +2,7 @@
 //! create row, the list, the settings panel and the picker itself.
 use super::model::display_name;
 use super::{HEIGHT, LOAD_AHEAD, Layout, NARROW, RAIL, ROW, TagPicker, View};
+use crate::i18n::format;
 use crate::i18n::t;
 use crate::tags::{Preferences, record_name as name};
 use crate::theme::Text as _;
@@ -9,8 +10,9 @@ use crate::ui::{
     self,
     check::{self, Mark},
     overlay_shell::{self},
+    rail_item::Look as RailLook,
 };
-use crate::{grid::format, motion, theme};
+use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use picto_library::TagRecord;
@@ -18,64 +20,23 @@ use picto_library::predicate::SetMatchMode;
 
 impl TagPicker {
     /// `.sidebarItem`: a 24px rail row, its badge brightening under the
-    /// pointer or when chosen.
+    /// pointer or when chosen. `mark` is given the row's hover group.
     fn rail_item(
         &self,
         id: &'static str,
         index: usize,
-        mark: AnyElement,
+        mark: impl FnOnce(SharedString) -> AnyElement,
         label: SharedString,
         count: u64,
         view: View,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let active = self.view == view;
-        let group = SharedString::from(format!("{id}-{index}"));
-        div()
-            .id((id, index))
-            .role(Role::Button)
-            .aria_label(format!("{label} {}", format::grouped(count)))
-            .aria_toggled(crate::ui::a11y::toggled(active))
-            .group(group.clone())
-            .h(px(24.))
-            .flex_none()
-            .pr(px(8.))
-            .flex()
-            .items_center()
-            .rounded(px(theme::RADIUS_MD))
-            .text(theme::TEXT_MD)
-            .line_height(px(24.))
-            .text_color(theme.text())
-            .whitespace_nowrap()
-            .bg(if active {
-                theme.surface_active()
-            } else {
-                gpui::transparent_black().into()
-            })
-            .when_not_active(active, move |row| {
-                row.hover(move |style| style.bg(theme.surface_hover()))
-            })
-            .child(mark)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(18.))
-                    .line_height(px(18.))
-                    .truncate()
-                    .child(label),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .ml_auto()
-                    .text(theme::TEXT_CAPTION)
-                    .text_color(theme.text_tertiary())
-                    .opacity(if active { 1. } else { 0.7 })
-                    .group_hover(group, |style| style.opacity(1.))
-                    .child(format::grouped(count)),
-            )
+        let item =
+            ui::rail_item::rail_item((id, index), RailLook::Picker, label, format::grouped(count))
+                .active(self.view == view);
+        let mark = mark(item.group());
+        item.mark(mark)
+            .build(cx)
             .on_click(cx.listener(move |this, _, _, cx| this.show_view(view.clone(), cx)))
     }
 
@@ -114,7 +75,7 @@ impl TagPicker {
             .child(self.rail_item(
                 "rail-all",
                 0,
-                bookmark(self.view == View::All),
+                |_| bookmark(self.view == View::All),
                 t("All").into(),
                 total,
                 View::All,
@@ -126,16 +87,21 @@ impl TagPicker {
                 .enumerate()
             {
                 let view = View::Group(group.name.clone());
-                let hovered = SharedString::from(format!("rail-group-{index}"));
-                let dot = div()
-                    .size(px(10.))
-                    .flex_none()
-                    .mx(px(6.))
-                    .rounded_full()
-                    .bg(rgb(crate::tags::group_color(&group.name, &preferences)))
-                    .opacity(if self.view == view { 1. } else { 0.85 })
-                    .group_hover(hovered, |style| style.opacity(1.))
-                    .into_any_element();
+                let (color, chosen) = (
+                    rgb(crate::tags::group_color(&group.name, &preferences)),
+                    self.view == view,
+                );
+                let dot = move |hovered: SharedString| {
+                    div()
+                        .size(px(10.))
+                        .flex_none()
+                        .mx(px(6.))
+                        .rounded_full()
+                        .bg(color)
+                        .opacity(if chosen { 1. } else { 0.85 })
+                        .group_hover(hovered, |style| style.opacity(1.))
+                        .into_any_element()
+                };
                 let label = if group.name.is_empty() {
                     "general".to_owned()
                 } else {
@@ -162,26 +128,26 @@ impl TagPicker {
         .child(self.rail_item(
             "rail-selected",
             0,
-            bookmark(self.view == View::Selected),
+            |_| bookmark(self.view == View::Selected),
             t("Selected").into(),
             self.entity.len() as u64,
             View::Selected,
             cx,
         ))
-        .child(
-            self.rail_item(
-                "rail-starred",
-                0,
+        .child(self.rail_item(
+            "rail-starred",
+            0,
+            |_| {
                 ui::icon("star", 10., theme.text())
                     .flex_none()
                     .mx(px(6.))
-                    .into_any_element(),
-                t("Starred").into(),
-                settings.starred_tags.len() as u64,
-                View::Starred,
-                cx,
-            ),
-        )
+                    .into_any_element()
+            },
+            t("Starred").into(),
+            settings.starred_tags.len() as u64,
+            View::Starred,
+            cx,
+        ))
     }
 
     /// `.tagRow`
@@ -571,14 +537,6 @@ impl TagPicker {
         [backdrop.into_any_element(), panel.into_any_element()]
     }
 }
-
-/// `when` for a condition that leaves the row as it is.
-trait WhenNotActive: Sized {
-    fn when_not_active(self, active: bool, then: impl FnOnce(Self) -> Self) -> Self {
-        if active { self } else { then(self) }
-    }
-}
-impl WhenNotActive for Stateful<Div> {}
 
 impl Render for TagPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

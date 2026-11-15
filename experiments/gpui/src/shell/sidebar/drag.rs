@@ -259,7 +259,7 @@ impl Sidebar {
                 label,
                 icon: match entry.icon {
                     Some(icon) if crate::assets::has_icon(&icon) => icon,
-                    _ if smart => "bookmark".into(),
+                    _ if smart => "IconBookmark".into(),
                     _ => "IconFolder".into(),
                 },
                 tint: entry.tint.map(rgb),

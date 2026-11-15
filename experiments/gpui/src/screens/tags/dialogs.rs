@@ -629,7 +629,7 @@ impl TagsScreen {
                     t("Delete unused tags"),
                     format!(
                         "Delete {} {} with no assignments anywhere in the library? Tags used by Inbox or Trash items are kept.",
-                        crate::grid::format::grouped(count),
+                        crate::i18n::format::grouped(count),
                         if count == 1 { "tag" } else { "tags" }
                     ),
                     t("Delete unused tags"),

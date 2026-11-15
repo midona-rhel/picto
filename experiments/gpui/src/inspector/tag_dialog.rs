@@ -4,7 +4,7 @@
 //! check boxes. Clicks only mark tags to add or remove; Apply puts them on
 //! the selected items, Cancel and Escape forget them. The tags checked at
 //! first are those of the item the inspector shows or last showed.
-use crate::grid::format;
+use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::Session;
 use crate::tags::{Preferences, TagPager, View, record_name as name};
@@ -16,6 +16,7 @@ use crate::ui::{
     check::{self, Mark, Size as CheckSize},
     menu::Return,
     modal::{self, Size},
+    rail_item::{Look as RailLook, rail_item},
     selection_modal::{self as shell, Key, ROW},
     text_input::{Kind, TextInput},
 };
@@ -329,12 +330,15 @@ impl TagDialog {
                     dot: Option<u32>,
                     cx: &mut Context<Self>| {
             let active = self.view == view;
-            shell::rail_item(id, label, count, active, dot, Some(NAME), cx).on_click(cx.listener(
-                move |this, _, window, cx| {
+            rail_item(id, RailLook::SelectionModal, label, count)
+                .active(active)
+                .dot(dot)
+                .name_width(NAME)
+                .build(cx)
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.leave_search(window, cx);
                     this.show_view(view.clone(), cx);
-                },
-            ))
+                }))
         };
         let mut rail = shell::rail(RAIL, cx)
             .child(item(
@@ -375,15 +379,16 @@ impl TagDialog {
                 group.name.clone()
             };
             rail = rail.child(
-                shell::rail_item(
+                rail_item(
                     ("tag-dialog-group", index),
+                    RailLook::SelectionModal,
                     label,
                     format::grouped(group.tag_count),
-                    active,
-                    Some(crate::tags::group_color(&group.name, &preferences)),
-                    Some(NAME),
-                    cx,
                 )
+                .active(active)
+                .dot(Some(crate::tags::group_color(&group.name, &preferences)))
+                .name_width(NAME)
+                .build(cx)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.leave_search(window, cx);
                     this.show_view(view.clone(), cx);

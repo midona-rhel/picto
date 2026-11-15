@@ -14,10 +14,10 @@ use gpui::*;
 use std::rc::Rc;
 use std::time::Instant;
 
-actions!(popover, [Close]);
+use super::keys::{self, Dismiss, Key};
 
 pub fn bind(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", Close, Some("Popover"))]);
+    keys::bind(cx, "Popover", &[Key::Escape]);
 }
 
 /// Which side of its anchor a panel opens on.
@@ -227,8 +227,8 @@ impl Floating {
         self
     }
     /// The [`Dismissal::Backdrop`] is a dialog's dimmed one
-    /// (`--modal-backdrop`) rather than clear: for a panel opened centred
-    /// over the window as a dialog is.
+    /// (`--modal-backdrop`, fading in as a dialog's does) rather than
+    /// clear: for a panel opened centred over the window as a dialog is.
     pub fn dimmed(mut self, dimmed: bool) -> Self {
         self.dimmed = dimmed;
         self
@@ -259,7 +259,7 @@ impl ParentElement for Floating {
 }
 
 impl RenderOnce for Floating {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let named = |name: &'static str| {
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), name.into())
         };
@@ -271,7 +271,7 @@ impl RenderOnce for Floating {
             if let Some(handler) = self.on_dismiss.clone() {
                 let cancel = handler.clone();
                 panel = panel
-                    .on_action(move |_: &Close, window, cx| handler(window, cx))
+                    .on_action(move |_: &Dismiss, window, cx| handler(window, cx))
                     // Escape closes the panel even from its text field,
                     // before the field would take it to cancel the edit.
                     .capture_action(move |_: &text_input::Cancel, window, cx| {
@@ -306,25 +306,40 @@ impl RenderOnce for Floating {
                     .child(panel),
             ),
             Position::At(corner) => {
-                let viewport = window.viewport_size();
-                let mut layer = div()
-                    .id(named("backdrop"))
-                    .w(viewport.width)
-                    .h(viewport.height);
+                let mut layer = match (self.dismiss, self.on_dismiss.is_some()) {
+                    // A dialog's backdrop, clear unless dimmed, which takes
+                    // every press and scroll beneath it.
+                    (Dismissal::Backdrop { .. }, true) => {
+                        let strength = if self.dimmed {
+                            let opened = *window
+                                .use_keyed_state(named("dimmed"), cx, |_, _| Instant::now())
+                                .read(cx);
+                            let presence = super::modal::Presence::since(opened);
+                            if presence.animating() {
+                                window.request_animation_frame();
+                            }
+                            presence.backdrop()
+                        } else {
+                            0.
+                        };
+                        super::modal::backdrop(named("backdrop"), strength, None, window)
+                    }
+                    _ => {
+                        let viewport = window.viewport_size();
+                        div()
+                            .id(named("backdrop"))
+                            .w(viewport.width)
+                            .h(viewport.height)
+                    }
+                };
                 if let (Dismissal::Backdrop { right }, Some(handler)) =
                     (self.dismiss, self.on_dismiss)
                 {
                     let click = handler.clone();
-                    if self.dimmed {
-                        layer = layer.bg(rgba(crate::theme::MODAL_BACKDROP));
-                    }
-                    layer = layer
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            cx.stop_propagation();
-                            click(window, cx);
-                        })
-                        .on_scroll(|_, _, cx| cx.stop_propagation());
+                    layer = layer.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        click(window, cx);
+                    });
                     if right {
                         layer = layer.on_mouse_down(MouseButton::Right, move |_, window, cx| {
                             handler(window, cx)

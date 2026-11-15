@@ -1,6 +1,6 @@
 //! A foreground task (an import) as the application reports it
 //! (`tasks.list`), and the words and states `taskPresentation.ts` gives it.
-use crate::grid::format::grouped;
+use crate::i18n::format::grouped;
 use serde_json::Value;
 
 /// `ForegroundTask` (`core/src/tasks.rs`).

@@ -1,5 +1,5 @@
 use super::text_input::TextInput;
-use crate::grid::format;
+use crate::i18n::format;
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;

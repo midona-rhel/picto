@@ -4,6 +4,7 @@
 //! folder whether it tags and watches.
 use super::{Inspector, PREVIEW};
 use crate::grid::format;
+use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
@@ -642,7 +643,7 @@ impl Inspector {
         };
 
         let mut properties = div()
-            .child(Self::property(t("Items"), format::grouped(view.total), cx))
+            .child(Self::property(t("Items"), grouped(view.total), cx))
             .child(Self::property(
                 t("Size"),
                 crate::text::size_to_gigabytes(view.size as u64),
