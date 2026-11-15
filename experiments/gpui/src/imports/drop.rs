@@ -235,6 +235,96 @@ pub fn stage(paths: Vec<PathBuf>, data: Option<&ExternalDropData>, directory: &P
     }
 }
 
+// This app's own: production receives no promised files.
+/// The reason given when no promised file arrived and the source said none.
+pub const NOT_DELIVERED: &str = crate::i18n::en("The dropped files did not arrive.");
+/// How long the files a drop promised may take to arrive in all (a large
+/// video exported from Photos takes a while).
+const PROMISE_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// The reports of the files a drop promised: `count` of them, or fewer when
+/// the platform stopped reporting or the wait ran out.
+pub async fn await_promised(
+    mut arrival: futures::channel::mpsc::UnboundedReceiver<gpui::PromisedFile>,
+    count: usize,
+    executor: &gpui::BackgroundExecutor,
+) -> Vec<gpui::PromisedFile> {
+    use futures::{FutureExt, StreamExt};
+    let mut reports = Vec::new();
+    let mut timeout = executor.timer(PROMISE_WAIT).fuse();
+    while reports.len() < count {
+        futures::select_biased! {
+            report = arrival.next() => match report {
+                Some(report) => reports.push(report),
+                None => break,
+            },
+            _ = timeout => break,
+        }
+    }
+    reports
+}
+
+/// What the files a drop promised came to, given the platform's `reports`
+/// for the `count` promised: the files written whole into `folder`, in
+/// order. Everything else in the folder (a file that failed part-way, one
+/// that never reported, a folder) is removed, so only whole files are ever
+/// imported; when none is left the folder goes too and the reason is given.
+pub fn settle_promised(
+    folder: &Path,
+    reports: Vec<gpui::PromisedFile>,
+    count: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let inside = std::fs::canonicalize(folder).ok();
+    let mut arrived = Vec::new();
+    let mut last_error = None;
+    for report in reports.into_iter().take(count) {
+        match report {
+            Ok(path) => {
+                let whole = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+                let parent = path
+                    .parent()
+                    .and_then(|parent| std::fs::canonicalize(parent).ok());
+                if whole && parent.is_some() && parent == inside {
+                    arrived.push(path);
+                }
+            }
+            Err(error) => last_error = Some(error).filter(|error| !error.is_empty()),
+        }
+    }
+    let kept: Vec<PathBuf> = arrived
+        .iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .collect();
+    for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !kept.contains(&canonical) {
+            let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                log::warn!("could not remove {}: {error}", path.display());
+            }
+        }
+    }
+    if arrived.is_empty() {
+        discard_promised(folder);
+        return Err(last_error.unwrap_or_else(|| NOT_DELIVERED.into()));
+    }
+    Ok(arrived)
+}
+
+/// Removes a drop's folder of promised files and whatever arrived in it.
+pub fn discard_promised(folder: &Path) {
+    if let Err(error) = std::fs::remove_dir_all(folder)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("could not remove {}: {error}", folder.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,25 +504,65 @@ mod tests {
         }
     }
 
-    /// The Windows platform's reading of a browser's virtual files and
-    /// `HTML Format`, on data made here.
+    /// The Windows platform's reading of a drop of virtual files (what
+    /// Outlook, a browser and Photos drag) from a data object made here:
+    /// each file is written into the drop's own folder under its name,
+    /// from global memory or a stream, folders left out; one shorter than
+    /// its descriptor says is removed and never imported.
     #[cfg(windows)]
     #[test]
-    fn the_windows_drag_gives_virtual_file_names_and_the_html_fragment() {
-        let mut group = 2u32.to_le_bytes().to_vec();
-        for (name, attributes) in [("photo.png", 0u32), ("folder", 0x10)] {
-            let mut descriptor = vec![0u8; 592];
-            descriptor[0..4].copy_from_slice(&0x4u32.to_le_bytes());
-            descriptor[36..40].copy_from_slice(&attributes.to_le_bytes());
-            for (index, unit) in name.encode_utf16().enumerate() {
-                descriptor[72 + index * 2..74 + index * 2].copy_from_slice(&unit.to_le_bytes());
+    fn a_windows_drop_of_virtual_files_is_written_whole_into_the_drops_folder() {
+        use futures::StreamExt;
+        let scratch = tempfile::tempdir().expect("folder");
+        gpui::set_promised_files_directory(scratch.path().to_owned());
+        let file = |name: &str, contents: &[u8], size: Option<u64>, stream: bool| {
+            gpui_windows::VirtualFile {
+                name: name.into(),
+                contents: contents.to_vec(),
+                directory: false,
+                size,
+                stream,
             }
-            group.extend(descriptor);
-        }
+        };
+        let object = gpui_windows::virtual_files_object(vec![
+            gpui_windows::VirtualFile {
+                name: "Album".into(),
+                contents: Vec::new(),
+                directory: true,
+                size: None,
+                stream: false,
+            },
+            file("Album\\photo.png", PNG, Some(PNG.len() as u64), false),
+            file("clip.mov", b"not a picture", None, true),
+            file("CON.txt", b"text", Some(4), true),
+            file("broken.jpg", b"half", Some(8), true),
+        ]);
+        let data = gpui_windows::read_drop_data(&object);
+        assert!(data.files.is_empty());
+        let promised = data.promised.expect("virtual files");
+        assert_eq!(promised.count, 4);
+        assert!(promised.folder.starts_with(scratch.path()));
+        let reports: Vec<_> =
+            futures::executor::block_on(promised.arrival().expect("reports").collect());
+        let arrived = settle_promised(&promised.folder, reports, promised.count).expect("files");
+        let names: Vec<String> = arrived
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["photo.png", "clip.mov", "_CON.txt"]);
+        assert_eq!(std::fs::read(&arrived[0]).unwrap(), PNG);
+        assert_eq!(std::fs::read(&arrived[1]).unwrap(), b"not a picture");
         assert_eq!(
-            gpui_windows::file_group_names(&group),
-            vec![("photo.png".to_owned(), false), ("folder".to_owned(), true)]
+            std::fs::read_dir(&promised.folder).unwrap().count(),
+            3,
+            "the short file is gone"
         );
+    }
+
+    /// The Windows platform's reading of `HTML Format`, on data made here.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_drag_gives_the_html_fragment() {
         let fragment = "<img src=\"https://e.test/a.png\">";
         let prefix = "<html><body><!--StartFragment-->";
         let header_length = 105;
@@ -493,6 +623,91 @@ mod tests {
             source_urls(&data),
             vec!["https://e.test/a.png", "https://e.test/page"]
         );
+    }
+
+    /// A promised file that failed part-way, or never reported, is never
+    /// imported and is removed; when none arrived the drop's folder goes.
+    #[test]
+    fn only_promised_files_written_whole_are_imported_and_the_rest_removed() {
+        let scratch = tempfile::tempdir().expect("folder");
+        let folder = scratch.path().join("promised-1");
+        std::fs::create_dir(&folder).unwrap();
+        let whole = folder.join("IMG_1.HEIC");
+        let partial = folder.join("IMG_2.MOV");
+        let silent = folder.join("IMG_3.JPG");
+        for path in [&whole, &partial, &silent] {
+            std::fs::write(path, b"bytes").unwrap();
+        }
+        let outside = scratch.path().join("elsewhere.png");
+        std::fs::write(&outside, PNG).unwrap();
+        let reports = vec![
+            Ok(whole.clone()),
+            Err("The source stopped writing.".to_owned()),
+            Ok(outside.clone()),
+        ];
+        assert_eq!(
+            settle_promised(&folder, reports, 4),
+            Ok(vec![whole.clone()])
+        );
+        assert!(whole.exists());
+        assert!(!partial.exists() && !silent.exists());
+        assert!(
+            outside.exists(),
+            "nothing outside the drop's folder is touched"
+        );
+
+        std::fs::write(&partial, b"half").unwrap();
+        assert_eq!(
+            settle_promised(&folder, vec![Err("Cancelled.".into())], 1),
+            Err("Cancelled.".into())
+        );
+        assert!(!folder.exists());
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(
+            settle_promised(&folder, Vec::new(), 2),
+            Err(NOT_DELIVERED.into())
+        );
+        assert!(!folder.exists());
+    }
+
+    /// The X11 platform's receiving of a file a drag offers to save (XDS,
+    /// what browsers and archive managers drag), from a source made here
+    /// on the display (Xvfb in CI): the file it writes at the address given
+    /// arrives whole and the drop is finished; one that fails part-way
+    /// leaves nothing to import and no folder.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs an X display"]
+    fn an_x11_drop_of_a_file_offered_to_save_arrives_whole() {
+        use futures::StreamExt;
+        let display = std::env::var("DISPLAY").expect("DISPLAY");
+        let scratch = tempfile::tempdir().expect("folder");
+        gpui::set_promised_files_directory(scratch.path().to_owned());
+        for fail in [true, false, true] {
+            let source = gpui_linux::DirectSaveSource::start(
+                Some(&display),
+                "photo.png",
+                PNG.to_vec(),
+                fail,
+            )
+            .expect("a source");
+            let promised = gpui_linux::receive_direct_save(&display, source.window, source.window);
+            assert!(promised.folder.starts_with(scratch.path()));
+            let reports: Vec<_> =
+                futures::executor::block_on(promised.arrival().expect("reports").collect());
+            eprintln!("reports: {reports:?}");
+            let settled = settle_promised(&promised.folder, reports, promised.count);
+            assert_eq!(source.finished(), Ok(!fail), "the drop was finished");
+            if fail {
+                assert!(settled.is_err());
+                assert!(!promised.folder.exists());
+            } else {
+                let arrived = settled.expect("the file");
+                assert_eq!(arrived.len(), 1);
+                assert_eq!(arrived[0].file_name().unwrap(), "photo.png");
+                assert_eq!(std::fs::read(&arrived[0]).unwrap(), PNG);
+            }
+        }
     }
 
     #[test]

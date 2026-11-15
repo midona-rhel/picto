@@ -1088,20 +1088,40 @@ impl X11Client {
                     // holds the selection. Never from a drag this process
                     // makes, which could not answer while it waits here.
                     let source = state.xdnd_state.other_window;
-                    let data = if state.xdnd_state.has_paths || state.windows.contains_key(&source)
-                    {
-                        gpui::ExternalDropData::default()
-                    } else {
+                    let foreign =
+                        !state.xdnd_state.has_paths && !state.windows.contains_key(&source);
+                    let mut data = if foreign {
                         let kinds = crate::linux::drop_data::wanted(&state.xdnd_state.offered);
                         crate::linux::drop_data::assemble(state.clipboard.read_xdnd(&kinds))
+                    } else {
+                        gpui::ExternalDropData::default()
                     };
+                    // A file the source offers to save (XDS) is asked for on
+                    // a thread, which tells the source the drop is finished
+                    // once it has the source's answer.
+                    let direct_save = foreign
+                        && state
+                            .xdnd_state
+                            .offered
+                            .iter()
+                            .any(|kind| kind == crate::linux::drop_data::DIRECT_SAVE);
+                    if direct_save {
+                        data.promised = Some(super::direct_save::receive(
+                            state.clipboard.display(),
+                            source,
+                            event.window,
+                            arg2,
+                        ));
+                    }
                     gpui::set_external_drop_data(data);
-                    xdnd_send_finished(
-                        &state.xcb_connection,
-                        &state.atoms,
-                        event.window,
-                        state.xdnd_state.other_window,
-                    );
+                    if !direct_save {
+                        xdnd_send_finished(
+                            &state.xcb_connection,
+                            &state.atoms,
+                            event.window,
+                            state.xdnd_state.other_window,
+                        );
+                    }
                     let position = state.xdnd_state.position;
                     drop(state);
                     window

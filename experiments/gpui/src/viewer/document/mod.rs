@@ -125,11 +125,7 @@ pub enum Document {
     Paged(Entity<PagedViewer>),
     Reader(Entity<ReaderViewer>),
     Font(Entity<FontViewer>),
-    Unsupported {
-        mime: String,
-        path: PathBuf,
-        scroll: ScrollHandle,
-    },
+    Unsupported { mime: String, scroll: ScrollHandle },
 }
 
 impl Document {
@@ -156,11 +152,9 @@ impl Document {
                 let mime = mime.to_owned();
                 Document::Font(cx.new(|cx| FontViewer::new(path, name, mime, cx)))
             }
-            // Word and PowerPoint, by decision, and every type without a
-            // renderer.
+            // Every type without a renderer.
             _ => Document::Unsupported {
                 mime: mime.to_owned(),
-                path,
                 scroll: ScrollHandle::new(),
             },
         }
@@ -302,15 +296,14 @@ impl Document {
         }
     }
 
-    /// The document's view. The unsupported view shows the thumbnail the
-    /// media surface has loaded.
-    pub fn element(&self, thumbnail: Option<Arc<RenderImage>>, cx: &App) -> AnyElement {
+    /// The document's view.
+    pub fn element(&self) -> AnyElement {
         match self {
             Document::Paged(paged) => paged.clone().into_any_element(),
             Document::Reader(reader) => reader.clone().into_any_element(),
             Document::Font(font) => font.clone().into_any_element(),
-            Document::Unsupported { mime, path, scroll } => {
-                unsupported::view(scroll, thumbnail, mime, path.clone(), cx).into_any_element()
+            Document::Unsupported { mime, scroll } => {
+                unsupported::view(scroll, mime).into_any_element()
             }
         }
     }

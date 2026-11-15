@@ -19,10 +19,15 @@ const HTML: &str = "text/html";
 /// Plain text, in the order preferred.
 const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 
-/// Whether a drag offering `offered` carries anything [`wanted`] reads.
+/// The type of an X11 drag that offers to save its file (XDS).
+pub(crate) const DIRECT_SAVE: &str = "XdndDirectSave0";
+
+/// Whether a drag offering `offered` carries anything [`wanted`] reads, or
+/// a file it offers to save.
 pub(crate) fn takes(offered: &[String]) -> bool {
     offered.iter().any(|kind| {
         kind == URI_LIST
+            || kind == DIRECT_SAVE
             || kind == HTML
             || IMAGE_TYPES.contains(&kind.as_str())
             || TEXT_TYPES.contains(&kind.as_str())

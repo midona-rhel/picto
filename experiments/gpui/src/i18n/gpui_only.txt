@@ -148,3 +148,4 @@ Recovery snapshot created
 Syncing library changes
 Estimating time remaining…
 The library is still in use; nothing was restored.
+The dropped files did not arrive.

@@ -996,6 +996,11 @@ impl Clipboard {
     /// What a drag-and-drop source offers in each of `kinds` (media types),
     /// read from `XdndSelection` on a connection of its own, as the
     /// clipboard is read; a kind that cannot be read is left out.
+    /// The X display the clipboard's connections use.
+    pub(crate) fn display(&self) -> &str {
+        &self.inner.display
+    }
+
     pub(crate) fn read_xdnd(&self, kinds: &[String]) -> Vec<(String, Vec<u8>)> {
         let Ok(reader) = XContext::new(&self.inner.display) else {
             return Vec::new();

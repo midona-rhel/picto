@@ -741,6 +741,9 @@ pub struct ExternalDropData {
     pub text: Vec<String>,
     /// Chromium's `DownloadURL` (`<media type>:<file name>:<address>`).
     pub download_urls: Vec<String>,
+    /// Files the source promised instead of putting them on the drag
+    /// (macOS's file promises), which it writes after the drop.
+    pub promised: Option<PromisedFiles>,
 }
 
 impl ExternalDropData {
@@ -751,7 +754,90 @@ impl ExternalDropData {
             && self.html.is_empty()
             && self.text.is_empty()
             && self.download_urls.is_empty()
+            && self.promised.is_none()
     }
+}
+
+/// What a promised file came to: where it was written, or why it was not.
+pub type PromisedFile = Result<PathBuf, String>;
+
+/// Files a drop promised, which their source writes into `folder` after the
+/// drop has been delivered. The platform makes `folder` for the drop inside
+/// [`promised_files_directory`] and reports each file once as it arrives or
+/// fails; the application waits for them with [`PromisedFiles::arrival`] and
+/// owns the folder from then on.
+#[derive(Clone)]
+pub struct PromisedFiles {
+    /// The folder made for this drop, which holds nothing else.
+    pub folder: PathBuf,
+    /// How many files were promised.
+    pub count: usize,
+    arrival: std::sync::Arc<
+        std::sync::Mutex<Option<futures::channel::mpsc::UnboundedReceiver<PromisedFile>>>,
+    >,
+}
+
+impl PromisedFiles {
+    /// Promised files to be written into `folder`, and the sender the
+    /// platform reports each of them through.
+    pub fn new(
+        folder: PathBuf,
+        count: usize,
+    ) -> (Self, futures::channel::mpsc::UnboundedSender<PromisedFile>) {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let promised = Self {
+            folder,
+            count,
+            arrival: std::sync::Arc::new(std::sync::Mutex::new(Some(receiver))),
+        };
+        (promised, sender)
+    }
+
+    /// The files' reports as they come, once (`None` after the first call).
+    /// The stream ends after `count` reports, or earlier when the platform
+    /// can no longer report (its sender dropped).
+    pub fn arrival(&self) -> Option<futures::channel::mpsc::UnboundedReceiver<PromisedFile>> {
+        self.arrival
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+    }
+}
+
+impl Debug for PromisedFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromisedFiles")
+            .field("folder", &self.folder)
+            .field("count", &self.count)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for PromisedFiles {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.arrival, &other.arrival)
+    }
+}
+
+impl Eq for PromisedFiles {}
+
+static PROMISED_FILES_DIRECTORY: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Sets the folder in which a platform makes each drop's folder for the
+/// files it promised (the system's temporary folder until set).
+pub fn set_promised_files_directory(directory: PathBuf) {
+    *PROMISED_FILES_DIRECTORY
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(directory);
+}
+
+/// Where a platform makes each drop's folder for promised files.
+pub fn promised_files_directory() -> PathBuf {
+    PROMISED_FILES_DIRECTORY
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// A file a drag held in memory.

@@ -174,8 +174,10 @@ does not need: lens, dispersion, tint and rim light).
 
 Drops from other applications. GPUI hands an application only the paths of
 dropped files, so what a web browser drags (an image's data, its address,
-the page's HTML for it) never arrived. Each platform now reads it while the
-drop is delivered.
+the page's HTML for it) never arrived, nor did files a drag only promises
+(macOS's file promises, Windows' virtual files, X11's direct save). Each
+platform now reads the data while the drop is delivered, and has the
+promised files written into a folder made for the drop.
 
 `gpui-pre`
 - `src/interactive.rs`: `ExternalDropData` (in-memory files as
@@ -184,6 +186,13 @@ drop is delivered.
   `set_external_drop_data` just before `FileDropEvent::Submit`, and the
   application calls `take_external_drop_data` while it handles that drop. A
   drag that carries only such data enters with no paths.
+  `ExternalDropData::promised` holds `PromisedFiles`: the folder made for
+  the drop, how many files were promised, and a stream (`arrival`, taken
+  once) on which the platform reports each file once, as its path or why it
+  was not written; the stream ends when the platform drops its sender.
+  `set_promised_files_directory` names the folder each drop's folder is
+  made in (`promised_files_directory`, the system's temporary folder until
+  set).
 
 `gpui-pre-macos` (AppKit)
 - `src/drop_data.rs`: the types a window registers besides
@@ -194,26 +203,41 @@ drop is delivered.
   type, link, HTML and text (no image data or link from an item that is a
   file, whose path the drop has). Public so the application's test can read
   a pasteboard of its own.
-- `src/window.rs`: registers those types; a drag with no file names that
-  offers one of them enters with no paths; `performDragOperation:` reads the
-  drag pasteboard and hands it over before `Submit`.
+- `src/drop_data.rs` also: `promise_types` (`NSFilePromiseReceiver`'s
+  `readableDraggedTypes`), `offers_promised_files`, and
+  `receive_promised_files`, which reads the pasteboard's
+  `NSFilePromiseReceiver`s and asks each to deliver into a new folder in
+  `promised_files_directory`, on an `NSOperationQueue` of its own, its
+  reader block reporting each file (one per promised type) through
+  `PromisedFiles`. AppKit allows this only during the drop.
+- `src/window.rs`: registers those types and the promise types; a drag
+  with no file names that offers one of them enters with no paths;
+  `performDragOperation:` reads the drag pasteboard and, for a drag without
+  file names that holds a promise, asks for the promised files, then hands
+  both over before `Submit`.
 - `src/gpui_macos.rs`: declares the module and exports
   `read_drop_pasteboard`.
 
 `gpui-pre-windows` (OLE drop target)
 - `src/drop_data.rs`: whether a data object offers what is read, and the
   reading, for a drag without `CF_HDROP`: virtual files
-  (`FileGroupDescriptorW` and each item's `FileContents`, from global memory
-  or a stream, at most 1 GiB each; folders skipped), else `PNG`, else
-  `CF_DIBV5` or `CF_DIB` made a BMP file; `UniformResourceLocatorW` (else
-  `UniformResourceLocator`), `HTML Format` (its fragment) and
-  `CF_UNICODETEXT`. `file_group_names` and `html_fragment` are public for
-  the application's test.
+  (`FileGroupDescriptorW`; folders skipped) written into a new folder in
+  `promised_files_directory`, each under the last part of its name (without
+  the characters a Windows name cannot hold, a device name prefixed with
+  `_`, `name (2).ext` when taken) from its `FileContents` in global memory
+  (cut to the size the descriptor gives) or a stream, a file shorter than
+  its descriptor says or failing part-way removed, each reported through
+  `PromisedFiles`; `PNG`, else `CF_DIBV5` or `CF_DIB` made a BMP file;
+  `UniformResourceLocatorW` (else `UniformResourceLocator`), `HTML Format`
+  (its fragment) and `CF_UNICODETEXT`. `html_fragment` and
+  `read_drop_data` are public for the application's test, with
+  `virtual_files_object` (`VirtualFile`), a data object holding virtual
+  files as Outlook and browsers drag them.
 - `src/window.rs`: `DragEnter` takes such a drag with no paths;
   `Drop` reads the data object and hands it over before `Submit`.
 - `src/clipboard.rs`: `convert_dib_to_bmp` and `LockedGlobal` are shared
   with the drop reading (`pub(crate)`).
-- `src/gpui_windows.rs`: declares the module and exports the two parsers.
+- `src/gpui_windows.rs`: declares the module and exports those.
 
 `gpui-pre-linux` (X11 and Wayland)
 - `src/linux/drop_data.rs`: which offered media types are taken
@@ -240,7 +264,24 @@ drop is delivered.
   empty enters with no paths, its data kept in `DragState::drop_data` and
   handed over on `Drop` (cleared on `Leave`).
 - `src/linux/wayland/clipboard.rs`: `DataOffer::mime_types`.
-- `src/linux.rs`, `src/gpui_linux.rs`: declare and export the module.
+- `src/linux/x11/direct_save.rs`: XDS (`XdndDirectSave0`), the Direct Save
+  protocol: on a thread and a connection of its own, the source's suggested
+  name (its window's `XdndDirectSave0` property) as a file in a new folder
+  in `promised_files_directory`, its `file://host/path` address put in that
+  property, the `XdndDirectSave0` target of `XdndSelection` asked for on a
+  window of the connection's own, the source's answer awaited (two minutes
+  at most; `S` with the file there is the file, anything else removes what
+  is there), then `XdndFinished` sent to the source for the target, and the
+  file reported through `PromisedFiles`. `receive_direct_save` and
+  `DirectSaveSource` (a source answering one request, for the
+  application's test) are exported.
+- `src/linux/x11/client.rs`: on `XdndDrop`, a drag from another process
+  without paths that offers `XdndDirectSave0` gets the direct save, which
+  sends `XdndFinished` itself. `src/linux/drop_data.rs`: `takes` the type,
+  so such a drag enters with no paths. `src/linux/x11/clipboard.rs`:
+  `Clipboard::display`.
+- `src/linux.rs`, `src/gpui_linux.rs`, `src/linux/x11.rs`: declare and
+  export the modules.
 
 Dragging files out on Windows and X11. `Window::start_platform_drag` had a
 platform drag on macOS and Wayland only.
@@ -320,7 +361,7 @@ diff --color -ruN gpui-pre-0.3.12/src/app.rs b/gpui-pre/src/app.rs
                  mode: GpuiMode::Production,
                  actions: Rc::new(ActionRegistry::default()),
                  pending_updates: 0,
-@@ -1856,8 +1859,37 @@
+@@ -1856,6 +1859,35 @@
      /// Returns the current text rendering mode for the application.
      pub fn text_rendering_mode(&self) -> TextRenderingMode {
          self.text_rendering_mode.get()
@@ -348,26 +389,21 @@ diff --color -ruN gpui-pre-0.3.12/src/app.rs b/gpui-pre/src/app.rs
 +            self.ui_zoom.set(zoom);
 +            self.refresh_windows();
 +        }
-     }
- 
++    }
++
 +    /// The interface zoom set by [`App::set_ui_zoom`]; 1 unless set.
 +    pub fn ui_zoom(&self) -> f32 {
 +        self.ui_zoom.get()
-+    }
-+
+     }
+ 
      /// Returns the operating system's power mode, or [`PowerMode::Unknown`]
-     /// when the platform cannot determine it.
-     pub fn power_mode(&self) -> PowerMode {
 diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/div.rs
 --- a/gpui-pre/src/elements/div.rs
 +++ b/gpui-pre/src/elements/div.rs
-@@ -1440,9 +1440,70 @@
-     /// Set the selected state for this element.
-     fn aria_selected(mut self, selected: bool) -> Self {
-         self.interactivity().aria.selected = Some(selected);
-+        self
-+    }
-+
+@@ -1443,6 +1443,67 @@
+         self
+     }
+ 
 +    /// Set the disabled state for this element: assistive technology shows
 +    /// it but does not offer to press or edit it.
 +    fn aria_disabled(mut self, disabled: bool) -> Self {
@@ -386,9 +422,9 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +    /// treats what lies outside it as inert (`aria-modal`).
 +    fn aria_modal(mut self, modal: bool) -> Self {
 +        self.interactivity().aria.modal = modal;
-         self
-     }
- 
++        self
++    }
++
 +    /// Mark this element as busy (`aria-busy`): its contents are still
 +    /// being loaded.
 +    fn aria_busy(mut self, busy: bool) -> Self {
@@ -454,13 +490,10 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
  
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
-@@ -2392,6 +2461,33 @@
-                         .a11y
-                         .note_focus_without_node(focus_handle.id, "it has no element id");
-                 }
-+            }
-+        }
-+
+@@ -2395,6 +2464,33 @@
+             }
+         }
+ 
 +        if window.a11y.is_active() {
 +            if let Some(handle) = self.a11y_focus_handle.as_ref()
 +                && let Some(global_id) = global_id
@@ -485,9 +518,12 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/div.rs b/gpui-pre/src/elements/di
 +                #[cfg(not(any(feature = "inspector", debug_assertions)))]
 +                let at = String::new();
 +                window.a11y.unexposed_clickables.push((at, bounds));
-             }
-         }
- 
++            }
++        }
++
+         if self.report_active_descendant_focus && window.a11y.is_active() {
+             if let Some(global_id) = global_id {
+                 window
 @@ -3652,10 +3748,31 @@
          if let Some(count) = self.aria.column_count {
              node.set_column_count(count);
@@ -541,20 +577,20 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
              object_fit: ObjectFit::Contain,
              loading: None,
              fallback: None,
-@@ -148,6 +150,13 @@
-     /// Set the image to be displayed in grayscale.
-     fn grayscale(mut self, grayscale: bool) -> Self {
-         self.image_style().grayscale = grayscale;
-+        self
-+    }
-+
+@@ -151,6 +153,13 @@
+         self
+     }
+ 
 +    /// Sample the image nearest-neighbour, as CSS `image-rendering:
 +    /// pixelated` draws it, rather than linearly.
 +    fn pixelated(mut self, pixelated: bool) -> Self {
 +        self.image_style().pixelated = pixelated;
-         self
-     }
- 
++        self
++    }
++
+     /// Set the object fit for the image.
+     fn object_fit(mut self, object_fit: ObjectFit) -> Self {
+         self.image_style().object_fit = object_fit;
 @@ -314,25 +323,24 @@
  
                              if let Some(state) = &mut state {
@@ -622,7 +658,7 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
 diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.rs
 --- a/gpui-pre/src/interactive.rs
 +++ b/gpui-pre/src/interactive.rs
-@@ -721,6 +721,69 @@
+@@ -721,6 +721,155 @@
      }
  }
  
@@ -646,6 +682,9 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 +    pub text: Vec<String>,
 +    /// Chromium's `DownloadURL` (`<media type>:<file name>:<address>`).
 +    pub download_urls: Vec<String>,
++    /// Files the source promised instead of putting them on the drag
++    /// (macOS's file promises), which it writes after the drop.
++    pub promised: Option<PromisedFiles>,
 +}
 +
 +impl ExternalDropData {
@@ -656,7 +695,90 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 +            && self.html.is_empty()
 +            && self.text.is_empty()
 +            && self.download_urls.is_empty()
++            && self.promised.is_none()
 +    }
++}
++
++/// What a promised file came to: where it was written, or why it was not.
++pub type PromisedFile = Result<PathBuf, String>;
++
++/// Files a drop promised, which their source writes into `folder` after the
++/// drop has been delivered. The platform makes `folder` for the drop inside
++/// [`promised_files_directory`] and reports each file once as it arrives or
++/// fails; the application waits for them with [`PromisedFiles::arrival`] and
++/// owns the folder from then on.
++#[derive(Clone)]
++pub struct PromisedFiles {
++    /// The folder made for this drop, which holds nothing else.
++    pub folder: PathBuf,
++    /// How many files were promised.
++    pub count: usize,
++    arrival: std::sync::Arc<
++        std::sync::Mutex<Option<futures::channel::mpsc::UnboundedReceiver<PromisedFile>>>,
++    >,
++}
++
++impl PromisedFiles {
++    /// Promised files to be written into `folder`, and the sender the
++    /// platform reports each of them through.
++    pub fn new(
++        folder: PathBuf,
++        count: usize,
++    ) -> (Self, futures::channel::mpsc::UnboundedSender<PromisedFile>) {
++        let (sender, receiver) = futures::channel::mpsc::unbounded();
++        let promised = Self {
++            folder,
++            count,
++            arrival: std::sync::Arc::new(std::sync::Mutex::new(Some(receiver))),
++        };
++        (promised, sender)
++    }
++
++    /// The files' reports as they come, once (`None` after the first call).
++    /// The stream ends after `count` reports, or earlier when the platform
++    /// can no longer report (its sender dropped).
++    pub fn arrival(&self) -> Option<futures::channel::mpsc::UnboundedReceiver<PromisedFile>> {
++        self.arrival
++            .lock()
++            .unwrap_or_else(|poison| poison.into_inner())
++            .take()
++    }
++}
++
++impl Debug for PromisedFiles {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("PromisedFiles")
++            .field("folder", &self.folder)
++            .field("count", &self.count)
++            .finish_non_exhaustive()
++    }
++}
++
++impl PartialEq for PromisedFiles {
++    fn eq(&self, other: &Self) -> bool {
++        std::sync::Arc::ptr_eq(&self.arrival, &other.arrival)
++    }
++}
++
++impl Eq for PromisedFiles {}
++
++static PROMISED_FILES_DIRECTORY: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
++
++/// Sets the folder in which a platform makes each drop's folder for the
++/// files it promised (the system's temporary folder until set).
++pub fn set_promised_files_directory(directory: PathBuf) {
++    *PROMISED_FILES_DIRECTORY
++        .lock()
++        .unwrap_or_else(|poison| poison.into_inner()) = Some(directory);
++}
++
++/// Where a platform makes each drop's folder for promised files.
++pub fn promised_files_directory() -> PathBuf {
++    PROMISED_FILES_DIRECTORY
++        .lock()
++        .unwrap_or_else(|poison| poison.into_inner())
++        .clone()
++        .unwrap_or_else(std::env::temp_dir)
 +}
 +
 +/// A file a drag held in memory.
@@ -695,15 +817,14 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
 --- a/gpui-pre/src/platform.rs
 +++ b/gpui-pre/src/platform.rs
-@@ -2146,10 +2146,18 @@
-             .update(|window, cx| self.handler.paste(item, window, cx))
+@@ -2147,9 +2147,17 @@
              .ok();
      }
-+
+ 
 +    // The rectangles and points exchanged with the system are in the
 +    // window's screen points; the handler's are in the points the window is
 +    // laid out in, which differ by the interface zoom (`App::set_ui_zoom`).
- 
++
      pub fn bounds_for_range(&mut self, range_utf16: Range<usize>) -> Option<Bounds<Pixels>> {
          self.cx
 -            .update(|window, cx| self.handler.bounds_for_range(range_utf16, window, cx))
@@ -783,10 +904,12 @@ diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/pla
              frame_scheduled: false,
              frame_callback_pending: false,
              input_handler: None,
-@@ -354,6 +356,21 @@
-         false
-     }
+@@ -352,6 +354,21 @@
  
+     fn is_maximized(&self) -> bool {
+         false
++    }
++
 +    // The decorations the window asked for, as a desktop that grants them
 +    // reports them, so a test sees a frameless window's own chrome.
 +    fn request_decorations(&self, decorations: WindowDecorations) {
@@ -800,11 +923,9 @@ diff --color -ruN gpui-pre-0.3.12/src/platform/test/window.rs b/gpui-pre/src/pla
 +                tiling: crate::Tiling::default(),
 +            },
 +        }
-+    }
-+
-     fn content_size(&self) -> Size<Pixels> {
-         self.bounds().size
      }
+ 
+     fn content_size(&self) -> Size<Pixels> {
 diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 --- a/gpui-pre/src/scene.rs
 +++ b/gpui-pre/src/scene.rs
@@ -839,12 +960,10 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
      }
  
      pub fn len(&self) -> usize {
-@@ -136,12 +142,52 @@
-         }
-         self.paint_operations
+@@ -138,10 +144,50 @@
              .push(PaintOperation::Primitive(primitive));
-+    }
-+
+     }
+ 
 +    /// Add a backdrop blur at the next draw order over its bounds, so that it
 +    /// blurs what was painted beneath it and what is painted over it later
 +    /// lands on top.
@@ -882,8 +1001,8 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 +            }
 +            PrimitiveBatch::Surfaces(range) => self.surfaces[range.start].order,
 +        }
-     }
- 
++    }
++
      pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
          for operation in &prev_scene.paint_operations[range] {
              match operation {
@@ -959,13 +1078,10 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
      pub inset: u32,
      pub pad: u32, // align to 8 bytes
  }
-@@ -588,9 +650,176 @@
- impl From<Shadow> for Primitive {
-     fn from(shadow: Shadow) -> Self {
-         Primitive::Shadow(shadow)
-+    }
-+}
-+
+@@ -591,6 +653,173 @@
+     }
+ }
+ 
 +/// A region whose backdrop, everything drawn beneath it so far, is shown
 +/// blurred, as CSS `backdrop-filter: blur() saturate() brightness()` does.
 +/// See [`crate::Window::paint_backdrop_blur`].
@@ -1108,14 +1224,14 @@ diff --color -ruN gpui-pre-0.3.12/src/scene.rs b/gpui-pre/src/scene.rs
 +            i += 2;
 +        }
 +        kernel
-     }
++    }
 +
 +    /// How many texels from the centre the furthest tap reads.
 +    pub fn reach(&self) -> i32 {
 +        self.offsets[self.tap_count as usize - 1].ceil() as i32
 +    }
- }
- 
++}
++
 +/// Where a renderer reads and writes for one [`BackdropBlur`], in device
 +/// pixels of the frame.
 +#[derive(Debug, Clone, Copy, PartialEq)]
@@ -1327,15 +1443,15 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns the client_inset value by [`Self::set_client_inset`].
-@@ -3331,7 +3390,29 @@
+@@ -3331,10 +3390,32 @@
      /// Overrides the display scale factor for tests.
      #[cfg(any(test, feature = "test-support"))]
      pub fn set_scale_factor(&mut self, scale_factor: f32) {
 -        self.scale_factor = scale_factor;
 +        self.scale_factor = scale_factor * self.ui_zoom;
-+        self.refresh();
-+    }
-+
+         self.refresh();
+     }
+ 
 +    /// The interface zoom this window is laid out at ([`App::set_ui_zoom`]):
 +    /// a point of the window's content is this many screen points.
 +    pub fn ui_zoom(&self) -> f32 {
@@ -1355,9 +1471,12 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +        self.ui_zoom = zoom;
 +        self.scale_factor = device_scale * zoom;
 +        self.viewport_size = zoomed_size(self.platform_window.content_size(), zoom);
-         self.refresh();
-     }
- 
++        self.refresh();
++    }
++
+     /// The size of an em for the base font of the application. Adjusting this value allows the
+     /// UI to scale, just like zooming a web page.
+     pub fn rem_size(&self) -> Pixels {
 @@ -3672,6 +3753,7 @@
          if self.platform_window.prepare_frame() {
              self.refresh();
@@ -1375,15 +1494,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          }
  
          let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
-@@ -4806,11 +4888,36 @@
-     ///
-     /// This method should only be called as part of the paint phase of element drawing.
-     pub fn paint_drop_shadows(
-+        &mut self,
-+        bounds: Bounds<Pixels>,
-+        corner_radii: Corners<Pixels>,
-+        shadows: &[BoxShadow],
-+    ) {
+@@ -4811,6 +4893,31 @@
+         corner_radii: Corners<Pixels>,
+         shadows: &[BoxShadow],
+     ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, false);
 +    }
 +
@@ -1394,11 +1508,11 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    ///
 +    /// This method should only be called as part of the paint phase of element drawing.
 +    pub fn paint_drop_shadows_outside(
-         &mut self,
-         bounds: Bounds<Pixels>,
-         corner_radii: Corners<Pixels>,
-         shadows: &[BoxShadow],
-     ) {
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
++    ) {
 +        self.paint_drop_shadows_cut(bounds, corner_radii, shadows, true);
 +    }
 +
@@ -1412,7 +1526,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
-@@ -4832,10 +4939,50 @@
+@@ -4832,12 +4939,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -1420,9 +1534,9 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +                inset: if outside { 2 } else { 0 },
                  pad: 0,
              });
-+        }
-+    }
-+
+         }
+     }
+ 
 +    /// Show what has been painted beneath `bounds` so far blurred inside its
 +    /// rounded shape, as CSS `backdrop-filter` does; paint the element's
 +    /// fill and contents after it. The blur follows the element opacity, so
@@ -1440,7 +1554,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +        let opacity = self.element_opacity() * filter.opacity;
 +        if opacity <= 0. {
 +            return;
-         }
++        }
 +        let scale_factor = self.scale_factor();
 +        let content_mask = self.snapped_content_mask();
 +        // A radius past half the shorter side has no shape to round.
@@ -1461,9 +1575,11 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            brightness: filter.brightness,
 +            opacity: opacity.min(1.),
 +        });
-     }
- 
++    }
++
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
+     /// be called after the element's background so the shadow layers on top of the fill.
+     /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
 @@ -5215,7 +5362,7 @@
  
              self.next_frame.scene.insert_primitive(PolychromeSprite {
@@ -1567,12 +1683,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  }
                  window.platform_window.set_input_handler(input_handler);
              }
-@@ -7302,6 +7502,41 @@
-     /// Debug representation of the last frame's accessibility information.
-     pub fn debug_a11y_tree_json(&self) -> Option<String> {
+@@ -7304,6 +7504,41 @@
          self.a11y.debug_tree_json()
-+    }
-+
+     }
+ 
 +    /// Builds the accessibility tree from the next frame on as though
 +    /// assistive technology had asked for it (or stops, with `false`), for
 +    /// tests and off-screen tools, whose platform never asks.
@@ -1606,9 +1720,11 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn a11y_unexposed_clickables(&self) -> Vec<(String, Bounds<Pixels>)> {
 +        self.a11y.unexposed_clickables.clone()
-     }
- 
++    }
++
      /// Register a listener for an accessibility action on a specific node.
+     /// The listener will be called when a screen reader requests the given
+     /// action on the node identified by `node_id`.
 @@ -8160,6 +8395,104 @@
          Ok(())
      } else {
@@ -1940,12 +2056,10 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
              match batch {
                  PrimitiveBatch::Shadows(range) => {
                      self.draw_shadows(range, instance_bindings, viewport_size, &command_encoder)
-@@ -945,6 +1021,128 @@
-         command_encoder.endEncoding();
- 
+@@ -947,6 +1023,128 @@
          Ok(command_buffer)
-+    }
-+
+     }
+ 
 +    /// Blur the frame drawn so far around `blur` and draw it back inside the
 +    /// region, in passes of their own between the frame's.
 +    fn draw_backdrop_blur(
@@ -2066,17 +2180,15 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +        let textures = [new_texture()?, new_texture()?];
 +        self.backdrop_blur_textures = Some(textures.clone());
 +        Ok(textures)
-     }
- 
-     fn draw_paths_to_intermediate(
-@@ -1579,12 +1777,124 @@
-     color_attachment.setSourceAlphaBlendFactor(MTLBlendFactor::One);
-     color_attachment.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
-     color_attachment.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
++    }
 +
-+    device
-+        .newRenderPipelineStateWithDescriptor_error(&descriptor)
-+        .with_context(|| format!("creating {label} render pipeline"))
+     fn draw_paths_to_intermediate(
+         &self,
+         paths: &[Path<ScaledPixels>],
+@@ -1583,6 +1781,118 @@
+     device
+         .newRenderPipelineStateWithDescriptor_error(&descriptor)
+         .with_context(|| format!("creating {label} render pipeline"))
 +}
 +
 +/// A pipeline that writes its output as it is, without blending.
@@ -2093,7 +2205,7 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +    let fragment_fn = library
 +        .newFunctionWithName(&NSString::from_str(fragment_fn_name))
 +        .with_context(|| format!("locating fragment function {fragment_fn_name}"))?;
- 
++
 +    let descriptor = MTLRenderPipelineDescriptor::new();
 +    descriptor.setLabel(Some(&NSString::from_str(label)));
 +    descriptor.setVertexFunction(Some(vertex_fn.as_ref()));
@@ -2103,11 +2215,11 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +    color_attachment.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
 +    color_attachment.setBlendingEnabled(false);
 +
-     device
-         .newRenderPipelineStateWithDescriptor_error(&descriptor)
-         .with_context(|| format!("creating {label} render pipeline"))
- }
- 
++    device
++        .newRenderPipelineStateWithDescriptor_error(&descriptor)
++        .with_context(|| format!("creating {label} render pipeline"))
++}
++
 +/// What the backdrop blur shaders read; mirrors `BackdropBlurParams` in
 +/// shaders.metal. Floats only, so both sides lay it out the same.
 +#[repr(C)]
@@ -2189,11 +2301,9 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/metal_renderer.rs b/gpui-pre-apple/s
 +            opacity: blur.opacity,
 +        }
 +    }
-+}
-+
+ }
+ 
  fn build_path_sprite_pipeline_state(
-     device: &ProtocolObject<dyn MTLDevice>,
-     library: &ProtocolObject<dyn MTLLibrary>,
 diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/shaders.metal
 --- a/gpui-pre-apple/src/shaders.metal
 +++ b/gpui-pre-apple/src/shaders.metal
@@ -2289,7 +2399,7 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
 +  float2 unit_vertex = unit_vertices[unit_vertex_id];
 +  return BackdropBlurVertexOutput{
 +      float4(unit_vertex * float2(2., -2.) + float2(-1., 1.), 0., 1.)};
- }
++}
 +
 +// One reduced texel: the average of its box of frame pixels, read two by two
 +// with bilinear samples between them.
@@ -2397,7 +2507,7 @@ diff --color -ruN gpui-pre-apple-0.3.12/src/shaders.metal b/gpui-pre-apple/src/s
 +  float3 rgb = mix(float3(luma), color.rgb, params->saturation) * params->brightness;
 +  color.rgb = clamp(rgb, float3(0.), float3(color.a));
 +  return color * coverage;
-+}
+ }
 diff --color -ruN gpui-pre-apple-0.3.12/vendor/gpui/src/scene.rs b/gpui-pre-apple/vendor/gpui/src/scene.rs
 --- a/gpui-pre-apple/vendor/gpui/src/scene.rs
 +++ b/gpui-pre-apple/vendor/gpui/src/scene.rs
@@ -3241,18 +3351,18 @@ diff --color -ruN gpui-pre-wgpu-0.3.12/src/wgpu_renderer.rs b/gpui-pre-wgpu/src/
                  match batch {
                      PrimitiveBatch::Quads(range) => self.draw_instances(
                          &instance_bindings.quads,
-@@ -1640,6 +1692,11 @@
+@@ -1639,6 +1691,11 @@
+                     PrimitiveBatch::Surfaces(_surfaces) => {}
                  }
              }
-         }
++        }
 +        if blur_frame_view.is_some()
 +            && let Some(blur_renderer) = &self.resources.backdrop_blur
 +        {
 +            blur_renderer.present(&device, &mut encoder, target_view);
-+        }
+         }
  
          let submission = self
-             .resources()
 diff --color -ruN gpui-pre-windows-0.3.12/src/clipboard.rs b/gpui-pre-windows/src/clipboard.rs
 --- a/gpui-pre-windows/src/clipboard.rs
 +++ b/gpui-pre-windows/src/clipboard.rs
@@ -3480,29 +3590,35 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drag_source.rs b/gpui-pre-windows/
 diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/src/drop_data.rs
 --- a/gpui-pre-windows/src/drop_data.rs
 +++ b/gpui-pre-windows/src/drop_data.rs
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,561 @@
 +//! What a drag from another application offers besides files (`CF_HDROP`):
-+//! a browser's dragged image as a virtual file (`FileGroupDescriptorW` with
-+//! `FileContents`) or as image data (`PNG`, `CF_DIBV5`, `CF_DIB`), its
++//! virtual files (`FileGroupDescriptorW` with `FileContents`, what Outlook,
++//! a browser and Photos drag), written into a folder made for the drop; a
++//! browser's dragged image as image data (`PNG`, `CF_DIBV5`, `CF_DIB`), its
 +//! address (`UniformResourceLocatorW`), the page's HTML for it
 +//! (`HTML Format`) and text.
++use std::io::Write;
++use std::path::{Path, PathBuf};
 +use std::sync::LazyLock;
 +
-+use gpui::{ExternalDropData, ExternalDropFile};
++use gpui::{ExternalDropData, ExternalDropFile, PromisedFile, PromisedFiles};
 +use windows::Win32::Foundation::S_OK;
 +use windows::Win32::System::{
-+    Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL, TYMED_ISTREAM},
++    Com::{
++        DVASPECT_CONTENT, FORMATETC, IDataObject, IDataObject_Impl, TYMED_HGLOBAL, TYMED_ISTREAM,
++    },
 +    DataExchange::RegisterClipboardFormatW,
 +    Ole::{CF_DIB, CF_DIBV5, CF_HDROP, CF_UNICODETEXT, ReleaseStgMedium},
 +};
-+use windows::core::{PCWSTR, w};
++use windows::core::{PCWSTR, implement, w};
 +
 +/// The most one in-memory file may hold; a larger one is left out.
 +const FILE_LIMIT: usize = 1 << 30;
-+/// `FILE_ATTRIBUTE_DIRECTORY`, and `FD_ATTRIBUTES` (the attributes field
-+/// is valid).
++/// `FILE_ATTRIBUTE_DIRECTORY`, `FD_ATTRIBUTES` (the attributes field is
++/// valid) and `FD_FILESIZE` (the size fields are).
 +const DIRECTORY: u32 = 0x10;
 +const FD_ATTRIBUTES: u32 = 0x4;
++const FD_FILESIZE: u32 = 0x40;
 +/// The size of one `FILEDESCRIPTORW`.
 +const DESCRIPTOR: usize = 592;
 +
@@ -3548,50 +3664,80 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 +    .any(|format| offers(data, format))
 +}
 +
-+/// The bytes of `format` (item `lindex`), from global memory or a stream.
-+fn bytes(data: &IDataObject, format: u16, lindex: i32) -> Option<Vec<u8>> {
++/// Copies the data of `format` (item `lindex`), from global memory or a
++/// stream, into `sink`: at most `limit` bytes of it (global memory, which
++/// the system may round up, is cut there); `Err` with the reason when it
++/// cannot be read or a stream holds more.
++fn copy(
++    data: &IDataObject,
++    format: u16,
++    lindex: i32,
++    limit: u64,
++    sink: &mut dyn Write,
++) -> Result<(), String> {
 +    if format == 0 {
-+        return None;
++        return Err("format not registered".into());
 +    }
 +    let wanted = etc(format, lindex, (TYMED_HGLOBAL.0 | TYMED_ISTREAM.0) as u32);
 +    // SAFETY: `GetData` hands over a medium the caller releases with
 +    // `ReleaseStgMedium`, which every path below does once; the union
 +    // field read is the one `tymed` names.
 +    unsafe {
-+        let mut medium = data.GetData(&wanted).ok()?;
-+        let read = if medium.tymed == TYMED_HGLOBAL.0 as u32 {
-+            crate::clipboard::LockedGlobal::lock(medium.u.hGlobal)
-+                .map(|locked| locked.as_bytes().to_vec())
-+                .filter(|bytes| bytes.len() <= FILE_LIMIT)
++        let mut medium = data.GetData(&wanted).map_err(|error| error.message())?;
++        let copied = if medium.tymed == TYMED_HGLOBAL.0 as u32 {
++            match crate::clipboard::LockedGlobal::lock(medium.u.hGlobal) {
++                Some(locked) => {
++                    let bytes = locked.as_bytes();
++                    let end = bytes
++                        .len()
++                        .min(usize::try_from(limit).unwrap_or(usize::MAX));
++                    sink.write_all(&bytes[..end])
++                        .map_err(|error| error.to_string())
++                }
++                None => Err("the data could not be locked".into()),
++            }
 +        } else if medium.tymed == TYMED_ISTREAM.0 as u32 {
-+            (*medium.u.pstm).as_ref().and_then(|stream| {
-+                let mut all = Vec::new();
-+                let mut chunk = vec![0u8; 1 << 16];
-+                loop {
-+                    let mut got = 0u32;
-+                    let result = stream.Read(
-+                        chunk.as_mut_ptr().cast(),
-+                        chunk.len() as u32,
-+                        Some(&mut got as *mut u32),
-+                    );
-+                    if result.is_err() {
-+                        return None;
-+                    }
-+                    if got == 0 {
-+                        return Some(all);
-+                    }
-+                    all.extend_from_slice(&chunk[..got as usize]);
-+                    if all.len() > FILE_LIMIT {
-+                        return None;
++            match (*medium.u.pstm).as_ref() {
++                Some(stream) => {
++                    let mut chunk = vec![0u8; 1 << 16];
++                    let mut total = 0u64;
++                    loop {
++                        let mut got = 0u32;
++                        let result = stream.Read(
++                            chunk.as_mut_ptr().cast(),
++                            chunk.len() as u32,
++                            Some(&mut got as *mut u32),
++                        );
++                        if result.is_err() {
++                            break Err(result.message());
++                        }
++                        if got == 0 {
++                            break Ok(());
++                        }
++                        total += u64::from(got);
++                        if total > limit {
++                            break Err("the data is longer than it was said to be".into());
++                        }
++                        if let Err(error) = sink.write_all(&chunk[..got as usize]) {
++                            break Err(error.to_string());
++                        }
 +                    }
 +                }
-+            })
++                None => Err("no stream".into()),
++            }
 +        } else {
-+            None
++            Err("the data is in a form not read".into())
 +        };
 +        ReleaseStgMedium(&mut medium);
-+        read
++        copied
 +    }
++}
++
++/// The bytes of `format` (item `lindex`), at most [`FILE_LIMIT`] of them.
++fn bytes(data: &IDataObject, format: u16, lindex: i32) -> Option<Vec<u8>> {
++    let mut all = Vec::new();
++    copy(data, format, lindex, FILE_LIMIT as u64, &mut all).ok()?;
++    Some(all)
 +}
 +
 +/// UTF-16 text up to its terminating nul.
@@ -3613,23 +3759,159 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 +    String::from_utf8_lossy(&bytes[..end]).into_owned()
 +}
 +
-+/// The names and attributes of a `FILEGROUPDESCRIPTORW`'s files, in order.
-+pub fn file_group_names(group: &[u8]) -> Vec<(String, bool)> {
++/// A file a `FILEGROUPDESCRIPTORW` describes.
++struct Descriptor {
++    name: String,
++    directory: bool,
++    /// Its size, when the descriptor gives it.
++    size: Option<u64>,
++}
++
++/// The files a `FILEGROUPDESCRIPTORW` describes, in order.
++fn file_group(group: &[u8]) -> Vec<Descriptor> {
 +    let Some(count) = group
 +        .get(..4)
 +        .map(|count| u32::from_le_bytes(count.try_into().unwrap()))
 +    else {
 +        return Vec::new();
 +    };
++    let word = |descriptor: &[u8], at: usize| {
++        u32::from_le_bytes(descriptor[at..at + 4].try_into().unwrap())
++    };
 +    (0..count as usize)
 +        .map_while(|index| {
 +            let descriptor = group.get(4 + index * DESCRIPTOR..4 + (index + 1) * DESCRIPTOR)?;
-+            let flags = u32::from_le_bytes(descriptor[0..4].try_into().unwrap());
-+            let attributes = u32::from_le_bytes(descriptor[36..40].try_into().unwrap());
-+            let directory = flags & FD_ATTRIBUTES != 0 && attributes & DIRECTORY != 0;
-+            Some((wide_text(&descriptor[72..592]), directory))
++            let flags = word(descriptor, 0);
++            let directory = flags & FD_ATTRIBUTES != 0 && word(descriptor, 36) & DIRECTORY != 0;
++            let size = (flags & FD_FILESIZE != 0)
++                .then(|| (u64::from(word(descriptor, 64)) << 32) | u64::from(word(descriptor, 68)));
++            Some(Descriptor {
++                name: wide_text(&descriptor[72..592]),
++                directory,
++                size,
++            })
 +        })
 +        .collect()
++}
++
++/// The name a virtual file is written under: the last part of the name it
++/// was given (a file in a dragged folder names the folder too), without
++/// the characters a Windows name cannot hold, never a device's name, and
++/// none when nothing is left.
++fn virtual_file_name(given: &str) -> Option<String> {
++    let last = given.rsplit(['\\', '/']).next().unwrap_or(given);
++    let cleaned: String = last
++        .chars()
++        .filter(|character| !matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
++        .filter(|character| !character.is_control())
++        .collect();
++    let cleaned = cleaned.trim_end_matches(['.', ' ']).trim_start();
++    if cleaned.is_empty() {
++        return None;
++    }
++    let stem = cleaned
++        .split('.')
++        .next()
++        .unwrap_or(cleaned)
++        .trim_end()
++        .to_ascii_uppercase();
++    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
++        || (stem.len() == 4
++            && (stem.starts_with("COM") || stem.starts_with("LPT"))
++            && stem.as_bytes()[3].is_ascii_digit());
++    Some(if device {
++        format!("_{cleaned}")
++    } else {
++        cleaned.to_owned()
++    })
++}
++
++/// `name` in `folder`, or `stem (2).ext` and on when that is taken.
++fn unused_path(folder: &Path, name: &str) -> PathBuf {
++    let path = folder.join(name);
++    if !path.exists() {
++        return path;
++    }
++    let (stem, extension) = match name.rsplit_once('.') {
++        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
++        _ => (name, None),
++    };
++    (2..)
++        .map(|number| {
++            folder.join(match extension {
++                Some(extension) => format!("{stem} ({number}).{extension}"),
++                None => format!("{stem} ({number})"),
++            })
++        })
++        .find(|path| !path.exists())
++        .unwrap()
++}
++
++/// A folder no other drop of this process has used, inside `directory`.
++fn drop_folder(directory: &Path) -> std::io::Result<PathBuf> {
++    use std::sync::atomic::{AtomicU64, Ordering};
++    static COUNT: AtomicU64 = AtomicU64::new(0);
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map_or(0, |since| since.as_nanos());
++    let folder = directory.join(format!(
++        "promised-{now:x}-{:x}-{:x}",
++        std::process::id(),
++        COUNT.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir_all(&folder)?;
++    Ok(folder)
++}
++
++/// Writes the virtual files `group` describes (folders left out) into a
++/// folder made for this drop, while the source still holds them, and
++/// reports each: its path, or why it was not written (a file that failed
++/// part-way is removed).
++fn write_virtual_files(data: &IDataObject, group: &[u8]) -> Option<PromisedFiles> {
++    let files: Vec<(usize, Descriptor)> = file_group(group)
++        .into_iter()
++        .enumerate()
++        .filter(|(_, file)| !file.directory)
++        .collect();
++    if files.is_empty() {
++        return None;
++    }
++    let folder = drop_folder(&gpui::promised_files_directory())
++        .map_err(|error| log::error!("no folder for dropped virtual files: {error}"))
++        .ok()?;
++    let (promised, sender) = PromisedFiles::new(folder.clone(), files.len());
++    for (index, file) in files {
++        let report: PromisedFile = (|| {
++            let name = virtual_file_name(&file.name)
++                .ok_or_else(|| format!("no usable name in \"{}\"", file.name))?;
++            let path = unused_path(&folder, &name);
++            let mut out = std::fs::File::create(&path).map_err(|error| error.to_string())?;
++            let limit = file.size.unwrap_or(u64::MAX);
++            let written = copy(data, *FILE_CONTENTS, index as i32, limit, &mut out)
++                .and_then(|()| out.flush().map_err(|error| error.to_string()))
++                .and_then(|()| match (file.size, out.metadata()) {
++                    (Some(size), Ok(meta)) if meta.len() != size => {
++                        Err("the file is shorter than it was said to be".into())
++                    }
++                    _ => Ok(()),
++                });
++            drop(out);
++            match written {
++                Ok(()) => Ok(path),
++                Err(error) => {
++                    let _ = std::fs::remove_file(&path);
++                    Err(error)
++                }
++            }
++        })();
++        let _ = sender.unbounded_send(report);
++    }
++    Some(promised)
++}
++
++/// [`read`], for the application's test of a drop of its own making.
++pub fn read_drop_data(data: &IDataObject) -> ExternalDropData {
++    read(data)
 +}
 +
 +/// The fragment `CF_HTML` marks (`StartFragment`/`EndFragment` byte
@@ -3654,43 +3936,31 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 +        .unwrap_or_else(|| cf_html.to_owned())
 +}
 +
-+/// What `data` offers besides files: its virtual files (else one image's
-+/// data), its address, HTML and text. Nothing of a drag of files.
++/// What `data` offers besides files: its virtual files, written into a
++/// folder of the drop's own, one image's data, its address, HTML and text.
++/// Nothing of a drag of files.
 +pub(crate) fn read(data: &IDataObject) -> ExternalDropData {
 +    let mut dropped = ExternalDropData::default();
 +    if offers(data, CF_HDROP.0) {
 +        return dropped;
 +    }
 +    if let Some(group) = bytes(data, *FILE_GROUP, -1) {
-+        for (index, (name, directory)) in file_group_names(&group).into_iter().enumerate() {
-+            if directory {
-+                continue;
-+            }
-+            if let Some(contents) = bytes(data, *FILE_CONTENTS, index as i32) {
-+                dropped.files.push(ExternalDropFile {
-+                    bytes: contents,
-+                    name: Some(name),
-+                    media_type: None,
-+                });
-+            }
-+        }
++        dropped.promised = write_virtual_files(data, &group);
 +    }
-+    if dropped.files.is_empty() {
-+        let image = bytes(data, *PNG, -1)
-+            .map(|png| (png, "image/png"))
-+            .or_else(|| {
-+                [CF_DIBV5.0, CF_DIB.0].into_iter().find_map(|format| {
-+                    let dib = bytes(data, format, -1)?;
-+                    Some((crate::clipboard::convert_dib_to_bmp(&dib)?, "image/bmp"))
-+                })
-+            });
-+        if let Some((bytes, media_type)) = image {
-+            dropped.files.push(ExternalDropFile {
-+                bytes,
-+                name: None,
-+                media_type: Some(media_type.to_owned()),
-+            });
-+        }
++    let image = bytes(data, *PNG, -1)
++        .map(|png| (png, "image/png"))
++        .or_else(|| {
++            [CF_DIBV5.0, CF_DIB.0].into_iter().find_map(|format| {
++                let dib = bytes(data, format, -1)?;
++                Some((crate::clipboard::convert_dib_to_bmp(&dib)?, "image/bmp"))
++            })
++        });
++    if let Some((bytes, media_type)) = image {
++        dropped.files.push(ExternalDropFile {
++            bytes,
++            name: None,
++            media_type: Some(media_type.to_owned()),
++        });
 +    }
 +    let address = bytes(data, *URL_WIDE, -1)
 +        .map(|bytes| wide_text(&bytes))
@@ -3705,6 +3975,182 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/drop_data.rs b/gpui-pre-windows/sr
 +        dropped.text.push(wide_text(&text));
 +    }
 +    dropped
++}
++
++/// A data object holding virtual files as Outlook and a browser drag them,
++/// for the application's test of a drop of its own making: one
++/// `FILEGROUPDESCRIPTORW` with each file's name, flags (`FD_ATTRIBUTES`,
++/// and `FD_FILESIZE` with the size given) and attributes, and each file's
++/// `FileContents` at its index, from global memory or, when asked, a
++/// stream. Every other format is refused.
++pub fn virtual_files_object(files: Vec<VirtualFile>) -> IDataObject {
++    VirtualFiles(files).into()
++}
++
++/// A file [`virtual_files_object`] holds.
++pub struct VirtualFile {
++    pub name: String,
++    pub contents: Vec<u8>,
++    /// A folder (its contents are never asked for).
++    pub directory: bool,
++    /// The size its descriptor gives, when it gives one.
++    pub size: Option<u64>,
++    /// Handed over as a stream rather than global memory.
++    pub stream: bool,
++}
++
++#[implement(IDataObject)]
++struct VirtualFiles(Vec<VirtualFile>);
++
++impl VirtualFiles {
++    fn group(&self) -> Vec<u8> {
++        let mut group = (self.0.len() as u32).to_le_bytes().to_vec();
++        for file in &self.0 {
++            let mut descriptor = vec![0u8; DESCRIPTOR];
++            let flags = FD_ATTRIBUTES | file.size.map_or(0, |_| FD_FILESIZE);
++            descriptor[0..4].copy_from_slice(&flags.to_le_bytes());
++            let attributes: u32 = if file.directory { DIRECTORY } else { 0x80 };
++            descriptor[36..40].copy_from_slice(&attributes.to_le_bytes());
++            let size = file.size.unwrap_or(0);
++            descriptor[64..68].copy_from_slice(&((size >> 32) as u32).to_le_bytes());
++            descriptor[68..72].copy_from_slice(&(size as u32).to_le_bytes());
++            for (index, unit) in file.name.encode_utf16().take(259).enumerate() {
++                descriptor[72 + index * 2..74 + index * 2].copy_from_slice(&unit.to_le_bytes());
++            }
++            group.extend(descriptor);
++        }
++        group
++    }
++}
++
++fn global_medium(bytes: &[u8]) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
++    use windows::Win32::System::Com::{STGMEDIUM, STGMEDIUM_0};
++    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
++    // SAFETY: the memory is allocated, filled while locked and handed to the
++    // receiver, who frees it with `ReleaseStgMedium`.
++    unsafe {
++        let global = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1))?;
++        let target = GlobalLock(global);
++        if target.is_null() {
++            return Err(windows::Win32::Foundation::E_OUTOFMEMORY.into());
++        }
++        std::ptr::copy_nonoverlapping(bytes.as_ptr(), target.cast::<u8>(), bytes.len());
++        let _ = GlobalUnlock(global);
++        Ok(STGMEDIUM {
++            tymed: TYMED_HGLOBAL.0 as u32,
++            u: STGMEDIUM_0 { hGlobal: global },
++            pUnkForRelease: std::mem::ManuallyDrop::new(None),
++        })
++    }
++}
++
++#[allow(non_snake_case)]
++impl IDataObject_Impl for VirtualFiles_Impl {
++    fn GetData(
++        &self,
++        format: *const FORMATETC,
++    ) -> windows::core::Result<windows::Win32::System::Com::STGMEDIUM> {
++        use windows::Win32::Foundation::DV_E_FORMATETC;
++        use windows::Win32::System::Com::{STGMEDIUM, STGMEDIUM_0};
++        // SAFETY: OLE passes a valid format or null.
++        let Some(format) = (unsafe { format.as_ref() }) else {
++            return Err(DV_E_FORMATETC.into());
++        };
++        if format.cfFormat == *FILE_GROUP && format.tymed & TYMED_HGLOBAL.0 as u32 != 0 {
++            return global_medium(&self.group());
++        }
++        let file = usize::try_from(format.lindex)
++            .ok()
++            .and_then(|index| self.0.get(index))
++            .filter(|file| !file.directory);
++        let (true, Some(file)) = (format.cfFormat == *FILE_CONTENTS, file) else {
++            return Err(DV_E_FORMATETC.into());
++        };
++        if file.stream && format.tymed & TYMED_ISTREAM.0 as u32 != 0 {
++            // SAFETY: a stream over a copy of the bytes, handed to the
++            // receiver, who releases it with `ReleaseStgMedium`.
++            let stream = unsafe {
++                windows::Win32::UI::Shell::SHCreateMemStream(Some(file.contents.as_slice()))
++            }
++            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY))?;
++            return Ok(STGMEDIUM {
++                tymed: TYMED_ISTREAM.0 as u32,
++                u: STGMEDIUM_0 {
++                    pstm: std::mem::ManuallyDrop::new(Some(stream)),
++                },
++                pUnkForRelease: std::mem::ManuallyDrop::new(None),
++            });
++        }
++        if format.tymed & TYMED_HGLOBAL.0 as u32 != 0 {
++            return global_medium(&file.contents);
++        }
++        Err(DV_E_FORMATETC.into())
++    }
++
++    fn GetDataHere(
++        &self,
++        _format: *const FORMATETC,
++        _medium: *mut windows::Win32::System::Com::STGMEDIUM,
++    ) -> windows::core::Result<()> {
++        Err(windows::Win32::Foundation::E_NOTIMPL.into())
++    }
++
++    fn QueryGetData(&self, format: *const FORMATETC) -> windows::core::HRESULT {
++        // SAFETY: OLE passes a valid format or null.
++        let offered = unsafe { format.as_ref() }.is_some_and(|format| {
++            format.cfFormat == *FILE_GROUP || format.cfFormat == *FILE_CONTENTS
++        });
++        if offered {
++            S_OK
++        } else {
++            windows::Win32::Foundation::DV_E_FORMATETC
++        }
++    }
++
++    fn GetCanonicalFormatEtc(
++        &self,
++        _format: *const FORMATETC,
++        out: *mut FORMATETC,
++    ) -> windows::core::HRESULT {
++        // SAFETY: OLE passes a writable format or null.
++        if let Some(out) = unsafe { out.as_mut() } {
++            out.ptd = std::ptr::null_mut();
++        }
++        windows::Win32::Foundation::DATA_S_SAMEFORMATETC
++    }
++
++    fn SetData(
++        &self,
++        _format: *const FORMATETC,
++        _medium: *const windows::Win32::System::Com::STGMEDIUM,
++        _release: windows::core::BOOL,
++    ) -> windows::core::Result<()> {
++        Err(windows::Win32::Foundation::E_NOTIMPL.into())
++    }
++
++    fn EnumFormatEtc(
++        &self,
++        _direction: u32,
++    ) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
++        Err(windows::Win32::Foundation::E_NOTIMPL.into())
++    }
++
++    fn DAdvise(
++        &self,
++        _format: *const FORMATETC,
++        _flags: u32,
++        _sink: windows::core::Ref<windows::Win32::System::Com::IAdviseSink>,
++    ) -> windows::core::Result<u32> {
++        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
++    }
++
++    fn DUnadvise(&self, _connection: u32) -> windows::core::Result<()> {
++        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
++    }
++
++    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
++        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
++    }
 +}
 diff --color -ruN gpui-pre-windows-0.3.12/src/gpui_windows.rs b/gpui-pre-windows/src/gpui_windows.rs
 --- a/gpui-pre-windows/src/gpui_windows.rs
@@ -3723,7 +4169,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/gpui_windows.rs b/gpui-pre-windows
  pub(crate) use wrapper::*;
  
 +pub use drag_source::drop_files as drag_drop_files;
-+pub use drop_data::{file_group_names, html_fragment};
++pub use drop_data::{VirtualFile, html_fragment, read_drop_data, virtual_files_object};
  pub use platform::WindowsPlatform;
  
  pub(crate) use windows::Win32::Foundation::HWND;
@@ -3789,16 +4235,14 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
 diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/window.rs
 --- a/gpui-pre-windows/src/window.rs
 +++ b/gpui-pre-windows/src/window.rs
-@@ -972,8 +972,40 @@
- 
-     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+@@ -974,6 +974,38 @@
          self.state.callbacks.request_frame.set(Some(callback));
-+    }
-+
-+    fn can_start_external_drag(&self) -> bool {
-+        true
      }
  
++    fn can_start_external_drag(&self) -> bool {
++        true
++    }
++
 +    /// An OLE drag of the files. `DoDragDrop` runs the system's drag loop
 +    /// until the drop, so it is run from a task of its own after the event
 +    /// that asked for it has been handled, and the drag's end is reported
@@ -3866,12 +4310,16 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
 diff --color -ruN gpui-pre-macos-0.3.12/src/drop_data.rs b/gpui-pre-macos/src/drop_data.rs
 --- a/gpui-pre-macos/src/drop_data.rs
 +++ b/gpui-pre-macos/src/drop_data.rs
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,206 @@
 +//! What a drag from another application offers besides files: image data,
-+//! links, HTML and text, as a web browser drags them.
-+use gpui::{ExternalDropData, ExternalDropFile};
-+use objc2::{msg_send, rc::Retained, runtime::AnyObject};
++//! links, HTML and text, as a web browser drags them, and files it promises
++//! (`NSFilePromiseReceiver`), as Photos, Mail, Safari and Messages drag
++//! theirs.
++use block2::RcBlock;
++use gpui::{ExternalDropData, ExternalDropFile, PromisedFile, PromisedFiles};
++use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
 +use objc2_foundation::{NSArray, NSData, NSString};
++use std::path::PathBuf;
 +
 +/// Image types read from a dragged item, in the order preferred, with the
 +/// media type each is.
@@ -3960,6 +4408,115 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/drop_data.rs b/gpui-pre-macos/src/dr
 +    }
 +    data
 +}
++
++/// The pasteboard types of a file promise, old and new
++/// (`NSFilePromiseReceiver.readableDraggedTypes`).
++pub(crate) fn promise_types() -> Vec<Retained<NSString>> {
++    // SAFETY: a class method that answers an array of strings.
++    unsafe {
++        let types: Option<Retained<NSArray<NSString>>> =
++            msg_send![class!(NSFilePromiseReceiver), readableDraggedTypes];
++        types.map(|types| types.to_vec()).unwrap_or_default()
++    }
++}
++
++/// Whether `pasteboard` holds a file promise.
++pub(crate) fn offers_promised_files(pasteboard: &AnyObject) -> bool {
++    let promised = promise_types();
++    // SAFETY: NSPasteboard's `types`, an array of strings or nil.
++    unsafe {
++        let types: Option<Retained<NSArray<NSString>>> = msg_send![pasteboard, types];
++        types
++            .iter()
++            .flat_map(|types| types.iter())
++            .any(|kind| promised.iter().any(|wanted| **wanted == *kind))
++    }
++}
++
++/// A folder no other drop of this process has used, inside `directory`.
++fn drop_folder(directory: &std::path::Path) -> std::io::Result<PathBuf> {
++    use std::sync::atomic::{AtomicU64, Ordering};
++    static COUNT: AtomicU64 = AtomicU64::new(0);
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map_or(0, |since| since.as_nanos());
++    let folder = directory.join(format!(
++        "promised-{now:x}-{:x}-{:x}",
++        std::process::id(),
++        COUNT.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir_all(&folder)?;
++    Ok(folder)
++}
++
++/// Asks the promises on the dragging pasteboard to write their files into a
++/// folder made for this drop. AppKit allows this only while the drop is
++/// being performed; the files are written afterwards, each reported on a
++/// queue of its own (never the main thread, where a source in this process
++/// would wait on itself). `None` when nothing is promised or the folder
++/// cannot be made.
++pub(crate) fn receive_promised_files(pasteboard: &AnyObject) -> Option<PromisedFiles> {
++    // SAFETY: NSPasteboard's, NSFilePromiseReceiver's, NSURL's,
++    // NSOperationQueue's and NSError's documented selectors with the
++    // argument types they take; each answer is retained or nil.
++    unsafe {
++        let classes: Retained<NSArray<AnyObject>> =
++            msg_send![class!(NSArray), arrayWithObject: class!(NSFilePromiseReceiver)];
++        let receivers: Option<Retained<NSArray<AnyObject>>> = msg_send![
++            pasteboard,
++            readObjectsForClasses: &*classes,
++            options: std::ptr::null::<AnyObject>()
++        ];
++        let receivers = receivers?.to_vec();
++        if receivers.is_empty() {
++            return None;
++        }
++        // One file for each type a receiver promises.
++        let count: usize = receivers
++            .iter()
++            .map(|receiver| {
++                let types: Option<Retained<NSArray<NSString>>> = msg_send![&**receiver, fileTypes];
++                types.map_or(0, |types| types.len()).max(1)
++            })
++            .sum();
++        let folder = drop_folder(&gpui::promised_files_directory())
++            .map_err(|error| log::error!("no folder for promised files: {error}"))
++            .ok()?;
++        let (promised, sender) = PromisedFiles::new(folder.clone(), count);
++        let destination: Retained<AnyObject> = msg_send![
++            class!(NSURL),
++            fileURLWithPath: &*NSString::from_str(&folder.to_string_lossy()),
++            isDirectory: objc2::runtime::Bool::YES
++        ];
++        let options: Retained<AnyObject> = msg_send![class!(NSDictionary), dictionary];
++        let queue: Retained<AnyObject> = msg_send![class!(NSOperationQueue), new];
++        let reader = RcBlock::new(move |url: *mut AnyObject, error: *mut AnyObject| {
++            let report: PromisedFile = match (url.as_ref(), error.as_ref()) {
++                (_, Some(error)) => {
++                    let text: Option<Retained<NSString>> = msg_send![error, localizedDescription];
++                    Err(text.map_or_else(String::new, |text| text.to_string()))
++                }
++                (Some(url), None) => {
++                    let path: Option<Retained<NSString>> = msg_send![url, path];
++                    path.map(|path| PathBuf::from(path.to_string()))
++                        .ok_or_else(String::new)
++                }
++                (None, None) => Err(String::new()),
++            };
++            let _ = sender.unbounded_send(report);
++        });
++        for receiver in &receivers {
++            let () = msg_send![
++                &**receiver,
++                receivePromisedFilesAtDestination: &*destination,
++                options: &*options,
++                operationQueue: &*queue,
++                reader: &*reader
++            ];
++        }
++        Some(promised)
++    }
++}
 diff --color -ruN gpui-pre-macos-0.3.12/src/gpui_macos.rs b/gpui-pre-macos/src/gpui_macos.rs
 --- a/gpui-pre-macos/src/gpui_macos.rs
 +++ b/gpui-pre-macos/src/gpui_macos.rs
@@ -3982,13 +4539,15 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/gpui_macos.rs b/gpui-pre-macos/src/g
 diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/window.rs
 --- a/gpui-pre-macos/src/window.rs
 +++ b/gpui-pre-macos/src/window.rs
-@@ -1092,10 +1092,12 @@
+@@ -1092,10 +1092,14 @@
                  deprecated,
                  reason = "File-drop decoding expects a property-list array of paths; replacing NSFilenamesPboardType requires migrating both registration and decoding to file URLs"
              )]
 +            let mut dragged_types = vec![NSFilenamesPboardType.retain()];
-+            // What a web browser drags: image data, links, HTML and text.
++            // What a web browser drags: image data, links, HTML and text;
++            // and files promised rather than put on the drag.
 +            dragged_types.extend(crate::drop_data::dragged_types());
++            dragged_types.extend(crate::drop_data::promise_types());
              let () = msg_send![
                  native_window,
 -                registerForDraggedTypes:
@@ -3997,28 +4556,40 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
              ];
              let () = msg_send![
                  native_window,
-@@ -3749,6 +3751,11 @@
+@@ -3749,6 +3753,20 @@
  ) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let position = drag_event_position(&window_state, dragging_info);
 +    let pasteboard: *mut AnyObject = unsafe { msg_send![dragging_info, draggingPasteboard] };
-+    let data = unsafe { pasteboard.as_ref() }
++    let pasteboard = unsafe { pasteboard.as_ref() };
++    let mut data = pasteboard
 +        .map(crate::drop_data::read_drop_pasteboard)
 +        .unwrap_or_default();
++    // Files promised by a drag that carries no files of its own are asked
++    // for now, the only time AppKit allows it; they arrive after the drop.
++    if let Some(pasteboard) = pasteboard
++        && external_paths_from_event(dragging_info).is_some_and(|paths| paths.paths().is_empty())
++        && crate::drop_data::offers_promised_files(pasteboard)
++    {
++        data.promised = crate::drop_data::receive_promised_files(pasteboard);
++    }
 +    gpui::set_external_drop_data(data);
      send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
  }
  
-@@ -3764,7 +3771,12 @@
+@@ -3764,7 +3782,15 @@
      )]
      let filenames: *mut NSArray<NSString> =
          unsafe { msg_send![pasteboard, propertyListForType: NSFilenamesPboardType] };
 -    let filenames = unsafe { filenames.as_ref() }?;
-+    // A drag of what is not a file (an image or a link from a web page)
-+    // enters with no paths; its data is read when it is dropped.
++    // A drag of what is not a file (an image or a link from a web page, a
++    // promised file) enters with no paths; its data is read, and promised
++    // files asked for, when it is dropped.
 +    let Some(filenames) = (unsafe { filenames.as_ref() }) else {
-+        return crate::drop_data::offers_drop_data(unsafe { &*pasteboard })
-+            .then(|| ExternalPaths(paths));
++        let pasteboard = unsafe { &*pasteboard };
++        return (crate::drop_data::offers_drop_data(pasteboard)
++            || crate::drop_data::offers_promised_files(pasteboard))
++        .then(|| ExternalPaths(paths));
 +    };
      for file in filenames {
          let path = unsafe {
@@ -4033,7 +4604,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/gpui_linux.rs b/gpui-pre-linux/src/g
 +#[cfg(any(feature = "wayland", feature = "x11"))]
 +pub use linux::drop_data::{assemble as assemble_drop_data, wanted as wanted_drop_types};
 +#[cfg(feature = "x11")]
-+pub use linux::xdnd_uri_list;
++pub use linux::{DirectSaveSource, receive_direct_save, xdnd_uri_list};
  pub use linux::{current_platform, linux_platform};
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux.rs b/gpui-pre-linux/src/linux.rs
 --- a/gpui-pre-linux/src/linux.rs
@@ -4046,19 +4617,19 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux.rs b/gpui-pre-linux/src/linux.
  mod headless;
  mod keyboard;
  mod platform;
-@@ -26,6 +28,8 @@
- #[cfg(feature = "wayland")]
+@@ -27,6 +29,8 @@
  pub(crate) use wayland::*;
  #[cfg(feature = "x11")]
-+pub use x11::xdnd_uri_list;
-+#[cfg(feature = "x11")]
  pub(crate) use x11::*;
++#[cfg(feature = "x11")]
++pub use x11::{DirectSaveSource, receive_direct_save, xdnd_uri_list};
  
  use std::rc::Rc;
+ 
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/src/linux/drop_data.rs
 --- a/gpui-pre-linux/src/linux/drop_data.rs
 +++ b/gpui-pre-linux/src/linux/drop_data.rs
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,96 @@
 +//! What a drag from another application offers besides files, read from an
 +//! XDND selection or a Wayland data offer by media type: an image's data,
 +//! its addresses, the page's HTML for it and text, as a web browser drags
@@ -4080,10 +4651,15 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/drop_data.rs b/gpui-pre-linux/
 +/// Plain text, in the order preferred.
 +const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 +
-+/// Whether a drag offering `offered` carries anything [`wanted`] reads.
++/// The type of an X11 drag that offers to save its file (XDS).
++pub(crate) const DIRECT_SAVE: &str = "XdndDirectSave0";
++
++/// Whether a drag offering `offered` carries anything [`wanted`] reads, or
++/// a file it offers to save.
 +pub(crate) fn takes(offered: &[String]) -> bool {
 +    offered.iter().any(|kind| {
 +        kind == URI_LIST
++            || kind == DIRECT_SAVE
 +            || kind == HTML
 +            || IMAGE_TYPES.contains(&kind.as_str())
 +            || TEXT_TYPES.contains(&kind.as_str())
@@ -4317,7 +4893,10 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/wayland/clipboard.rs b/gpui-pr
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11.rs b/gpui-pre-linux/src/linux/x11.rs
 --- a/gpui-pre-linux/src/linux/x11.rs
 +++ b/gpui-pre-linux/src/linux/x11.rs
-@@ -3,6 +3,7 @@
+@@ -1,13 +1,17 @@
+ mod client;
+ mod clipboard;
++mod direct_save;
  mod display;
  mod event;
  mod window;
@@ -4325,7 +4904,8 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11.rs b/gpui-pre-linux/src/li
  mod xim_handler;
  
  pub(crate) use client::*;
-@@ -10,4 +11,5 @@
+ pub(crate) use clipboard::wait_for_clipboard_handovers;
++pub use direct_save::{DirectSaveSource, receive_direct_save};
  pub(crate) use display::*;
  pub(crate) use event::*;
  pub(crate) use window::*;
@@ -4480,27 +5060,59 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                      if !state.xdnd_state.retrieved {
                          check_reply(
                              || "Failed to convert selection for drag and drop",
-@@ -981,6 +1083,19 @@
+@@ -981,12 +1083,45 @@
                      window
                          .handle_input(PlatformInput::FileDrop(FileDropEvent::Pending { position }));
                  } else if event.type_ == state.atoms.XdndDrop {
+-                    xdnd_send_finished(
+-                        &state.xcb_connection,
+-                        &state.atoms,
+-                        event.window,
+-                        state.xdnd_state.other_window,
+-                    );
 +                    // What a drag without files offers (a web browser's
 +                    // image, its addresses), read while the source still
 +                    // holds the selection. Never from a drag this process
 +                    // makes, which could not answer while it waits here.
 +                    let source = state.xdnd_state.other_window;
-+                    let data = if state.xdnd_state.has_paths || state.windows.contains_key(&source)
-+                    {
-+                        gpui::ExternalDropData::default()
-+                    } else {
++                    let foreign =
++                        !state.xdnd_state.has_paths && !state.windows.contains_key(&source);
++                    let mut data = if foreign {
 +                        let kinds = crate::linux::drop_data::wanted(&state.xdnd_state.offered);
 +                        crate::linux::drop_data::assemble(state.clipboard.read_xdnd(&kinds))
++                    } else {
++                        gpui::ExternalDropData::default()
 +                    };
++                    // A file the source offers to save (XDS) is asked for on
++                    // a thread, which tells the source the drop is finished
++                    // once it has the source's answer.
++                    let direct_save = foreign
++                        && state
++                            .xdnd_state
++                            .offered
++                            .iter()
++                            .any(|kind| kind == crate::linux::drop_data::DIRECT_SAVE);
++                    if direct_save {
++                        data.promised = Some(super::direct_save::receive(
++                            state.clipboard.display(),
++                            source,
++                            event.window,
++                            arg2,
++                        ));
++                    }
 +                    gpui::set_external_drop_data(data);
-                     xdnd_send_finished(
-                         &state.xcb_connection,
-                         &state.atoms,
-@@ -994,6 +1109,15 @@
++                    if !direct_save {
++                        xdnd_send_finished(
++                            &state.xcb_connection,
++                            &state.atoms,
++                            event.window,
++                            state.xdnd_state.other_window,
++                        );
++                    }
+                     let position = state.xdnd_state.position;
+                     drop(state);
+                     window
+@@ -994,6 +1129,15 @@
                      self.0.borrow_mut().xdnd_state = Xdnd::default();
                  }
              }
@@ -4516,7 +5128,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
              Event::SelectionNotify(event) => {
                  let window = self.get_window(event.requestor)?;
                  let state = self.0.borrow_mut();
-@@ -1024,13 +1148,16 @@
+@@ -1024,13 +1168,16 @@
                              }
                          })
                          .collect();
@@ -4534,7 +5146,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  }
              }
              Event::ConfigureNotify(event) => {
-@@ -1309,6 +1436,47 @@
+@@ -1309,6 +1456,47 @@
              }
              Event::XinputButtonRelease(event) => {
                  let window = self.get_window(event.event)?;
@@ -4582,7 +5194,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1334,6 +1502,26 @@
+@@ -1334,6 +1522,26 @@
              }
              Event::XinputMotion(event) => {
                  let window = self.get_window(event.event)?;
@@ -4609,10 +5221,12 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
                  if window.is_blocked() {
-@@ -2408,6 +2596,39 @@
+@@ -2406,6 +2614,39 @@
+         }
+     }
      0
- }
- 
++}
++
 +/// The names of the types an XDND source offers: the three in its
 +/// `XdndEnter`, or its `XdndTypeList` when it offers more.
 +fn xdnd_offered_types(
@@ -4644,11 +5258,9 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/client.rs b/gpui-pre-linux
 +            String::from_utf8(reply.name).ok()
 +        })
 +        .collect()
-+}
-+
+ }
+ 
  fn xdnd_send_finished(
-     xcb_connection: &XCBConnection,
-     atoms: &XcbAtoms,
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-linux/src/linux/x11/clipboard.rs
 --- a/gpui-pre-linux/src/linux/x11/clipboard.rs
 +++ b/gpui-pre-linux/src/linux/x11/clipboard.rs
@@ -4696,7 +5308,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-li
              log::info!(
                  "Received a SelectionNotify for a selection other than CLIPBOARD, PRIMARY or SECONDARY. This is unexpected."
              );
-@@ -979,6 +991,32 @@
+@@ -979,6 +991,37 @@
              server_handle: join_handle,
          });
          Ok(Self { inner: ctx })
@@ -4705,6 +5317,11 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-li
 +    /// What a drag-and-drop source offers in each of `kinds` (media types),
 +    /// read from `XdndSelection` on a connection of its own, as the
 +    /// clipboard is read; a kind that cannot be read is left out.
++    /// The X display the clipboard's connections use.
++    pub(crate) fn display(&self) -> &str {
++        &self.inner.display
++    }
++
 +    pub(crate) fn read_xdnd(&self, kinds: &[String]) -> Vec<(String, Vec<u8>)> {
 +        let Ok(reader) = XContext::new(&self.inner.display) else {
 +            return Vec::new();
@@ -4729,6 +5346,423 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-li
      }
  
      pub(crate) fn set_text(
+diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-linux/src/linux/x11/direct_save.rs
+--- a/gpui-pre-linux/src/linux/x11/direct_save.rs
++++ b/gpui-pre-linux/src/linux/x11/direct_save.rs
+@@ -0,0 +1,413 @@
++//! Files an X11 drag offers to save rather than put on the drag: the Direct
++//! Save protocol (XDS, `XdndDirectSave0`), the X11 form of a file promise,
++//! which web browsers use for a dragged image or link and archive managers
++//! for a file inside an archive. The source names the file in the
++//! `XdndDirectSave0` property of its window; on the drop the target puts a
++//! `file:` address there, asks for the `XdndDirectSave0` target of
++//! `XdndSelection`, and the source writes the file and answers `S` (saved),
++//! `E` (an error) or `F` (it will not; the target may read the data itself,
++//! which this side does not do).
++use std::path::{Path, PathBuf};
++use std::time::{Duration, Instant};
++
++use gpui::{PromisedFile, PromisedFiles};
++use x11rb::{
++    COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
++    connection::Connection,
++    protocol::{
++        Event,
++        xproto::{
++            AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt as _, CreateWindowAux,
++            EventMask, PropMode, Window, WindowClass,
++        },
++    },
++    rust_connection::RustConnection,
++    wrapper::ConnectionExt as _,
++};
++
++use crate::linux::drop_data::DIRECT_SAVE;
++/// How long the source may take to write the file (a browser may fetch it).
++const ANSWER_WAIT: Duration = Duration::from_secs(120);
++
++/// The name a source suggests, as a name in one folder: its last part, and
++/// none when nothing usable is left.
++fn file_name(suggested: &str) -> Option<String> {
++    let name = suggested.rsplit('/').next().unwrap_or(suggested).trim();
++    let name: String = name
++        .chars()
++        .filter(|character| *character != '\0')
++        .collect();
++    (!name.is_empty() && name != "." && name != "..").then_some(name)
++}
++
++/// `name` in `folder`, or `stem (2).ext` and on when that is taken.
++fn unused_path(folder: &Path, name: &str) -> PathBuf {
++    let path = folder.join(name);
++    if !path.exists() {
++        return path;
++    }
++    let (stem, extension) = match name.rsplit_once('.') {
++        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
++        _ => (name, None),
++    };
++    (2..)
++        .map(|number| {
++            folder.join(match extension {
++                Some(extension) => format!("{stem} ({number}).{extension}"),
++                None => format!("{stem} ({number})"),
++            })
++        })
++        .find(|path| !path.exists())
++        .unwrap()
++}
++
++/// A folder no other drop of this process has used, inside `directory`.
++fn drop_folder(directory: &Path) -> std::io::Result<PathBuf> {
++    use std::sync::atomic::{AtomicU64, Ordering};
++    static COUNT: AtomicU64 = AtomicU64::new(0);
++    let now = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map_or(0, |since| since.as_nanos());
++    let folder = directory.join(format!(
++        "promised-{now:x}-{:x}-{:x}",
++        std::process::id(),
++        COUNT.fetch_add(1, Ordering::Relaxed)
++    ));
++    std::fs::create_dir_all(&folder)?;
++    Ok(folder)
++}
++
++/// This machine's name, which a `file:` address for XDS carries.
++fn host_name() -> String {
++    let mut buffer = [0u8; 256];
++    // SAFETY: the buffer is writable for its length; the name is cut at its
++    // nul (or the buffer's end).
++    let result = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
++    if result != 0 {
++        return String::new();
++    }
++    let end = buffer
++        .iter()
++        .position(|byte| *byte == 0)
++        .unwrap_or(buffer.len());
++    String::from_utf8_lossy(&buffer[..end]).into_owned()
++}
++
++fn atom(conn: &RustConnection, name: &str) -> Result<u32, String> {
++    Ok(conn
++        .intern_atom(false, name.as_bytes())
++        .map_err(|error| error.to_string())?
++        .reply()
++        .map_err(|error| error.to_string())?
++        .atom)
++}
++
++/// Asks the source of the drag being dropped (`source`, its window) to save
++/// the file it offers into a folder made for this drop, on a thread and a
++/// connection of its own, and then tells it the drop is finished on
++/// `target`'s behalf (`XdndFinished`, which the caller does not send).
++/// `time` is the drop's.
++pub(crate) fn receive(display: &str, source: Window, target: Window, time: u32) -> PromisedFiles {
++    let folder = drop_folder(&gpui::promised_files_directory());
++    let (promised, sender) = PromisedFiles::new(
++        folder
++            .as_ref()
++            .cloned()
++            .unwrap_or_else(|_| gpui::promised_files_directory()),
++        1,
++    );
++    let display = display.to_owned();
++    std::thread::spawn(move || {
++        let report: PromisedFile = match (folder, RustConnection::connect(Some(&display))) {
++            (Err(error), _) => Err(error.to_string()),
++            (_, Err(error)) => Err(error.to_string()),
++            (Ok(folder), Ok((conn, screen))) => {
++                let report = save(&conn, screen, source, time, &folder);
++                let finished = finish(&conn, source, target, report.is_ok());
++                match (report, finished) {
++                    (Err(error), Err(also)) => Err(format!("{error}; {also}")),
++                    (report, finished) => {
++                        if let Err(error) = finished {
++                            log::warn!("{error}");
++                        }
++                        report
++                    }
++                }
++            }
++        };
++        if let Err(error) = &report {
++            log::warn!("a drag's direct save failed: {error}");
++        }
++        let _ = sender.unbounded_send(report);
++    });
++    promised
++}
++
++/// The exchange: the file's name from the source, the address it is to be
++/// saved at, the request and the source's answer.
++fn save(
++    conn: &RustConnection,
++    screen: usize,
++    source: Window,
++    time: u32,
++    folder: &Path,
++) -> PromisedFile {
++    let fail = |error: x11rb::errors::ConnectionError| error.to_string();
++    let direct_save = atom(conn, DIRECT_SAVE)?;
++    let text = atom(conn, "text/plain")?;
++    let selection = atom(conn, "XdndSelection")?;
++    let suggested = conn
++        .get_property(false, source, direct_save, AtomEnum::ANY, 0, 1024)
++        .map_err(fail)?
++        .reply()
++        .map_err(|error| error.to_string())?;
++    let name = file_name(&String::from_utf8_lossy(&suggested.value))
++        .ok_or("the source named no file to save")?;
++    let path = unused_path(folder, &name);
++    let mut address = url::Url::from_file_path(&path).map_err(|()| "not an absolute path")?;
++    let _ = address.set_host(
++        Some(&host_name())
++            .filter(|host| !host.is_empty())
++            .map(String::as_str),
++    );
++    conn.change_property8(
++        PropMode::REPLACE,
++        source,
++        direct_save,
++        text,
++        address.as_str().as_bytes(),
++    )
++    .map_err(fail)?;
++    // A window of this connection's own receives the answer.
++    let requestor = conn.generate_id().map_err(|error| error.to_string())?;
++    let root = conn.setup().roots.get(screen).ok_or("no screen")?.root;
++    conn.create_window(
++        COPY_DEPTH_FROM_PARENT,
++        requestor,
++        root,
++        0,
++        0,
++        1,
++        1,
++        0,
++        WindowClass::INPUT_ONLY,
++        COPY_FROM_PARENT,
++        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
++    )
++    .map_err(fail)?;
++    conn.convert_selection(requestor, selection, direct_save, direct_save, time)
++        .map_err(fail)?;
++    conn.flush().map_err(fail)?;
++    let answer = wait_for_answer(conn, requestor, direct_save);
++    let _ = conn.destroy_window(requestor);
++    let _ = conn.flush();
++    let saved = match answer? {
++        answer if answer.starts_with(b"S") => {
++            std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
++        }
++        _ => false,
++    };
++    if saved {
++        Ok(path)
++    } else {
++        // Whatever the source left there is not taken.
++        let _ = std::fs::remove_file(&path);
++        Err("the source did not save the file".into())
++    }
++}
++
++/// The source's answer: the property it set on `requestor`.
++fn wait_for_answer(
++    conn: &RustConnection,
++    requestor: Window,
++    property: u32,
++) -> Result<Vec<u8>, String> {
++    let until = Instant::now() + ANSWER_WAIT;
++    while Instant::now() < until {
++        let event = conn.poll_for_event().map_err(|error| error.to_string())?;
++        let Some(event) = event else {
++            std::thread::sleep(Duration::from_millis(5));
++            continue;
++        };
++        if let Event::SelectionNotify(notify) = event
++            && notify.requestor == requestor
++        {
++            if notify.property == u32::from(AtomEnum::NONE) {
++                return Err("the source refused to save the file".into());
++            }
++            let reply = conn
++                .get_property(true, requestor, property, AtomEnum::ANY, 0, 16)
++                .map_err(|error| error.to_string())?
++                .reply()
++                .map_err(|error| error.to_string())?;
++            return Ok(reply.value);
++        }
++    }
++    Err("the source did not answer".into())
++}
++
++/// `XdndFinished` from `target` to `source`.
++fn finish(
++    conn: &RustConnection,
++    source: Window,
++    target: Window,
++    accepted: bool,
++) -> Result<(), String> {
++    let finished = atom(conn, "XdndFinished")?;
++    let copy = atom(conn, "XdndActionCopy")?;
++    let message = ClientMessageEvent {
++        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
++        format: 32,
++        sequence: 0,
++        window: source,
++        type_: finished,
++        data: ClientMessageData::from([
++            target,
++            u32::from(accepted),
++            if accepted { copy } else { 0 },
++            0,
++            0,
++        ]),
++    };
++    conn.send_event(false, source, EventMask::NO_EVENT, message)
++        .map_err(|error| format!("XdndFinished not sent: {error}"))?
++        .check()
++        .map_err(|error| format!("XdndFinished refused: {error:?}"))?;
++    conn.flush().map_err(|error| error.to_string())
++}
++
++/// A source of a direct-save drag, for the application's test: a window of
++/// a connection of its own that owns `XdndSelection`, names `name` in its
++/// `XdndDirectSave0` property and, asked to save, writes `contents` (or,
++/// with `fail`, half of them and answers `E`) at the address given. It
++/// answers once, then waits for `XdndFinished`.
++pub struct DirectSaveSource {
++    /// The source's window.
++    pub window: Window,
++    answered: std::thread::JoinHandle<Result<bool, String>>,
++}
++
++impl DirectSaveSource {
++    pub fn start(
++        display: Option<&str>,
++        name: &str,
++        contents: Vec<u8>,
++        fail: bool,
++    ) -> Result<Self, String> {
++        let (conn, screen) = RustConnection::connect(display).map_err(|error| error.to_string())?;
++        let fail_with = |error: x11rb::errors::ConnectionError| error.to_string();
++        let window = conn.generate_id().map_err(|error| error.to_string())?;
++        let root = conn.setup().roots[screen].root;
++        conn.create_window(
++            COPY_DEPTH_FROM_PARENT,
++            window,
++            root,
++            0,
++            0,
++            1,
++            1,
++            0,
++            WindowClass::INPUT_ONLY,
++            COPY_FROM_PARENT,
++            &CreateWindowAux::new(),
++        )
++        .map_err(fail_with)?;
++        let direct_save = atom(&conn, DIRECT_SAVE)?;
++        let text = atom(&conn, "text/plain")?;
++        let selection = atom(&conn, "XdndSelection")?;
++        let finished = atom(&conn, "XdndFinished")?;
++        conn.change_property8(
++            PropMode::REPLACE,
++            window,
++            direct_save,
++            text,
++            name.as_bytes(),
++        )
++        .map_err(fail_with)?;
++        conn.set_selection_owner(window, selection, x11rb::CURRENT_TIME)
++            .map_err(fail_with)?;
++        conn.flush().map_err(fail_with)?;
++        let answered = std::thread::spawn(move || -> Result<bool, String> {
++            let until = Instant::now() + Duration::from_secs(30);
++            let mut saved = None;
++            // What the source saw, for a failure's message.
++            let mut seen = Vec::new();
++            while Instant::now() < until {
++                let event = conn.poll_for_event().map_err(|error| error.to_string())?;
++                let Some(event) = event else {
++                    std::thread::sleep(Duration::from_millis(5));
++                    continue;
++                };
++                seen.push(format!("{event:?}"));
++                match event {
++                    Event::SelectionRequest(request) if request.target == direct_save => {
++                        let address = conn
++                            .get_property(false, window, direct_save, AtomEnum::ANY, 0, 4096)
++                            .map_err(|error| error.to_string())?
++                            .reply()
++                            .map_err(|error| error.to_string())?;
++                        let address = String::from_utf8_lossy(&address.value).into_owned();
++                        seen.push(address.clone());
++                        // The address names this machine, which the `url`
++                        // crate does not take for a path; its path is the
++                        // file's.
++                        let path = url::Url::parse(&address).ok().and_then(|address| {
++                            url::Url::parse(&format!("file://{}", address.path()))
++                                .ok()?
++                                .to_file_path()
++                                .ok()
++                        });
++                        let wrote = path.is_some_and(|path| {
++                            let bytes = if fail {
++                                &contents[..contents.len() / 2]
++                            } else {
++                                &contents[..]
++                            };
++                            std::fs::write(path, bytes).is_ok()
++                        }) && !fail;
++                        let answer: &[u8] = if wrote { b"S" } else { b"E" };
++                        conn.change_property8(
++                            PropMode::REPLACE,
++                            request.requestor,
++                            request.property,
++                            AtomEnum::STRING,
++                            answer,
++                        )
++                        .map_err(fail_with)?;
++                        let notify = x11rb::protocol::xproto::SelectionNotifyEvent {
++                            response_type: x11rb::protocol::xproto::SELECTION_NOTIFY_EVENT,
++                            sequence: 0,
++                            time: request.time,
++                            requestor: request.requestor,
++                            selection: request.selection,
++                            target: request.target,
++                            property: request.property,
++                        };
++                        conn.send_event(false, request.requestor, EventMask::NO_EVENT, notify)
++                            .map_err(fail_with)?;
++                        conn.flush().map_err(fail_with)?;
++                        saved = Some(wrote);
++                    }
++                    Event::ClientMessage(message) if message.type_ == finished => {
++                        return saved.ok_or_else(|| "finished before any request".to_owned());
++                    }
++                    _ => {}
++                }
++            }
++            Err(format!("no XdndFinished; the source saw {seen:?}"))
++        });
++        Ok(Self { window, answered })
++    }
++
++    /// Whether the file was written, once the drop was finished.
++    pub fn finished(self) -> Result<bool, String> {
++        self.answered
++            .join()
++            .map_err(|_| "the source's thread panicked".to_owned())?
++    }
++}
++
++/// [`receive`], for the application's test of a drop of its own making.
++pub fn receive_direct_save(display: &str, source: Window, target: Window) -> PromisedFiles {
++    receive(display, source, target, x11rb::CURRENT_TIME)
++}
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux/src/linux/x11/window.rs
 --- a/gpui-pre-linux/src/linux/x11/window.rs
 +++ b/gpui-pre-linux/src/linux/x11/window.rs
@@ -4770,7 +5804,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
          TextUriList: b"text/uri-list",
          UTF8_STRING,
          TEXT,
-@@ -1827,8 +1830,27 @@
+@@ -1827,6 +1830,25 @@
              ),
          )
          .log_err();
@@ -4778,8 +5812,8 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
 +
 +    fn can_start_external_drag(&self) -> bool {
 +        true
-     }
- 
++    }
++
 +    /// An XDND drag of the files, from this window (`xdnd_source.rs`).
 +    fn start_external_drag(&self, payload: &ExternalDragPayload) -> bool {
 +        let ExternalDragPayload::Files(paths) = payload;
@@ -4793,11 +5827,9 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/window.rs b/gpui-pre-linux
 +        }
 +        let client = self.0.state.borrow().client.get_client();
 +        client.is_some_and(|client| client.start_xdnd_drag(self.0.x_window, &paths))
-+    }
-+
+     }
+ 
      fn start_window_move(&self) {
-         const MOVERESIZE_MOVE: u32 = 8;
-         self.send_moveresize(MOVERESIZE_MOVE).log_err();
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/xdnd_source.rs b/gpui-pre-linux/src/linux/x11/xdnd_source.rs
 --- a/gpui-pre-linux/src/linux/x11/xdnd_source.rs
 +++ b/gpui-pre-linux/src/linux/x11/xdnd_source.rs
