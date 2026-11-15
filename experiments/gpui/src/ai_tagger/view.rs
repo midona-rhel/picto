@@ -248,7 +248,7 @@ impl AiTagger {
             )
             .child(self.nav_button(
                 "ai-next",
-                "ai-chevron-right",
+                "menu-chevron-right",
                 t("Next item"),
                 "view.nextImage",
                 1,
@@ -519,7 +519,7 @@ impl AiTagger {
                 if checked { Mark::Checked } else { Mark::Empty },
                 check::Size::Compact,
             ))
-            .child(ui::icon("ai-bookmark", 13., color).flex_none())
+            .child(ui::icon("pin-bookmark", 13., color).flex_none())
             .child(name)
             .child(
                 div()
