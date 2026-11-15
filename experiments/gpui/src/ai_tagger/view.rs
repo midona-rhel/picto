@@ -12,6 +12,7 @@ use crate::ui::{
     self,
     action_button::Look,
     check::{self, Mark},
+    icon_button::Look as IconLook,
     overlay_shell,
 };
 use crate::{motion, theme};
@@ -240,37 +241,13 @@ impl AiTagger {
         shortcut: &'static str,
         delta: isize,
         enabled: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        let mut button = div()
-            .id(id)
-            .role(Role::Button)
-            .aria_label(t(tip))
-            .aria_disabled(!enabled)
-            .size(px(24.))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(5.))
-            .child(ui::icon(icon, 15., theme.text()));
-        if enabled {
-            button = button
-                .cursor_pointer()
-                .hover(move |style| style.bg(theme.surface_hover()))
-                .on_click(cx.listener(move |this, _, _, cx| this.move_active(delta, cx)));
-        } else {
-            button = button.opacity(0.28);
-        }
-        ui::tooltip::attach(
-            button,
-            SharedString::from(format!("{id}-tip")),
-            ui::tip(tip).shortcut(shortcut, cx),
-            24.,
-            window,
-            cx,
-        )
+    ) -> ui::icon_button::IconButton {
+        ui::icon_button(id, icon)
+            .look(IconLook::Nav)
+            .disabled(!enabled)
+            .tip(ui::tip(tip).shortcut(shortcut, cx))
+            .on_click(cx.listener(move |this, _, _, cx| this.move_active(delta, cx)))
     }
 
     /// The item reviewed (`.reviewPane`).
@@ -299,7 +276,6 @@ impl AiTagger {
                 "view.prevImage",
                 -1,
                 index > 0,
-                window,
                 cx,
             ))
             .child(
@@ -319,7 +295,6 @@ impl AiTagger {
                 "view.nextImage",
                 1,
                 index + 1 < count,
-                window,
                 cx,
             ));
 
