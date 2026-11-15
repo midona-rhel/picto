@@ -476,12 +476,9 @@ impl Logins {
         let answer = self
             .session
             .read(cx)
-            .dispatch("auth.credentials.set", credential.arguments());
+            .call("auth.credentials.set", credential.arguments());
         cx.spawn(async move |this, cx| {
-            let saved = answer
-                .await
-                .unwrap_or_else(|_| Err("The application has stopped".to_owned()))
-                .map(|_| ());
+            let saved = answer.await.map(|_| ());
             let _ = this.update(cx, |this, cx| {
                 if saved.is_ok() {
                     report_local_login(&this.session, &site, cx);
@@ -647,13 +644,10 @@ impl Services for AppServices {
         }
         let answer = {
             let cx = self.cx.borrow();
-            self.session.read_with(&*cx, |session, _| {
-                session.dispatch(command.to_owned(), args)
-            })
+            self.session
+                .read_with(&*cx, |session, _| session.call(command.to_owned(), args))
         };
-        answer
-            .await
-            .unwrap_or_else(|_| Err("The application has stopped".to_owned()))
+        answer.await
     }
 }
 

@@ -790,6 +790,15 @@ impl Session {
     ) -> futures::channel::oneshot::Receiver<Result<serde_json::Value, String>> {
         self.application.dispatch(command, args)
     }
+
+    /// [`Session::dispatch`]'s answer, as a future of its own.
+    pub fn call<C: Into<String>>(
+        &self,
+        command: C,
+        args: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<serde_json::Value, String>> + use<C> {
+        self.application.call(command, args)
+    }
 }
 
 #[cfg(test)]

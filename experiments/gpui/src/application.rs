@@ -18,6 +18,14 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+/// What a caller is told when the application ended before it answered.
+pub const STOPPED: &str = "The application has stopped";
+
+/// The answer `receiver` brings, or [`STOPPED`] if its sender went first.
+pub async fn answer<T>(receiver: oneshot::Receiver<Result<T, String>>) -> Result<T, String> {
+    receiver.await.unwrap_or_else(|_| Err(STOPPED.to_owned()))
+}
+
 /// The file `run.sh` writes into a copy, naming the library it copied.
 pub const MARKER: &str = ".gpui-disposable";
 /// What the folder holding a copy is called (`run.sh`, `million.sh`).
@@ -606,6 +614,15 @@ impl Application {
         result
     }
 
+    /// [`Application::dispatch`]'s answer, as a future of its own.
+    pub fn call<C: Into<String>>(
+        &self,
+        command: C,
+        args: Value,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + use<C> {
+        answer(self.dispatch(command, args))
+    }
+
     /// Sends a command to the application, as the Electron renderer's
     /// `invoke(command, args)` does, and hands back its JSON answer. Commands
     /// sent before the library has opened wait for it.
@@ -628,7 +645,7 @@ impl Application {
         self.runtime.spawn(async move {
             let ready = match opened.wait_for(Option::is_some).await {
                 Ok(state) => state.clone().unwrap_or(Ok(())),
-                Err(_) => Err("The application has stopped".to_owned()),
+                Err(_) => Err(STOPPED.to_owned()),
             };
             let result = match ready {
                 Ok(()) => picto_core::state::invoke(&command, &args.to_string())

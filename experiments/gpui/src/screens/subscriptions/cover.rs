@@ -37,9 +37,8 @@ impl SubscriptionsScreen {
         let answer = self.send(requests::cover_candidates(id, cursor), cx);
         let blobs = self.session.read(cx).blobs().to_path_buf();
         cx.spawn(async move |this, cx| {
-            let page = answer
+            let page = crate::application::answer(answer)
                 .await
-                .unwrap_or_else(|_| Err("The application has stopped".to_owned()))
                 .and_then(|page| {
                     serde_json::from_value::<SubscriptionCoverCandidatePage>(page)
                         .map_err(|error| error.to_string())

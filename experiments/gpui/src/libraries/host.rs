@@ -653,9 +653,7 @@ pub fn restore(
                 let _ = sent.send(result);
             })
             .ok();
-        let result = answered
-            .await
-            .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+        let result = crate::application::answer(answered).await;
         drop(application);
         cx.update(|cx| {
             // The restored database is a new file; the user's consent to
@@ -734,9 +732,7 @@ pub fn join(
                 let _ = sent.send(result.map(|_| choice.library.library_id));
             })
             .ok();
-        let result = answered
-            .await
-            .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+        let result = crate::application::answer(answered).await;
         cx.update(|cx| {
             host.update(cx, |host, cx| {
                 host.busy = false;
@@ -915,7 +911,7 @@ fn start_with(
         }
         let result = match opened.wait_for(Option::is_some).await {
             Ok(result) => result.clone().unwrap_or(Ok(())),
-            Err(_) => Err("The application has stopped".to_owned()),
+            Err(_) => Err(crate::application::STOPPED.to_owned()),
         };
         cx.update(|cx| {
             host.update(cx, |host, _| host.busy = false);
