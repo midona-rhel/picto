@@ -69,14 +69,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_deletion(
-            target.selection(self.session.read(cx)),
-            reject,
-            false,
-            None,
-            window,
-            cx,
-        );
+        self.request_deletion(target.selection(), reject, false, None, window, cx);
     }
 
     /// `rejectTarget` when the setting deletes rejected items: deletes

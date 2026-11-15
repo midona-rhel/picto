@@ -8,6 +8,7 @@ use crate::theme;
 use gpui::*;
 use picto_library::RootId;
 use picto_library::query::ItemScope;
+use picto_library::selection::SelectionTarget;
 use std::path::PathBuf;
 
 /// A press on a tile becomes a drag once the pointer has moved this far.
@@ -51,7 +52,13 @@ pub fn pin_covers(thumbnails: &Entity<Thumbnails>, covers: &[Cover], cx: &mut Ap
 /// The items being dragged.
 #[derive(Clone)]
 pub struct ItemDrag {
+    /// The items dragged by id, in grid order (of a query-wide selection,
+    /// the loaded ones), which a reorder moves.
     pub roots: Vec<RootId>,
+    /// What a drop addresses: the grid's selection, loaded or not, or the
+    /// one tile dragged; and how many items that is.
+    pub target: SelectionTarget,
+    pub count: u64,
     /// The scope they were dragged from: a drop into a folder from the Inbox
     /// or the Trash also makes them active.
     pub source: ItemScope,
@@ -152,7 +159,7 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
                 ),
         );
     }
-    let count = drag.roots.len();
+    let count = drag.count;
     if count > 1 {
         frame = frame.child(
             div()
@@ -381,17 +388,33 @@ impl super::GridView {
             let theme = theme::theme(cx);
             // The selection, loaded or not, when the tile is in it; the
             // ghost shows the loaded ones.
-            let (roots, chosen) = if session.is_selected(ordinal) {
-                (session.selected_ids(), session.selected_loaded())
-            } else {
-                let item = session.item_at(ordinal);
-                (
-                    item.iter().map(|item| item.root_id).collect(),
-                    item.into_iter().collect(),
-                )
+            let selection = session
+                .selection_target()
+                .filter(|_| session.is_selected(ordinal));
+            let (roots, chosen, target, count) = match selection {
+                Some(target) => {
+                    let chosen = session.selected_loaded();
+                    (
+                        session.selected_ids(),
+                        chosen,
+                        target,
+                        session.selection_count(),
+                    )
+                }
+                None => {
+                    let item = session.item_at(ordinal);
+                    let roots: Vec<RootId> = item.iter().map(|item| item.root_id).collect();
+                    let count = roots.len() as u64;
+                    let target = SelectionTarget::Explicit {
+                        root_ids: roots.clone(),
+                    };
+                    (roots, item.into_iter().collect(), target, count)
+                }
             };
             drag::ItemDrag {
                 roots,
+                target,
+                count,
                 source: session
                     .nav
                     .get(session.displayed)
@@ -412,7 +435,7 @@ impl super::GridView {
                 position,
             }
         };
-        if items.roots.is_empty() {
+        if items.count == 0 {
             self.press = None;
             return;
         }

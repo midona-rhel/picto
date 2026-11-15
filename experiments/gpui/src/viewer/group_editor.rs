@@ -535,11 +535,16 @@ impl GroupEditor {
                 vec![index]
             };
             let theme = theme::theme(cx);
+            let roots: Vec<_> = members
+                .iter()
+                .map(|index| self.members[*index].root_id)
+                .collect();
             let ghost = drag::ItemDrag {
-                roots: members
-                    .iter()
-                    .map(|index| self.members[*index].root_id)
-                    .collect(),
+                count: roots.len() as u64,
+                target: picto_library::selection::SelectionTarget::Explicit {
+                    root_ids: roots.clone(),
+                },
+                roots,
                 source: picto_library::query::ItemScope::All,
                 covers: members
                     .iter()

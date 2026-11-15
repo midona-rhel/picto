@@ -152,12 +152,13 @@ impl Shell {
             return;
         }
         let session = self.session.read(cx);
-        if session.selection.is_empty() || session.selection.query_wide() {
-            cx.propagate();
-            return;
+        let selection = session
+            .selection_target()
+            .filter(|_| !session.selection.query_wide());
+        match selection {
+            Some(selection) => self.copy_files(selection, cx),
+            None => cx.propagate(),
         }
-        let ids = session.selected_ids();
-        self.copy_files(ids, cx);
     }
 
     /// `edit.rename`: the inspector's name field for one item.

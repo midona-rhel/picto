@@ -110,12 +110,10 @@ pub fn grid_drop(node: &str) -> Option<GridDrop> {
 /// target: a folder adds them, and makes them active when they came from
 /// the Inbox or the Trash; All, Inbox and Trash set their lifecycle.
 fn drop_work(
-    session: &Entity<crate::session::Session>,
     items: &ItemDrag,
     target: GridDrop,
-    cx: &App,
 ) -> impl FnOnce(&picto_library::Library) -> picto_library::Result<()> + Send + 'static {
-    let selection = session.read(cx).target_for(items.roots.clone());
+    let selection = items.target.clone();
     let activate = matches!(items.source, ItemScope::Inbox | ItemScope::Trash);
     move |library| {
         match target {
@@ -141,7 +139,7 @@ pub fn drop_into_folder(
     folder: FolderId,
     cx: &mut App,
 ) {
-    let work = drop_work(session, &items, GridDrop::Folder(folder), cx);
+    let work = drop_work(&items, GridDrop::Folder(folder));
     session.update(cx, |session, cx| {
         let _ = session.edit(work, Reread::RESULTS, cx);
     });
@@ -204,7 +202,7 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let work = drop_work(&self.session, &items, target, cx);
+        let work = drop_work(&items, target);
         edit_then_in(
             &self.session,
             Report::default(),

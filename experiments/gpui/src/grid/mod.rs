@@ -129,19 +129,14 @@ pub struct GridView {
 /// "Return to Top" appears once the grid has scrolled this far.
 const RETURN_TO_TOP_AFTER: f32 = 200.;
 
-/// The files `media.resolve_target_paths` answered with, each once, in
-/// its order (`resolveNativeDragHashes` keeps the first of each file).
-fn drag_out_paths(found: &serde_json::Value) -> Vec<PathBuf> {
+/// The files [`Session::resolve_files`] answered with, each once, in its
+/// order (`resolveNativeDragHashes` keeps the first of each file).
+fn drag_out_paths(found: Vec<(String, PathBuf)>) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     found
-        .as_array()
         .into_iter()
-        .flatten()
-        .filter(|file| {
-            let hash = file.get("file_hash").and_then(serde_json::Value::as_str);
-            hash.is_none_or(|hash| seen.insert(hash.to_owned()))
-        })
-        .filter_map(|file| file.get("path")?.as_str().map(PathBuf::from))
+        .filter(|(hash, _)| seen.insert(hash.clone()))
+        .map(|(_, path)| path)
         .collect()
 }
 
@@ -449,17 +444,10 @@ impl GridView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = self.session.read(cx).target_for(items.roots.clone());
-        let Ok(target) = serde_json::to_value(&target) else {
-            return;
-        };
         self.drag_files = Some(None);
         self.drag_out_waiting = false;
         let request = self.drag_request.next();
-        let answer = self.session.read(cx).dispatch(
-            "media.resolve_target_paths",
-            serde_json::json!({ "target": target }),
-        );
+        let answer = self.session.read(cx).resolve_files(&items.target);
         cx.spawn_in(window, async move |this, cx| {
             let resolved = answer.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -468,12 +456,11 @@ impl GridView {
                     return;
                 }
                 let files = match resolved {
-                    Ok(Ok(found)) => drag_out_paths(&found),
-                    Ok(Err(error)) => {
+                    Ok(found) => drag_out_paths(found),
+                    Err(error) => {
                         eprintln!("[drag] native drag failed: {error}");
                         Vec::new()
                     }
-                    Err(_) => Vec::new(),
                 };
                 if this.drag_files == Some(None) {
                     this.drag_files = Some(Some(files));
@@ -1415,18 +1402,18 @@ mod tests {
 
     #[test]
     fn dragged_out_files_are_each_file_once() {
-        let found = serde_json::json!([
-            { "file_hash": "a", "path": "/library/a.jpg" },
-            { "file_hash": "b", "path": "/library/b.png" },
-            { "file_hash": "a", "path": "/library/elsewhere/a.jpg" },
-        ]);
+        let file = |hash: &str, path: &str| (hash.to_owned(), PathBuf::from(path));
+        let found = vec![
+            file("a", "/library/a.jpg"),
+            file("b", "/library/b.png"),
+            file("a", "/library/elsewhere/a.jpg"),
+        ];
         assert_eq!(
-            drag_out_paths(&found),
+            drag_out_paths(found),
             [
                 PathBuf::from("/library/a.jpg"),
                 PathBuf::from("/library/b.png")
             ]
         );
-        assert!(drag_out_paths(&serde_json::json!(null)).is_empty());
     }
 }

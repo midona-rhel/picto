@@ -21,7 +21,8 @@ use picto_library::{FolderId, Library, MutationReceipt, Rating, RootId, TagId, T
 /// What the inspector's edits apply to: the items, their tags and their
 /// folders (for several items, the ones they all share).
 pub(super) struct Target {
-    pub ids: Vec<RootId>,
+    /// The item shown alone, or the selection the summary describes.
+    pub selection: SelectionTarget,
     pub tags: Vec<TagRecord>,
     pub folders: Vec<FolderId>,
 }
@@ -42,7 +43,9 @@ impl Inspector {
             Mode::Item => {
                 let item = self.item.as_ref()?;
                 Some(Target {
-                    ids: vec![item.root.root_id],
+                    selection: SelectionTarget::Explicit {
+                        root_ids: vec![item.root.root_id],
+                    },
                     tags: records(&item.tag_ids),
                     folders: item.folder_ids.clone(),
                 })
@@ -53,7 +56,7 @@ impl Inspector {
                 let shown = self.selection.shown.as_ref()?;
                 let summary = shown.summary.as_ref()?;
                 Some(Target {
-                    ids: shown.ids.clone(),
+                    selection: shown.target.clone(),
                     tags: records(&summary.shared_tags),
                     folders: summary.shared_folders.clone(),
                 })
@@ -89,7 +92,7 @@ impl Inspector {
             let work = move |library: &Library, target: &SelectionTarget| {
                 work(library, target).map(|_| ())
             };
-            self.edit_items(target.ids, touches, false, work, |_, _| {}, cx);
+            self.edit_items(target.selection, touches, false, work, |_, _| {}, cx);
         }
     }
 
@@ -100,17 +103,13 @@ impl Inspector {
     /// selection.
     pub(super) fn edit_items(
         &mut self,
-        ids: Vec<RootId>,
+        selection: SelectionTarget,
         touches: Touches,
         navigation: bool,
         work: impl FnOnce(&Library, &SelectionTarget) -> picto_library::Result<()> + Send + 'static,
         then: impl FnOnce(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        if ids.is_empty() {
-            return;
-        }
-        let selection = self.session.read(cx).target_for(ids);
         let reread = Reread {
             results: self.changes_results(touches, cx),
             navigation,
@@ -259,7 +258,7 @@ impl Inspector {
             return;
         };
         self.edit_items(
-            target.ids,
+            target.selection,
             Touches::Tags,
             created,
             move |library, target| library.apply_tags(target, &[tag_name], add).map(|_| ()),
@@ -397,9 +396,9 @@ impl Inspector {
 
     // ── The dialogs ─────────────────────────────────────────────
 
-    /// The grid's selected items, in grid order.
-    fn selected_ids(&self, cx: &App) -> Vec<RootId> {
-        self.session.read(cx).selected_ids()
+    /// What an edit of the grid's selection addresses, loaded or not.
+    fn grid_selection(&self, cx: &App) -> Option<SelectionTarget> {
+        self.session.read(cx).selection_target()
     }
 
     /// T and the grid menu's Add Tags (`TagSelectModal`): the dialog checks
@@ -441,16 +440,15 @@ impl Inspector {
         remove: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        let ids = self.selected_ids(cx);
-        if ids.is_empty() {
+        let Some(selection) = self.grid_selection(cx) else {
             return;
-        }
+        };
         if !add.is_empty() {
             self.session
                 .update(cx, |session, _| session.record_tags_use(&add));
         }
         self.edit_items(
-            ids,
+            selection,
             Touches::Tags,
             false,
             move |library, target| {
@@ -476,17 +474,16 @@ impl Inspector {
         remove: Vec<FolderId>,
         cx: &mut Context<Self>,
     ) {
-        let ids = self.selected_ids(cx);
-        if ids.is_empty() {
+        let Some(selection) = self.grid_selection(cx) else {
             return;
-        }
+        };
         self.session.update(cx, |session, _| {
             for folder in &add {
                 session.record_folder_use(*folder);
             }
         });
         self.edit_items(
-            ids,
+            selection,
             Touches::Folders,
             false,
             move |library, target| {

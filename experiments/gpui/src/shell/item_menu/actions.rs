@@ -8,7 +8,7 @@ use crate::session::{Report, Reread, edit_then, edit_then_in};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::selection::SelectionTarget;
-use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootId, RootKind};
+use picto_library::{ContentSortField, FolderId, Library, Lifecycle, RootKind};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -148,6 +148,9 @@ impl Shell {
                     write_text(lines.join("\n"), cx);
                 }
             }
+            // Names come from the loaded items, so only when they are the
+            // whole selection (`Names are unavailable for this selection`).
+            Action::CopySelectionNames if !target.loaded() => {}
             Action::CopySelectionNames => {
                 let names = target
                     .items
@@ -158,34 +161,24 @@ impl Shell {
             }
             Action::CopySelectionPaths | Action::CopySelectionLinks => {
                 // `resolveTargetFilePaths`: every file of the selection,
-                // collection members included, in order.
+                // loaded or not, collection members included, in order.
                 let links = action == Action::CopySelectionLinks;
-                let report = Report::default();
-                edit_then(
-                    &self.session,
-                    report,
-                    Reread::NOTHING,
-                    files_of(ids),
-                    cx,
-                    move |_, files, cx| {
-                        let files = files.into_iter().flatten();
-                        if links {
-                            let lines = files
-                                .map(|(hash, path)| link(&hash, &path))
-                                .collect::<Vec<_>>();
-                            if !lines.is_empty() {
-                                write_text(lines.join("\n"), cx);
-                            }
-                        } else {
-                            let paths = files
-                                .map(|(_, path)| PathBuf::from(path))
-                                .collect::<Vec<_>>();
-                            if !paths.is_empty() {
-                                copy_paths(&paths, cx);
-                            }
+                self.with_files(target.selection(), cx, move |files, cx| {
+                    if links {
+                        let lines = files
+                            .iter()
+                            .map(|(hash, path)| link(hash, path))
+                            .collect::<Vec<_>>();
+                        if !lines.is_empty() {
+                            write_text(lines.join("\n"), cx);
                         }
-                    },
-                );
+                    } else {
+                        let paths = files.into_iter().map(|(_, path)| path).collect::<Vec<_>>();
+                        if !paths.is_empty() {
+                            copy_paths(&paths, cx);
+                        }
+                    }
+                });
             }
             Action::CopyFile => {
                 // `copyFileForHash`: the one file the row is about.
@@ -210,7 +203,7 @@ impl Shell {
                     crate::ui::notify::error(t("Could not copy selection"), error, cx);
                 }
             }
-            Action::CopySelection => self.copy_files(ids, cx),
+            Action::CopySelection => self.copy_files(target.selection(), cx),
             // ── Lifecycle ──
             Action::Accept | Action::Restore => {
                 self.set_lifecycle(&target, Lifecycle::Active, window, cx)
@@ -240,7 +233,7 @@ impl Shell {
                 if let Some(folder) = last {
                     self.session
                         .update(cx, |session, _| session.record_folder_use(folder));
-                    let selection = target.selection(self.session.read(cx));
+                    let selection = target.selection();
                     let node = format!("folder:{}", folder.0);
                     let name = self
                         .session
@@ -267,7 +260,7 @@ impl Shell {
                 }
             }
             Action::NewFolderWithSelection => {
-                let selection = target.selection(self.session.read(cx));
+                let selection = target.selection();
                 self.sidebar.update(cx, |sidebar, cx| {
                     sidebar.new_folder_in(None, Some(selection), window, cx)
                 });
@@ -282,7 +275,7 @@ impl Shell {
             }
             Action::RemoveFromFolder => {
                 if let Some(folder) = target.folder {
-                    let selection = target.selection(self.session.read(cx));
+                    let selection = target.selection();
                     edit_then(
                         &self.session,
                         Report::default(),
@@ -355,7 +348,10 @@ impl Shell {
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
                 return;
             }
-            Action::BatchRename => self.batch_rename(target.items, cx),
+            // The dialog names each item, so every one must be loaded
+            // (`Rename requires a loaded selection`).
+            Action::BatchRename if target.loaded() => self.batch_rename(target.items, cx),
+            Action::BatchRename => {}
             Action::AddTags => {
                 self.dispatch(Box::new(crate::keymap::AddTags), window, cx);
                 return;
@@ -366,8 +362,7 @@ impl Shell {
                 // viewer's item and a collection's members are named.
                 let session = self.session.read(cx);
                 let named = target.member || target.group || session.viewer;
-                let selection = target.selection(session);
-                let explicit = named.then_some(selection);
+                let explicit = named.then(|| target.selection());
                 // Over the grid it opens centred over the window, as Add
                 // Tags and Add to Folder open their dialogs there (the
                 // owner's choice; production docks it beside the inspector
@@ -382,8 +377,8 @@ impl Shell {
             Action::CopyTags => self.copy_tags(target, cx),
             Action::PasteTags => {
                 let tags = self.items.tag_clipboard.clone();
-                if !tags.is_empty() && !ids.is_empty() {
-                    let selection = target.selection(self.session.read(cx));
+                if !tags.is_empty() && target.count() > 0 {
+                    let selection = target.selection();
                     edit_then(
                         &self.session,
                         Report::default(),
@@ -396,7 +391,7 @@ impl Shell {
             }
             Action::Rate(stars) => {
                 let rating = picto_library::Rating::ALL[usize::from(stars).min(5)];
-                let selection = target.selection(self.session.read(cx));
+                let selection = target.selection();
                 edit_then(
                     &self.session,
                     Report::default(),
@@ -409,14 +404,8 @@ impl Shell {
             // ── Exporting ──
             Action::ExportOriginals | Action::ExportAs | Action::ExportPictoPack => {
                 // The whole selection, loaded or not, when these are it.
-                let session = self.session.read(cx);
-                let selection = target.selection(session);
-                let count = match &selection {
-                    picto_library::selection::SelectionTarget::Explicit { root_ids } => {
-                        root_ids.len() as u64
-                    }
-                    _ => session.selection_count(),
-                };
+                let selection = target.selection();
+                let count = target.count();
                 if let Some(exports) = crate::export::get(cx) {
                     exports.update(cx, |exports, cx| match action {
                         Action::ExportOriginals => exports.export_originals(selection, cx),
@@ -551,31 +540,42 @@ impl Shell {
             .collect()
     }
 
-    /// `copyTarget`: the files of these items, collection members
+    /// `copyTarget`: the files of `selection`, collection members
     /// included, on the clipboard, or a notification saying why not.
-    pub(in crate::shell) fn copy_files(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
-        let report = Report::default();
-        edit_then(
-            &self.session,
-            report,
-            Reread::NOTHING,
-            files_of(ids),
-            cx,
-            |_, files, cx| {
-                let Ok(files) = files else {
-                    return;
-                };
-                let paths: Vec<PathBuf> = files.into_iter().map(|(_, path)| path.into()).collect();
-                let copied = if paths.is_empty() {
-                    Err("The selection has no physical files to copy.".to_owned())
-                } else {
-                    crate::desktop::copy_files(&paths, cx)
-                };
-                if let Err(error) = copied {
-                    crate::ui::notify::error(t("Could not copy selection"), error, cx);
-                }
-            },
-        );
+    pub(in crate::shell) fn copy_files(
+        &mut self,
+        selection: SelectionTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.with_files(selection, cx, |files, cx| {
+            let paths: Vec<PathBuf> = files.into_iter().map(|(_, path)| path).collect();
+            let copied = if paths.is_empty() {
+                Err("The selection has no physical files to copy.".to_owned())
+            } else {
+                crate::desktop::copy_files(&paths, cx)
+            };
+            if let Err(error) = copied {
+                crate::ui::notify::error(t("Could not copy selection"), error, cx);
+            }
+        });
+    }
+
+    /// [`crate::session::Session::resolve_files`] for `selection`, then
+    /// `then` with the files; a failure goes to the console.
+    fn with_files(
+        &mut self,
+        selection: SelectionTarget,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(Vec<(String, PathBuf)>, &mut App) + 'static,
+    ) {
+        let files = self.session.read(cx).resolve_files(&selection);
+        cx.spawn(async move |_, cx| match files.await {
+            Ok(files) => {
+                let _ = cx.update(|cx| then(files, cx));
+            }
+            Err(error) => eprintln!("picto: resolving the selection's files failed: {error}"),
+        })
+        .detach();
     }
 
     /// `media.regenerate_thumbnails` for these files (see
@@ -670,7 +670,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if target.items.is_empty() {
+        if target.count() == 0 {
             return;
         }
         let quick_look = self.quick_look.read(cx).is_open();
@@ -681,7 +681,7 @@ impl Shell {
                 .focus_ordinal()
                 .zip(session.selected_item().map(|item| item.root_id))
                 .filter(|(_, id)| viewing && target.ids() == [*id]);
-            (target.selection(session), shown)
+            (target.selection(), shown)
         };
         let Some((ordinal, id)) = shown else {
             self.session.update(cx, |session, cx| {
@@ -734,9 +734,9 @@ impl Shell {
     /// `onCopyTags`: one item's tags, or the tags every selected item
     /// shares, as JSON on the clipboard and kept for "Paste Tags".
     fn copy_tags(&mut self, target: Target, cx: &mut Context<Self>) {
-        let single = target.items.len() == 1;
+        let single = target.count() == 1 && target.items.len() == 1;
         let ids = target.ids();
-        let selection = target.selection(self.session.read(cx));
+        let selection = target.selection();
         let work = move |library: &Library| {
             let tag_ids = if single {
                 library.details(ids[0])?.tag_ids
@@ -772,7 +772,7 @@ impl Shell {
         let Some(cover) = target.items.first().map(|item| item.root_id) else {
             return;
         };
-        let selection = target.selection(self.session.read(cx));
+        let selection = target.selection();
         edit_then(
             &self.session,
             Report::failure(t("Could not create group")).and_announce("collections.organize"),
@@ -905,13 +905,10 @@ impl Shell {
     }
 
     fn confirm_ungroup(&mut self, target: Target, cx: &mut Context<Self>) {
-        let selection = target.selection(self.session.read(cx));
+        let selection = target.selection();
         // The loaded items count the collections only when they are all the
         // selection; past them, the library's count when it has given one.
-        let loaded = matches!(
-            &selection,
-            SelectionTarget::Explicit { root_ids, .. } if root_ids.len() == target.items.len()
-        );
+        let loaded = target.loaded();
         let collections = target.collections.or_else(|| {
             loaded.then(|| {
                 target
@@ -980,28 +977,10 @@ fn copy_paths(paths: &[PathBuf], cx: &mut App) {
     }
 }
 
-/// `resolveTargetFilePaths`: the content hash and path of every file of
-/// these items, collection members included, in order.
-fn files_of(
-    ids: Vec<RootId>,
-) -> impl FnOnce(&Library) -> picto_library::Result<Vec<(String, String)>> + Send + 'static {
-    move |library| {
-        let mut files = Vec::new();
-        for id in ids {
-            for media in library.details(id)?.media {
-                files.push((media.facts.content_hash, media.file_path));
-            }
-        }
-        Ok(files)
-    }
-}
-
 /// `copyTargetLinks`: a file's link, with the extension its path has.
-fn link(hash: &str, path: &str) -> String {
-    let extension = std::path::Path::new(path)
-        .extension()
-        .map_or("bin".into(), |extension| {
-            extension.to_string_lossy().into_owned()
-        });
+fn link(hash: &str, path: &std::path::Path) -> String {
+    let extension = path.extension().map_or("bin".into(), |extension| {
+        extension.to_string_lossy().into_owned()
+    });
     format!("media://localhost/file/{hash}.{extension}")
 }

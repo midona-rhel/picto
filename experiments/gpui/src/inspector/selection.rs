@@ -41,6 +41,8 @@ const STACK_PINS: [&str; stack::CARDS + 1] = [
 /// The summary on display and the selection it describes.
 pub(super) struct Shown {
     pub(super) ids: Vec<RootId>,
+    /// What an edit of the selection shown addresses, loaded or not.
+    pub(super) target: SelectionTarget,
     /// `None` when reading the summary failed.
     pub(super) summary: Option<SelectionSummary>,
     /// The key the notes field was set with for this selection.
@@ -181,14 +183,22 @@ impl Inspector {
     /// still the same when it arrives.
     fn read_summary(&mut self, cx: &mut Context<Self>) {
         let ids = self.selection.order.clone();
-        self.read_summary_of(ids, cx);
+        let target =
+            self.session
+                .read(cx)
+                .selection_target()
+                .unwrap_or_else(|| SelectionTarget::Explicit {
+                    root_ids: ids.clone(),
+                });
+        self.read_summary_of(ids, target, cx);
     }
 
     /// Reads the summary shown again after an edit, even when the rail is
     /// pinned to it and the grid has another selection.
     pub(super) fn reread_summary(&mut self, cx: &mut Context<Self>) {
-        if let Some(ids) = self.selection.shown.as_ref().map(|shown| shown.ids.clone()) {
-            self.read_summary_of(ids, cx);
+        if let Some(shown) = &self.selection.shown {
+            let (ids, target) = (shown.ids.clone(), shown.target.clone());
+            self.read_summary_of(ids, target, cx);
         }
     }
 
@@ -198,7 +208,12 @@ impl Inspector {
         Some(summary.shared_source_urls.clone().unwrap_or_default())
     }
 
-    fn read_summary_of(&mut self, ids: Vec<RootId>, cx: &mut Context<Self>) {
+    fn read_summary_of(
+        &mut self,
+        ids: Vec<RootId>,
+        target: SelectionTarget,
+        cx: &mut Context<Self>,
+    ) {
         self.selection.asked = Some(ids.clone());
         let refreshing = |shown: &Option<Shown>, ids: &[RootId]| {
             shown.as_ref().is_some_and(|shown| shown.ids == ids)
@@ -217,11 +232,12 @@ impl Inspector {
                 });
             }));
         }
-        let target = self.session.read(cx).target_for(ids.clone());
-        let job = self
-            .session
-            .read(cx)
-            .run(move |library| library.selection_summary(&target));
+        let job = {
+            let target = target.clone();
+            self.session
+                .read(cx)
+                .run(move |library| library.selection_summary(&target))
+        };
         cx.spawn(async move |this, cx| {
             let Ok(result) = job.await else {
                 return;
@@ -254,7 +270,12 @@ impl Inspector {
                 this.selection
                     .notes
                     .update(cx, |field, cx| field.set_field(key, notes, cx));
-                this.selection.shown = Some(Shown { ids, summary, key });
+                this.selection.shown = Some(Shown {
+                    ids,
+                    target,
+                    summary,
+                    key,
+                });
                 this.sync_pickers(cx);
                 cx.notify();
             });
@@ -272,10 +293,14 @@ impl Inspector {
         + 'static,
         cx: &mut Context<Self>,
     ) {
-        let Some(ids) = self.selection.shown.as_ref().map(|shown| shown.ids.clone()) else {
+        let Some(target) = self
+            .selection
+            .shown
+            .as_ref()
+            .map(|shown| shown.target.clone())
+        else {
             return;
         };
-        let target = self.session.read(cx).target_for(ids);
         // The focused item was edited with the rest.
         crate::session::edit_then(
             &self.session,
