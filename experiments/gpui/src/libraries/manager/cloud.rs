@@ -346,8 +346,7 @@ impl Manager {
                 }
             }
             "cloud-stop" => {
-                self.stopping = Some(ui::modal::Presence::new());
-                cx.notify();
+                self.stopping.open((), ui::menu::Return::Opener, cx);
             }
             action => {
                 if let Some(root) = ENABLE
@@ -362,18 +361,19 @@ impl Manager {
     }
 
     /// Stop Syncing's question (`window.confirm`).
-    pub(super) fn stop_question(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let presence = self.stopping?;
+    pub(super) fn stop_question(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.stopping.layer(window, cx)?;
+        let (presence, focus) = (dialog.presence, dialog.focus.clone());
+        let close = cx.listener(|this: &mut Self, _: &(), _, cx| this.stopping.dismiss(cx));
         let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.stopping = None;
-            cx.notify();
-        });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.stopping = None;
-            cx.notify();
+            this.stopping.close(cx);
         });
         let accept = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.stopping = None;
+            this.stopping.dismiss(cx);
             this.cloud_command(
                 "cloud-disable",
                 "cloud.disable",
@@ -391,8 +391,9 @@ impl Manager {
                 presence,
             )
             .danger(true)
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
+            .focus(&focus)
+            .on_close(move |window, cx| close(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
             .on_confirm(move |window, cx| accept(&(), window, cx))
             .into_any_element(),
         )

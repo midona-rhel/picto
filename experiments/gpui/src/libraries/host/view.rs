@@ -8,9 +8,9 @@ impl Main {
         Self {
             shell: None,
             gate: Gate::Closed,
-            asking: None,
-            missing: None,
-            blocked: None,
+            asking: Default::default(),
+            missing: Default::default(),
+            blocked: Default::default(),
             focus: cx.focus_handle(),
             notifications: cx.new(ui::notify::Host::new),
             offered: false,
@@ -39,8 +39,8 @@ impl Main {
                 // Only once the launch has had its say and nothing is
                 // opening or being asked about: a library given at launch
                 // leaves the gate closed for a frame or two first.
-                let waiting = !self.launched || self.asking.is_some() || host(cx).read(cx).busy;
-                if !self.offered && self.missing.is_none() && !waiting {
+                let waiting = !self.launched || self.asking.is_open() || host(cx).read(cx).busy;
+                if !self.offered && !self.missing.is_open() && !waiting {
                     self.offered = true;
                     cx.defer(|cx| crate::libraries::manager::open(cx));
                 }
@@ -120,20 +120,17 @@ impl Main {
             .into_any_element()
     }
 
-    fn consent(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let asking = self.asking.as_ref()?;
-        let message = consent_message(&asking.root);
+    fn consent(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.asking.layer(window, cx)?;
+        let message = consent_message(&dialog.content.root);
+        let (presence, focus) = (dialog.presence, dialog.focus.clone());
+        let close = cx.listener(|this: &mut Self, _: &(), _, cx| this.asking.dismiss(cx));
         let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.asking = None;
-            cx.notify();
-        });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.asking = None;
-            cx.notify();
+            this.asking.close(cx);
         });
         let accept = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            if let Some(asking) = this.asking.take() {
-                cx.notify();
+            if let Some(asking) = this.asking.content().cloned() {
+                this.asking.dismiss(cx);
                 cx.defer(move |cx| consented(asking, cx));
             }
         });
@@ -143,11 +140,12 @@ impl Main {
                 en("Open this library directly?"),
                 message,
                 t("Open Library"),
-                asking.presence,
+                presence,
             )
             .layer(ui::layer::OVER_DIALOG)
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
+            .focus(&focus)
+            .on_close(move |window, cx| close(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
             .on_confirm(move |window, cx| accept(&(), window, cx))
             .into_any_element(),
         )
@@ -155,16 +153,20 @@ impl Main {
 
     /// `handleMissingLibrary`'s message box: Locate…, Remove from List,
     /// Cancel.
-    fn missing(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (path, presence) = self.missing.as_ref()?;
+    fn missing(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.missing.layer(window, cx)?;
+        let (path, presence, focus) = (
+            dialog.content.clone(),
+            dialog.presence,
+            dialog.focus.clone(),
+        );
         let theme = theme::theme(cx);
         let name = crate::libraries::name(&path.to_string_lossy());
-        let dismiss = |this: &mut Self, cx: &mut Context<Self>| {
-            this.missing = None;
-            cx.notify();
-        };
+        let dismiss = |this: &mut Self, cx: &mut Context<Self>| this.missing.dismiss(cx);
         let close = cx.listener(move |this: &mut Self, _: &(), _, cx| dismiss(this, cx));
-        let cancel = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| dismiss(this, cx));
+        let cancel = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+            this.missing.close(cx);
+        });
         let located = path.clone();
         let locate = cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
             dismiss(this, cx);
@@ -191,9 +193,10 @@ impl Main {
             path.display()
         );
         Some(
-            ui::modal::modal("library-missing", en("Library Not Found"), *presence)
+            ui::modal::modal("library-missing", en("Library Not Found"), presence)
                 .size(ui::modal::Size::Small)
                 .layer(ui::layer::OVER_DIALOG)
+                .focus(&focus)
                 .on_close(move |window, cx| close(&(), window, cx))
                 .child(
                     div()
@@ -230,18 +233,20 @@ impl Main {
         )
     }
 
-    fn notice(&self) -> Option<AnyElement> {
-        let (_, presence) = self.blocked.as_ref()?;
+    fn notice(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.blocked.layer(window, cx)?;
+        let (presence, focus) = (dialog.presence, dialog.focus.clone());
         Some(
             ui::confirm::confirm(
                 "library-picto-running",
                 en("Quit Picto first"),
                 en("Picto is running while this app has a library you keep open. Both must never have a library open at the same time: quit Picto, then choose Check Again, or close the library here."),
                 t("Check Again"),
-                *presence,
+                presence,
             )
             .cancel_label(en("Close Library"))
             .layer(ui::layer::OVER_DIALOG)
+            .focus(&focus)
             // It stays until Picto has quit or the library is closed.
             .on_close(|_, _| {})
             .on_cancel(|_, cx| cx.defer(close))
@@ -263,9 +268,9 @@ impl Render for Main {
             .size_full()
             .relative()
             .child(content)
-            .children(self.missing(cx))
-            .children(self.consent(cx))
-            .children(self.notice());
+            .children(self.missing(window, cx))
+            .children(self.consent(window, cx))
+            .children(self.notice(window, cx));
         // The shell draws its own notifications; the gate needs these.
         if self.shell.is_none() {
             root = root

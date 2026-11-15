@@ -624,7 +624,7 @@ impl Render for SettingsWindow {
             .key_context("Settings") // i18n: a key context
             .child(sidebar)
             .child(content);
-        root.children(self.restore_question(cx))
+        root.children(self.restore_question(window, cx))
             .children(ui::window_chrome::resize_edges(window))
             .children(ui::window_chrome::rim(window, cx))
     }

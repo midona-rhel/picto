@@ -310,11 +310,20 @@ pub fn check_picto(cx: &mut App) {
         None
     };
     let _ = main.update(cx, |main, _, cx| {
-        if main.blocked.as_ref().map(|(process, _)| process) != blocked.as_ref() {
+        let leaving = main
+            .blocked
+            .get_mut()
+            .is_some_and(|notice| notice.presence.closing());
+        let shown = main.blocked.content().filter(|_| !leaving);
+        if shown != blocked.as_ref() {
             // The notice keeps its own time on screen while it stays, so
-            // its entrance plays once.
-            main.blocked = blocked.map(|process| (process, ui::modal::Presence::new()));
-            cx.notify();
+            // its entrance plays once; it leaves as a dialog does.
+            match blocked {
+                Some(process) => {
+                    main.blocked.open(process, ui::menu::Return::Opener, cx);
+                }
+                None => main.blocked.dismiss(cx),
+            }
         }
     });
 }
@@ -348,14 +357,16 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
             let main = host.read(cx).main;
             if let Some(main) = main {
                 let _ = main.update(cx, |main, window, cx| {
-                    main.asking = Some(Asking {
-                        root,
-                        identity,
-                        origin,
-                        presence: ui::modal::Presence::new(),
-                    });
+                    main.asking.open(
+                        Asking {
+                            root,
+                            identity,
+                            origin,
+                        },
+                        ui::menu::Return::Opener,
+                        cx,
+                    );
                     crate::ui::window_chrome::activate(window);
-                    cx.notify();
                 });
             }
         }
@@ -382,8 +393,7 @@ pub fn start_last(cx: &mut App) {
     let main = host(cx).read(cx).main;
     if let Some(main) = main {
         let _ = main.update(cx, |main, _, cx| {
-            main.missing = Some((path, ui::modal::Presence::new()));
-            cx.notify();
+            main.missing.open(path, ui::menu::Return::Opener, cx);
         });
     }
 }
@@ -472,7 +482,6 @@ fn consented(asking: Asking, cx: &mut App) {
         root,
         identity,
         origin,
-        ..
     } = asking;
     agree(&identity, cx);
     request(&root, origin, cx);
@@ -689,7 +698,7 @@ fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Ope
     let _ = main.update(cx, |main, window, cx| {
         main.shell = None;
         main.gate = gate;
-        main.blocked = None;
+        main.blocked.close(cx);
         window.set_window_title(en("Picto GPUI"));
         // The keyboard goes back to the window itself.
         window.focus(&main.focus, cx);
@@ -740,24 +749,24 @@ pub enum Gate {
 }
 
 /// A library the user is asked about.
+#[derive(Clone)]
 struct Asking {
     root: PathBuf,
     identity: super::Identity,
     origin: Origin,
-    presence: ui::modal::Presence,
 }
 
 /// The main window's root: the gate, or the open library's shell.
 pub struct Main {
     shell: Option<Entity<Shell>>,
     gate: Gate,
-    asking: Option<Asking>,
+    asking: ui::modal::Host<Asking>,
     /// The library this app had open last, missing at start: the "Library
     /// Not Found" question.
-    missing: Option<(PathBuf, ui::modal::Presence)>,
+    missing: ui::modal::Host<PathBuf>,
     /// The Electron app's process while it runs beside a library the user
     /// keeps.
-    blocked: Option<(String, ui::modal::Presence)>,
+    blocked: ui::modal::Host<String>,
     focus: FocusHandle,
     notifications: Entity<ui::notify::Host>,
     /// Whether the gate has opened the Library Manager by itself yet.

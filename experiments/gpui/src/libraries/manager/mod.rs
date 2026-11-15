@@ -193,11 +193,12 @@ pub struct Manager {
     reading: bool,
     message: Option<String>,
     error: Option<String>,
-    removing: Option<(String, ui::modal::Presence)>,
+    /// A library to take off the list, once the user confirms.
+    removing: ui::modal::Host<String>,
     /// A library about to be deleted, once the user confirms (`deleteLibrary`).
-    deleting: Option<(String, ui::modal::Presence)>,
+    deleting: ui::modal::Host<String>,
     /// A library the user is asked about before `Act` (its consent).
-    asking: Option<(super::Identity, PathBuf, Act, ui::modal::Presence)>,
+    asking: ui::modal::Host<(super::Identity, PathBuf, Act)>,
     /// The icon picker, while Change… has it open.
     icons: Option<Entity<ui::icon_picker::IconPicker>>,
     menu: menu::Host,
@@ -223,7 +224,7 @@ pub struct Manager {
     work_key: Option<String>,
     eta: Option<u64>,
     /// Stop Syncing's question.
-    stopping: Option<ui::modal::Presence>,
+    stopping: ui::modal::Host<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -272,9 +273,9 @@ impl Manager {
             reading: false,
             message: None,
             error: host.read(cx).failure.clone().map(|(_, message)| message),
-            removing: None,
-            deleting: None,
-            asking: None,
+            removing: Default::default(),
+            deleting: Default::default(),
+            asking: Default::default(),
             icons: None,
             menu: menu::Host::deferred(ui::layer::MENU, menu::Return::Opener),
             busy: false,
@@ -293,7 +294,7 @@ impl Manager {
             samples: Vec::new(),
             work_key: None,
             eta: None,
-            stopping: None,
+            stopping: Default::default(),
             _subscriptions: subscriptions,
         };
         this.read(cx);
@@ -418,7 +419,8 @@ impl Manager {
         match denied {
             host::Denied::Ask { root, identity } => {
                 if let Some(act) = act {
-                    self.asking = Some((identity, root, act, ui::modal::Presence::new()));
+                    self.asking
+                        .open((identity, root, act), ui::menu::Return::Opener, cx);
                 }
             }
             host::Denied::Error(error) => self.error = Some(error),
@@ -433,8 +435,7 @@ impl Manager {
             Act::Reveal => crate::desktop::reveal_library(Path::new(&path), cx),
             Act::Move => self.move_library(path, cx),
             Act::Delete => {
-                self.deleting = Some((path, ui::modal::Presence::new()));
-                cx.notify();
+                self.deleting.open(path, ui::menu::Return::Opener, cx);
             }
         }
     }
@@ -493,8 +494,7 @@ impl Manager {
     /// may have changed, then removes it. A consent withdrawn meanwhile
     /// leaves it as it is.
     fn delete(&mut self, path: String, cx: &mut Context<Self>) {
-        self.deleting = None;
-        cx.notify();
+        self.deleting.dismiss(cx);
         let manager = cx.entity().downgrade();
         host::delete(PathBuf::from(&path), cx, move |result, cx| {
             let _ = manager.update(cx, |this, cx| {
@@ -728,8 +728,8 @@ impl Manager {
                 "move" => this.guarded(path.clone(), Act::Move, window, cx),
                 "delete" => this.guarded(path.clone(), Act::Delete, window, cx),
                 "remove" => {
-                    this.removing = Some((path.clone(), ui::modal::Presence::new()));
-                    cx.notify();
+                    this.removing
+                        .open(path.clone(), ui::menu::Return::Opener, cx);
                 }
                 action => this.cloud_action(action, cx),
             },
@@ -737,7 +737,7 @@ impl Manager {
     }
 
     fn remove(&mut self, path: String, cx: &mut Context<Self>) {
-        self.removing = None;
+        self.removing.dismiss(cx);
         crate::state::update(cx, |state| {
             history::remove(
                 &mut state.library_history,
@@ -832,10 +832,10 @@ impl Render for Manager {
             )
             .child(self.footer(cx))
             .children(self.menu.layer(window, cx))
-            .children(self.removal(cx))
-            .children(self.deletion(cx))
-            .children(self.consent(cx))
-            .children(self.stop_question(cx))
+            .children(self.removal(window, cx))
+            .children(self.deletion(window, cx))
+            .children(self.consent(window, cx))
+            .children(self.stop_question(window, cx))
             .children(ui::window_chrome::rim(window, cx))
     }
 }
