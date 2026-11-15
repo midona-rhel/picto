@@ -675,8 +675,9 @@ the application menu, item menus, keys and imports all use.
 `Platform` of Mac, Windows or Linux) with two presentations: the macOS menu
 bar, and off macOS (or with `PICTO_GPUI_APP_MENU=window`) a titlebar button
 that opens the same rows in the shared context menu. A row is enabled
-exactly when something handles its action where the keyboard is; rows for
-features not built are marked `.todo()` and show disabled.
+exactly when something handles its action where the keyboard is; a row for
+a feature not built would be marked `.todo()` and show disabled (none is
+now).
 
 **Imports, exports, dialogs** (`src/imports/`, `src/export/`, `prompt.rs`).
 Imports go through the core's queue (`imports.enqueue`) with the folder and
@@ -1120,7 +1121,10 @@ scroll, selection and focus; never stretch a capture.
 | `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` | debug builds | every site login's addresses move onto that loopback origin, the sign-in window loads nothing outside it, and a login saved or removed is reported on standard error as its `auth.credentials.list` row and the names (never the values) of the cookies the core's store holds; OnlyFans' own-browser login and Pixiv's code exchange, which would reach the real site whatever the window loads, are refused; for checking sign-ins against local pages |
 | `PICTO_GPUI_LOGIN_CHECK=<folder>` | debug builds | with `PICTO_GPUI_LOGIN_ORIGIN`, the app serves a login of its own at that origin and signs in through the system's sign-in window (`src/logins/check.rs`): a page that cannot load, Cancel, the window closed as by its close button, and a sign-in whose session cookie is saved through `auth.credentials.set`, read back and removed; it writes `login-check.log` (last line `result: pass` or `result: fail`) and pictures of the window to the folder, then quits |
 | `PICTO_GPUI_APP_DATA=<folder>` | debug builds | the core's application data (AI models in `models/`) there instead of beside the copy |
-| `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once |
+| `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once; an update's installer likewise (held at that share, or the update fails) |
+| `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>` | debug builds | the update feed and its downloads, the search engines' pages and the site icons are fetched from that loopback origin instead, each address with its host as the first part of the path (`https://tineye.com/` is `<origin>/tineye.com/`); a redirect off it is not followed, the search's web view loads nothing outside it, and a page that would open in the browser (a results page, a release page) is written on standard error instead (`src/net.rs`); automatic update checks and a version's first-start notes run as in a release build. Under any other seam, or in a test build, without this one nothing is fetched (the icons stay the globe, update checks say they are not available, a search does nothing) |
+| `PICTO_GPUI_NET_CHECK=<folder>` | debug builds | with `PICTO_GPUI_NET_ORIGIN`, the app serves those fixtures itself and checks the three network features against them (`src/net_check.rs`: icons fetched, kept, decoded or the globe; this version's notes, then an update found, its installer downloaded and verified on Windows and Linux and a mismatching one refused, or the release page on macOS; a search on every engine in the hidden web view, each engine receiving exactly the file); it writes `net-check.log` (last line `result: pass` or `result: fail`), then quits |
+| `PICTO_GPUI_UPDATE_PLATFORM=darwin\|win32\|linux` | debug builds | the update check follows that system's flow (the release page, or the `latest.yml` / `latest-linux.yml` installer) on any machine |
 | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
 | `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
 | `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen tool | start at the gate; the generated libraries directly in that temporary folder may be listed and opened |
@@ -1153,7 +1157,13 @@ installed first if the image lacks it), and `PICTO_GPUI_LOGIN_CHECK` opens
 the sign-in window on the system's web view against the app's own local
 login; the step fails unless `login-check.log` ends `result: pass`. The
 log, the app's output and two pictures of the sign-in window are the
-`login-check-linux` and `login-check-windows` artifacts.
+`login-check-linux` and `login-check-windows` artifacts. Then
+`PICTO_GPUI_NET_CHECK` runs the network features against the app's own
+loopback fixtures (icons, the update check and download of that system's
+installer with its verification, Search by Image on every engine in the
+system's web view); the step fails unless `net-check.log` ends
+`result: pass`, which with the app's output is the `net-check-linux` and
+`net-check-windows` artifact.
 
 ## What works
 
@@ -1197,7 +1207,9 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
 | AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
 | Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
-| Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); the sign-in window end to end against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`: a page that cannot load, Cancel, the window closed by its close button, and a cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed) on macOS locally and on Linux and Windows in CI; the masked Cookie and X-BC fields (picture, accessibility tree); pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons) |
+| Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); the sign-in window end to end against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`: a page that cannot load, Cancel, the window closed by its close button, and a cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed) on macOS locally and on Linux and Windows in CI; the masked Cookie and X-BC fields (picture, accessibility tree); pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons, measured while they were the globe); the services' icons (`siteIconService.mjs`: the touch icon, then the favicon, at most 512 KB, a picture by its first bytes, kept in `site-icons/` of this app's folder, asked again after 30 s while shown, the globe when there is none or it cannot be drawn) fetched, kept and drawn against loopback fixtures (`PICTO_GPUI_NET_CHECK` on macOS and in CI on Linux and Windows; pictures off-screen with PNG and ICO icons, and the globe when nothing answers) |
+| Software updates | File › Check for Updates… (a check, then the update dialog; at the gate, without a library, the outcome as a notification), Settings' Updates (Installed version, the status line, Check Now, the next step) and About's Check Now; production's feed (GitHub's releases, the newest application release newer than `package.json`'s version, drafts and model releases skipped), then on Windows and Linux that release's `latest.yml` / `latest-linux.yml`, its `.exe` or `.AppImage` downloaded into `updates/` in this app's folder with its progress and kept only if its SHA-512 and size match the feed; the dialog's states (checking, up to date, error, unavailable, downloading with its bar, downloaded, available on macOS, this version's notes) with the release's name, date and notes as headings, bullets and paragraphs; the "is available" and "is ready" notifications with View; on macOS Open Download Page; elsewhere Show Installer (see Missing features); a version's bundled notes shown at its first start until the dialog is closed; automatic checks 15 s after start and every six hours in a release build | `PICTO_GPUI_NET_CHECK` against loopback fixtures on macOS (all three systems' flows through `PICTO_GPUI_UPDATE_PLATFORM`) and in CI on Linux and Windows (their own flow); a test that an installer not matching the feed (another checksum, cut short) is never kept; pictures off-screen (the dialog downloading at a held 42% and downloaded, Settings' panel with an update available, the notifications); Show Installer's hand-off recorded off-screen |
+| Search by Image | every engine production offers (TinEye, SauceNAO, Yandex Images, Sogou, Bing Visual Search) in the grid's, viewer's, group's and detail window's item menus for one image; the original file handed to the engine's own page in a web view that is never shown, with production's scripts per engine, and the results address (SauceNAO's built from the uploaded picture's address, as production's) opened in the browser; failures as production's "Reverse image search failed" | `PICTO_GPUI_NET_CHECK` (every engine against loopback pages, each receiving exactly the file's bytes, name and type, the results address as production's; nothing reaches an engine before) on macOS (WKWebView) and in CI on Linux (WebKitGTK) and Windows (WebView2); off-screen: the rows enabled, the submenu opened and hovered without any request, and a click on TinEye reaching the search (which off-screen, without a native window for the web view, ends in the failure notification) |
 | Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
 | Libraries | the gate, the Library Manager (list, Open Library, New Library, Open Existing…, Add to and Remove from Quick Access, Rename, Show in File Manager, Remove from List, the cover, statistics), Open Library…, Recent Libraries and Clear History, the switcher's rows and functions, switching, the last library at start, under the rules of section 2 | pictures (Library Manager against production's: same layout, header, sidebar and footer; the switcher; production's gate could not be shown, its reference opens a library by itself); tests (each rule; an open and a switch of generated libraries); off-screen with `PICTO_GPUI_TEST_LIBRARIES` (consent, open, switch, statistics, an incompatible schema refused) |
 | Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
@@ -1403,7 +1415,13 @@ re-checked by reading the code; the rest were checked against it.
   group's arrows do not move the choice (as for the keyboard). The import
   task bar is a live region too; whether any platform announces a change
   there, or a notification, has not been heard.
-- Update checks, cloud sync, pause, snapshots, restore points and retention
+- Installing an update: this app is not packaged, so where production
+  restarts into the installer (Windows, Linux), Show Installer shows the
+  verified installer in the file manager; that installer is production
+  Picto's, as the feed is production's. Production's Settings description
+  and "Restart to finish updating" are replaced by words that say so. No real
+  feed has been read: every check ran against loopback fixtures.
+- Cloud sync, pause, snapshots, restore points and retention
   writes: drawn in Settings, disabled, not performed. On a library with a
   cloud provider, Settings › Cloud says under its buttons that they are
   not available in this version, and Restore History says its snapshots
@@ -1420,8 +1438,8 @@ re-checked by reading the code; the rest were checked against it.
   in a page's field). FANBOX's login keeps only the web view's User-Agent
   as its headers (production keeps the headers Chromium sent to FANBOX's
   API, `sec-ch-ua` among them, which WebKit does not send). The services'
-  icons are the globe (production fetches each site's own icon from the
-  site). The OnlyFans browser login has never run (it starts a browser of
+  icons have been fetched only from loopback fixtures, never from a real
+  site. The OnlyFans browser login has never run (it starts a browser of
   the user's, which would reach the network; the local seam refuses it).
   A password field (the manual session's Cookie and X-BC) does not switch
   the system's input method off or turn on macOS's secure keyboard entry
@@ -1434,9 +1452,13 @@ re-checked by reading the code; the rest were checked against it.
   button's medium weight and 1px dark ring, which production's dialog
   buttons do not have. (Production derives no Retry now or Review source
   action for a problem, so neither button shows in either app.)
-- Search by Image (it uploads the file to a search engine): its engines are
-  drawn in every menu as production draws a disabled row (40%, no hover, no
-  tooltip).
+- Search by Image, partly: no real engine has been searched (their pages
+  change; the scripts are production's as of this writing), and a click on
+  an engine's row has been seen reaching the search only off-screen, where
+  the web view cannot be made; the search itself has run in the system's
+  web view only from `PICTO_GPUI_NET_CHECK`. The file goes in through the
+  page's own `DataTransfer` and file field events rather than production's
+  DevTools `DOM.setFileInputFiles`.
 - Files a source promises on macOS (`NSFilePromiseReceiver`, which some
   browsers drag an image as without its data): such a drag shows as links
   only and is refused.
@@ -1501,7 +1523,9 @@ re-checked by reading the code; the rest were checked against it.
   (shared with the user's Picto, under the service's name alone, whatever
   the library) or keep its process-local store, as now, also when it opens
   a library the user keeps.
-- Network features: update check and install, cloud sync, AI model download.
+- Network features: cloud sync, AI model download; and what installing an
+  update should mean before this app is packaged (it shows production
+  Picto's verified installer now; macOS opens the release page).
 
 ### Kept different on purpose
 
