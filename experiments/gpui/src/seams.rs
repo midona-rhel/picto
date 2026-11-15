@@ -89,8 +89,43 @@ pub fn hold_runs() -> bool {
 /// against local pages and never reaches a real site (`logins::sites`).
 /// Only a loopback `http:` origin is taken.
 pub fn login_origin() -> Option<String> {
-    let value = seam!("PICTO_GPUI_LOGIN_ORIGIN")?;
-    let url = url::Url::parse(value.to_str()?).ok()?;
+    loopback_origin(seam!("PICTO_GPUI_LOGIN_ORIGIN")?.to_str()?)
+}
+
+/// `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>`: the update feed and its
+/// downloads, the search engines' pages and the site icons are fetched from
+/// that origin instead, each address with its host as the first part of the
+/// path (`https://tineye.com/` is `<origin>/tineye.com/`), so the checks
+/// run every request against local fixtures (`net`). Only a loopback
+/// `http:` origin is taken.
+pub fn net_origin() -> Option<String> {
+    loopback_origin(seam!("PICTO_GPUI_NET_ORIGIN")?.to_str()?)
+}
+
+/// `PICTO_GPUI_NET_CHECK=<folder>`: with `PICTO_GPUI_NET_ORIGIN`, the app
+/// serves the update feed, the search engines' pages and the site icons
+/// itself at that origin, runs the update check and download, a search on
+/// every engine and the icons' fetch against them, writes what happened to
+/// the folder and quits (`net_check`).
+#[cfg(debug_assertions)]
+pub fn net_check() -> Option<PathBuf> {
+    seam!("PICTO_GPUI_NET_CHECK")
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+}
+
+/// `PICTO_GPUI_UPDATE_PLATFORM=darwin|win32|linux`: the update check
+/// follows that system's flow (production's `platform`) on any machine, so
+/// one machine can show every system's (`updates`).
+pub fn update_platform() -> Option<String> {
+    seam!("PICTO_GPUI_UPDATE_PLATFORM")
+        .and_then(|value| value.into_string().ok())
+        .filter(|value| matches!(value.as_str(), "darwin" | "win32" | "linux"))
+}
+
+/// The origin of `value` when it is a loopback `http:` address.
+fn loopback_origin(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
     let loopback = match url.host()? {
         url::Host::Ipv4(address) => address.is_loopback(),
         url::Host::Ipv6(address) => address.is_loopback(),
@@ -126,7 +161,7 @@ pub fn app_data() -> Option<PathBuf> {
 
 /// Every variable above, which drive, observe or redirect the app.
 #[cfg(debug_assertions)]
-const ALL: [&str; 13] = [
+const ALL: [&str; 16] = [
     "PICTO_GPUI_POINTER",
     "PICTO_GPUI_BACKGROUND",
     "PICTO_GPUI_WINDOW",
@@ -140,6 +175,9 @@ const ALL: [&str; 13] = [
     "PICTO_GPUI_HOLD_DOWNLOADS",
     "PICTO_GPUI_LOGIN_ORIGIN",
     "PICTO_GPUI_LOGIN_CHECK",
+    "PICTO_GPUI_NET_ORIGIN",
+    "PICTO_GPUI_UPDATE_PLATFORM",
+    "PICTO_GPUI_NET_CHECK",
 ];
 
 /// The automation seam active in this process, if any: one of the

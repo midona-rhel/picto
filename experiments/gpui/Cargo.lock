@@ -7068,6 +7068,7 @@ dependencies = [
  "same-file",
  "serde_json",
  "sha1",
+ "sha2",
  "smallvec",
  "symphonia",
  "sys-locale",

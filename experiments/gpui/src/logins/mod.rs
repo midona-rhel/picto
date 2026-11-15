@@ -315,6 +315,7 @@ impl Logins {
                 min_height: size.min_height,
                 intercept: Rc::new(move |url| adapter.as_ref().is_some_and(|a| a.handles(url))),
                 events,
+                local_origin: crate::seams::login_origin(),
             },
             cx,
         )?;
