@@ -593,7 +593,9 @@ impl DuplicatesScreen {
     /// The decisions on the set, and the way back.
     /// The decisions, then Skip and Undo at the right end. The row never
     /// wraps: when it is short, Skip and Undo lose their words first, then
-    /// "Keep all, related" and "Not duplicates"; each keeps its tooltip.
+    /// "Keep all, related" and "Not duplicates", then the merge says only
+    /// "Keep this", then its glyph, and last Skip and Undo go; each keeps
+    /// its tooltip and its key.
     fn compare_footer(&self, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let width = f32::from(self.compare.pane.size.width);
@@ -620,17 +622,25 @@ impl DuplicatesScreen {
             .border_t_1()
             .border_color(theme.border_secondary())
             .bg(theme.footer_surface())
-            .child(
-                ui::action_button("duplicates-keep-this", Look::Primary)
-                    .icon("action-arrows-join", 16.)
-                    .label(en("Keep this, merge the rest"))
-                    .disabled(self.busy)
-                    .tip(
-                        ui::tip(en("Keep the shown file and merge the others into it"))
-                            .shortcut("dup.merge", cx),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.merge_key(cx))),
-            )
+            .child({
+                // The merge keeps its words longest: all of them, then two,
+                // then its glyph alone in the narrowest pane.
+                let merge = ui::action_button("duplicates-keep-this", Look::Primary)
+                    .icon("action-arrows-join", 16.);
+                if words(520.) {
+                    merge.label(en("Keep this, merge the rest"))
+                } else if words(360.) {
+                    merge.label(en("Keep this"))
+                } else {
+                    merge.width(theme::ACTION_BUTTON).padding(0.)
+                }
+                .disabled(self.busy)
+                .tip(
+                    ui::tip(en("Keep the shown file and merge the others into it"))
+                        .shortcut("dup.merge", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.merge_key(cx)))
+            })
             .child(
                 button(
                     "duplicates-keep-all",
@@ -654,7 +664,9 @@ impl DuplicatesScreen {
                 .on_click(cx.listener(|this, _, _, cx| this.apart_key(cx))),
             )
             .child(div().flex_1())
-            .child(
+            // In the narrowest pane Skip and Undo go, keeping their keys
+            // (Space, and the app's Undo).
+            .children(words(240.).then(|| {
                 button(
                     "duplicates-skip",
                     Look::Ghost,
@@ -663,9 +675,9 @@ impl DuplicatesScreen {
                     rest,
                 )
                 .tip(ui::tip(en("Skip to the next set")).shortcut("dup.compare", cx))
-                .on_click(cx.listener(|this, _, _, cx| this.skip(cx))),
-            )
-            .child(
+                .on_click(cx.listener(|this, _, _, cx| this.skip(cx)))
+            }))
+            .children(words(240.).then(|| {
                 button(
                     "duplicates-undo",
                     Look::Ghost,
@@ -676,8 +688,8 @@ impl DuplicatesScreen {
                 .tip(ui::tip(t("Undo")).shortcut("edit.undo", cx))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.session.update(cx, |session, cx| session.undo(cx));
-                })),
-            )
+                }))
+            }))
     }
 
     /// The titlebar's zoom state in Compare.
