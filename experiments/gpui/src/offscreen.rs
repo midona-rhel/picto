@@ -16,6 +16,9 @@
 //! window would (see `settle`) / redraw every tick, the default, or
 //! `notify <tone> <title> | <message>`, which shows a notification
 //! (`error`, `warning`, `info`, `success`; `info+` adds a Redo button), or
+//! `update <status> [darwin|win32|linux]`, which puts the update state where
+//! a check would (`downloading` at 42%, `downloaded`, `available`, …) with
+//! its notification, and `update dialog`, which opens the update dialog, or
 //! `action <name>` (`action app_menu::Accept`, `action app_menu::SetRating
 //! 3`), which chooses an application menu row, or `invoke <command>
 //! <json>`, which sends an application command (`folders.create`, …) and
@@ -249,6 +252,14 @@ fn plays_a_script() {
             lazy = line == "lazy";
         } else if let Some(rest) = line.strip_prefix("notify ") {
             notify_line(&mut cx, rest);
+        } else if line == "update dialog" {
+            cx.update(|cx| crate::updates::show_dialog(cx));
+            settle(&mut cx, window, pace, lazy);
+        } else if let Some(rest) = line.strip_prefix("update ") {
+            // The update state a check would reach, for its pictures.
+            let (status, platform) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+            cx.update(|cx| crate::updates::show_for_pictures(status, platform.trim(), cx));
+            settle(&mut cx, window, pace, lazy);
         } else if let Some(name) = line.strip_prefix("action ") {
             // An application menu row chosen: its action, sent to where the
             // keyboard is, as AppKit sends it.
