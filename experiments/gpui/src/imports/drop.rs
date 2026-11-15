@@ -683,7 +683,7 @@ mod tests {
         let display = std::env::var("DISPLAY").expect("DISPLAY");
         let scratch = tempfile::tempdir().expect("folder");
         gpui::set_promised_files_directory(scratch.path().to_owned());
-        for fail in [true, false] {
+        for fail in [true, false, true] {
             let source = gpui_linux::DirectSaveSource::start(
                 Some(&display),
                 "photo.png",

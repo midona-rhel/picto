@@ -5349,7 +5349,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/clipboard.rs b/gpui-pre-li
 diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-linux/src/linux/x11/direct_save.rs
 --- a/gpui-pre-linux/src/linux/x11/direct_save.rs
 +++ b/gpui-pre-linux/src/linux/x11/direct_save.rs
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,413 @@
 +//! Files an X11 drag offers to save rather than put on the drag: the Direct
 +//! Save protocol (XDS, `XdndDirectSave0`), the X11 form of a file promise,
 +//! which web browsers use for a dragged image or link and archive managers
@@ -5475,8 +5475,16 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +            (_, Err(error)) => Err(error.to_string()),
 +            (Ok(folder), Ok((conn, screen))) => {
 +                let report = save(&conn, screen, source, time, &folder);
-+                finish(&conn, source, target, report.is_ok());
-+                report
++                let finished = finish(&conn, source, target, report.is_ok());
++                match (report, finished) {
++                    (Err(error), Err(also)) => Err(format!("{error}; {also}")),
++                    (report, finished) => {
++                        if let Err(error) = finished {
++                            log::warn!("{error}");
++                        }
++                        report
++                    }
++                }
 +            }
 +        };
 +        if let Err(error) = &report {
@@ -5591,11 +5599,14 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +}
 +
 +/// `XdndFinished` from `target` to `source`.
-+fn finish(conn: &RustConnection, source: Window, target: Window, accepted: bool) {
-+    let (Ok(finished), Ok(copy)) = (atom(conn, "XdndFinished"), atom(conn, "XdndActionCopy"))
-+    else {
-+        return;
-+    };
++fn finish(
++    conn: &RustConnection,
++    source: Window,
++    target: Window,
++    accepted: bool,
++) -> Result<(), String> {
++    let finished = atom(conn, "XdndFinished")?;
++    let copy = atom(conn, "XdndActionCopy")?;
 +    let message = ClientMessageEvent {
 +        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
 +        format: 32,
@@ -5610,8 +5621,11 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +            0,
 +        ]),
 +    };
-+    let _ = conn.send_event(false, source, EventMask::NO_EVENT, message);
-+    let _ = conn.flush();
++    conn.send_event(false, source, EventMask::NO_EVENT, message)
++        .map_err(|error| format!("XdndFinished not sent: {error}"))?
++        .check()
++        .map_err(|error| format!("XdndFinished refused: {error:?}"))?;
++    conn.flush().map_err(|error| error.to_string())
 +}
 +
 +/// A source of a direct-save drag, for the application's test: a window of
@@ -5668,12 +5682,15 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +        let answered = std::thread::spawn(move || -> Result<bool, String> {
 +            let until = Instant::now() + Duration::from_secs(30);
 +            let mut saved = None;
++            // What the source saw, for a failure's message.
++            let mut seen = Vec::new();
 +            while Instant::now() < until {
 +                let event = conn.poll_for_event().map_err(|error| error.to_string())?;
 +                let Some(event) = event else {
 +                    std::thread::sleep(Duration::from_millis(5));
 +                    continue;
 +                };
++                seen.push(format!("{event:?}"));
 +                match event {
 +                    Event::SelectionRequest(request) if request.target == direct_save => {
 +                        let address = conn
@@ -5682,9 +5699,16 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +                            .reply()
 +                            .map_err(|error| error.to_string())?;
 +                        let address = String::from_utf8_lossy(&address.value).into_owned();
-+                        let path = url::Url::parse(&address)
-+                            .ok()
-+                            .and_then(|address| address.to_file_path().ok());
++                        seen.push(address.clone());
++                        // The address names this machine, which the `url`
++                        // crate does not take for a path; its path is the
++                        // file's.
++                        let path = url::Url::parse(&address).ok().and_then(|address| {
++                            url::Url::parse(&format!("file://{}", address.path()))
++                                .ok()?
++                                .to_file_path()
++                                .ok()
++                        });
 +                        let wrote = path.is_some_and(|path| {
 +                            let bytes = if fail {
 +                                &contents[..contents.len() / 2]
@@ -5722,7 +5746,7 @@ diff --color -ruN gpui-pre-linux-0.3.12/src/linux/x11/direct_save.rs b/gpui-pre-
 +                    _ => {}
 +                }
 +            }
-+            Err("no XdndFinished".into())
++            Err(format!("no XdndFinished; the source saw {seen:?}"))
 +        });
 +        Ok(Self { window, answered })
 +    }
