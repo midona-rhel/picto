@@ -119,12 +119,11 @@ pub(super) fn empty_state(cx: &App) -> Div {
 const DETAILS_INSET: f32 = 4.;
 const DETAILS_GAP: f32 = 6.;
 
-/// How wide a tile's details row is: the state badge (its spaced mono
-/// capitals, padding and border), the gap, and the items and sources.
-fn details_width(card: &data::Subscription, window: &Window) -> f32 {
-    let (_, label) = format::card_status(card);
+/// How wide a status badge with `label` is drawn: its spaced mono
+/// capitals, its padding and its border.
+pub(super) fn badge_width(label: &str, window: &Window) -> f32 {
     let label = label.to_uppercase();
-    let badge = f32::from(
+    f32::from(
         ui::shape_line(
             label.clone(),
             font(theme::FONT_MONO),
@@ -134,7 +133,14 @@ fn details_width(card: &data::Subscription, window: &Window) -> f32 {
         )
         .width,
     ) + label.chars().count() as f32 * theme::TEXT_XS * 0.04
-        + 12.;
+        + 12.
+}
+
+/// How wide a tile's details row is: the state badge (its spaced mono
+/// capitals, padding and border), the gap, and the items and sources.
+fn details_width(card: &data::Subscription, window: &Window) -> f32 {
+    let (_, label) = format::card_status(card);
+    let badge = badge_width(label, window);
     let meta = f32::from(
         ui::shape_line(
             format::card_meta(card.items, card.queries.len()),
