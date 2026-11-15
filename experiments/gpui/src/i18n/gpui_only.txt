@@ -130,3 +130,16 @@ Waiting for the site…
 Sync now, Pause and Create snapshot are not available in this version.
 Recovery snapshots are not listed in this version.
 Login saved for this session; it is not kept after the app quits.
+Checking…
+is ready to install
+is available
+Picto is up to date
+Updates download in the background. This version cannot install them itself: Show Installer shows the downloaded installer in the file manager.
+Show Installer
+Update checks are not available while the app runs under a check.
+Open the release notes to download it.
+It downloads in the background.
+Its installer has been downloaded and verified.
+The update could not be downloaded.
+The installer has been downloaded and verified. This version cannot install it itself: Show Installer shows it in the file manager.
+What’s new in

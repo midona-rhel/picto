@@ -114,11 +114,9 @@ impl SettingsWindow {
                             .child(row(
                                 theme,
                                 t("Software updates"),
-                                // TODO: check the release feed; disabled until
-                                // then, as Check for Updates is.
                                 ui::action_button("about-check-updates", Look::Settings)
                                     .label(t("Check Now"))
-                                    .disabled(true),
+                                    .on_click(|_, _, cx| crate::updates::check(cx)),
                             ))
                             .child(separator(theme))
                             .child(row(theme, t("License"), value(theme, t("MIT")))),

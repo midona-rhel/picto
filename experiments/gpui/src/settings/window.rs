@@ -95,10 +95,13 @@ impl SettingsWindow {
         let capture_focus = cx.focus_handle();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let updates = crate::updates::entity(cx);
         let subscriptions = vec![
             cx.observe(&model, |_, _, cx| cx.notify()),
             cx.observe(&search, |_, _, cx| cx.notify()),
             cx.observe(&shortcut_search, |_, _, cx| cx.notify()),
+            // The update panel follows the check and the download.
+            cx.observe(&updates, |_, _, cx| cx.notify()),
             // A binding field stops listening when the keyboard leaves it.
             cx.on_blur(&capture_focus, window, |this, _, cx| {
                 this.capturing = None;

@@ -39,8 +39,6 @@ actions!(
         NewSmartFolder,
         ImportFiles,
         ImportFolder,
-        // TODO: check for updates and show the updates dialog
-        // (`menu:show-updates`). This app does no network work.
         CheckForUpdates,
         CloseWindow,
         Rename,
@@ -385,7 +383,8 @@ impl Item {
     }
 
     /// Not performed by this app yet; the action's `TODO` says what it
-    /// should do.
+    /// should do. (Every row is built now.)
+    #[allow(dead_code)]
     fn todo(mut self) -> Self {
         self.built = false;
         self
@@ -551,7 +550,7 @@ pub fn model(context: &MenuContext, platform: Platform) -> Vec<TopMenu> {
     }
     file.extend([
         Separator,
-        item("Check for Updates…", CheckForUpdates).todo().into(),
+        item("Check for Updates…", CheckForUpdates).into(),
         Separator,
         if platform.is_mac() {
             item("Close Window", CloseWindow).keys(fixed("Mod+W", window_key))
@@ -1290,6 +1289,8 @@ pub fn bind(cx: &mut App) {
         });
     });
     cx.on_action(|_: &ClearRecentLibraries, cx| cx.defer(crate::libraries::clear_history));
+    // A check, then the update dialog (`checkForUpdates`), from any window.
+    cx.on_action(|_: &CheckForUpdates, cx| cx.defer(crate::updates::check_from_menu));
     cx.on_action(|_: &EditCut, cx| edit(cx, Some(Box::new(crate::ui::text_input::Cut)), None));
     // Outside a text field, Copy puts the files themselves on the
     // clipboard, as ⌘C over the grid, the viewer and a detail window does.
@@ -1819,7 +1820,7 @@ mod tests {
                 }
             });
         }
-        assert_eq!(unbuilt, ["Check for Updates…"]);
+        assert!(unbuilt.is_empty(), "{unbuilt:?}");
     }
 
     fn bound(
