@@ -123,8 +123,16 @@ pub(crate) fn receive(display: &str, source: Window, target: Window, time: u32) 
             (_, Err(error)) => Err(error.to_string()),
             (Ok(folder), Ok((conn, screen))) => {
                 let report = save(&conn, screen, source, time, &folder);
-                finish(&conn, source, target, report.is_ok());
-                report
+                let finished = finish(&conn, source, target, report.is_ok());
+                match (report, finished) {
+                    (Err(error), Err(also)) => Err(format!("{error}; {also}")),
+                    (report, finished) => {
+                        if let Err(error) = finished {
+                            log::warn!("{error}");
+                        }
+                        report
+                    }
+                }
             }
         };
         if let Err(error) = &report {
@@ -239,11 +247,14 @@ fn wait_for_answer(
 }
 
 /// `XdndFinished` from `target` to `source`.
-fn finish(conn: &RustConnection, source: Window, target: Window, accepted: bool) {
-    let (Ok(finished), Ok(copy)) = (atom(conn, "XdndFinished"), atom(conn, "XdndActionCopy"))
-    else {
-        return;
-    };
+fn finish(
+    conn: &RustConnection,
+    source: Window,
+    target: Window,
+    accepted: bool,
+) -> Result<(), String> {
+    let finished = atom(conn, "XdndFinished")?;
+    let copy = atom(conn, "XdndActionCopy")?;
     let message = ClientMessageEvent {
         response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
         format: 32,
@@ -258,8 +269,11 @@ fn finish(conn: &RustConnection, source: Window, target: Window, accepted: bool)
             0,
         ]),
     };
-    let _ = conn.send_event(false, source, EventMask::NO_EVENT, message);
-    let _ = conn.flush();
+    conn.send_event(false, source, EventMask::NO_EVENT, message)
+        .map_err(|error| format!("XdndFinished not sent: {error}"))?
+        .check()
+        .map_err(|error| format!("XdndFinished refused: {error:?}"))?;
+    conn.flush().map_err(|error| error.to_string())
 }
 
 /// A source of a direct-save drag, for the application's test: a window of
