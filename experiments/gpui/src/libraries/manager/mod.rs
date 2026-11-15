@@ -193,6 +193,10 @@ pub struct Manager {
     reading: bool,
     message: Option<String>,
     error: Option<String>,
+    /// The detail pane's scrolling, and the error it has yet to bring into
+    /// view (the error is drawn at the pane's end, as production draws it).
+    detail_scroll: ScrollHandle,
+    error_shown: Option<String>,
     /// A library to take off the list, once the user confirms.
     removing: ui::modal::Host<String>,
     /// A library about to be deleted, once the user confirms (`deleteLibrary`).
@@ -273,6 +277,8 @@ impl Manager {
             reading: false,
             message: None,
             error: host.read(cx).failure.clone().map(|(_, message)| message),
+            detail_scroll: ScrollHandle::new(),
+            error_shown: None,
             removing: Default::default(),
             deleting: Default::default(),
             asking: Default::default(),
@@ -801,6 +807,19 @@ impl Render for Manager {
                 )
                 .into_any_element(),
         };
+        // A new error is scrolled to once it has been laid out: at the
+        // window's usual size it lies below what the pane shows.
+        if self.error != self.error_shown {
+            self.error_shown = self.error.clone();
+            if self.error.is_some() {
+                let scroll = self.detail_scroll.clone();
+                window.on_next_frame(move |window, _| {
+                    let end = scroll.max_offset().y;
+                    scroll.set_offset(point(scroll.offset().x, -end));
+                    window.refresh();
+                });
+            }
+        }
         let detail = div()
             .id("library-detail")
             .flex_1()
@@ -808,6 +827,7 @@ impl Render for Manager {
             .h_full()
             .p(px(22.))
             .overflow_y_scroll()
+            .track_scroll(&self.detail_scroll)
             .child(detail)
             .children(self.feedback(cx));
         div()

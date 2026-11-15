@@ -534,11 +534,19 @@ impl Manager {
                     .rounded(px(theme::RADIUS_LG))
                     .border_1()
                     .border_color(theme.negative_at(45.))
-                    .bg(theme.control_surface())
+                    // `color-mix(negative 9%, control-surface)`
+                    .bg(theme::blend(theme.control_surface(), theme.negative(), 0.09))
                     .flex()
                     .items_start()
                     .gap(px(8.))
                     .overflow_hidden()
+                    // `IconAlertTriangle`, 16px in the negative colour.
+                    .child(
+                        div()
+                            .flex_none()
+                            .mt(px(1.))
+                            .child(ui::icon("task-alert-triangle", 16., theme.negative())),
+                    )
                     .child(
                         div()
                             .flex_1()

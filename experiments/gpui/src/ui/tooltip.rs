@@ -89,6 +89,10 @@ impl Tip {
     }
 }
 
+/// The bubble's height, and how far a tooltip keeps from the window's edge.
+const BUBBLE_HEIGHT: f32 = 24.;
+const WINDOW_MARGIN: f32 = 5.;
+
 /// A control's tooltip timing, kept between frames: it opens once the pointer
 /// has rested on the control for 400 ms and closes when the pointer leaves,
 /// popping in and out over 150 ms each way.
@@ -98,6 +102,10 @@ pub struct Hover {
     /// Counts hovers, so a timer from an earlier one opens nothing.
     visit: u64,
     shown: motion::Fade,
+    /// Whether the window has no room for the tooltip below the control,
+    /// as last measured while it was drawn: it opens above then, rather
+    /// than being pushed up over the control it names.
+    no_room_below: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl Hover {
@@ -203,7 +211,7 @@ impl Hover {
         // `padding: 0 6px` inside the 1px border, which the surface draws.
         let mut bubble = div()
             .relative()
-            .h(px(24.))
+            .h(px(BUBBLE_HEIGHT))
             .px(px(7.))
             .flex()
             .items_center()
@@ -235,23 +243,44 @@ impl Hover {
                     .child(key.clone()),
             );
         }
-        let (top, anchor) = if tip.above {
+        let (top, anchor) = if tip.above || self.no_room_below.get() {
             (-motion::TOOLTIP_OFFSET + below, Anchor::BottomCenter)
         } else {
             (extent + motion::TOOLTIP_OFFSET + below, Anchor::TopCenter)
         };
         let slot = div().absolute().top(px(top)).left(relative(0.5));
+        // Where the control ends in the window, measured as it is drawn
+        // (the first frame, on which the tooltip is still invisible).
+        let no_room = self.no_room_below.clone();
+        let probe = canvas(
+            move |bounds, window, _| {
+                let needed = motion::TOOLTIP_OFFSET + BUBBLE_HEIGHT + WINDOW_MARGIN;
+                let bottom = f32::from(bounds.top()) + needed;
+                no_room.set(bottom > f32::from(window.viewport_size().height));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top(px(extent))
+        .left_0()
+        .size_0();
         Some(
-            slot.child(
-                deferred(
-                    anchored()
-                        .anchor(anchor)
-                        .snap_to_window_with_margin(px(5.))
-                        .child(bubble),
+            div()
+                .absolute()
+                .inset_0()
+                .child(probe)
+                .child(
+                    slot.child(
+                        deferred(
+                            anchored()
+                                .anchor(anchor)
+                                .snap_to_window_with_margin(px(WINDOW_MARGIN))
+                                .child(bubble),
+                        )
+                        .with_priority(super::layer::TOOLTIP),
+                    ),
                 )
-                .with_priority(super::layer::TOOLTIP),
-            )
-            .into_any_element(),
+                .into_any_element(),
         )
     }
 }
