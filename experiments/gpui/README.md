@@ -577,7 +577,8 @@ view owns another's state.
 **Shared UI layer** (`src/ui/`). One implementation of each control, as
 `src/shared/ui` is for production: buttons, icon buttons, check boxes and
 radios, switches, selects, sliders, number fields, date and colour pickers,
-chips, rows, the scrollbar, tooltips, empty states, segmented controls and
+chips, rows, the rows of a rail of views (`rail_item`, a look per
+stylesheet, as glyph buttons have), the scrollbar, tooltips, empty states, segmented controls and
 tab strips, breadcrumbs, window chrome, and the track-drag gesture and hover
 fade they share. A control that only one view has in production (its own CSS
 class, such as the grid's Retry button) is drawn by that view. The pieces

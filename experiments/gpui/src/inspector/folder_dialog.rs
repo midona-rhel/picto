@@ -16,6 +16,7 @@ use crate::ui::{
     check::{self, Mark, Size as CheckSize},
     menu::Return,
     modal::{self, Size},
+    rail_item::{Look as RailLook, rail_item},
     selection_modal::{self as shell, Key, ROW},
     text_input::{Kind, TextInput},
 };
@@ -166,16 +167,10 @@ impl FolderDialog {
                     count: usize,
                     view: View,
                     cx: &mut Context<Self>| {
-            shell::rail_item(
-                id,
-                label,
-                count.to_string(),
-                self.view == view,
-                None,
-                None,
-                cx,
-            )
-            .on_click(cx.listener(move |this, _, window, cx| {
+            rail_item(id, RailLook::SelectionModal, label, count.to_string())
+                .active(self.view == view)
+                .build(cx)
+                .on_click(cx.listener(move |this, _, window, cx| {
                 this.leave_search(window, cx);
                 this.view = view;
                 cx.notify();

@@ -36,6 +36,7 @@ pub mod popover;
 pub mod progress_bar;
 pub mod progress_dialog;
 pub mod property_row;
+pub mod rail_item;
 mod scroll_to_top;
 pub mod scrollbar;
 mod section_header;

@@ -38,53 +38,11 @@ impl AiTagger {
         disabled: bool,
         cx: &App,
     ) -> Stateful<Div> {
-        let theme = theme::theme(cx);
-        // A button read as its name and badge, pressed while chosen.
-        let mut row = div()
-            .id(id)
-            .role(Role::Button)
-            .aria_label(format!("{label} {badge}"))
-            .aria_toggled(ui::a11y::toggled(active))
-            .aria_disabled(disabled)
-            .w_full()
-            .h(px(24.))
-            .flex_none()
-            .px(px(8.))
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .rounded(px(theme::RADIUS_MD))
-            .text(theme::TEXT_MD)
-            .text_color(theme.text())
-            .whitespace_nowrap()
-            .child(mark)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .max_w(px(122.))
-                    .truncate()
-                    .child(label),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .flex_none()
-                    .text(theme::TEXT_CAPTION)
-                    .text_color(theme.text_tertiary())
-                    .child(badge),
-            );
-        if active {
-            row = row.bg(theme.surface_active());
-        }
-        if disabled {
-            row = row.opacity(0.45);
-        } else {
-            row = row
-                .cursor_pointer()
-                .hover(move |style| style.bg(theme.surface_hover()));
-        }
-        row
+        ui::rail_item::rail_item(id, ui::rail_item::Look::AiTagger, label, badge)
+            .mark(mark)
+            .active(active)
+            .disabled(disabled)
+            .build(cx)
     }
 
     fn dot(color: impl Into<Hsla>) -> AnyElement {
