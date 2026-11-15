@@ -21,6 +21,7 @@ pub use tag_dialog::TagDialog;
 pub use tag_picker::TagPicker;
 
 use crate::grid::{format, thumbnails::Thumbnails};
+use crate::i18n::format::grouped;
 use crate::i18n::t;
 use crate::session::{Change, Session};
 use crate::theme;
@@ -636,7 +637,7 @@ impl Inspector {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let label = if count > 1 {
-            crate::tf!("Auto Tag {value0} Images", crate::i18n::format::grouped(count))
+            crate::tf!("Auto Tag {value0} Images", grouped(count))
         } else {
             t("Auto Tag").to_owned()
         };
@@ -1245,7 +1246,7 @@ impl Inspector {
             .child(self.rating(Rate::Item(id), details.rating.bitmap_key() as usize, cx))
             .child(Self::property(
                 t("Items"),
-                crate::i18n::format::grouped(root.media_count as u64),
+                grouped(root.media_count as u64),
                 cx,
             ));
         if let Some((width, height)) = cover

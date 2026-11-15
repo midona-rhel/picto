@@ -19,7 +19,11 @@ pub fn hover(hovered: &mut Option<usize>, hit: Option<(usize, f32, f32)>) -> boo
 }
 
 /// The tile whose magnifier `hit` is on, if it is on one.
-pub fn magnifier(hit: Option<(usize, f32, f32)>, layout: &Layout, text_height: f32) -> Option<usize> {
+pub fn magnifier(
+    hit: Option<(usize, f32, f32)>,
+    layout: &Layout,
+    text_height: f32,
+) -> Option<usize> {
     hit.filter(|&(index, x, y)| marquee::on_magnifier(&layout.tiles[index], x, y, text_height))
         .map(|(index, _, _)| index)
 }
@@ -65,7 +69,10 @@ pub fn band_moved(
 /// scrolled `current`, each frame until it can go no further: whether it
 /// moved, and so needs the next frame.
 pub fn autoscroll(marquee: Option<&Marquee>, scroll: &ScrollHandle, current: f32) -> bool {
-    let Some(speed) = marquee.map(|marquee| marquee.speed).filter(|speed| *speed != 0.) else {
+    let Some(speed) = marquee
+        .map(|marquee| marquee.speed)
+        .filter(|speed| *speed != 0.)
+    else {
         return false;
     };
     let limit = f32::from(scroll.max_offset().y).max(0.);

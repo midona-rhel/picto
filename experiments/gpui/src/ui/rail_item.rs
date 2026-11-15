@@ -118,7 +118,9 @@ impl RailItem {
             .role(Role::Button)
             .aria_label(name)
             .aria_toggled(super::a11y::toggled(active))
-            .when(look == Look::AiTagger, |row| row.aria_disabled(self.disabled))
+            .when(look == Look::AiTagger, |row| {
+                row.aria_disabled(self.disabled)
+            })
             .group(group.clone())
             .rounded(px(theme::RADIUS_MD))
             .text(theme::TEXT_MD);

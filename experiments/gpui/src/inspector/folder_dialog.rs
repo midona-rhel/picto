@@ -6,6 +6,7 @@
 //! of the item the inspector shows or last showed.
 use super::folder_picker::{Folder, Row, folders, rows};
 use super::membership;
+use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::Session;
 use crate::theme;
@@ -170,10 +171,10 @@ impl FolderDialog {
                 .active(self.view == view)
                 .build(cx)
                 .on_click(cx.listener(move |this, _, window, cx| {
-                this.leave_search(window, cx);
-                this.view = view;
-                cx.notify();
-            }))
+                    this.leave_search(window, cx);
+                    this.view = view;
+                    cx.notify();
+                }))
         };
         shell::rail(RAIL, cx)
             .child(item(
@@ -296,7 +297,7 @@ impl FolderDialog {
         .children(folder.count.map(|count| {
             shell::badge(group, false, cx)
                 .ml_auto()
-                .child(crate::i18n::format::grouped(count))
+                .child(format::grouped(count))
         }))
         .on_mouse_down(
             MouseButton::Left,

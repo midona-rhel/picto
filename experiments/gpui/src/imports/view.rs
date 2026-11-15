@@ -809,7 +809,10 @@ fn progress(task: &Task, height: f32, top: f32, cx: &App) -> Stateful<Div> {
     // Each task's bar under an id of its own, so that several in the task
     // bar do not share one.
     div()
-        .id(ElementId::NamedInteger("task-progress".into(), task.task_id as u64))
+        .id(ElementId::NamedInteger(
+            "task-progress".into(),
+            task.task_id as u64,
+        ))
         .w_full()
         .mt(px(top))
         .child(bar)

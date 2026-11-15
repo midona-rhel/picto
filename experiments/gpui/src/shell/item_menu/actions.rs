@@ -1,8 +1,8 @@
 //! What a chosen item-menu row does: the dispatch of each action through
 //! the session and the library, and the edits behind them.
 use super::{File, Target, media_link};
-use crate::i18n::format::grouped;
 use crate::grid::menu::Action;
+use crate::i18n::format::grouped;
 use crate::i18n::{en, t};
 use crate::session::{Report, Reread, edit_then, edit_then_in};
 use crate::shell::Shell;

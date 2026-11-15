@@ -1,4 +1,5 @@
 use super::text_input::TextInput;
+use crate::i18n::format;
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;
@@ -371,7 +372,7 @@ impl RenderOnce for SidebarRow {
         let name: SharedString = if super::a11y::active(window) {
             let shown_label = crate::i18n::t_shared(self.label.clone());
             match self.count {
-                Some(count) => format!("{shown_label} {}", crate::i18n::format::grouped(count)).into(),
+                Some(count) => format!("{shown_label} {}", format::grouped(count)).into(),
                 None => shown_label,
             }
         } else {
@@ -573,7 +574,7 @@ impl RenderOnce for SidebarRow {
                     .font_family(theme::FONT_INSPECTOR_MONO)
                     .font_features(theme::tabular_figures())
                     .text_color(count_color)
-                    .child(crate::i18n::format::grouped(count)),
+                    .child(format::grouped(count)),
             );
         }
         if let Some(handler) = self.on_click {

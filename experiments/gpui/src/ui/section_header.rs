@@ -1,4 +1,5 @@
 use super::tooltip::{self, Tip};
+use crate::i18n::format;
 use crate::theme::Text as _;
 use crate::{motion, theme};
 use gpui::*;
@@ -147,7 +148,7 @@ impl RenderOnce for SectionHeader {
                     // the browser drops.
                     .children(
                         (self.count > 0)
-                            .then(|| format!("({})", crate::i18n::format::grouped(self.count as u64))),
+                            .then(|| format!("({})", format::grouped(self.count as u64))),
                     ),
             );
         if self.on_toggle.is_some() {
@@ -170,7 +171,7 @@ impl RenderOnce for SectionHeader {
         // `role="button"` with `aria-expanded`, read as its text: the label
         // and the count after it.
         let name: SharedString = if self.count > 0 {
-            format!("{} ({})", self.label, crate::i18n::format::grouped(self.count as u64)).into()
+            format!("{} ({})", self.label, format::grouped(self.count as u64)).into()
         } else {
             self.label.clone()
         };

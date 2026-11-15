@@ -5,8 +5,8 @@ use super::{
     CHECK_SLOT, CUSTOM_PADDING, Entry, GAP, Menu, Opened, PADDING, Presentation, ROW_PADDING, Role,
     SEARCH_HEIGHT, SEARCH_INPUT_LEFT, SHORTCUT_GAP, SWATCH, SWATCH_ROW,
 };
-use crate::ui::keys::{Confirm, Dismiss, Down, Left, Right, Up};
 use crate::theme::Text as _;
+use crate::ui::keys::{Confirm, Dismiss, Down, Left, Right, Up};
 use crate::ui::text_input;
 use crate::{motion, theme};
 use gpui::prelude::FluentBuilder as _;

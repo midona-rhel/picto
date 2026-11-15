@@ -701,7 +701,10 @@ impl VideoPlayer {
             return Some(Duration::from_secs_f64((next - position) / rate + 0.001));
         }
         let mode = visualizer::Mode::from_setting(
-            &crate::settings::model(cx).read(cx).saved.audio_visualization,
+            &crate::settings::model(cx)
+                .read(cx)
+                .saved
+                .audio_visualization,
         );
         if mode != visualizer::Mode::None {
             return Some(motion::LOOP_FRAME);
@@ -716,9 +719,9 @@ impl VideoPlayer {
         } else {
             second
         };
-        Some(Duration::from_secs_f64(second.min(pixel).max(
-            motion::LOOP_FRAME.as_secs_f64(),
-        )))
+        Some(Duration::from_secs_f64(
+            second.min(pixel).max(motion::LOOP_FRAME.as_secs_f64()),
+        ))
     }
 
     // ---- drawing ----
@@ -1263,7 +1266,11 @@ impl Render for VideoPlayer {
         // video at its next frame, audio at its visualiser's rate or the
         // scrubber's next pixel, not at the display's rate.
         self.wake = None;
-        let next = self.playback.playing.then(|| self.next_change(cx)).flatten();
+        let next = self
+            .playback
+            .playing
+            .then(|| self.next_change(cx))
+            .flatten();
         if let Some(delay) = next {
             self.wake = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(delay).await;

@@ -28,8 +28,7 @@ impl Sweep {
     /// Where the segment's left edge is, as a share of the track, over and
     /// over.
     fn offset(&self, elapsed: Duration) -> f32 {
-        let along =
-            (elapsed.as_secs_f32() % self.period.as_secs_f32()) / self.period.as_secs_f32();
+        let along = (elapsed.as_secs_f32() % self.period.as_secs_f32()) / self.period.as_secs_f32();
         self.segment * (-1.1 + self.travel * motion::EASE_IN_OUT.ease(along))
     }
 }

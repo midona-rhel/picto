@@ -199,7 +199,12 @@ pub fn navigation(library: &Library) -> picto_library::Result<(Vec<Navigation>, 
             Some(counts.untagged),
             ItemScope::Untagged,
         ),
-        screen(Screen::Tags, t("Tags"), "IconBookmark", Some(tags.len() as u64)),
+        screen(
+            Screen::Tags,
+            t("Tags"),
+            "IconBookmark",
+            Some(tags.len() as u64),
+        ),
         Navigation {
             random: true,
             ..system(t("Random"), "arrows-shuffle", None, ItemScope::All)

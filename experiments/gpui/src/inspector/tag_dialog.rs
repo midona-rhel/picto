@@ -4,6 +4,7 @@
 //! check boxes. Clicks only mark tags to add or remove; Apply puts them on
 //! the selected items, Cancel and Escape forget them. The tags checked at
 //! first are those of the item the inspector shows or last showed.
+use crate::i18n::format;
 use crate::i18n::t;
 use crate::session::Session;
 use crate::tags::{Preferences, TagPager, View, record_name as name};
@@ -360,7 +361,7 @@ impl TagDialog {
             .child(item(
                 "tag-dialog-all",
                 t("All").into(),
-                crate::i18n::format::grouped(total),
+                format::grouped(total),
                 View::All,
                 None,
                 cx,
@@ -382,7 +383,7 @@ impl TagDialog {
                     ("tag-dialog-group", index),
                     RailLook::SelectionModal,
                     label,
-                    crate::i18n::format::grouped(group.tag_count),
+                    format::grouped(group.tag_count),
                 )
                 .active(active)
                 .dot(Some(crate::tags::group_color(&group.name, &preferences)))
@@ -467,7 +468,7 @@ impl TagDialog {
                 .min_w(px(32.))
                 .flex()
                 .justify_end()
-                .child(crate::i18n::format::grouped(tag.active_count)),
+                .child(format::grouped(tag.active_count)),
         )
         .on_mouse_down(
             MouseButton::Left,
