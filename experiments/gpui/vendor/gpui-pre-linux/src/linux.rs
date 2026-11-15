@@ -28,9 +28,9 @@ pub(crate) use text_system::*;
 #[cfg(feature = "wayland")]
 pub(crate) use wayland::*;
 #[cfg(feature = "x11")]
-pub use x11::xdnd_uri_list;
-#[cfg(feature = "x11")]
 pub(crate) use x11::*;
+#[cfg(feature = "x11")]
+pub use x11::{DirectSaveSource, receive_direct_save, xdnd_uri_list};
 
 use std::rc::Rc;
 

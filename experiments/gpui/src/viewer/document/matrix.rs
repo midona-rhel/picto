@@ -449,7 +449,7 @@ mod gpu {
     use crate::theme;
     use gpui::{
         AnyWindowHandle, App, AppContext as _, Context, HeadlessAppContext, IntoElement,
-        ParentElement as _, Render, RenderImage, Styled as _, Window, div, px, size,
+        ParentElement as _, Render, Styled as _, Window, div, px, size,
     };
     use image::RgbaImage;
     use std::path::Path;
@@ -463,11 +463,8 @@ mod gpu {
     }
 
     impl Render for Root {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .relative()
-                .size_full()
-                .child(self.document.element())
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().relative().size_full().child(self.document.element())
         }
     }
 
@@ -503,11 +500,7 @@ mod gpu {
 
     /// Opens a file in its viewer in an off-screen window, waits for it to
     /// load and draw, and returns the window's picture.
-    pub fn render(
-        cx: &mut HeadlessAppContext,
-        path: &Path,
-        mime: &str,
-    ) -> RgbaImage {
+    pub fn render(cx: &mut HeadlessAppContext, path: &Path, mime: &str) -> RgbaImage {
         let kind = renderer_kind(mime);
         assert!(kind.is_document(), "{mime} is not a document");
         let document = cx

@@ -441,7 +441,9 @@ their element out as CSS does, nearest-neighbour image sampling for the
 (`Window::start_platform_drag`, given an OLE drag source on Windows and an
 XDND source on X11), what a drop from another application carries besides
 files (`ExternalDropData`: a browser's image data, its addresses, HTML and
-text, read by each platform), an interface zoom for every window
+text, read by each platform, and `PromisedFiles`: files a drag promises,
+offers to save or holds as virtual files, written into a folder of the
+drop's own), an interface zoom for every window
 (`App::set_ui_zoom`), and test-only hooks for the off-screen
 checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
 that keep client decorations). `vendor/README.md` explains each change and
@@ -1187,7 +1189,7 @@ large tiles; inspector fields 0.9%, chips 4.3%).
 | Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables (a problem's message and detail in its tooltip), every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
 | Subscription run pop-ups | "Subscription paused" and "Gallery download paused", "Query completed", "Subscription completed", and a settled gallery download's "Gallery downloaded", "Gallery already exists" or "Gallery import failed" with its transient subscription removed, for the whole app whichever view shows | tests (production's settle test cases as recorded sequences of `subscriptions.list`, `subscriptions.runs.get` and `subscriptions.runs.list` answers); pictures of the pop-ups; never seen after a real run (no network) |
 | Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
-| Imports and exports | drops (files, and a browser's image data with its addresses as sources), choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
+| Imports and exports | drops (files, files a drag promises, offers to save or holds as virtual files, and a browser's image data with its addresses as sources), choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
 | Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
 | Keyboard | every registry shortcut bound or listed in `NOT_YET`; Tab order and focus rings in dialogs, popovers and Settings | values (keymap test); read |
 | Text fields | Chromium's editing on each platform: words (with Chinese, Japanese and Thai dictionaries), rows, paragraphs, Emacs keys, the field's own undo, input method | tests |
@@ -1251,9 +1253,35 @@ re-checked by reading the code; the rest were checked against it.
   on macOS; none has been dropped on Windows or Linux. On macOS the pasteboard reading was checked on a pasteboard
   of a test's own, and a drop of in-memory image data (played with
   `dropdata`) was imported into a real window with its addresses as
-  sources, and a drop of links only was refused with its notification; on Windows and Linux only the parsing of virtual-file
-  descriptors, `HTML Format` and the media types read is tested, and the
-  reading code is compiled in CI.
+  sources, and a drop of links only was refused with its notification; on Windows and Linux only the parsing of
+  `HTML Format` and the media types read is tested, and the reading code
+  is compiled in CI.
+- **Files a drag promises, offers to save or holds as virtual files.**
+  Received into a folder made for the drop in the session's scratch folder
+  (`gpui::PromisedFiles`), then imported as dropped files are, of any type
+  and under their own names, and deleted once imported (the folder with the
+  last of them); a file reported failed, cut short or never reported is
+  removed and never imported, and when none arrives the drop's in-memory
+  image is imported instead if it had one, else it is refused with the
+  reason. On macOS the window takes `NSFilePromiseReceiver`'s types and asks
+  the receivers for the files while the drop is performed, delivered on an
+  operation queue of their own (Photos, Mail, Safari, Messages, Notes drag
+  so); on Windows a drag's virtual files (`FileGroupDescriptorW` with
+  `FileContents`, from global memory or a stream: Outlook, browsers,
+  Photos) are written while the drop is delivered; on X11 a drag that
+  offers XDS (`XdndDirectSave0`: browsers, archive managers) is asked to
+  save its file on a thread and a connection of their own, which sends
+  `XdndFinished` once the source has answered. Wayland has no such
+  protocol (its drags give data by media type, read as above). Checked:
+  the settling of what arrived (a test); Windows' reading of virtual files
+  from a data object of the test's own, through the platform's reading
+  code (`cargo test` in CI); X11's direct save against a source of the
+  test's own on Xvfb (`Drop check (Linux)` in CI). On macOS the receiving
+  code has not received a real drag: AppKit lets receivers deliver only
+  during a real drop (`_NSDragManager _isDropping`), and the screen was
+  locked while this was built, so no drag could be played; production
+  (Electron 43's Chromium links no `NSFilePromiseReceiver`) imports no
+  promised file at all on macOS, which this app now does.
 - **macOS system integration.** Seen on a library copy: Reveal in Finder
   opened a Finder window with the copy's file selected; Open with Default
   App opened the copy's file in Preview; Open With Other listed the
@@ -1437,9 +1465,6 @@ re-checked by reading the code; the rest were checked against it.
 - Search by Image (it uploads the file to a search engine): its engines are
   drawn in every menu as production draws a disabled row (40%, no hover, no
   tooltip).
-- Files a source promises on macOS (`NSFilePromiseReceiver`, which some
-  browsers drag an image as without its data): such a drag shows as links
-  only and is refused.
 - Opening another library from the file manager or a second launch
   (production's `switchLibrary` from `drainAssociatedFiles`): refused with
   a notification, on purpose (rule 4 above).
@@ -1695,7 +1720,8 @@ Smaller differences by area†
 | Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
 | Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
 | Drag items out of the window | OLE drag of a `CF_HDROP` data object (`DoDragDrop` run from a task after the event that started it); never run | XDND source (versions 3 to 5, `text/uri-list`, proxies followed; Escape does not cancel it); never run | GPUI's native drag |
-| Drops from a browser (in-memory image, addresses, HTML) | virtual files (`FileGroupDescriptorW`/`FileContents`), else `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
+| Drops from a browser (in-memory image, addresses, HTML) | `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
+| Files a drag promises (macOS: `NSFilePromiseReceiver`) | virtual files (`FileGroupDescriptorW`/`FileContents`, global memory or stream), written on the drop; checked in CI on a data object of the test's own | XDS (`XdndDirectSave0`), asked on a thread after the drop; checked in CI on Xvfb against a source of the test's own | none (no such protocol) |
 | Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
 | Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |
 | Detail window aspect lock | not built | not built | not built |

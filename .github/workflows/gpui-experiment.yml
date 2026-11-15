@@ -96,6 +96,17 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+      # A drop of a file the drag offers to save (XDS, what browsers and
+      # archive managers drag on X11), received by the platform's own code
+      # from a source the test makes on a virtual X display. (Windows' drop
+      # of virtual files is checked by the tests above; it needs no display.)
+      - name: Drop check (Linux)
+        if: runner.os == 'Linux'
+        run: >-
+          xvfb-run -a -s "-screen 0 1024x768x24"
+          cargo test --locked -- --ignored --exact
+          imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
+
       # A synthetic library of generated pictures (the application core's
       # example), marked disposable and kept where the app's guard allows a
       # copy: a `picto-gpui-…` folder directly in the system's temporary

@@ -286,7 +286,9 @@ impl Imports {
         let count = promised.count;
         cx.spawn_in(window, async move |this, cx| {
             let reports = match arrival {
-                Some(arrival) => drop::await_promised(arrival, count, cx.background_executor()).await,
+                Some(arrival) => {
+                    drop::await_promised(arrival, count, cx.background_executor()).await
+                }
                 None => Vec::new(),
             };
             let settled = cx
@@ -324,11 +326,7 @@ impl Imports {
                     if images.is_some() {
                         this.drop_with_data(Vec::new(), images, destination, window, cx);
                     } else {
-                        this.report(
-                            crate::i18n::t("Could not import dropped media"),
-                            &error,
-                            cx,
-                        );
+                        this.report(crate::i18n::t("Could not import dropped media"), &error, cx);
                     }
                 }
             });

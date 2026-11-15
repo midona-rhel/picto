@@ -41,7 +41,7 @@ pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
 pub use drag_source::drop_files as drag_drop_files;
-pub use drop_data::{file_group_names, html_fragment};
+pub use drop_data::{VirtualFile, html_fragment, read_drop_data, virtual_files_object};
 pub use platform::WindowsPlatform;
 
 pub(crate) use windows::Win32::Foundation::HWND;
