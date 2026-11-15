@@ -297,6 +297,9 @@ pub fn targets(id: &str) -> Vec<Target> {
         // Duplicates.
         "dup.merge" => vec![to!(Duplicates, duplicates::Merge)],
         "dup.smartMerge" => vec![to!(Duplicates, duplicates::SmartMerge)],
+        "dup.keepLeft" => vec![to!(Duplicates, duplicates::KeepFirst)],
+        "dup.keepRight" => vec![to!(Duplicates, duplicates::KeepSecond)],
+        "dup.difference" => vec![to!(Duplicates, duplicates::ShowDifference)],
         "dup.skip" => vec![to!(Duplicates, duplicates::Skip)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
         "dup.previous" => vec![to!(Duplicates, duplicates::PreviousFile)],

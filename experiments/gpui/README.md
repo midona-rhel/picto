@@ -358,18 +358,23 @@ subscription's page puts its counters, schedule and destination in a rail
 the shell shows in the inspector's place, with the inspector's width,
 toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
 may give the shell such a rail (`shell::ScreenRail`). Duplicates
-is one desk: the core's matching pairs gathered into sets of files that
-match one another (`duplicates/sets.rs`), queued most alike first in
-Identical and Similar tabs; the set's files flipping in place on the stage
-or two of them side by side under one zoom, the pixel difference while Show
-Difference is held and what comparing the pixels measured, in words; and in
-the inspector's place the files' facts side by side and what the item left
-after the merge will hold, worked out with the library's own rules. A set
-opens on the file the library suggests keeping, named as the suggestion;
-the file shown is the one kept, and on the suggested file that merge is
-Smart merge, which S does whichever file is shown. The wheel moves about in
-the picture and never changes the file. Each decision on a set is one
-undoable step (`Library::resolve_duplicates`).
+is one desk for deciding sets from the keyboard: the core's matching pairs
+gathered into sets of files that match one another (`duplicates/sets.rs`),
+most alike first in Identical and Similar tabs, one set at a time with its
+place in the tab over the picture (↑ ↓ go to the set before and after).
+The set's files flip in place with ← → at one zoom, so what differs
+blinks; under the picture, centred, each file with its size, format and
+bytes, bright where the files differ, and the library's suggestion, on
+which a set opens. Enter keeps the file shown (Smart merge on the suggested
+one; S does it whichever is shown), Z and X keep the first or second file
+outright, N says they are not duplicates, Space skips. The pixel
+difference shows while D is held or the pointer rests on Show Difference,
+beside what comparing the pixels measured, in words; the wheel moves about
+in the picture and never changes the file. In the inspector's place, the
+files' facts side by side and what the item left after the merge will
+hold, worked out with the library's own rules. The next set's pictures are
+decoded ahead, and each decision is one undoable step
+(`Library::resolve_duplicates`).
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.

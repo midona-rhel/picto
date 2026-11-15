@@ -139,13 +139,11 @@ Syncing library changes
 Estimating time remaining…
 The library is still in use; nothing was restored.
 The dropped files did not arrive.
-Keep this, merge the rest
 Keep the shown file and merge the others into it
 Skip to the next set
 You have no identical items.
 Enjoy your day
 Remove from This Set
-files
 Links
 You have no duplicated items.
 Identical
@@ -173,6 +171,7 @@ differs visibly
 differ at all
 sizes differ,
 compared stretched
-Side by Side
 equal quality, the older file
 No clear quality winner. Choose the file to keep, or mark the set as not duplicates.
+Previous set
+Next set

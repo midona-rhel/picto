@@ -11,7 +11,6 @@
 //! the rest into it, or says they are not duplicates, or skips.
 mod compare;
 mod difference;
-mod queue;
 mod rail;
 mod sets;
 mod stage;
@@ -43,6 +42,9 @@ actions!(
         NextSet,
         Merge,
         SmartMerge,
+        KeepFirst,
+        KeepSecond,
+        ShowDifference,
         Skip,
         NotDuplicate,
         FitPair,
@@ -52,8 +54,6 @@ actions!(
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-/// The space between two files shown side by side.
-const SIDE_GAP: f32 = 1.;
 /// The library hands at most this many pairs at a time.
 const QUEUE_LIMIT: usize = 500;
 /// `scanDuplicates(distanceThreshold = 16)`.
@@ -114,15 +114,12 @@ struct StageState {
     /// and the two files it was made from.
     difference: Option<((u32, u32), Arc<RenderImage>, difference::Measure)>,
     difference_task: Option<Task<()>>,
-    /// The difference button is held under the pointer.
+    /// The pointer rests on the difference button.
     difference_hovered: bool,
+    /// The difference's key is held down.
+    difference_held: bool,
     pane: Bounds<Pixels>,
     drag: Option<(Point<Pixels>, (f32, f32))>,
-    /// The press under way has moved the picture, so its release chooses
-    /// no file.
-    moved: bool,
-    /// Two files are shown next to each other rather than one in place.
-    side_by_side: bool,
 }
 
 pub struct DuplicatesScreen {
@@ -161,12 +158,6 @@ pub struct DuplicatesScreen {
     /// The scan's progress bar, which waits 200 ms.
     scan_progress: bool,
     scan_task: Option<Task<()>>,
-    /// The queue's scroll and the area it was last laid out in.
-    queue_scroll: ScrollHandle,
-    queue_bounds: Bounds<Pixels>,
-    /// The screen's width as last laid out, which decides whether the
-    /// queue shows its sets' names or only their pictures.
-    width: f32,
     art: Option<crate::grid::art::Art>,
     stage: StageState,
     /// A file's menu.
@@ -234,9 +225,6 @@ impl DuplicatesScreen {
             scanning: false,
             scan_progress: false,
             scan_task: None,
-            queue_scroll: ScrollHandle::new(),
-            queue_bounds: Bounds::default(),
-            width: 0.,
             art: None,
             stage: StageState::default(),
             _session: subscriptions,
@@ -316,6 +304,7 @@ impl DuplicatesScreen {
         self.fetch_task = None;
         self.stage.drag = None;
         self.stage.difference_hovered = false;
+        self.stage.difference_held = false;
         self.focused_once = false;
         if self.focus.contains_focused(window, cx) {
             match self.return_focus.take() {
@@ -639,55 +628,36 @@ impl DuplicatesScreen {
         }
     }
 
+    /// Z and X (`dup.keepLeft`, `dup.keepRight`): keeps the set's first or
+    /// second file and merges the rest into it, without showing it first.
+    fn keep_file(&mut self, file: usize, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
+            return;
+        };
+        if file < self.entries[index].set.files.len() {
+            let steps = self.entries[index].set.merge_steps(file);
+            self.resolve(steps, true, cx);
+        }
+    }
+
+    /// The difference shows while the pointer rests on its button or its
+    /// key is held.
+    fn difference_shown(&self) -> bool {
+        self.stage.difference_hovered || self.stage.difference_held
+    }
+
+    /// D down and up (`dup.difference`).
+    fn hold_difference(&mut self, held: bool, cx: &mut Context<Self>) {
+        if self.stage.difference_held != held {
+            self.stage.difference_held = held;
+            cx.notify();
+        }
+    }
+
     /// Whether Enter on the shown file is what Smart merge would do.
     fn shown_is_suggested(&self) -> bool {
         self.current_index()
             .is_some_and(|index| self.entries[index].set.suggested == Some(self.shown))
-    }
-
-    pub(super) fn side_by_side(&self) -> bool {
-        self.stage.side_by_side
-    }
-
-    pub(super) fn set_side_by_side(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.stage.side_by_side != on {
-            self.stage.side_by_side = on;
-            self.stage.zoom.fit();
-            self.changed(cx);
-        }
-    }
-
-    /// The files on the stage, left to right: the shown one alone, or side
-    /// by side a pair in its own order (so choosing one moves neither), and
-    /// of a larger set the shown file and the one it is measured against.
-    fn staged(&self) -> Vec<usize> {
-        let Some(index) = self.current_index() else {
-            return Vec::new();
-        };
-        match (self.stage.side_by_side, self.partner()) {
-            (true, Some(_)) if self.entries[index].set.files.len() == 2 => vec![0, 1],
-            (true, Some(partner)) => vec![self.shown, partner],
-            _ => vec![self.shown],
-        }
-    }
-
-    /// Where each staged file is drawn, in window coordinates.
-    fn panes(&self) -> Vec<Bounds<Pixels>> {
-        let whole = self.stage.pane;
-        let count = self.staged().len().max(1);
-        let gap = px(SIDE_GAP);
-        let width = (whole.size.width - gap * (count as f32 - 1.)) / count as f32;
-        (0..count)
-            .map(|at| Bounds {
-                origin: point(whole.origin.x + (width + gap) * at as f32, whole.origin.y),
-                size: size(width, whole.size.height),
-            })
-            .collect()
-    }
-
-    /// The size a picture is fitted and zoomed in: one pane's.
-    fn view_extent(&self) -> compare::Extent {
-        pane_extent(self.panes().first().copied().unwrap_or(self.stage.pane))
     }
 
     /// N: the set's files are different pictures; none is touched, and a
@@ -759,7 +729,6 @@ impl DuplicatesScreen {
         };
         if let Some(index) = target.and_then(|target| self.order.get(target)).copied() {
             self.show_set(Some(index), cx);
-            self.reveal_current();
             self.changed(cx);
         }
     }
@@ -777,7 +746,8 @@ impl DuplicatesScreen {
             .unwrap_or(0);
         self.stage.zoom.fit();
         self.stage.drag = None;
-        self.release_originals(cx);
+        self.stage.difference_held = false;
+        self.prune_originals(cx);
         self.load_compared(cx);
         self.changed(cx);
     }
@@ -785,7 +755,6 @@ impl DuplicatesScreen {
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if self.tab != tab {
             self.tab = tab;
-            self.queue_scroll.set_offset(point(px(0.), px(0.)));
             self.reorder();
             self.show_set(self.order.first().copied(), cx);
             self.changed(cx);
@@ -815,49 +784,71 @@ impl DuplicatesScreen {
         self.show_file(next, cx);
     }
 
-    /// Scrolls the queue so the set on the stage shows.
-    fn reveal_current(&mut self) {
-        let Some(at) = self
-            .current_index()
-            .and_then(|index| self.order.iter().position(|&each| each == index))
-        else {
-            return;
-        };
-        let top = queue::row_top(at);
-        let bottom = top + queue::ROW;
-        let view = f32::from(self.queue_bounds.size.height);
-        let scrolled = -f32::from(self.queue_scroll.offset().y);
-        let target = if top < scrolled {
-            top
-        } else if bottom > scrolled + view {
-            bottom - view
-        } else {
-            scrolled
-        };
-        self.queue_scroll
-            .set_offset(point(px(0.), px(-target.max(0.))));
-    }
-
     // ── The stage's pictures ───────────────────────────────────
 
-    /// Loads the originals the stage needs: the shown file, its partner and
-    /// the file after, each once.
+    /// The set after the one on the desk, in the tab's order.
+    fn next_index(&self) -> Option<usize> {
+        let index = self.current_index()?;
+        let at = self.order.iter().position(|&each| each == index)?;
+        self.order.get(at + 1).copied()
+    }
+
+    /// Lets go of the originals of sets that are neither on the desk nor
+    /// next, and of the difference picture, which was the last pair's.
+    fn prune_originals(&mut self, cx: &mut Context<Self>) {
+        let keep = [self.current_index(), self.next_index()]
+            .into_iter()
+            .flatten()
+            .flat_map(|index| self.entries[index].set.files.iter())
+            .map(|side| side.file.file_id.0)
+            .collect::<std::collections::HashSet<_>>();
+        let stage = &mut self.stage;
+        stage.loads.retain(|id, _| keep.contains(id));
+        stage.difference_task = None;
+        let gone = stage
+            .originals
+            .keys()
+            .filter(|id| !keep.contains(id))
+            .copied()
+            .collect::<Vec<_>>();
+        let images = gone
+            .into_iter()
+            .filter_map(|id| stage.originals.remove(&id))
+            .chain(stage.difference.take().map(|(_, image, _)| image))
+            .collect::<Vec<_>>();
+        for image in images {
+            crate::atlas::release(image, cx);
+        }
+    }
+
+    /// Loads the originals the desk needs, each once: the shown file, its
+    /// partner and the file after, and the two files the next set opens
+    /// on, so that a decision lands on pictures already decoded.
     fn load_compared(&mut self, cx: &mut Context<Self>) {
         let Some(index) = self.current_index() else {
             return;
         };
-        let entry = &self.entries[index];
-        let count = entry.set.files.len();
-        let wanted = [
-            self.shown,
-            (self.shown + 1) % count,
-            (self.shown + 2) % count,
+        let count = self.entries[index].set.files.len();
+        let mut wanted = vec![
+            (index, self.shown),
+            (index, (self.shown + 1) % count),
+            (index, (self.shown + 2) % count),
         ];
+        if let Some(next) = self.next_index() {
+            let set = &self.entries[next].set;
+            let first = set.suggested.unwrap_or(0);
+            wanted.push((next, first));
+            wanted.push((next, (first + 1) % set.files.len()));
+        }
         let mut paths = Vec::new();
-        for file in wanted {
+        for (index, file) in wanted {
+            let entry = &self.entries[index];
             let side = &entry.set.files[file];
             let id = side.file.file_id.0;
-            if self.stage.originals.contains_key(&id) || self.stage.loads.contains_key(&id) {
+            if self.stage.originals.contains_key(&id)
+                || self.stage.loads.contains_key(&id)
+                || paths.iter().any(|(wanted, _)| *wanted == id)
+            {
                 continue;
             }
             if let Some(path) = original(entry, file) {
@@ -981,7 +972,7 @@ impl DuplicatesScreen {
             return;
         };
         let delta = event.delta.pixel_delta(window.line_height());
-        let pane = self.view_extent();
+        let pane = pane_extent(self.stage.pane);
         let pans = crate::settings::current(cx).viewer_trackpad_gestures;
         if pans && !event.modifiers.secondary(cx) {
             let center = self.stage.zoom.center();
@@ -992,12 +983,7 @@ impl DuplicatesScreen {
                 (f32::from(delta.x), f32::from(delta.y)),
             );
         } else {
-            let under = self
-                .panes()
-                .into_iter()
-                .find(|bounds| bounds.contains(&event.position))
-                .unwrap_or(self.stage.pane);
-            let offset = event.position - under.center();
+            let offset = event.position - self.stage.pane.center();
             self.stage.zoom.wheel(
                 pane,
                 image,
