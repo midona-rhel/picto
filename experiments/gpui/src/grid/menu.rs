@@ -546,19 +546,10 @@ impl Builder<'_> {
 /// `buildTileContextMenu`: a right-click on a tile, or in the viewer.
 pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let b = Builder { hint };
-    let h = &d.handlers;
-    let count = d.selection_count;
-    let viewer = d.surface == Surface::Viewer;
-    let has_selection = count > 0;
-    let ai_tag_enabled = d.ai_tag_enabled.unwrap_or(h.ai_tagger);
-    let can_set_library_cover = d.single
-        && d.single_hash.is_some()
-        && d.single_kind == Some(Kind::Media)
-        && h.library_cover;
-    let several = |one: &str, many: String| if count > 1 { many } else { one.to_owned() };
     let mut rows: Vec<Row> = Vec::new();
     let mut more: Vec<Row> = Vec::new();
 
+    let h = &d.handlers;
     // A selection with folders in it has a short menu of its own.
     if d.mixed {
         if h.move_to_trash {
@@ -571,7 +562,24 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         return rows;
     }
 
-    // Inbox review comes first.
+    inbox_section(d, &b, &mut rows);
+    open_section(d, &b, &mut rows, &mut more);
+    view_section(d, &b, &mut rows);
+    organize_section(d, &b, &mut rows);
+    rename_section(d, &b, &mut rows, &mut more);
+    copy_section(d, &b, &mut rows);
+    tag_section(d, &b, &mut rows);
+    share_section(d, &mut rows);
+    end_section(d, &b, &mut rows, &mut more);
+    rows
+}
+
+/// Inbox review: Accept and Reject first.
+fn inbox_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
+    let several = |one: &str, many: String| several(count, one, many);
     if d.status == Some(Status::Inbox) && has_selection {
         rows.push(
             item(
@@ -595,7 +603,15 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         );
         rows.push(Row::Separator);
     }
+}
 
+/// One item: how to open it; its "More" rows for covers and matches.
+fn open_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let can_set_library_cover = d.single
+        && d.single_hash.is_some()
+        && d.single_kind == Some(Kind::Media)
+        && h.library_cover;
     if d.single {
         let mut open = Vec::new();
         if d.single_kind == Some(Kind::Collection) {
@@ -622,13 +638,18 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
                 .into(),
         );
     }
+}
 
+/// Outside the viewer: the content sort, the view panels and Grayscale.
+fn view_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let viewer = d.surface == Surface::Viewer;
     if !viewer {
         if h.sort_contents {
             rows.push(content_sort(d.sort_fields.as_deref()));
             rows.push(Row::Separator);
         }
-        b.view_entries(&mut rows);
+        b.view_entries(rows);
         rows.push(
             item(Action::Grayscale, "Grayscale", h.toggle_grayscale)
                 .icon("menu-contrast")
@@ -639,7 +660,13 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         );
         rows.push(Row::Separator);
     }
+}
 
+/// Folders and collections the selection goes into or out of.
+fn organize_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
     if has_selection {
         if h.add_to_last_folder {
             let label = match &d.last_folder_name {
@@ -696,7 +723,12 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         }
         rows.push(Row::Separator);
     }
+}
 
+/// Rename, the folder cover, Batch Rename.
+fn rename_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
     if d.single && h.rename {
         rows.push(
             item(Action::Rename, "Rename", true)
@@ -726,9 +758,15 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         );
         rows.push(Row::Separator);
     }
+}
 
+/// Copying the item, or the selection, to the clipboard.
+fn copy_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
     if d.single && d.single_hash.is_some() && d.single_kind != Some(Kind::Collection) {
-        b.copy_entries(d, &mut rows);
+        b.copy_entries(d, rows);
         rows.push(Row::Separator);
     } else if has_selection && !d.query_selection && h.copy_selection {
         rows.push(
@@ -769,7 +807,15 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         }
         rows.push(Row::Separator);
     }
+}
 
+/// Tags: add, auto tag, copy and paste.
+fn tag_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
+    let several = |one: &str, many: String| several(count, one, many);
+    let ai_tag_enabled = d.ai_tag_enabled.unwrap_or(h.ai_tagger);
     if has_selection {
         rows.push(
             item(Action::AddTags, "Add Tags", h.tag_select)
@@ -811,7 +857,13 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
         );
         rows.push(Row::Separator);
     }
+}
 
+/// Rating, export and the search engines.
+fn share_section(d: &Description, rows: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
     if has_selection && h.set_rating {
         rows.push(submenu(
             t("Set Rating"),
@@ -845,14 +897,20 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
             Some("menu-search"),
             ENGINES
                 .iter()
-                .map(|(engine, label)| {
-item(Action::SearchByImage(*engine), *label, true).into()
-                })
+                .map(|(engine, label)| item(Action::SearchByImage(*engine), *label, true).into())
                 .collect(),
         ));
         rows.push(Row::Separator);
     }
+}
 
+/// "More", removal from the folder, and Trash last; only "Delete
+/// Permanently" is drawn as dangerous.
+fn end_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
+    let h = &d.handlers;
+    let count = d.selection_count;
+    let has_selection = count > 0;
+    let several = |one: &str, many: String| several(count, one, many);
     if has_selection && !d.contains_group {
         more.push(
             item(
@@ -869,7 +927,7 @@ item(Action::SearchByImage(*engine), *label, true).into()
         );
     }
     if !more.is_empty() {
-        rows.push(submenu("More", Some("menu-dots"), more));
+        rows.push(submenu("More", Some("menu-dots"), std::mem::take(more)));
         rows.push(Row::Separator);
     }
 
@@ -890,7 +948,6 @@ item(Action::SearchByImage(*engine), *label, true).into()
         rows.push(Row::Separator);
     }
 
-    // Only "Delete Permanently" is drawn as dangerous.
     if has_selection {
         if d.status == Some(Status::Trash) {
             rows.push(
@@ -934,7 +991,11 @@ item(Action::SearchByImage(*engine), *label, true).into()
             );
         }
     }
-    rows
+}
+
+/// `one` for a single item, else `many`.
+fn several(count: usize, one: &str, many: String) -> String {
+    if count > 1 { many } else { one.to_owned() }
 }
 
 /// `buildEmptyContextMenu`: a right-click on empty grid space.
