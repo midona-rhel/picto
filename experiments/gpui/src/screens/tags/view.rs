@@ -515,7 +515,12 @@ impl TagsScreen {
             };
             content = content.child(row);
         }
-        if shimmering || self.list_shown.elapsed() < motion::TAG_LIST_FADE {
+        // The shimmer loops for as long as pages load, so it is drawn at the
+        // looping rate; only the bounded fade asks for every frame.
+        if shimmering {
+            motion::loop_frame(window, cx);
+        }
+        if self.list_shown.elapsed() < motion::TAG_LIST_FADE {
             window.request_animation_frame();
         }
 

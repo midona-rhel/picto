@@ -365,6 +365,9 @@ pub struct VideoPlayer {
     settle_until: Instant,
     /// Until when a picture is waited for after opening.
     first_picture_until: Instant,
+    /// The redraw at the next change playback makes (see
+    /// [`VideoPlayer::next_change`]).
+    wake: Option<Task<()>>,
 }
 
 impl VideoPlayer {
@@ -445,6 +448,7 @@ impl VideoPlayer {
             _waveform_task: waveform_task,
             settle_until: now,
             first_picture_until: now + Duration::from_secs(10),
+            wake: None,
         };
         player.schedule_hide(cx);
         player
@@ -681,6 +685,40 @@ impl VideoPlayer {
                 cx.emit(FirstPicture);
             }
         }
+    }
+
+    /// How long until playing changes what the player shows, or `None`
+    /// to draw every frame: a video whose frame rate is not measured yet
+    /// (AVFoundation measures it from the frames it is asked for).
+    fn next_change(&self, cx: &App) -> Option<Duration> {
+        let rate = f64::from(self.playback.rate.max(0.0625));
+        if self.kind == Kind::Video {
+            let fps = self.status.fps.filter(|fps| *fps > 0.)?;
+            // The frame after the one showing, and a millisecond more so it
+            // is due when it is asked for.
+            let position = self.status.position.max(0.);
+            let next = ((position * fps + 1e-6).floor() + 1.) / fps;
+            return Some(Duration::from_secs_f64((next - position) / rate + 0.001));
+        }
+        let mode = visualizer::Mode::from_setting(
+            &crate::settings::model(cx).read(cx).saved.audio_visualization,
+        );
+        if mode != visualizer::Mode::None {
+            return Some(motion::LOOP_FRAME);
+        }
+        // Only the time and the scrubber move: the next whole second or the
+        // fill's next pixel, whichever comes first.
+        let position = self.playback.current.max(0.);
+        let second = (position.floor() + 1. - position) / rate;
+        let width = f64::from(f32::from(self.bar.size.width));
+        let pixel = if width > 0. && self.playback.duration > 0. {
+            self.playback.duration / width / rate
+        } else {
+            second
+        };
+        Some(Duration::from_secs_f64(second.min(pixel).max(
+            motion::LOOP_FRAME.as_secs_f64(),
+        )))
     }
 
     // ---- drawing ----
@@ -1221,7 +1259,21 @@ impl Render for VideoPlayer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.poll(cx);
         let now = Instant::now();
-        if self.playback.playing
+        // While it plays, the view is drawn when what it shows changes: a
+        // video at its next frame, audio at its visualiser's rate or the
+        // scrubber's next pixel, not at the display's rate.
+        self.wake = None;
+        let next = self.playback.playing.then(|| self.next_change(cx)).flatten();
+        if let Some(delay) = next {
+            self.wake = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(delay).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.wake = None;
+                    cx.notify();
+                });
+            }));
+        }
+        if (self.playback.playing && next.is_none())
             || now < self.settle_until
             || (self.kind == Kind::Video && self.frame.is_none() && now < self.first_picture_until)
             // Paused before the media loaded: keep asking until its length

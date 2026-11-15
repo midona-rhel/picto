@@ -646,10 +646,12 @@ impl Render for GroupEditor {
             let current = self.scroll_top();
             let limit = f32::from(self.scroll.max_offset().y).max(0.);
             let next = (current + speed).clamp(0., limit);
+            // At the end of the list nothing moves, so nothing is drawn
+            // until the pointer does.
             if next != current {
                 self.scroll.set_offset(point(px(0.), px(-next)));
+                window.request_animation_frame();
             }
-            window.request_animation_frame();
         }
         let prefs = self.prefs(cx);
         let width = self.grid_width();

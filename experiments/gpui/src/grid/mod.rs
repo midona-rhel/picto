@@ -692,10 +692,12 @@ impl Render for GridView {
             let current = self.raw_scroll();
             let limit = f32::from(self.scroll.max_offset().y).max(0.);
             let next = (current + speed).clamp(0., limit);
+            // At the end of the list nothing moves, so nothing is drawn
+            // until the pointer does.
             if next != current {
                 self.scroll.set_offset(point(px(0.), px(-next)));
+                window.request_animation_frame();
             }
-            window.request_animation_frame();
         }
         // The session moves its scope change along, hears how far this grid
         // is scrolled and where its window lies, and says where a restored

@@ -97,7 +97,13 @@ does not need: lens, dispersion, tint and rim light).
   whenever its window draws, not only while the window is the active one,
   as a browser plays it: a detail window beside the main window, or the
   main window while another application is in front, kept its GIFs on one
-  frame. A covered or minimised window still draws nothing.
+  frame. A covered or minimised window still draws nothing. Its view is
+  drawn again when the frame shown has been shown for its delay, by a timer
+  the element keeps in its state, not on every frame the display can show,
+  which redrew the whole window at the display's rate for as long as an
+  animated image was on screen. A frame of 10 ms or less is shown for
+  100 ms, as browsers show it (`shown_for`); it used to advance once per
+  frame drawn.
 - Accessibility. 0.3.12 already builds an AccessKit tree from every element
   with an id and a role, hands it to each platform's adapter (macOS
   NSAccessibility, Windows UI Automation, Linux AT-SPI) only while
@@ -591,7 +597,42 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
      /// Set the object fit for the image.
      fn object_fit(mut self, object_fit: ObjectFit) -> Self {
          self.image_style().object_fit = object_fit;
-@@ -314,25 +323,24 @@
+@@ -242,6 +251,17 @@
+ impl DerefMut for Stateful<Img> {
+     fn deref_mut(&mut self) -> &mut Self::Target {
+         &mut self.element
++    }
++}
++
++/// How long frame `index` of an animated image is shown. As browsers do,
++/// a frame of 10 ms or less is shown for 100 ms.
++fn shown_for(data: &RenderImage, index: usize) -> Duration {
++    let delay = Duration::from(data.delay(index));
++    if delay <= Duration::from_millis(10) {
++        Duration::from_millis(100)
++    } else {
++        delay
+     }
+ }
+ 
+@@ -250,6 +270,8 @@
+     frame_index: usize,
+     last_frame_time: Option<Instant>,
+     started_loading: Option<(Instant, Task<()>)>,
++    /// The redraw when the frame shown has been shown for its delay.
++    next_frame: Option<Task<()>>,
+ }
+ 
+ /// The image layout state between frames
+@@ -288,6 +310,7 @@
+                     frame_index: 0,
+                     last_frame_time: None,
+                     started_loading: None,
++                    next_frame: None,
+                 })
+             });
+ 
+@@ -314,25 +337,24 @@
  
                              if let Some(state) = &mut state {
                                  state.frame_index = state.frame_index.min(max_frame_index);
@@ -609,7 +650,7 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
 +                                    if let Some(last_frame_time) = state.last_frame_time {
 +                                        let elapsed = current_time - last_frame_time;
 +                                        let frame_duration =
-+                                            Duration::from(data.delay(state.frame_index));
++                                            shown_for(&data, state.frame_index);
  
 -                                            if elapsed >= frame_duration {
 -                                                state.frame_index =
@@ -631,15 +672,36 @@ diff --color -ruN gpui-pre-0.3.12/src/elements/img.rs b/gpui-pre/src/elements/im
                                      }
                                  } else {
                                      state.last_frame_time = None;
-@@ -377,7 +385,6 @@
+@@ -375,12 +397,22 @@
+                                 };
+                             }
  
-                             if global_id.is_some()
-                                 && data.frame_count() > 1
+-                            if global_id.is_some()
+-                                && data.frame_count() > 1
 -                                && window.is_window_active()
-                                 && !cx.reduce_motion()
-                             {
-                                 window.request_animation_frame();
-@@ -489,13 +496,14 @@
+-                                && !cx.reduce_motion()
+-                            {
+-                                window.request_animation_frame();
++                            // The view is drawn again when the frame shown
++                            // has been shown for its delay, not every frame.
++                            if let Some(state) = &mut state {
++                                state.next_frame = None;
++                                if let Some(last_frame_time) = state.last_frame_time
++                                    && frame_count > 1
++                                    && !cx.reduce_motion()
++                                {
++                                    let remaining = shown_for(&data, state.frame_index)
++                                        .saturating_sub(last_frame_time.elapsed());
++                                    let current_view = window.current_view();
++                                    state.next_frame = Some(window.spawn(cx, async move |cx| {
++                                        cx.background_executor().timer(remaining).await;
++                                        cx.update(move |_, cx| cx.notify(current_view)).ok();
++                                    }));
++                                }
+                             }
+                         }
+                         Some(_err) => {
+@@ -489,13 +521,14 @@
                          .get_bounds(bounds, data.size(layout_state.frame_index));
                      let corner_radii = style.corner_radii.to_pixels(window.rem_size());
                      window
