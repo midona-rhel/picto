@@ -695,6 +695,7 @@ mod tests {
             assert!(promised.folder.starts_with(scratch.path()));
             let reports: Vec<_> =
                 futures::executor::block_on(promised.arrival().expect("reports").collect());
+            eprintln!("reports: {reports:?}");
             let settled = settle_promised(&promised.folder, reports, promised.count);
             assert_eq!(source.finished(), Ok(!fail), "the drop was finished");
             if fail {

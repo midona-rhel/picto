@@ -316,12 +316,15 @@ impl DirectSaveSource {
         let answered = std::thread::spawn(move || -> Result<bool, String> {
             let until = Instant::now() + Duration::from_secs(30);
             let mut saved = None;
+            // What the source saw, for a failure's message.
+            let mut seen = Vec::new();
             while Instant::now() < until {
                 let event = conn.poll_for_event().map_err(|error| error.to_string())?;
                 let Some(event) = event else {
                     std::thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                seen.push(format!("{event:?}"));
                 match event {
                     Event::SelectionRequest(request) if request.target == direct_save => {
                         let address = conn
@@ -330,9 +333,16 @@ impl DirectSaveSource {
                             .reply()
                             .map_err(|error| error.to_string())?;
                         let address = String::from_utf8_lossy(&address.value).into_owned();
-                        let path = url::Url::parse(&address)
-                            .ok()
-                            .and_then(|address| address.to_file_path().ok());
+                        seen.push(address.clone());
+                        // The address names this machine, which the `url`
+                        // crate does not take for a path; its path is the
+                        // file's.
+                        let path = url::Url::parse(&address).ok().and_then(|address| {
+                            url::Url::parse(&format!("file://{}", address.path()))
+                                .ok()?
+                                .to_file_path()
+                                .ok()
+                        });
                         let wrote = path.is_some_and(|path| {
                             let bytes = if fail {
                                 &contents[..contents.len() / 2]
@@ -370,7 +380,7 @@ impl DirectSaveSource {
                     _ => {}
                 }
             }
-            Err("no XdndFinished".into())
+            Err(format!("no XdndFinished; the source saw {seen:?}"))
         });
         Ok(Self { window, answered })
     }
