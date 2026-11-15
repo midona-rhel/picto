@@ -846,7 +846,9 @@ rules above), this app's list of libraries and the consents in
 `state.json` (`mod.rs`, production's `globalConfig.mjs` rules), the main
 window's content (`host.rs`: the gate or the library's shell, opening,
 switching as production's `switchLibrary`, the consent dialog and the
-blocking notice), the Library Manager window (`manager.rs`), and the
+blocking notice), the Library Manager window (`manager/`: its actions in
+`mod.rs`, its panes in `panes.rs`, its questions in `dialogs.rs`, cloud sync
+in `cloud.rs`), and the
 platform leaves for the process probe (`platform/`). Rule: every open goes
 through `host::request` (or `host::create` for New Library), and every
 change on disk through `host::rename`, `move_library` or `delete`, which
