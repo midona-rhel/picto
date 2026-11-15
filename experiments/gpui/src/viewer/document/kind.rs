@@ -11,8 +11,6 @@ pub enum RendererKind {
     Flash,
     Font,
     TextDocument,
-    Docx,
-    Pptx,
     Epub,
     Cbz,
     Djvu,
@@ -30,8 +28,6 @@ pub fn renderer_kind(mime: &str) -> RendererKind {
     match mime {
         "image/jxl" => JpegXl,
         "application/pdf" => Pdf,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Docx,
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => Pptx,
         "application/epub+zip" => Epub,
         "application/vnd.comicbook+zip" | "application/x-cbz" => Cbz,
         "image/vnd.djvu" | "image/x-djvu" => Djvu,
@@ -53,7 +49,7 @@ impl RendererKind {
         use RendererKind::*;
         matches!(
             self,
-            Pdf | Font | TextDocument | Docx | Pptx | Epub | Cbz | Djvu | Unsupported
+            Pdf | Font | TextDocument | Epub | Cbz | Djvu | Unsupported
         )
     }
 }
@@ -73,14 +69,6 @@ mod tests {
             ("text/plain", TextDocument),
             ("text/markdown", TextDocument),
             ("application/json", TextDocument),
-            (
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                Docx,
-            ),
-            (
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                Pptx,
-            ),
             ("application/epub+zip", Epub),
             ("application/vnd.comicbook+zip", Cbz),
             ("image/vnd.djvu", Djvu),

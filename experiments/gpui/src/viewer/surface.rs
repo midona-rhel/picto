@@ -1471,7 +1471,7 @@ impl Render for MediaSurface {
                 surface = surface.children(self.image_layers(image));
             }
         } else if let Some(document) = self.document() {
-            surface = surface.child(document.element(self.thumbnail.clone(), cx));
+            surface = surface.child(document.element());
         } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
             // The player draws nothing until its first frame; the held
             // picture, or the pane's background, shows until then. While it
@@ -1521,7 +1521,7 @@ impl Render for MediaSurface {
                         .object_fit(ObjectFit::Fill)
                         .pixelated(*pixelated),
                 ),
-                Held::Document(document) => layer.child(document.element(None, cx)),
+                Held::Document(document) => layer.child(document.element()),
                 Held::Player(player) => layer.child(player.clone()),
             });
         }

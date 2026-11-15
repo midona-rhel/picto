@@ -1445,11 +1445,6 @@ re-checked by reading the code; the rest were checked against it.
   a notification, on purpose (rule 4 above).
 - On macOS, a pack opened with the app while no instance runs: the system
   launches the bundle without a copy, which the app refuses.
-- Thumbnails of Word and PowerPoint files without an embedded picture (and
-  of an EPUB without a cover): the application takes the embedded one;
-  production draws the others' first page with its document viewers in a
-  hidden window, and this app has no Word or PowerPoint viewer to draw with,
-  so they show the torn page.
 - Document viewers: PDF text selection, text selection on text and book
   pages, WOFF2 fonts, RTF character formatting,
   Markdown images and raw HTML (shown as text)†, an EPUB chapter's own
@@ -1489,6 +1484,12 @@ re-checked by reading the code; the rest were checked against it.
   accepted as it is.
 - File › New Folder starts a rename here (production's only creates the
   folder), and the sidebar's row keyboard stays.
+- The Word and PowerPoint viewers are dropped. A `.doc`, `.docx`, `.ppt` or
+  `.pptx` file is a file with no viewer, as any other: the viewer shows
+  production's unsupported view (the document shell with "Preview is not
+  available for …" and no page), and its tile shows the picture the core
+  takes from the file when it holds one, else the torn page. Production
+  views and draws them with its document viewers.
 
 ### Waiting on the owner
 
@@ -1527,8 +1528,6 @@ re-checked by reading the code; the rest were checked against it.
 - PDF, DjVu and comic pages scroll as one continuous column, because the
   owner asked; production shows one page at a time. In a collection the
   pages run inline at the member's width.
-- Word and PowerPoint files are not viewed: they keep their embedded
-  thumbnail and open in the default application.
 - Organize › Tags opens the Tags screen; production's row does nothing.
 - On "Find Items with This Media" the inspector shows the destination's
   covers, item count and size; production shows its empty, unavailable

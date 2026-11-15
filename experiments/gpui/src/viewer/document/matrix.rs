@@ -197,10 +197,12 @@ fn every_accepted_type_has_a_renderer() {
     );
     assert_eq!(by_kind["Video"].len(), 15);
     assert_eq!(by_kind["Audio"].len(), 11);
-    // Word and PowerPoint documents take the unsupported view, as do the
-    // design, 3D, office and other formats with no renderer.
+    // Formats with no renderer take the unsupported view: office, design,
+    // 3D and the rest.
     for mime in [
         "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.ms-powerpoint",
         "text/html",
         "model/gltf-binary",
@@ -208,10 +210,6 @@ fn every_accepted_type_has_a_renderer() {
     ] {
         assert_eq!(renderer_kind(mime), Unsupported, "{mime}");
     }
-    assert!(
-        renderer_kind("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            .is_document()
-    );
 }
 
 // ── Checking a picture ─────────────────────────────────────────
@@ -462,7 +460,6 @@ mod gpu {
 
     struct Root {
         document: Document,
-        thumbnail: Option<Arc<RenderImage>>,
     }
 
     impl Render for Root {
@@ -470,7 +467,7 @@ mod gpu {
             div()
                 .relative()
                 .size_full()
-                .child(self.document.element(self.thumbnail.clone(), cx))
+                .child(self.document.element())
         }
     }
 
@@ -510,7 +507,6 @@ mod gpu {
         cx: &mut HeadlessAppContext,
         path: &Path,
         mime: &str,
-        thumbnail: Option<Arc<RenderImage>>,
     ) -> RgbaImage {
         let kind = renderer_kind(mime);
         assert!(kind.is_document(), "{mime} is not a document");
@@ -518,10 +514,7 @@ mod gpu {
             .update(|cx| Document::open(kind, path.to_owned(), mime, "Fixture".into(), false, cx));
         let window = cx
             .open_window(size(px(WIDTH), px(HEIGHT)), |_, cx| {
-                cx.new(|_| Root {
-                    document,
-                    thumbnail,
-                })
+                cx.new(|_| Root { document })
             })
             .unwrap();
         let handle: AnyWindowHandle = window.into();
@@ -591,7 +584,7 @@ mod gpu {
         ];
         cases.extend(font_files(folder.path()));
         for (path, mime) in cases {
-            let picture = render(&mut cx, &path, mime, None);
+            let picture = render(&mut cx, &path, mime);
             if let Some(out) = &out {
                 let name = path
                     .file_name()
@@ -602,27 +595,13 @@ mod gpu {
             }
             assert_view(&picture, mime);
         }
-        // Word files take the unsupported view: the thumbnail, the message
-        // and the button.
-        let thumbnail = super::super::render_image(RgbaImage::from_fn(160, 120, |x, _| {
-            image::Rgba([(x * 255 / 160) as u8, 90, 200, 255])
-        }));
-        let picture = render(
-            &mut cx,
-            &fixture("missing.docx"),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            Some(thumbnail),
-        );
+        // A type with no renderer takes the unsupported view: the message
+        // in the document shell.
+        let picture = render(&mut cx, &fixture("missing.zip"), "application/zip");
         if let Some(out) = &out {
-            picture.save(out.join("unsupported_docx.png")).unwrap();
+            picture.save(out.join("unsupported_zip.png")).unwrap();
         }
         assert_view(&picture, "unsupported");
-        assert_eq!(
-            renderer_kind(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            ),
-            RendererKind::Docx
-        );
     }
 
     /// The type of a real file, from its extension.
@@ -687,7 +666,7 @@ mod gpu {
         }
         if kind.is_document() {
             let mut cx = context();
-            let picture = render(&mut cx, &path, &mime, None);
+            let picture = render(&mut cx, &path, &mime);
             if let Some(out) = &out {
                 picture.save(out.join("viewer.png")).unwrap();
             }

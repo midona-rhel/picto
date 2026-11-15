@@ -140,10 +140,6 @@ mod tests {
         ] {
             assert!(draws(mime), "{mime}");
         }
-        // Word and PowerPoint files have no viewer here to draw them with.
-        assert!(!draws(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ));
         assert!(!draws("image/png"));
         assert!(!draws("video/mp4"));
     }
