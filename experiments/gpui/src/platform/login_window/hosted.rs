@@ -313,7 +313,7 @@ impl Hosted {
         remove(self.handle, &self.gone, cx);
         #[cfg(target_os = "windows")]
         if let Some(data) = self.data {
-            super::windows::remove_later(data);
+            crate::platform::remove_when_released(data, "the sign-in window's data");
         }
     }
 }

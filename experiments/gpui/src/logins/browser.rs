@@ -52,26 +52,9 @@ impl Shared {
             let _ = child.wait();
         }
         if let Some(profile) = self.profile.lock().ok().and_then(|mut slot| slot.take()) {
-            remove_profile(profile);
+            crate::platform::remove_when_released(profile, "the OnlyFans login's browser profile");
         }
     }
-}
-
-/// Removes a profile folder, trying again for a few seconds while the
-/// browser's last processes let go of its files (Windows keeps them locked
-/// for a moment after the browser ends).
-fn remove_profile(profile: tempfile::TempDir) {
-    let path = profile.keep();
-    for _ in 0..20 {
-        if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-    eprintln!(
-        "picto: the OnlyFans login's browser profile could not be removed: {}",
-        path.display()
-    );
 }
 
 impl ExternalLogin {
