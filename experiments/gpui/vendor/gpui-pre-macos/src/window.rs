@@ -1093,8 +1093,10 @@ impl MacWindow {
                 reason = "File-drop decoding expects a property-list array of paths; replacing NSFilenamesPboardType requires migrating both registration and decoding to file URLs"
             )]
             let mut dragged_types = vec![NSFilenamesPboardType.retain()];
-            // What a web browser drags: image data, links, HTML and text.
+            // What a web browser drags: image data, links, HTML and text;
+            // and files promised rather than put on the drag.
             dragged_types.extend(crate::drop_data::dragged_types());
+            dragged_types.extend(crate::drop_data::promise_types());
             let () = msg_send![
                 native_window,
                 registerForDraggedTypes: &*NSArray::from_retained_slice(&dragged_types)
@@ -3752,9 +3754,18 @@ extern "C" fn perform_drag_operation(
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
     let pasteboard: *mut AnyObject = unsafe { msg_send![dragging_info, draggingPasteboard] };
-    let data = unsafe { pasteboard.as_ref() }
+    let pasteboard = unsafe { pasteboard.as_ref() };
+    let mut data = pasteboard
         .map(crate::drop_data::read_drop_pasteboard)
         .unwrap_or_default();
+    // Files promised by a drag that carries no files of its own are asked
+    // for now, the only time AppKit allows it; they arrive after the drop.
+    if let Some(pasteboard) = pasteboard
+        && external_paths_from_event(dragging_info).is_some_and(|paths| paths.paths().is_empty())
+        && crate::drop_data::offers_promised_files(pasteboard)
+    {
+        data.promised = crate::drop_data::receive_promised_files(pasteboard);
+    }
     gpui::set_external_drop_data(data);
     send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
 }
@@ -3771,11 +3782,14 @@ fn external_paths_from_event(dragging_info: *mut AnyObject) -> Option<ExternalPa
     )]
     let filenames: *mut NSArray<NSString> =
         unsafe { msg_send![pasteboard, propertyListForType: NSFilenamesPboardType] };
-    // A drag of what is not a file (an image or a link from a web page)
-    // enters with no paths; its data is read when it is dropped.
+    // A drag of what is not a file (an image or a link from a web page, a
+    // promised file) enters with no paths; its data is read, and promised
+    // files asked for, when it is dropped.
     let Some(filenames) = (unsafe { filenames.as_ref() }) else {
-        return crate::drop_data::offers_drop_data(unsafe { &*pasteboard })
-            .then(|| ExternalPaths(paths));
+        let pasteboard = unsafe { &*pasteboard };
+        return (crate::drop_data::offers_drop_data(pasteboard)
+            || crate::drop_data::offers_promised_files(pasteboard))
+        .then(|| ExternalPaths(paths));
     };
     for file in filenames {
         let path = unsafe {

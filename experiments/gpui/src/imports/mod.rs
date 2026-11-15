@@ -148,6 +148,10 @@ impl Imports {
         };
         // A task left open when the app last closed takes the foreground.
         imports.refresh(cx);
+        // Files a drop promises are written into the session's own scratch
+        // folder, which goes with the session.
+        let promised = imports.session.read(cx).scratch().join("drops");
+        gpui::set_promised_files_directory(promised);
         imports
     }
 
@@ -203,6 +207,10 @@ impl Imports {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(promised) = data.as_ref().and_then(|data| data.promised.clone()) {
+            self.drop_promised(promised, data, destination, window, cx);
+            return;
+        }
         if data.as_ref().is_none_or(|data| data.files.is_empty()) && !paths.is_empty() {
             self.drop_paths(paths, destination, window, cx);
             return;
@@ -255,6 +263,77 @@ impl Imports {
                 }
             }
         }
+    }
+
+    /// A drop of files their source promised (macOS's file promises, from
+    /// Photos, Mail, Safari, Messages): once the source has written them
+    /// into the drop's own folder, the files written whole are imported as
+    /// dropped files are and deleted once imported (the folder with the
+    /// last of them); a file that failed is removed, never imported. When
+    /// none arrives, the drop's in-memory images are imported instead if it
+    /// carried any, else the drop is refused with the reason.
+    fn drop_promised(
+        &mut self,
+        promised: gpui::PromisedFiles,
+        data: Option<gpui::ExternalDropData>,
+        destination: Destination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let allowed = self.allow(cx);
+        let folder = promised.folder.clone();
+        let arrival = promised.arrival();
+        let count = promised.count;
+        cx.spawn_in(window, async move |this, cx| {
+            let reports = match arrival {
+                Some(arrival) => drop::await_promised(arrival, count, cx.background_executor()).await,
+                None => Vec::new(),
+            };
+            let settled = cx
+                .background_spawn({
+                    let folder = folder.clone();
+                    async move {
+                        if allowed {
+                            drop::settle_promised(&folder, reports, count)
+                        } else {
+                            drop::discard_promised(&folder);
+                            Ok(Vec::new())
+                        }
+                    }
+                })
+                .await;
+            if !allowed {
+                return;
+            }
+            let _ = this.update_in(cx, |this, window, cx| match settled {
+                Ok(arrived) => {
+                    let params = Params {
+                        delete_after_ingest: true,
+                        source_urls: data.as_ref().map(drop::source_urls).unwrap_or_default(),
+                        ..Params::to(destination)
+                    };
+                    this.request(arrived, params, window, cx);
+                }
+                Err(error) => {
+                    let images = data.filter(|data| !data.files.is_empty()).map(|data| {
+                        gpui::ExternalDropData {
+                            promised: None,
+                            ..data
+                        }
+                    });
+                    if images.is_some() {
+                        this.drop_with_data(Vec::new(), images, destination, window, cx);
+                    } else {
+                        this.report(
+                            crate::i18n::t("Could not import dropped media"),
+                            &error,
+                            cx,
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// `chooseAndImportFiles`: the system's file chooser, then the files as

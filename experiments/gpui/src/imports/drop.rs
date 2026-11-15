@@ -235,6 +235,94 @@ pub fn stage(paths: Vec<PathBuf>, data: Option<&ExternalDropData>, directory: &P
     }
 }
 
+// This app's own: production receives no promised files.
+/// The reason given when no promised file arrived and the source said none.
+pub const NOT_DELIVERED: &str = crate::i18n::en("The dropped files did not arrive.");
+/// How long the files a drop promised may take to arrive in all (a large
+/// video exported from Photos takes a while).
+const PROMISE_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// The reports of the files a drop promised: `count` of them, or fewer when
+/// the platform stopped reporting or the wait ran out.
+pub async fn await_promised(
+    mut arrival: futures::channel::mpsc::UnboundedReceiver<gpui::PromisedFile>,
+    count: usize,
+    executor: &gpui::BackgroundExecutor,
+) -> Vec<gpui::PromisedFile> {
+    use futures::{FutureExt, StreamExt};
+    let mut reports = Vec::new();
+    let mut timeout = executor.timer(PROMISE_WAIT).fuse();
+    while reports.len() < count {
+        futures::select_biased! {
+            report = arrival.next() => match report {
+                Some(report) => reports.push(report),
+                None => break,
+            },
+            _ = timeout => break,
+        }
+    }
+    reports
+}
+
+/// What the files a drop promised came to, given the platform's `reports`
+/// for the `count` promised: the files written whole into `folder`, in
+/// order. Everything else in the folder (a file that failed part-way, one
+/// that never reported, a folder) is removed, so only whole files are ever
+/// imported; when none is left the folder goes too and the reason is given.
+pub fn settle_promised(
+    folder: &Path,
+    reports: Vec<gpui::PromisedFile>,
+    count: usize,
+) -> Result<Vec<PathBuf>, String> {
+    let inside = std::fs::canonicalize(folder).ok();
+    let mut arrived = Vec::new();
+    let mut last_error = None;
+    for report in reports.into_iter().take(count) {
+        match report {
+            Ok(path) => {
+                let whole = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+                let parent = path.parent().and_then(|parent| std::fs::canonicalize(parent).ok());
+                if whole && parent.is_some() && parent == inside {
+                    arrived.push(path);
+                }
+            }
+            Err(error) => last_error = Some(error).filter(|error| !error.is_empty()),
+        }
+    }
+    let kept: Vec<PathBuf> = arrived
+        .iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .collect();
+    for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !kept.contains(&canonical) {
+            let removed = if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                log::warn!("could not remove {}: {error}", path.display());
+            }
+        }
+    }
+    if arrived.is_empty() {
+        discard_promised(folder);
+        return Err(last_error.unwrap_or_else(|| NOT_DELIVERED.into()));
+    }
+    Ok(arrived)
+}
+
+/// Removes a drop's folder of promised files and whatever arrived in it.
+pub fn discard_promised(folder: &Path) {
+    if let Err(error) = std::fs::remove_dir_all(folder)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!("could not remove {}: {error}", folder.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +581,45 @@ mod tests {
             source_urls(&data),
             vec!["https://e.test/a.png", "https://e.test/page"]
         );
+    }
+
+    /// A promised file that failed part-way, or never reported, is never
+    /// imported and is removed; when none arrived the drop's folder goes.
+    #[test]
+    fn only_promised_files_written_whole_are_imported_and_the_rest_removed() {
+        let scratch = tempfile::tempdir().expect("folder");
+        let folder = scratch.path().join("promised-1");
+        std::fs::create_dir(&folder).unwrap();
+        let whole = folder.join("IMG_1.HEIC");
+        let partial = folder.join("IMG_2.MOV");
+        let silent = folder.join("IMG_3.JPG");
+        for path in [&whole, &partial, &silent] {
+            std::fs::write(path, b"bytes").unwrap();
+        }
+        let outside = scratch.path().join("elsewhere.png");
+        std::fs::write(&outside, PNG).unwrap();
+        let reports = vec![
+            Ok(whole.clone()),
+            Err("The source stopped writing.".to_owned()),
+            Ok(outside.clone()),
+        ];
+        assert_eq!(settle_promised(&folder, reports, 4), Ok(vec![whole.clone()]));
+        assert!(whole.exists());
+        assert!(!partial.exists() && !silent.exists());
+        assert!(outside.exists(), "nothing outside the drop's folder is touched");
+
+        std::fs::write(&partial, b"half").unwrap();
+        assert_eq!(
+            settle_promised(&folder, vec![Err("Cancelled.".into())], 1),
+            Err("Cancelled.".into())
+        );
+        assert!(!folder.exists());
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(
+            settle_promised(&folder, Vec::new(), 2),
+            Err(NOT_DELIVERED.into())
+        );
+        assert!(!folder.exists());
     }
 
     #[test]
