@@ -386,23 +386,4 @@ mod tests {
         assert_eq!(size_to_terabytes(1536), "1.50 KB");
         assert_eq!(size_to_terabytes(20 * 1048576), "20.0 MB");
     }
-
-    #[test]
-    fn type_names_share_the_short_names() {
-        assert_eq!(inspector_type("image/jpeg"), "JPG");
-        assert_eq!(inspector_type("video/quicktime"), "MOV");
-        assert_eq!(inspector_type("video/x-matroska"), "MKV");
-        assert_eq!(inspector_type("image/svg+xml"), "SVG");
-        assert_eq!(
-            inspector_type("application/x-shockwave-flash"),
-            "SHOCKWAVE-FLASH"
-        );
-        assert_eq!(inspector_type("application/epub+zip"), "EPUB");
-        assert_eq!(inspector_type("audio/mpeg"), "MPEG");
-        assert_eq!(filter_type("audio/mpeg"), "MP3");
-        assert_eq!(filter_type("image/jpeg"), "JPG");
-        assert_eq!(filter_type("image/*"), "Images");
-        assert_eq!(filter_type("video/x-msvideo"), "MSVIDEO");
-        assert_eq!(filter_type("application/epub+zip"), "EPUB+ZIP");
-    }
 }

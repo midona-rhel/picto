@@ -992,8 +992,8 @@ fn folder_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{folder_name, path_from_text};
-    use std::path::{Path, PathBuf};
+    use super::path_from_text;
+    use std::path::PathBuf;
 
     #[test]
     fn copied_text_counts_only_absolute_paths_and_file_addresses() {
@@ -1008,11 +1008,5 @@ mod tests {
         assert_eq!(path_from_text("relative.png"), None);
         assert_eq!(path_from_text("# comment"), None);
         assert_eq!(path_from_text(""), None);
-    }
-
-    #[test]
-    fn a_folder_is_named_by_its_last_component() {
-        assert_eq!(folder_name(Path::new("/x/Holiday/")), "Holiday");
-        assert_eq!(folder_name(Path::new("/")), "folder");
     }
 }

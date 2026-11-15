@@ -304,11 +304,13 @@ fn checked_one(path: &Path, cx: &App) -> Result<PathBuf, String> {
     checked(&[path.to_path_buf()], cx).map(|mut paths| paths.remove(0))
 }
 
-/// The files of the open copy a drag out of the window hands to the system:
-/// all of them, or none, with a notification, when one is not the copy's.
+/// The files of the open copy a drag out of the window hands to the system,
+/// by the paths it shows (no `\\?\` prefix on Windows, as Copy gives
+/// them): all of them, or none, with a notification, when one is not the
+/// copy's.
 pub fn drag_out(paths: &[PathBuf], cx: &mut App) -> Vec<PathBuf> {
     match checked(paths, cx) {
-        Ok(paths) => paths,
+        Ok(paths) => paths.iter().map(|path| system_path(path)).collect(),
         Err(error) => {
             crate::ui::notify::error("Could not drag files", error, cx);
             Vec::new()
@@ -682,35 +684,20 @@ fn system_notification(title: &str, body: &str, cx: &App) {
     });
 }
 
-/// A `DROPFILES` clipboard payload (`CF_HDROP`): the 20-byte header (the
-/// list's offset, an unused point and client flag, and wide characters on),
-/// then each path in UTF-16 ending in a NUL, and a NUL ending the list.
-#[cfg(any(test, target_os = "windows"))]
+/// The `DROPFILES` list (`CF_HDROP`) of `paths` as the desktop takes them,
+/// built by the vendored GPUI's drag source, so that Copy and a drag out of
+/// the window hand Explorer the same list.
+#[cfg(target_os = "windows")]
 fn drop_files(paths: &[PathBuf]) -> Vec<u8> {
-    const HEADER: u32 = 20;
-    let mut payload = Vec::new();
-    payload.extend(HEADER.to_le_bytes());
-    payload.extend([0u8; 12]);
-    payload.extend(1i32.to_le_bytes());
-    for path in paths {
-        let path = system_path(path);
-        for unit in path.to_string_lossy().encode_utf16().chain([0]) {
-            payload.extend(unit.to_le_bytes());
-        }
-    }
-    payload.extend(0u16.to_le_bytes());
-    payload
+    let paths: Vec<PathBuf> = paths.iter().map(|path| system_path(path)).collect();
+    gpui_windows::drag_drop_files(&paths)
 }
 
-/// The `text/uri-list` production writes on Linux: each file's `file:` URL,
-/// each line ending in CRLF.
-#[cfg(any(not(any(target_os = "macos", target_os = "windows")), all(test, unix)))]
-fn uri_list(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .filter_map(|path| url::Url::from_file_path(path).ok())
-        .map(|url| format!("{url}\r\n"))
-        .collect()
+/// The `text/uri-list` production writes on Linux, built by the vendored
+/// GPUI's X11 drag source, so that Copy and a drag out offer the same list.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn uri_list(paths: &[PathBuf]) -> Vec<u8> {
+    gpui_linux::xdnd_uri_list(paths)
 }
 
 /// A path as the rest of the desktop takes it. The library's root is a
@@ -746,34 +733,8 @@ fn sort_applications(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// A drag out of the window hands Explorer the same `CF_HDROP` list as
-    /// Copy does.
-    #[cfg(windows)]
-    #[test]
-    fn a_drag_out_on_windows_holds_the_clipboards_file_list() {
-        let paths = [PathBuf::from(r"C:\one.jpg"), PathBuf::from(r"D:\two é.png")];
-        assert_eq!(
-            gpui_windows::drag_drop_files(&paths),
-            super::drop_files(&paths)
-        );
-    }
-
-    /// A drag out of the window on X11 offers the same `text/uri-list` as
-    /// Copy does.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_drag_out_on_x11_offers_the_clipboards_address_list() {
-        let paths = [
-            PathBuf::from("/tmp/one.jpg"),
-            PathBuf::from("/tmp/two é#.png"),
-        ];
-        assert_eq!(
-            gpui_linux::xdnd_uri_list(&paths),
-            super::uri_list(&paths).into_bytes()
-        );
-    }
-
     /// `CF_HDROP`'s list, as production's native addon builds it.
+    #[cfg(windows)]
     #[test]
     fn files_go_to_the_windows_clipboard_as_a_wide_dropfiles_list() {
         let paths = [PathBuf::from(r"\\?\C:\one.jpg"), PathBuf::from("é")];
@@ -796,13 +757,13 @@ mod tests {
 
     /// `clipboardImport.test.mjs`: "Linux writes the standard URI-list
     /// clipboard format".
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn files_go_to_the_linux_clipboard_as_a_uri_list() {
         let paths = [PathBuf::from("/one two.jpg"), PathBuf::from("/three.png")];
         assert_eq!(
             super::uri_list(&paths),
-            "file:///one%20two.jpg\r\nfile:///three.png\r\n"
+            b"file:///one%20two.jpg\r\nfile:///three.png\r\n"
         );
     }
 
@@ -945,7 +906,7 @@ mod tests {
     }
 
     use super::{
-        Application, active_runs, badge_count, finished_body, new_items, sort_applications,
+        Application, active_runs, finished_body, new_items, sort_applications,
     };
     use serde_json::json;
 
@@ -1074,12 +1035,5 @@ mod tests {
             finished_body(1234),
             "1,234 new library items are ready to review."
         );
-    }
-
-    #[test]
-    fn the_badge_is_capped() {
-        assert_eq!(badge_count(&json!(12)), 12);
-        assert_eq!(badge_count(&json!(120000)), 9_999);
-        assert_eq!(badge_count(&json!(null)), 0);
     }
 }

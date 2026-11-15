@@ -5,7 +5,7 @@
 use super::Shell;
 use crate::i18n::t;
 use crate::imports::{self, plan::Destination};
-use crate::keymap::{ImportFiles, ImportFolder, PasteImport};
+use crate::keymap::PasteImport;
 use crate::theme;
 use gpui::*;
 use std::path::PathBuf;
@@ -162,19 +162,11 @@ impl Shell {
         )
     }
 
-    /// The import keys: Import Files (`file.import`), Import Folder (the
-    /// application menu's fixed ⇧⌘I) and Paste Import (`edit.pasteImport`,
-    /// not in the Trash, smart folders, Recently Viewed or media matches).
+    /// Paste Import (`edit.pasteImport`, not in the Trash, smart folders,
+    /// Recently Viewed or media matches). Import Files and Import Folder
+    /// are the application menu's (`menu_commands`).
     pub(super) fn import_actions(&self, root: Div, cx: &mut Context<Self>) -> Div {
-        root.on_action(
-            cx.listener(|this, _: &ImportFiles, window, cx| this.import(Import::Files, window, cx)),
-        )
-        .on_action(
-            cx.listener(|this, _: &ImportFolder, window, cx| {
-                this.import(Import::Folder, window, cx)
-            }),
-        )
-        .on_action(cx.listener(|this, _: &PasteImport, window, cx| {
+        root.on_action(cx.listener(|this, _: &PasteImport, window, cx| {
             if this.grid_scope(cx).imports() {
                 this.import(Import::Paste, window, cx);
             } else {

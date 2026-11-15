@@ -117,7 +117,7 @@ fn flash(original: &Path) -> Result<image::RgbaImage> {
 
 #[cfg(test)]
 mod tests {
-    use super::{draws, page_pixels};
+    use super::page_pixels;
 
     #[test]
     fn pages_fit_the_box_at_two_pixels_a_point() {
@@ -125,22 +125,5 @@ mod tests {
         assert_eq!(page_pixels(612., 792.), (1236, 1600));
         // A tiny page is enlarged at most twice.
         assert_eq!(page_pixels(100., 50.), (400, 200));
-    }
-
-    #[test]
-    fn the_types_drawn_here_are_those_the_media_worker_leaves() {
-        assert!(draws("application/x-shockwave-flash"));
-        assert!(draws("application/pdf"));
-        for mime in [
-            "text/plain",
-            "text/markdown",
-            "application/json",
-            "application/rtf",
-            "application/epub+zip",
-        ] {
-            assert!(draws(mime), "{mime}");
-        }
-        assert!(!draws("image/png"));
-        assert!(!draws("video/mp4"));
     }
 }

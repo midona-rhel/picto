@@ -1,32 +1,20 @@
 use super::Application;
-use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use windows::Win32::Foundation::{GlobalFree, HANDLE};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
+use windows::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows::Win32::System::Ole::CF_HDROP;
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::core::PCWSTR;
 
 pub fn set_badge(_count: u64) {}
 
 pub fn notify(title: &str, body: &str, cx: &gpui::App) {
     super::system_notification(title, body, cx);
 }
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn OpenClipboard(owner: *mut c_void) -> i32;
-    fn EmptyClipboard() -> i32;
-    fn SetClipboardData(format: u32, memory: *mut c_void) -> *mut c_void;
-    fn CloseClipboard() -> i32;
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
-    fn GlobalLock(memory: *mut c_void) -> *mut c_void;
-    fn GlobalUnlock(memory: *mut c_void) -> i32;
-    fn GlobalFree(memory: *mut c_void) -> *mut c_void;
-}
-
-/// `CF_HDROP`, and `GHND` (moveable, zeroed).
-const CF_HDROP: u32 = 15;
-const GHND: u32 = 0x0042;
 
 /// `copy_files` in `native/picto-node`: a `DROPFILES` list of the paths
 /// on the clipboard, which Explorer pastes as the files.
@@ -35,30 +23,30 @@ pub fn copy_files(paths: &[PathBuf]) -> Result<(), String> {
     // SAFETY: the clipboard and global-memory calls with the arguments
     // they take; the memory is handed to the system only when
     // `SetClipboardData` takes it, and freed here otherwise.
+    // (GHND: moveable and zeroed.)
     unsafe {
-        if OpenClipboard(std::ptr::null_mut()) == 0 {
+        if OpenClipboard(None).is_err() {
             return Err("Could not open the system clipboard".into());
         }
-        EmptyClipboard();
-        let memory = GlobalAlloc(GHND, payload.len());
-        if memory.is_null() {
-            CloseClipboard();
+        let _ = EmptyClipboard();
+        let Ok(memory) = GlobalAlloc(GHND, payload.len()) else {
+            let _ = CloseClipboard();
             return Err("Could not allocate a file clipboard payload".into());
-        }
+        };
         let locked = GlobalLock(memory).cast::<u8>();
         if locked.is_null() {
-            GlobalFree(memory);
-            CloseClipboard();
+            let _ = GlobalFree(Some(memory));
+            let _ = CloseClipboard();
             return Err("Could not prepare a file clipboard payload".into());
         }
         std::ptr::copy_nonoverlapping(payload.as_ptr(), locked, payload.len());
-        GlobalUnlock(memory);
-        if SetClipboardData(CF_HDROP, memory).is_null() {
-            GlobalFree(memory);
-            CloseClipboard();
+        let _ = GlobalUnlock(memory);
+        if SetClipboardData(u32::from(CF_HDROP.0), Some(HANDLE(memory.0))).is_err() {
+            let _ = GlobalFree(Some(memory));
+            let _ = CloseClipboard();
             return Err("Could not write files to the system clipboard".into());
         }
-        CloseClipboard();
+        let _ = CloseClipboard();
     }
     Ok(())
 }
@@ -83,21 +71,6 @@ pub fn applications(_file: &Path) -> Vec<Application> {
     Vec::new()
 }
 
-#[link(name = "shell32")]
-unsafe extern "system" {
-    fn ShellExecuteW(
-        window: *mut c_void,
-        operation: *const u16,
-        file: *const u16,
-        parameters: *const u16,
-        directory: *const u16,
-        show: i32,
-    ) -> *mut c_void;
-}
-
-/// `SW_SHOWNORMAL`
-const SW_SHOWNORMAL: i32 = 1;
-
 fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt as _;
     text.encode_wide().chain([0]).collect()
@@ -115,14 +88,15 @@ fn shell_execute(operation: &str, file: &Path, parameters: &str) -> Result<(), S
     // the call; no window is named.
     let result = unsafe {
         ShellExecuteW(
-            std::ptr::null_mut(),
-            operation.as_ptr(),
-            path.as_ptr(),
-            parameters.as_ptr(),
-            std::ptr::null(),
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(path.as_ptr()),
+            PCWSTR(parameters.as_ptr()),
+            PCWSTR::null(),
             SW_SHOWNORMAL,
         )
-    } as usize;
+    }
+    .0 as usize;
     // Above 32 is success; below, the error.
     if result > 32 {
         Ok(())

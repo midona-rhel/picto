@@ -126,21 +126,6 @@ impl Session {
         self.selection.target(self.ran.as_ref())
     }
 
-    /// What an edit of `ids` addresses. When they are the grid's
-    /// selection, as [`Session::selected_ids`] or the window gives it, the
-    /// edit addresses all of it: the items chosen that are not loaded, or
-    /// the destination's query for a query-wide selection, so that it
-    /// reaches every item. Other ids (the viewer's item, a tile dragged
-    /// alone) are addressed as they are.
-    pub fn target_for(&self, ids: Vec<RootId>) -> picto_library::selection::SelectionTarget {
-        let loaded = self
-            .selected_loaded()
-            .into_iter()
-            .map(|item| item.root_id)
-            .collect::<Vec<_>>();
-        target_of(ids, &loaded, &self.selected_ids(), self.selection_target())
-    }
-
     /// Replaces the selection with the items at these ordinals, as a
     /// finished rubber band does; `keep` adds them to the items chosen. The
     /// item shown stays if it is still selected; otherwise the last one is
@@ -280,78 +265,5 @@ impl Session {
             self.request_window_at(ordinal, cx);
             cx.emit(Change::Results);
         }
-    }
-}
-
-/// [`Session::target_for`]: `selection` (what an edit of the grid's
-/// selection addresses) when `ids` are the selected items, loaded or by id;
-/// else `ids` alone.
-fn target_of(
-    ids: Vec<RootId>,
-    loaded: &[RootId],
-    selected: &[RootId],
-    selection: Option<picto_library::selection::SelectionTarget>,
-) -> picto_library::selection::SelectionTarget {
-    let whole = same_items(&ids, loaded) || same_items(&ids, selected);
-    match selection.filter(|_| whole) {
-        Some(target) => target,
-        None => picto_library::selection::SelectionTarget::Explicit { root_ids: ids },
-    }
-}
-
-/// Whether `ids` are the same items as `selected`: the grid's selection,
-/// rather than one item acted on by itself (the viewer's, a tile dragged
-/// alone).
-fn same_items(ids: &[RootId], selected: &[RootId]) -> bool {
-    if ids.is_empty() || ids.len() != selected.len() {
-        return false;
-    }
-    let mut ids = ids.to_vec();
-    let mut selected = selected.to_vec();
-    ids.sort_unstable();
-    selected.sort_unstable();
-    ids == selected
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{same_items, target_of};
-    use picto_library::RootId;
-
-    #[test]
-    fn only_the_grid_selection_stands_for_the_whole_destination() {
-        let ids = |range: std::ops::Range<u32>| range.map(RootId).collect::<Vec<_>>();
-        // The loaded selection, acted on as one, in any order.
-        let mut reversed = ids(0..500);
-        reversed.reverse();
-        assert!(same_items(&reversed, &ids(0..500)));
-        // One item acted on by itself while everything is selected.
-        assert!(!same_items(&ids(3..4), &ids(0..500)));
-        assert!(!same_items(&[], &[]));
-    }
-
-    #[test]
-    fn an_edit_of_one_shown_item_leaves_the_rest_of_the_selection_alone() {
-        use picto_library::query::{ItemScope, RootQuery};
-        use picto_library::selection::SelectionTarget;
-        let ids = |range: std::ops::Range<u32>| range.map(RootId).collect::<Vec<_>>();
-        // The whole destination is selected; 100 items are loaded.
-        let whole = SelectionTarget::Query {
-            query: RootQuery {
-                scope: ItemScope::All,
-                view: Default::default(),
-            },
-            excluded_root_ids: Vec::new(),
-        };
-        let edit = |acted_on| target_of(acted_on, &ids(0..100), &ids(0..100), Some(whole.clone()));
-        // The viewer's menu moves the item it shows, and only that one.
-        assert_eq!(
-            edit(ids(7..8)),
-            SelectionTarget::Explicit {
-                root_ids: ids(7..8)
-            }
-        );
-        // The grid's menu, opened on the selection, moves all of it.
-        assert_eq!(edit(ids(0..100)), whole);
     }
 }

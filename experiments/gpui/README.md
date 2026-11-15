@@ -1,400 +1,204 @@
 # Picto GPUI frontend
 
-## What this is
+## 1. What this is
 
-A native frontend for Picto written in Rust on GPUI (the UI framework of the
-Zed editor), built to behave and look like the Electron app's renderer
-(`src/` at the repository root). It runs Picto's own application layer
-(`core/`, `picto-library/`) inside the process, as the Electron app does
-through its native addon, so commands, background workers and events are
-production's. It covers most of what a user does day to day (browsing,
-selecting, the inspector, menus, the viewers, imports, exports, the Tags,
-Subscriptions and Duplicates screens, Settings), but it is not a replacement:
-section 8 lists what is missing and what has never been checked. It opens a
-disposable copy of a library as it always has, and a library the user keeps
-only under the rules of "Opening a library you keep" below. It is
-developed and used on macOS; Windows and Linux are built, tested and
-photographed off-screen in CI and have never been used on a screen.
+A native frontend for Picto in Rust on GPUI (the UI framework of the Zed
+editor), built to behave and look like the Electron app's renderer (`src/` at
+the repository root). It runs Picto's own application layer (`core/`,
+`picto-library/`) inside the process, as the Electron app does through its
+native addon, so commands, background workers and events are production's.
+It covers most of what a user does day to day (browsing, selecting, the
+inspector, menus, the viewers, imports, exports, the Tags, Subscriptions and
+Duplicates screens, Settings), but it is not a replacement: section 7 says
+what is open. It opens a disposable copy of a library, and a library the user
+keeps only under the rules of section 2. It is developed and used on macOS;
+Windows and Linux are built, tested and photographed off-screen in CI and
+have never been used on a screen.
 Issue: https://github.com/midona-rhel/picto/issues/163
 
-## Running it safely
+## 2. Running it safely
 
 ### The safety boundary
 
-The app writes, imports and deletes files, so it opens only a folder it can
-prove is a throwaway copy (`application::guard` in `src/application/copy.rs`). A
-copy is accepted only when all of these hold:
+The app writes, imports and deletes files, so a folder opens as a throwaway
+copy only when `application::guard` (`src/application/copy.rs`) proves it is
+one:
 
 - it holds the marker file `.gpui-disposable`, whose first line names the
   library it was copied from (or `synthetic:…` for a generated library);
 - it is not that library, not inside it, and does not contain it;
-- it sits exactly one level inside a folder named `picto-gpui-…` that lies
-  directly in a temporary folder: the system's (`std::env::temp_dir()`, which
-  is `$TMPDIR` on macOS and `%TEMP%` on Windows) or, on macOS and Linux,
-  `/tmp` or `/var/tmp`. A marked folder moved or copied anywhere else is
-  refused, because a marker travels with the files;
-- none of the copy's top-level entries, none of the entries of `blobs/`, and
-  neither `blobs/f` nor `blobs/t` is a symbolic link (what is written through
-  a link lands where it points);
+- it sits exactly one level inside a folder named `picto-gpui-…` directly in
+  a temporary folder: the system's (`std::env::temp_dir()`: `$TMPDIR` on
+  macOS, `%TEMP%` on Windows) or, on macOS and Linux, `/tmp` or `/var/tmp`.
+  A marked folder anywhere else is refused, since a marker travels with the
+  files;
+- none of its top-level entries, none of the entries of `blobs/`, and
+  neither `blobs/f` nor `blobs/t` is a symbolic link;
 - its `library.sqlite` is not the source's database reached another way (a
   hard link).
 
-Before the application starts its workers, and again on every launch,
-`application::detach` cuts the copy loose from work the real library has
-going on. In one transaction it:
+Before the workers start, on every launch, `application::detach` cuts the
+copy loose from the real library's work, in one transaction: cloud sync
+disconnected; a cloud identity of the copy's own given once (a new
+`library_id` and `device_id`, in `.gpui-cloud-identity`), so a copy connected
+to a cloud folder writes and purges only under its own name
+(`a_copy_never_syncs_as_the_library_it_was_copied_from`); every watched
+folder switched off; every subscription's next run cleared and pending or
+running runs and run queries cancelled; "delete after import" cleared on
+every import job. On the first open only (it then writes `.gpui-detached`)
+it also fails import jobs still pending or running, and rewrites every
+`media_file.file_path` that starts with the source's path to start with the
+copy's, so nothing opened, revealed, copied or dragged out is a file of the
+real library.
 
-- disconnects cloud sync (provider, account and remote root cleared, state
-  disabled), so nothing is written to the user's cloud folder;
-- gives the copy a cloud identity of its own once (a new `library_id` and
-  `device_id`, recorded in `.gpui-cloud-identity`), so a copy the user then
-  connects to a cloud folder writes, and purges, only under its own name
-  there, never the library's it was copied from
-  (`a_copy_never_syncs_as_the_library_it_was_copied_from`);
-- switches off every watched folder;
-- clears every subscription's next run, and cancels subscription runs and
-  run queries that were pending or running; choosing a schedule again in the
-  app sets a next run;
-- clears "delete after import" on every import job, so no job removes a file
-  outside the copy once it has been imported.
-
-On the first open only (it then writes `.gpui-detached` in the copy) it also
-marks import jobs still pending or running as failed ("Queued in the library
-this copy was made from"), and rewrites every stored `media_file.file_path`
-that starts with the source library's path to start with the copy's, so that
-nothing opened, revealed, copied or dragged out is a file of the real
-library.
-
-The application data the core keeps outside a library (its AI models, in
-`models/`) is, in a debug build, `app-data/` beside the copy, or the folder
-`PICTO_GPUI_APP_DATA` names; never the Electron app's folder
+The core's application data outside a library (its AI models, in `models/`)
+is, in a debug build, `app-data/` beside the copy or the folder
+`PICTO_GPUI_APP_DATA` names, never the Electron app's folder
 (`application::application_data`). The core may write there whenever it
-opens (it recovers interrupted model downloads), so to try the AI tagger with
-models production already downloaded, point the variable at a folder holding
-an APFS clone of them (`cp -Rc "$HOME/Library/Application Support/picto/models"
-<folder>/models`), not at the real folder. A release build uses production's
-own location, `picto` in the per-user application data folder
-(`app.getPath('appData')`): `~/Library/Application Support/picto` on macOS,
-`%APPDATA%\picto` on Windows, `$XDG_CONFIG_HOME/picto` or `~/.config/picto` on
-Linux, so it finds and manages the models production downloaded.
+opens, so to try the AI tagger with models production downloaded, point the
+variable at an APFS clone of them (`cp -Rc "$HOME/Library/Application
+Support/picto/models" <folder>/models`), never at the real folder. A release
+build uses production's location (`picto` in the per-user application data
+folder) and so shares production's models.
 
-Files are handed to the rest of the desktop only through `src/desktop/`
-(open with the default application, Open With, reveal in the file manager,
-copy files, Copy File Path, drag out of the window). Each canonicalises the
-path and refuses, with a notification, any file that is not inside the open
-copy, whatever the library stored. Links are opened only when they are
-`http:` or `https:` (`desktop::open_link`).
-
-Delete Permanently, Empty Trash and the Duplicates screen's Keep and Smart
-merge remove files only through the core, from the open library's blobs.
-The source library of a copy is only ever read, to copy it.
+Files reach the rest of the desktop only through `src/desktop/` (open with
+the default application, Open With, reveal, copy files, Copy File Path, drag
+out). Each makes the path canonical and refuses, with a notification, any
+file not inside the open library, whatever the library stored; the paths are
+handed over without Windows' `\\?\` prefix (`desktop::system_path`). Links
+open only when they are `http:` or `https:` (`desktop::open_link`). Delete
+Permanently, Empty Trash and the Duplicates screen's Keep and Smart merge
+remove files only through the core, from the open library's blobs. The
+source of a copy is only ever read.
 
 ### Opening a library you keep
 
 A library the user keeps (a `.library` folder with `library.sqlite` and no
-`.gpui-disposable` marker) is that user's only copy of years of work. This
-app opens one only by a deliberate act of the user, and nothing in this
-project's automation can reach one. `src/libraries/admission.rs` decides
-every open, in this order; each rule is enforced there unless another place
-is named, and proven by the test named.
+marker) is that user's only copy of years of work. `src/libraries/admission.rs`
+decides every open, in this order; each rule names where it is enforced and
+the test that proves it.
 
 1. **It is a library, and not a copy out of place.** A folder that passes
-   `application::guard` is a disposable copy and opens exactly as before
-   (detached, from any origin but a file the system handed over). A marked
-   folder that fails the guard is refused with the guard's words, never
-   taken for a library the user keeps. Anything else must be a `.library`
-   folder holding `library.sqlite`; production would create a library in an
-   empty `.library` folder, this app does not
+   the guard opens as a copy. A marked folder that fails it is refused with
+   the guard's words. Anything else must be a `.library` folder holding
+   `library.sqlite`; an empty `.library` folder is refused, where production
+   would create a library
    (`a_copy_opens_as_before_and_a_marked_folder_elsewhere_is_refused`,
    `what_is_not_a_library_is_refused`).
-2. **The build permits it.** A release build does. A debug or test build
+2. **The build permits it.** A release build does; a debug or test build
    only when started with `--allow-real-libraries` as its first argument
    (`main.rs`, `libraries::set_flag`), so every agent, script, test and CI
-   run is copy-only by default
-   (`a_debug_build_refuses_a_kept_library_without_the_flag`).
-3. **No automation seam is active.** Any variable of `src/seams.rs`
-   (pointer FIFO, background, window size, menus, state folder, inspector,
-   held runs and downloads, silent, application data) or a test build (the
-   off-screen tool, dialog answers, recorded desktop requests) refuses a
-   library the user keeps even with the flag (`seams::automation`;
-   `an_automation_seam_refuses_a_kept_library_even_with_the_flag`, which
-   also checks the test process itself). A release build has no seams.
-4. **The user asked for it**: the Library Manager (a row, Open Library, New
-   Library), Open Library…, File › Recent Libraries, the sidebar's library
-   switcher, the library this app last had open (`lastLibrary` in this
-   app's own `state.json`, looked at only when this process may open it),
-   a library found with Locate…, or the command line with the flag. When
-   the library last open is missing at start, production's "Library Not
-   Found" question is asked (`handleMissingLibrary`: Locate…, Remove from
-   List, Cancel; `host::start_last`); a library Locate… finds (the chosen
-   folder, or the library of the same name in it,
-   `locate_finds_the_library_chosen_or_the_one_inside_the_folder`) takes
-   the old one's place in the list and is opened through every rule here,
-   its consent asked again. Production first falls back to the first
-   library of its history still on disk; this app opens at start only the
-   library it had open last. A file the system hands over (a
-   launch with files, Open With, a drop on the Dock icon, a second launch)
-   never opens a library; `opening::accept` refuses it as before
-   (`only_a_library_the_user_chose_is_opened`).
-5. **The Electron app is not running.** The core has no lock production
-   honours yet, and production's single-instance lock does not know this
-   app, so a process of the Electron app running at all refuses the open,
-   and so does a failure to look (`src/libraries/platform/`: every
-   process's executable on macOS, `/proc` on Linux, a Tool Help snapshot on
-   Windows; names `Picto.app`/`Picto`/`Picto Helper…`, `picto` or a
-   `Picto…AppImage`, `Picto.exe`). While a library the user keeps is open,
-   the check runs again whenever the main window becomes active, and a
-   running Electron app puts a notice over the window that stays until it
-   has quit (Check Again) or the library is closed (Close Library)
+   run is copy-only (`a_debug_build_refuses_a_kept_library_without_the_flag`).
+3. **No automation seam is active.** Any variable of `src/seams.rs`, or a
+   test build, refuses a library the user keeps even with the flag
+   (`seams::automation`;
+   `an_automation_seam_refuses_a_kept_library_even_with_the_flag`). A
+   release build has no seams.
+4. **The user asked for it**: the Library Manager, Open Library…, Recent
+   Libraries, the sidebar's switcher, the library last open (`lastLibrary`
+   in this app's `state.json`), a library found with Locate…, or the command
+   line with the flag. A missing last library asks production's "Library
+   Not Found" question (Locate…, Remove from List, Cancel;
+   `host::start_last`); a library Locate… finds takes the old one's place
+   and is opened through every rule here
+   (`locate_finds_the_library_chosen_or_the_one_inside_the_folder`). A file
+   the system hands over never opens a library (`opening::accept`,
+   `only_a_library_the_user_chose_is_opened`).
+5. **The Electron app is not running.** The installed Picto takes no lock
+   this app can see, so any process of it, or a failure to look, refuses the
+   open (`src/libraries/platform/`: process executables on macOS, `/proc` on
+   Linux, a Tool Help snapshot on Windows; `Picto.app`/`Picto`/`Picto
+   Helper…`, `picto` or a `Picto…AppImage`, `Picto.exe`). While a library
+   the user keeps is open the check runs again whenever the main window
+   becomes active, and a running Picto puts a notice over the window until
+   it quits (Check Again) or the library is closed
    (`libraries::host::check_picto`;
    `a_kept_library_is_refused_while_picto_runs_or_cannot_be_checked`). The
-   probe is injectable (`admission::Probes`).
-6. **The core finds its schema current**, read through SQLite's
-   `immutable` flag, which writes nothing, not even a shared-memory file
-   (`admission::compatibility`, `picto_library::schema::validate`). The
-   core's open would migrate an older schema in place; this app refuses it
-   with the core's words ("incompatible library: expected generation 1 (…),
-   found …"; "… missing schema-generation-1 metadata" for another database)
-   and asks the user to open it in Picto
+   probe sees names and paths only: not Picto run from source, renamed, run
+   by another user, or on another machine over a network share.
+6. **The core finds its schema current**, read through SQLite's `immutable`
+   flag, which writes nothing (`admission::compatibility`,
+   `picto_library::schema::validate`). An older schema is refused with the
+   core's words, never migrated; the user opens it once in Picto first
    (`an_incompatible_schema_is_refused_with_the_cores_words_and_left_alone`).
 7. **The user agreed, once per library.** The first open asks, naming the
-   path, that this app will read and write the library directly and that
-   Picto must not have it open at the same time. The answer is kept in
-   this app's `state.json` (`libraryConsents`: canonical path and the
-   database file's identity: device, inode and creation time on macOS and
-   Linux, since a freed inode goes to the next file made; creation time on
-   Windows), never in the library; a different library later at the
-   same path is asked about again. A library made with New Library here
-   needs no question; a rename carries the consent along
+   path. The answer is kept in `state.json` (`libraryConsents`: canonical
+   path and the database file's identity), never in the library; a different
+   library later at the same path is asked about again; New Library here
+   needs no question and a rename carries the consent
    (`consent_is_asked_once_per_library_and_its_database`).
 
-Then, as it opens (`libraries::host::begin`): this app's own instance lock
-for the library (`opening::instance`) refuses a second instance of this app,
-which comes forward instead; and the core takes `.picto-library.lock` in the
-library's folder, an exclusive lock held for as long as it is open, which
-refuses any other holder (another instance, or Picto once it takes the same
-lock). A library the user keeps is never detached or marked: it is opened
-exactly as production opens it (`Application::open`; `detach` itself refuses
-a folder without the marker,
-`detach_never_touches_a_library_without_the_marker`). A switch closes the
-library first (`Application::close`, after which the old application refuses
-every command so nothing of its session reaches the next library) and opens
-the next (`a_kept_library_opens_as_it_is_and_a_switch_closes_it_first`, with
-generated libraries and injected probes). In a debug build the core's
-application data for a library the user keeps is `app-data` in this app's
-own folder, never beside the library.
+Then (`libraries::host::begin`) this app's instance lock refuses a second
+instance on the library, and the core takes `.picto-library.lock`, an
+exclusive lock held while it is open. A library the user keeps is never
+detached or marked (`detach_never_touches_a_library_without_the_marker`). A
+switch closes the library first (`Application::close`, after which the old
+application refuses every command) and closes the detail, Settings and log
+windows, whose commands would otherwise reach the next library
+(`a_kept_library_opens_as_it_is_and_a_switch_closes_it_first`).
 
-The first run lists the Electron app's libraries (`libraries::seed`): when
-this app's own list is empty and was never seeded, a process that may list
-libraries the user keeps (a release build, or a debug build with the flag
-and no automation) reads production's `config.json` read-only, copies its
-`libraryHistory` and `pinnedLibraries` (absolute paths, each once) into
-this app's `state.json`, and keeps `librariesSeeded` so it never happens
-again, even after the list is emptied. Production keeps the file in its
-per-user application data: `~/Library/Application Support/picto/config.json`
-on macOS, `%APPDATA%\picto\config.json` on Windows,
-`$XDG_CONFIG_HOME/picto/config.json` or `~/.config/picto/config.json` on
-Linux. A missing, unreadable or malformed file seeds nothing and is not an
-error. Seeding only lists: it gives no consent, sets no last library and
-opens nothing; every rule above still applies to each listed library
+The first run may list the Electron app's libraries (`libraries::seed`):
+when this app's list is empty and was never seeded, a process that may list
+libraries the user keeps reads production's `config.json` read-only and
+copies its `libraryHistory` and `pinnedLibraries`, once. Seeding only lists:
+no consent, no last library, nothing opened
 (`seeding_happens_once_into_an_empty_list_and_only_lists`,
-`a_missing_unreadable_or_malformed_file_seeds_nothing`,
-`a_process_that_cannot_list_kept_libraries_never_reads_the_file`).
+`a_process_that_cannot_list_kept_libraries_never_reads_the_file`). Listing
+shows only libraries this process may open (`libraries::listed`) and writes
+nothing to them (`listing_a_kept_library_writes_nothing_to_it`).
 
-Listing reads nothing it need not: the Library Manager, the switcher and
-Recent Libraries list only the libraries this process may open
-(`libraries::listed`), so a debug build without the flag, or any automation,
-reads nothing of a library the user keeps, not even whether its folder
-exists. Listing reads a listed library's folder and its cover file and
-writes nothing there (`listing_a_kept_library_writes_nothing_to_it`);
-statistics are read only for the open library, through its application.
-
-Edits that cannot be undone work on the open library whichever way it was
-admitted, as production does them on every library, and on nothing else.
-One predicate decides (`libraries::writable`, through
-`Session::writable_root`): the session's library must be the one open in
-the main window; with nothing open, another library open or the library
-closing, each is refused with "No library is open."
-(`edits_are_refused_unless_their_library_is_the_open_one`). Each file an
-edit writes, replaces or removes itself must lie inside that library's
-folder (`libraries::confine`, the desktop hand-offs' check: its folder made
-canonical, so a link leading out is caught, and the file itself not a
-link), or nothing is written
-(`writes_are_confined_to_the_open_library`,
+Edits that cannot be undone work only on the library open in the main
+window (`libraries::writable`, through `Session::writable_root`; otherwise
+"No library is open.", `edits_are_refused_unless_their_library_is_the_open_one`),
+and every file an edit writes itself must lie inside that library's folder
+(`libraries::confine`; `writes_are_confined_to_the_open_library`,
 `a_thumbnail_is_written_only_inside_the_library`,
-`the_cover_is_written_only_inside_the_library`):
+`the_cover_is_written_only_inside_the_library`). That covers Delete
+Permanently, Empty Trash and Reject when it deletes (the core's own
+`Library::permanently_delete` and `delete_rejected`; the core's worker
+removes the files), drawn thumbnails, Regenerate Thumbnails, Set as
+Thumbnail, and the library's cover.
 
-- Delete Permanently, Empty Trash and Reject (when it deletes) run the
-  core's own delete (`Library::permanently_delete`, `delete_rejected`, what
-  production's `items.delete` and `items.reject_delete` run) with
-  production's confirmation and words; the core's media worker removes the
-  files. This app removes none.
-- Thumbnails the core cannot make (PDF, DjVu, comics, Flash, documents) are
-  drawn to `<hash>.png` beside the library's own thumbnail, as production's
-  main process draws them.
-- Regenerate Thumbnails sets the thumbnail aside beside itself, has it made
-  again, and puts it back if that failed (`regenerateThumbnail`).
-- Set as Thumbnail writes the frame as `<hash>.png` and removes the `.jpg`
-  (`setThumbnail`).
-- The library's cover is written as `.picto-library-cover.*` and
-  `.picto-library-cover.json` in the library's folder (`setLibraryMeta`).
-
-The session's scratch folder (the cover's crops, dropped data) is in a
-copy's own temporary folder, or the system's for a library the user keeps:
-nothing is written beside a library the user keeps.
-
-The Library Manager has what production's has. A library's
-colour and icon are kept in this app's `state.json` (`libraryMeta`, as
-production keeps them in its `config.json`) and drawn on its avatar; they
-follow a rename, move or Locate…. The actions menu's Rename, Show in File
-Manager, Move… and Delete… on a library that is not open first run
-`admission::admit` as an open from the manager would (`host::permit`), and
-ask the consent question when the user has not agreed to that library yet;
-a refusal (Picto running, an older schema, a debug build without the flag)
-stops them with its words. The host checks again when it renames, moves or
-deletes, and answers the manager with the outcome, which shows a failure
-in production's words ("Failed to rename library: …", "A library operation
-is already in progress."). Move… (`relocateLibrary`) asks for a folder,
-refuses one inside a library or holding a library of that name, closes the
-library first if it is open, renames the folder, or across volumes copies
-it beside the target, compares every file, renames the copy into place and
-only then removes the original (`libraries::files`); a library holding a
-symbolic link is not moved across volumes. Locate… on a missing row finds
-it as at start, without opening it. Delete… (`deleteLibrary`) is refused
-for the open library; production's question names the full path ("Delete
-library "…"? This will permanently delete all files in: … This cannot be
-undone."); once confirmed the rules are checked again and the folder is
-removed for good, as production removes it (`fs.rm`, not the system's
-Trash), only if it is a real `.library` folder (not a link) holding a
-`library.sqlite` file and no other holder has the core's lock
-(`delete_removes_only_a_library_that_is_neither_open_nor_held`,
-`move_puts_the_library_in_the_folder_chosen_and_nowhere_else`,
-`a_copy_across_volumes_is_verified_before_the_original_goes`). Cloud sync
-is described under "Cloud" below.
+The Library Manager's Rename, Show in File Manager, Move… and Delete… on a
+library that is not open run `admission::admit` first (`host::permit`) and
+ask the consent question (production has no such question). Delete… is
+refused for the open library and removes only a real `.library` folder
+holding `library.sqlite` that no one else holds locked
+(`delete_removes_only_a_library_that_is_neither_open_nor_held`); Move…
+across volumes copies, compares every file and only then removes the
+original (`a_copy_across_volumes_is_verified_before_the_original_goes`).
 
 ### Cloud
 
-Production's cloud sync signs in to nothing and opens no connection: a
-library publishes verified snapshots of its database and its originals
-into the folder of a Google Drive or Dropbox desktop app already installed
-on the device, and that app carries them to the provider. The core owns all
-of it (`core/src/cloud/`, the commands `cloud.*` and its snapshot worker,
-which publishes once changes have been idle 30 s); this app sends the same
-commands production's renderer sends and keeps no tokens or secrets (there
-are none, so nothing goes near the system keychain from any build):
+Production's cloud sync signs in to nothing: a library publishes verified
+snapshots of its database and originals into the folder of a Google Drive or
+Dropbox desktop app on the device, which carries them on. The core owns all
+of it (`core/src/cloud/`, commands `cloud.*`); this app sends the same
+commands and keeps no tokens or secrets. The safety facts:
 
-- Settings › Cloud: provider, folder, state, last sync; Sync now, Pause or
-  Resume, Create snapshot; pending work; the four retention fields, written
-  on each change (`cloud.retention.update`); Restore History
-  (`cloud.restore.list`) and Restore with production's question.
-- Library Manager: the Cloud Sync card (provider and account, state with
-  its coloured dot, last sync as "Just now" / "n min ago", pending changes
-  and files, the sync's progress and time remaining, or the core's
-  message), the dot on the open library's row, Synchronize Library with
-  each folder found, Connect Google Drive… / Connect Dropbox… (the folder
-  is validated as the root of an installed app, kept as `cloudLocations` in
-  `state.json`, and connected when the open library has no folder yet), the
-  actions menu's Sync Now, Pause/Resume Sync, Create Recovery Snapshot,
-  Show Cloud Folder, Stop Syncing (with production's question) or Enable
-  Cloud Sync's submenu, and Open from Cloud… (the libraries in the folders,
-  those already added marked, a local name, Choose Location…).
-- The main window: production's `CloudSyncBar` (the bar along the bottom
-  between the rails while a sync runs, with bytes or units done) and the
-  blocking progress dialog while a library joined from the cloud restores
-  its media; `cloudSettle`'s notifications ("Cloud changes found" with
-  View progress, which opens the log window; "Cloud sync needs attention";
-  "Cloud update complete").
-
-Two things differ from production because the app reads the library
-directly rather than only through commands:
-
-- **Restore** (`host::restore`) closes the library's views (Settings
-  included, as a switch does), waits until this app holds no connection to
-  the database (at most 15 s, else nothing is restored), has the core set
-  the database aside as an emergency copy and put the snapshot's in place,
-  and opens the library again; a copy keeps the folder it was connected to,
-  and the consent to a library the user keeps carries over to the restored
-  database file.
-- **Open from Cloud…** (`host::join`) closes the open library first, has
-  the core make the new library from the newest snapshot, and opens it as a
-  library the user made here (consent recorded, `cloudLibraryId` kept); a
-  failed join removes the folder it made and opens the previous library
-  again. The new library is one the user keeps, so it follows section 2: a
-  debug build needs `--allow-real-libraries` and no automation seam.
-
-While an automation seam is active (any check, any test build) only the
-folders `PICTO_GOOGLE_DRIVE_ROOT` and `PICTO_DROPBOX_ROOT` name are listed or
-accepted, so no check lists or writes a real account's folder. The core's
-own validation still looks for installed apps under the home folder, so
-local checks run with `HOME` pointed at an empty folder.
-
-Rename, Show in File Manager, Move… and Delete… act on a library the user
-may not have opened here, so they ask the same consent as opening does
-(production has no such question; this app errs on the side of asking).
-Remove from List and Locate… only change this app's list, and ask nothing
-more than production does. Rename, Remove from List, Move…, Delete…, Show
-in File Manager, New Library and the blocking notice were run end to end
-in the off-screen tool on generated libraries.
-
-Decided, where this app differs from production on purpose:
-
-- **A switch closes the detail, Settings and log windows.** Production
-  keeps them open across `switchLibrary`; each holds the closed library's
-  session, and a command from one would reach the library opened next.
-  Closing them is the only way here to be sure nothing of one library is
-  written to another, so it stays (`host::close_views`).
-- **An older schema is refused, never migrated.** The core would migrate
-  it in place as it opens, a change this app cannot undo and production
-  makes with its own backup. The user opens that library once in Picto
-  (which updates it), quits Picto, and opens it here; the refusal says so.
-- **The Electron app's probe has limits.** It looks at process names and
-  paths, not at what a process has open: on macOS any executable inside a
-  `Picto.app` or named `Picto`/`Picto Helper…`, on Linux an executable or
-  process named `picto` or a `Picto…AppImage`, on Windows `Picto.exe`. It
-  does not see Picto run from source (`electron .`, named `Electron`), an
-  installation renamed to something else, Picto run by another user whose
-  processes this one may not read, or Picto on another machine using the
-  same library over a network share; it does count any unrelated program
-  of those names as Picto (refusing more, never less). It runs at each open
-  and whenever the main window becomes active, not continuously: Picto
-  started while this app stays in the background is noticed only when the
-  window is next brought forward. The installed Picto does not take the
-  core's `.picto-library.lock`, so until it does, this probe and the notice
-  are all that keep the two apart; the owner should quit Picto before
-  opening a library here.
-
-What stays as it was: `--make-copy` reads its source read-only;
-`<copy> --detach` refuses anything but a marked copy; the desktop hand-offs
-refuse paths outside the open library, whichever kind it is, and Show in
-File Manager in the Library Manager reveals only a listed library's folder.
-
-For pictures of this path, the off-screen tool (a seam) takes
-`PICTO_GPUI_TEST_LIBRARIES=<folder>`, read in test builds only: the
-libraries directly in that folder, which must lie inside a temporary
-folder, count as permitted by rules 2 and 3, and only they are listed.
-`PICTO_GPUI_TEST_PICTO_RUNNING=1` makes the Electron app's probe say it
-runs, and `=after-open` says it does not for the open's own look and does
-from then on, as when it starts while a library is open (unset there, it
-says it does not).
+- A copy's cloud is disconnected at every launch and has its own identity
+  (above), so it never writes or purges as the library it came from.
+- While any automation seam is active only the folders `PICTO_GOOGLE_DRIVE_ROOT`
+  and `PICTO_DROPBOX_ROOT` name are listed or accepted; the core's own
+  validation looks under the home folder, so checks run with `HOME` pointed
+  at an empty folder.
+- **Restore** (`host::restore`) closes the library's views, waits until this
+  app holds no connection to the database (at most 15 s, else nothing is
+  restored), has the core keep the current database as an emergency copy and
+  put the snapshot's in place, and opens the library again.
+- **Open from Cloud…** (`host::join`) makes a library the user keeps, so it
+  follows the rules above; a failed join removes the folder it made and
+  reopens the previous library.
 
 ### Making a copy and opening it
 
-On macOS, `run.sh` copies a library, builds the app and opens it:
+On macOS, `run.sh /path/to/Main.library` refuses unless the library and
+`$TMPDIR` share an APFS volume, builds the debug binary, makes the copy with
+`--make-copy` (APFS clones, taking no space until a file changes), wraps the
+binary as `target/Picto GPUI.app` (needed for system notifications) and opens
+it. `PICTO_GPUI_COPY_ONLY=1` makes the copy, prints its path and stops.
 
-```sh
-experiments/gpui/run.sh /path/to/Main.library
-```
-
-It refuses, copying nothing, when the library and the system's temporary
-folder (`$TMPDIR`) are on different volumes or the volume is not APFS, then
-builds the debug binary and makes the copy with its `--make-copy` (below),
-which on APFS clones every file but the database with `clonefile`, taking no
-space until either side changes a file. It then wraps the binary as
-`experiments/gpui/target/Picto GPUI.app` (bundle id
-`dev.picto.gpui-experiment`; the bundle is needed for system notifications),
-writes the copy's path to `target/last-snapshot` and opens the bundle on the
-copy. `PICTO_GPUI_COPY_ONLY=1` makes the copy, prints its path and stops.
-
-On every platform the app makes the copy itself:
+On every platform:
 
 ```sh
 cd experiments/gpui
@@ -404,594 +208,251 @@ cargo run --locked -- <that path>
 
 `--make-copy` (`application::make_copy`) puts the copy in a new
 `picto-gpui-library.…` folder of the system's temporary folder, backs up the
-database the same way, copies everything else with the system's file copy
-(which clones on APFS, btrfs, XFS and ReFS and copies in full elsewhere, so a
-large library needs that much free space there), refuses a library that holds
-a symbolic link anywhere, writes the marker, detaches the copy and checks it
-with the guard. A failed copy leaves nothing behind. Run the binary through
-`cargo run` on Linux: it links the core's ONNX Runtime libraries
-(`libwebgpu_dawn.so` among them), which cargo puts on the loader's path and a
-bare `target/debug/picto-gpui-spike` does not find.
+database, copies the rest with the system's file copy (clones on APFS,
+btrfs, XFS and ReFS, a full copy elsewhere), refuses a library holding a
+symbolic link, writes the marker, detaches and guards the copy, and leaves
+nothing behind if it fails. On Linux run through `cargo run`, which puts the
+core's ONNX Runtime libraries on the loader's path.
 
-With no argument the app opens the library it had open last, if it may
-(rules above), and otherwise shows production's gate ("Open a library to
-start", Choose Library…), which opens the Library Manager by itself.
-`--allow-real-libraries [<library>]` first lets a debug build open
-libraries the user keeps, and opens the one named.
-
-The binary takes the copy's root first. `<copy> --detach` detaches the copy
-and exits without opening a window; `reference.sh` uses it before the
-Electron app opens the same copy. Files after the copy are opened as
-production opens files from the file manager (`src/opening/`): a
-`.picto-pack` goes to the pack's import dialog (several wait their turn),
-a `.library` that is the open library only brings the window forward, and
-any other `.library` is refused, since a file the system hands over never
-opens a library here (rule 4 above). There is one instance per library
-(the copy it started on, or each library it opens later): a second launch on a copy already open
-hands its files to that instance, which comes forward, and exits; launches
-on other copies run side by side. A launch with files and no copy (what a
-file manager starts) hands them to the instance whose window was active
-last, or fails when none is open. On macOS the same files also arrive
-through `application:openURLs:` (Open With, `open -a`, a drop on the Dock
-icon) while the app runs. No file type is registered with the system: the
-bundle `run.sh` makes declares none, and nothing is written to the
-registry or to a `.desktop` file.
+With no argument the app opens the library it had open last, if it may, and
+otherwise shows production's gate. `<copy> --detach` detaches and exits
+(`reference.sh` uses it). Files after the copy are opened as production opens
+files from the file manager (`src/opening/`): a `.picto-pack` goes to the
+pack import dialog; a `.library` other than the open one is refused. There
+is one instance per library: a second launch on it hands its files over and
+exits; a launch with files and no copy hands them to the instance active
+last. No file type is registered with the system.
 
 `million.sh [items]` generates a synthetic library (a million items by
-default, sharing 4,096 generated JPEGs through hard links, with five smart
-folders) with the core's `million_grid_demo` example, built in release mode
-from the repository root, in `/tmp/picto-gpui-synthetic.XXXXXX/`, marks it
-`synthetic:million_grid_demo`, builds the app and opens it with the frame
-meter on. It reads no existing library. `PICTO_GPUI_MILLION_ONLY=1` makes the
-library, prints its path and stops.
+default, five smart folders) in `/tmp/picto-gpui-synthetic.XXXXXX/` with the
+core's `million_grid_demo` example and opens it with the frame meter.
 
-Delete copies when done: `/tmp/picto-gpui-*` and `$TMPDIR/picto-gpui-*` on
-macOS and Linux, `%TEMP%\picto-gpui-*` on Windows. A copy made by
-`reference.sh` also holds the Electron app's data in `electron-data/` beside
-it.
+Delete copies when done: `/tmp/picto-gpui-*` and `$TMPDIR/picto-gpui-*`, or
+`%TEMP%\picto-gpui-*` on Windows (a `reference.sh` copy also holds the
+Electron app's data in `electron-data/`).
 
-### Frame meter and counters
-
-Every build reads these two variables; with neither set nothing is added.
-
-`PICTO_GPUI_FPS=1` (`src/meter.rs`) shows a meter in the window's bottom-left
-corner: frames drawn in the last second, the time between the last two, and
-how long the app spent drawing one, from the start of the shell's render to
-the end of its paint (the GPU's work afterwards is not in it). It reads
-"idle" once nothing has drawn for a second, and asks for no frames of its own
-beyond one a second to say so.
-
-`PICTO_GPUI_STATS=1` (`src/stats.rs`) prints to standard error, for each
-second in which something happened: how often each view repainted; how long
-the grid took to build a frame, by the clock and in the main thread's own
-time, with its layout and tile parts; the gap between the window's frames;
-the longest a 4 ms timer on the main thread was kept waiting (a stall); how
-many thumbnail files were read, let go, let go without ever being painted, or
-dropped unfinished; the most bytes the decoded thumbnails held; and how many
-pictures were released from GPUI's sprite atlas (in the off-screen tool, also
-how many an atlas still held afterwards, which should be none). It also
-prints at once each stage of opening (database readable, application
-finished), each window of results read and when it arrived, and every screen
-read or edit on the library thread that took 5 ms or more. Unset, the timings
-read no clock and each counter costs one atomic add.
-
-## Building
+## 3. Building
 
 The experiment is a Cargo workspace of its own (`experiments/gpui/Cargo.toml`
-and `Cargo.lock`), outside the production workspace. The toolchain is Rust
-1.98.0, pinned by the repository's `rust-toolchain.toml`. Without rustup,
-install that toolchain anywhere and put its `bin` first on `PATH`;
-`experiments/gpui/.toolchain/` is ignored by Git for that purpose.
+and `Cargo.lock`). The toolchain is Rust 1.98.0, pinned by the repository's
+`rust-toolchain.toml`; without rustup, put that toolchain's `bin` first on
+`PATH` (`experiments/gpui/.toolchain/` is ignored by Git for that).
 
 ```sh
 cd experiments/gpui
-cargo build --locked     # debug, as run.sh, million.sh, reference.sh and CI build
+cargo build --locked
 cargo test --locked
 ```
 
-GPUI is taken from `gpui-pre` and `gpui-pre-platform` `=0.3.12`, a crates.io
-snapshot of upstream GPUI (zed-industries/zed); the official `gpui` crate has
-not been published since 0.2.2 and GPUI promises no API stability between
-snapshots, so the version is pinned exactly and upgraded deliberately. Six
-of the snapshot's crates (`gpui-pre`, `gpui-pre-apple`, `gpui-pre-wgpu`,
-`gpui-pre-windows`, `gpui-pre-macos`, `gpui-pre-linux`) are vendored under
-`vendor/` and substituted with
-`[patch.crates-io]`. The patches add a backdrop-blur primitive (drawn by the
-Metal and wgpu renderers, ignored by the DirectX one), drop shadows that cut
-their element out as CSS does, nearest-neighbour image sampling for the
-"Pixelated" preview setting, a native file drag the app can start itself
-(`Window::start_platform_drag`, given an OLE drag source on Windows and an
-XDND source on X11), what a drop from another application carries besides
-files (`ExternalDropData`: a browser's image data, its addresses, HTML and
-text, read by each platform, and `PromisedFiles`: files a drag promises,
-offers to save or holds as virtual files, written into a folder of the
-drop's own), an interface zoom for every window
-(`App::set_ui_zoom`), and test-only hooks for the off-screen
-checks (`Window::is_dirty`, `Window::has_image_atlas_entry`, test windows
-that keep client decorations). `vendor/README.md` explains each change and
-holds the full diff against 0.3.12, so it can be re-applied to a newer
-snapshot.
+GPUI is `gpui-pre` and `gpui-pre-platform` `=0.3.12`, a crates.io snapshot of
+upstream GPUI pinned exactly (the `gpui` crate has not been published since
+0.2.2, and snapshots promise no API stability). Six of its crates are
+vendored under `vendor/` and patched in with `[patch.crates-io]`: a backdrop
+blur (Metal and wgpu; the DirectX renderer ignores it), CSS-like cut-out
+shadows, nearest-neighbour sampling, a native file drag the app starts
+itself (`Window::start_platform_drag`, with an OLE source on Windows and an
+XDND source on X11, whose file-list encoders the app's Copy uses too), what
+a drop carries besides files (`ExternalDropData`, `PromisedFiles`), an
+interface zoom (`App::set_ui_zoom`), and test-only hooks for the off-screen
+tool. `vendor/README.md` explains each change and holds the diff against
+0.3.12.
 
-The `dev` profile builds this crate at `opt-level = 1` and every dependency
-at `opt-level = 2`, with line-number debug information only and incremental
-compilation off, because full debug information and incremental caches made
-each build cycle write several gigabytes. There is no tuned release profile;
-`cargo build --release` drops the test seams (section 5).
+The `dev` profile builds this crate at `opt-level = 1` and dependencies at
+`opt-level = 2`, with line tables only and incremental compilation off, to
+keep build output small; there is no tuned release profile, and `cargo build
+--release` drops the test seams. Expect about 1,100 packages, a 156 MB debug
+binary and about 7 GB of `target/`.
 
-Expect a large build: the lockfile holds about 1,100 packages (the
-application core, ONNX Runtime, Ruffle, wgpu and the document decoders among
-them), the debug binary is about 156 MB, and one worktree's `target/` folder
-measured about 7 GB after debug builds and tests. `million.sh` also builds the
-core's example in release mode in the repository root's `target/`. A clean
-build takes several minutes; it has not been timed with the current
-dependencies.
-
-Platforms: macOS is where the app is developed and the only platform it has
-run on with a screen. Windows and Linux are built and tested in CI (section
-6). Linux needs the packages CI installs: `pkg-config clang cmake
-libasound2-dev libclang-dev libdbus-1-dev libfontconfig-dev libglib2.0-dev
-libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
-libzstd-dev libudev-dev libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
+Linux needs: `pkg-config clang cmake libasound2-dev libclang-dev
+libdbus-1-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1
+libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libudev-dev
+libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
 libjavascriptcoregtk-4.1-dev` (and `mesa-vulkan-drivers` for software
-drawing); the WebKitGTK packages are for the site logins' sign-in window
-and are needed at run time too (`libwebkit2gtk-4.1-0`, WebKitGTK 2.38 or
-later). On Windows the sign-in window needs the Microsoft Edge WebView2
-Runtime (part of Windows 11, and installed with Edge on Windows 10); without
-it a sign-in ends with a message saying so.
-Video other than what AVFoundation plays needs the `ffmpeg` binary the core
-already uses, found through `PICTO_FFMPEG_DIR`, then `vendor/ffmpeg/` in or
-above the working directory or the executable
-(`scripts/download-ffmpeg.sh` fetches it), then `PATH`.
+drawing; WebKitGTK 2.38 or later at run time for the sign-in window). On
+Windows the sign-in window needs the WebView2 Runtime. Video beyond what
+AVFoundation plays needs the core's `ffmpeg` binary: `PICTO_FFMPEG_DIR`, then
+`vendor/ffmpeg/` in or above the working directory or the executable
+(`scripts/download-ffmpeg.sh`), then `PATH`.
 
-## How it is put together
+## 4. How it is put together
 
-About 112,000 lines of Rust in `src/`. The map below says what each area
-owns, its main types, and the one rule to know there.
+Each area: what it owns, its main types, and the one rule to know there.
+Details are in each module's `//!` documentation.
 
 **Application and library thread** (`application/`, `backend.rs`).
-`Application` (`application/mod.rs`) runs `picto_core` on a Tokio runtime of
-its own: it sets the application data root, registers the core's event
-callback, opens the copy with `picto_core::state::open_library_reporting`
-and answers `dispatch("command", json)` exactly as the renderer's `invoke`
-is answered (`core/src/ipc.rs`); `call` is the same answer as a future,
-"The application has stopped" if it never comes. `application/copy.rs`
-holds the disposable-copy rules: which folder opens as a copy (`guard`),
-`--make-copy` and `detach`. `backend::start` runs one library thread that borrows
-the application's own `Library`, so the database is opened once; grid
-results and the sidebar are read as soon as the database is readable, while
-the core's recovery passes still run (10–30 s on a million items), and
-everything else waits for the whole open, as commands do. Rule: the library
-is never touched from the thread that draws.
+`Application` runs `picto_core` on a Tokio runtime of its own, opens the
+library with `picto_core::state::open_library_reporting` and answers
+`dispatch("command", json)` as the renderer's `invoke` is answered
+(`core/src/ipc.rs`). `application/copy.rs` holds the copy rules.
+`backend::start` runs one library thread on the application's own
+`Library`; grid results and the sidebar are read once the database is
+readable, while the core's recovery passes still run. Rule: the library is
+never touched from the thread that draws.
 
-**Session** (`src/session/`). `Session` is the one model every view reads:
-the destination list (`backend::Navigation`), the destination shown and the
-history of places (`navigation.rs`), its results as a window over the
-destination (`results.rs`), the selection (`selection.rs`), the viewer, and
-library edits (`edits.rs`). It emits a `Change` (`Navigation`, `Results`,
-`Selection`, `Details`, `Edited`, `Viewer`, `Activity`) so each view repaints
-only for what it shows. `events.rs` drains the core's `library/changed` and
-`picto:thumbnail-changed` events, merged into one per poll as the renderer's
-registry merges them per frame, and does what production's settle stores do:
-the sidebar's destinations and counts are read again, the shown grid is read
-again in place (coalesced, spaced between 40 ms and 1 s by three times the
-last refresh's time, held during a press, rubber band or drag or a change of
-destination, keeping the selection by item and the topmost visible tile
-where it was), and subscription activity is polled every 1.5 s while a run
-goes. Rule: views read the session and change it through its methods; no
-view owns another's state.
+**Session** (`session/`). The one model every view reads: the destination
+list, the destination shown and its history, its results as a window over
+the destination, the selection, the viewer, and library edits. It emits a
+`Change` so each view repaints only for what it shows; `events.rs` turns the
+core's change events into reads, as production's settle stores do. A query-wide
+selection (Select All, a range) is addressed through the library
+(`Session::selection_target`), never through the loaded items. Rule: views
+change the session through its methods; no view owns another's state.
 
-**Shared UI layer** (`src/ui/`). One implementation of each control, as
-`src/shared/ui` is for production: buttons, icon buttons, check boxes and
-radios, switches, selects, sliders, number fields, date and colour pickers,
-chips, rows, the rows of a rail of views (`rail_item`, a look per
-stylesheet, as glyph buttons have), the scrollbar, tooltips, empty states, segmented controls and
-tab strips, breadcrumbs, window chrome, and the track-drag gesture and hover
-fade they share. A control that only one view has in production (its own CSS
-class, such as the grid's Retry button) is drawn by that view. The pieces
-every view relies on:
+**Shared UI** (`ui/`). One implementation of each control, as
+`src/shared/ui` is for production. The pieces every view relies on: layers
+by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
+(`focus.rs`), the context menu (`menu.rs`, `menu/`; pop-up windows on macOS,
+drawn in the window elsewhere), dialogs (`modal.rs` with its `Host`, which
+plays a dialog's exit and gives the keyboard back, `modal::backdrop` and
+`modal::dialog_panel`, the one backdrop and panel; `confirm.rs`, `form.rs`),
+the keys of every floating surface (`keys.rs`: Escape, the arrows, Enter and
+Tab, taken by the innermost surface holding the keyboard), rail rows
+(`rail_item`),
+the text field (`text_input/`, editing as Chromium does per platform),
+notifications (`notify.rs`), glass (`glass.rs`) and accessibility
+(`a11y.rs`: roles, names, values, states and actions for AccessKit, built
+only while assistive technology is attached).
 
-- *Layers* (`ui/layer.rs`): the one drawing order for everything that floats,
-  production's `--layer-*` scale by name (`OVERLAY`, `PANEL`, `DIALOG`,
-  `MENU`, `POPOVER`, `TOOLTIP`, `DRAG`, `PREVIEW`, `NOTIFICATION`, …). GPUI
-  draws all deferred elements of a frame in one list sorted by priority,
-  however nested, so something that opens inside another (a tooltip in a
-  dialog) needs the higher layer.
-- *Floating panels* (`ui/popover.rs`): one placement rule (`place`) and one
-  element (`Floating`) for everything laid beside the control that opened it
-  (the library switcher, calendars, select lists, tag suggestions, the
-  smart-folder dialog's popovers, the inspector's sources, the pickers),
-  with its backdrop or outside press, Escape, and a Tab that stays inside.
-  The pickers' movable panel is `ui/overlay_shell.rs`.
-- *Focus* (`ui/focus.rs`): every shared control is a tab stop; a dialog, a
-  popover and the Settings window are scopes Tab cycles inside; the ring
-  shows only when Tab put the keyboard there.
-- *Menus* (`ui/menu.rs`, `ui/menu/`): the context menu with submenus, check
-  rows, swatch rows, embedded views and the search row. `presentation()`
-  alone decides how a menu is shown: on macOS each panel is a pop-up window
-  of its own that can reach past the main window; elsewhere, and with
-  `PICTO_GPUI_MENU=window`, panels are drawn in the window.
-- *Dialogs* (`ui/modal.rs`, `ui/confirm.rs`, `ui/form.rs`): the centred glass
-  dialog with its backdrop and motion, the confirmation production calls
-  `ConfirmModal`, and the form pieces. `modal::backdrop` is the one dimmed
-  (or clear) layer every dialog and floating panel's backdrop is, and
-  `modal::dialog_panel` the one dialog panel, which the progress dialog and
-  the import task dialog lay their own contents in.
-- *Keys* (`ui/keys.rs`): Escape, the arrows, Enter and Tab as one set of
-  actions, which each floating surface (dialog, popover, picker panel,
-  selection dialog, menu) binds in its own key context; the innermost one
-  holding the keyboard takes them.
-- *Text input* (`ui/text_input/`): one `TextInput` with builder options,
-  split into keys per platform, editing commands, pointer, input method,
-  layout and pure editing rules. It edits as Chromium does on each platform.
-- *Notifications* (`ui/notify.rs`): `notify::error`, `warning`, `info` and
-  `success` from any `cx`; the main window's `Host` draws one at a time above
-  everything.
-- *Glass* (`ui/glass.rs`): the surface of every floating panel and its
-  backdrop blur.
-- *Accessibility* (`ui/a11y.rs`): what screen readers are told. GPUI builds
-  an AccessKit tree from every element with an id and a role, only while
-  assistive technology is attached (VoiceOver on macOS through
-  NSAccessibility, Narrator and others on Windows through UI Automation,
-  Orca on Linux through AT-SPI), and sends it to the platform after each
-  frame. Every shared control sets its role, name, value and states (a
-  button pressed or disabled, a check box ticked, a select's choice and
-  whether its list is open, a slider's value and range, a field's text,
-  placeholder and selection), and does what assistive technology asks
-  (press, focus, step or set a slider). A control's tab stop is a child of
-  no size (`ui/focus.rs`); `Control::attach` makes the control's node stand
-  for it (`a11y_focus`), so the node reads as focused while the stop is.
-  Dialogs are modal dialogs named by their title; menus are menus of
-  items, check items and submenus, the highlighted row read as focused;
-  notifications are alerts or statuses in a live region, announced as they
-  arrive. The views: the sidebar is a tree (each row an item at its level,
-  selected, expanded, named by its label and count as production's row
-  reads); the grid is a list box of the tiles drawn, each an option named
-  by its file, selected or not, at its place in the whole destination
-  (`3 of 2,673`), the tile the keyboard is on read as focused inside the
-  window's content; inspector sections are groups with headings;
-  Settings' sections are tabs over a tab panel with its rows' labels as
-  text. `a11y::text` and `a11y::heading` make a container read as text or a
-  heading, since GPUI's own text is not in the tree.
+**Theme, motion, zoom** (`theme.rs`, `motion.rs`, `zoom.rs`). Colours from a
+theme's background, contrast and text colours as `tokens.css` derives them;
+durations and easings; the interface zoom (5% steps between 50% and 200%)
+applied in the vendored GPUI, so views need no change. Rule: anything that
+turns window points into screen points goes through `zoom`'s conversions.
 
-**Theme, motion, keymap** (`theme.rs`, `motion.rs`, `keymap.rs`,
-`settings/registry.rs`). `theme.rs` derives every colour from a theme's
-background, contrast and text colours as `tokens.css` does (Auto, Light,
-Light Gray, Gray, Dark, Blue, Purple) and holds sizes and fonts; `motion.rs`
-holds durations, easings and the fade helpers. `settings/registry.rs` is
-production's shortcut registry (`shortcuts.ts`) as data; `keymap.rs` turns it,
-with the keyboard preset and the user's overrides, into bindings in the key
-context of production's scope (`Anywhere`, `App`, `Grid`, `Viewer`,
-`GroupEditor`, `Duplicates`, `Subscriptions`, `DetailWindow`, `Media`,
-`TextField`), rebuilt when Settings applies a change. Nothing fires while a
-text field, menu, popover or dialog has the keyboard. Rule: views take their
-colours and timings from these files; only colour tables that are data (the
-theme swatches, the colour editor's presets, a chip's label shades) sit with
-the code that lists them, and a size that belongs to one component stays with
-it, beside the CSS rule it ports.
+**Keys and the application menu** (`settings/registry.rs`, `keymap.rs`,
+`app_menu/`, `shell/menu_commands.rs`, `shell/shortcuts.rs`). The registry
+is production's `shortcuts.ts` as data; `keymap.rs` turns it, with the preset
+and the user's overrides, into bindings in production's scopes. The
+application menu is one model of production's `menu.mjs` (`app_menu/model.rs`)
+shown as the macOS menu bar or, off macOS, a titlebar button
+(`app_menu/presentation.rs`). A command the menu and the keys share is
+handled once, in `Shell::menu_actions`, under production's menu rule: a row
+with keys in production binds the keymap's action itself, a row shown
+without keys has an action of its own under the same rule. Each action is
+handled only while its rule holds, so AppKit's row enablement and the key
+follow one rule.
 
-**Interface zoom** (`zoom.rs`). Production's `zoomController.ts`: Cmd+= /
-Cmd++ / Cmd+− / Cmd+0 (Control off macOS, and also on it) zoom the whole
-interface by 5% between 50% and 200%, kept per machine. It works as a
-browser's page zoom, in the vendored GPUI rather than in the views: each
-window lays out in its size divided by the zoom and draws at the display's
-scale times the zoom (text rasterized at the zoomed size), and positions
-from the system are divided by it, so the app's pixel sizes, hit-testing
-and drag maths need no change. Rule: anything that turns window points
-into screen points (pop-up windows' frames, AppKit's blur views) goes
-through `zoom::content_origin_in_ui`, `screen_to_ui` and `ui_to_screen`,
-and input played as though from the system goes through
-`Window::dispatch_platform_input`.
-
-**Grid** (`src/grid/`). `layout.rs` ports `layoutMath.ts` (waterfall, grid,
-justified) in double precision. `window.rs` is the windowed model of
-production's `gridWindow.ts`: at most 1,500 items are held, read at an exact
-ordinal of the destination's order (first 500 at the top, then aligned to
-500); the scroll height stands for every item (estimated from the first
-items laid out, capped at 8,000,000 px), and items outside the window are
-neither laid out nor drawn. `selection.rs` keeps the selection by item: items
-chosen one by one, Select All less exceptions, and shift ranges as spans of
-the order, which edits address through the library
-(`SelectionTarget::Query`, `::Range`) and never through what is loaded.
-`tile.rs` draws a tile (shared with the collection editor); `thumbnails.rs`
-loads thumbnails six at a time in `thumbnailPlan.ts`'s order and keeps
-decoded ones up to a byte budget of three windows of the smallest tiles;
-`originals.rs` decodes originals for tiles larger than their 512 px
-thumbnail; `rendered.rs` draws the thumbnails the core cannot make (PDF,
-DjVu and comic first pages, Flash frames), only into the open library. Also here:
-the context-menu rows (`menu.rs`, pure functions), filters and the filter
-bar, rubber band, keyboard movement, hover preview, subfolder tiles, drag
-out, and the pointer over tiles (hover, magnifier, rubber band and its
-edge scrolling) that the collection editor shares (`pointer.rs`). The
-grid's frame reads the session and lays out in `frame.rs` and draws its
-body in `body.rs`. Rule: every decoded picture leaves GPUI's sprite atlas through
+**Grid** (`grid/`). `layout.rs` ports `layoutMath.ts`; `window.rs` is the
+windowed model of `gridWindow.ts` (at most 1,500 items held, the scroll
+height standing for every item); `selection.rs` keeps the selection by item
+(chosen items, Select All less exceptions, shift ranges as spans);
+`thumbnails.rs` loads and budgets thumbnails; `rendered.rs` draws the
+thumbnails the core cannot make; `menu.rs` holds the context menus' rows as
+pure functions; `drag.rs` drags items within the app and out of it;
+`pointer.rs` is the pointer over tiles the collection editor shares; the
+frame reads the session and lays out in `frame.rs` and draws in `body.rs`. Rule:
+every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 
-**Viewer** (`src/viewer/`). One media surface (`surface.rs`) shows any item:
-images with zoom and pan (`camera.rs`), animated images, Flash through Ruffle
-(`flash.rs`), video and audio in the media player (`video/`), and documents
-(`document/`). It has three hosts: the media view that replaces the grid
-(`mod.rs`, with `toolbar.rs` in the titlebar), Quick Look over the whole
-window (`quick_look.rs`), and detail windows (`detail.rs`); `trigger.rs`
-decides which a key or click opens. `document/kind.rs` chooses the renderer
-for a media type as `detailRendererKind.ts` does; `document/paged.rs` shows
-PDF (hayro), DjVu (djvu-rs) and comic archives as one continuous column;
-`document/reader.rs` and `rich.rs` show text, Markdown, JSON, RTF and EPUB;
-`document/font.rs` the font viewer. The player sees media only through
-`video/backend.rs`: AVFoundation on macOS for QuickTime and MPEG-4 (frames
-drawn without copying), the bundled `ffmpeg` binary for everything else,
-Symphonia and CPAL for sound. Collections open in the reader (`group.rs`) or
-the editor (`group_editor.rs`); `review.rs` is the Inbox's Accept and Reject
-pill. Rule: decoding never runs on the thread that draws.
+**Viewer** (`viewer/`). One media surface for images, animation, Flash
+(Ruffle), video and audio (`video/`, behind `video/backend.rs`:
+AVFoundation on macOS, the `ffmpeg` binary elsewhere, Symphonia and CPAL for
+sound) and documents (`document/`). Three hosts: the media view, Quick Look
+and detail windows. Collections open in the reader or the editor. Rule:
+decoding never runs on the thread that draws.
 
-**Screens** (`src/screens/`). Destinations that are screens rather than a
-grid: Tags (`tags/`), Subscriptions (`subscriptions/`), Duplicates
-(`duplicates/`). A screen can hand the titlebar its own controls. The tag
-browser model the Tags screen, the tag picker and the Add Tags dialog share
-is `src/tags.rs`; the folder tree the folder picker and the Folders dialog
-share is `inspector/folder_picker.rs`. The cover dialog (`MediaCoverDialog`)
-a subscription's cover and the library's share is `ui/cover_dialog.rs`.
+**Screens** (`screens/`): Tags, Subscriptions, Duplicates. **Inspector**
+(`inspector/`): the destination, one item, several items, the pickers and
+their dialogs.
 
-**Inspector** (`src/inspector/`). The right rail: the destination when
-nothing is selected (`scope.rs`), one item (`mod.rs`), several
-(`selection.rs`), the tag and folder pickers and their dialogs, sources,
-colours, membership chips.
+**Shell** (`shell/`). The window as `AppShell.tsx` arranges it: titlebar,
+sidebar, rails, toolbar, imports and exports, batch rename, permanent
+delete, the Inbox review. Item menus (`item_menu.rs`, `item_menu/actions.rs`)
+record what they act on when they open (`Target`: the grid's selection, or
+the one item the viewer or preview shows) and perform the chosen row; keys
+and application menu rows run the same rows. `GridScope` is the one
+classification of the grid's destination.
 
-**Shell** (`src/shell/`). The window as `AppShell.tsx` arranges it (`mod.rs`):
-titlebar, sidebar (`sidebar.rs`, `sidebar/`), rails and their resize edges
-(`rails.rs`), toolbar, view menu, imports and exports from the window, batch
-rename, permanent delete (`delete.rs`), the Inbox review wiring. Item menus
-(`item_menu.rs`, `item_menu/actions.rs`) describe what was right-clicked and
-perform the chosen row; keyboard shortcuts and application menu rows run the
-same rows rather than their own edits. `menu_commands.rs` handles the
-application menu's commands on the window, each only while production's rule
-enables it; `GridScope` there is the one classification of the grid's
-destination (kind, open folder, whether imports and drops are allowed) that
-the application menu, item menus, keys and imports all use.
+**Imports, exports, opening files** (`imports/`, `export/`, `opening/`,
+`prompt.rs`). Imports through the core's queue, exports through
+`media.export` and `picto_pack.*`, the command line and opened files, one
+instance per library (a lock plus a Unix socket or named pipe).
 
-**Application menu** (`app_menu.rs`). One portable model of production's
-`menu.mjs` (rows, titles, order, separators, keys from the registry, and a
-`Platform` of Mac, Windows or Linux) with two presentations: the macOS menu
-bar, and off macOS (or with `PICTO_GPUI_APP_MENU=window`) a titlebar button
-that opens the same rows in the shared context menu. A row is enabled
-exactly when something handles its action where the keyboard is; a row for
-a feature not built would be marked `.todo()` and show disabled (none is
-now).
+**Site logins** (`logins/`, `platform/login_window/`). Production's
+`authSessions.mjs`: the service's own login page in a sign-in window on the
+system's web view (WKWebView, WebView2, WebKitGTK through `wry`), each on a
+private data store; per-service completion rules in `adapters/`; the session
+as a pure state machine (`machine.rs`). The core would file a login's secret
+in the system keychain under the service's name alone, shared with the
+user's Picto, so `main` sets `PICTO_EPHEMERAL_CREDENTIALS=1`
+(`logins::keep_credentials_in_process`): logins live in the process and go
+when it quits. Rule: platform calls stay in `platform/login_window/`.
 
-**Imports, exports, dialogs** (`src/imports/`, `src/export/`, `prompt.rs`).
-Imports go through the core's queue (`imports.enqueue`) with the folder and
-collection questions and the task dialog and task bar; exports through
-`media.export` and `picto_pack.*`. `prompt.rs` opens the system's file,
-folder and save dialogs.
+**Libraries** (`libraries/`). Admission (section 2), this app's list and
+consents, the main window's content (`host/`: open, switch, close, rename,
+move, delete, cloud restore and join, the gate and its questions), the
+Library Manager (`manager/`) and the process probe (`platform/`). Rule: every
+open goes through `host::request` (or `host::create`), every change on disk
+through `host::rename`, `move_library` or `delete`.
 
-**Opening files** (`src/opening/`). The command line (`parse`: the copy,
-then files), production's classification of opened files
-(`associatedFileService.mjs`: `.picto-pack` and `.library`, made absolute
-against the launch's working folder), and `accept`, which queues packs on
-the export view's pack dialog and brings the window forward.
-`opening/instance/` keeps one instance per copy: an exclusive lock on a file
-named after the copy's identity in a folder of the user's own, and a Unix
-socket (`unix.rs`) or named pipe (`windows.rs`) beside it that takes a later
-launch's working folder and arguments as one JSON line.
+**Desktop** (`desktop/`). The Inbox badge, the system notification and the
+guarded file hand-offs; `mod.rs` is portable, `macos.rs`, `windows.rs` and
+`linux.rs` hold the platform calls.
 
-**Site logins** (`src/logins/`, `src/platform/login_window/`,
-`screens/subscriptions/accounts.rs`). Production's `authSessions.mjs`,
-`authSites.mjs` and `externalOnlyFansAuth.mjs` and its Accounts dialog. A
-login opens the service's own login page in a sign-in window on the system's
-web view, through the `wry` crate: on macOS a WKWebView and on Windows a
-WebView2, each as a child of a GPUI window of its own (titled
-"Login: <service>", production's sizes, the system's title bar); on Linux a
-GTK window holding WebKitGTK, since GPUI's X11 and Wayland windows are not
-GTK's (GTK is started on the main thread with the first sign-in and its
-events are run from GPUI's loop every 10 ms while one is open; it opens its
-own connection to X11 or Wayland). Every web view starts on a private data
-store of its own that goes when it closes, which is what production's
-partition, cleared when a login starts and once it is saved, comes to.
-The web view is made from a task of its own, outside any GPUI update:
-WebView2 runs the thread's messages while it starts, which run GPUI's
-tasks, and those must find the app unborrowed (a page asked for meanwhile
-loads once it is there). A page that fails to load is reported as
-production's `did-fail-load` is, "<service> could not load (…)", on all
-three systems: on macOS from a navigation delegate put in front of `wry`'s
-(which takes no failures) that passes every other message on, with the
-system's description; on Windows from a `NavigationCompleted` handler of
-its own beside `wry`'s (a failure with no answer from the server, named by
-WebView2's error status, e.g. `CONNECTION_ABORTED`); on Linux from
-WebKitGTK's `load-failed`, with its message. A load stopped by a newer one
-or refused by the window is not one, as Electron leaves out `ERR_ABORTED`.
-Pages cannot read or write the clipboard (WebKitGTK's
-`javascript-can-access-clipboard` is off; the user's own copy and paste in
-a field are the web view's editing), WebView2's own right-click menu is
-off as Electron has none, and every permission is refused. A login ends
-when the app quits and when its library closes (a switch, Close Library),
-the sign-in window or OnlyFans' browser and its profile with it, whether
-or not the Accounts dialog is open; an answer that comes back for a login
-that has since ended (a save, the outside browser's ending) changes
-nothing.
-`sites.rs` is the service table; `adapters/` holds production's rules for
-when a login has finished, one file per kind of service (`cookie.rs`: the
-session cookies a service's login sets, read for that service's addresses
-only, the page showing a signed-in session, ExHentai's check page,
-FANBOX's API answering; `account_api.rs`: a booru's API key on its options
-page; `oauth.rs`: an OAuth callback, which never loads, Pixiv's flow, and
-OAuth 1.0a signing; `scripts.rs`: the scripts run in the page); `machine.rs` is the session
-(one at a time, every state and message the Accounts dialog shows, a look at
-the page every 750 ms bounded to 4 s, cancel, the window closed by the user)
-as a pure state machine; `Logins` (`mod.rs`) performs what it asks for and
-hands the credential to the application with `auth.credentials.set`, the
-command production's main process uses. OnlyFans signs in in a Chrome, Edge,
-Brave or Chromium of the user's on a new, empty temporary profile, watched
-over the DevTools protocol on the loopback (`browser.rs`), or with a pasted
-session. Rule: platform calls stay in `src/platform/login_window/`; the
-login logic never names a platform.
+**Languages** (`i18n/`). Production's eight catalogs (included from the
+repository root at build time) and its rules: `t("English text")`,
+`tf!("… {value0} …", a)`. The language is the one chosen in Settings, else
+the system's, else English, switched live in every window. Numbers and dates
+follow the system's language, as production's `toLocaleString()` does
+(`format.rs`, checked against ICU).
 
-**Why a web view.** Production signs in on the service's own page in a
-browser window of the app and reads that window's cookies for the service
-only; the system's web view does the same here on all three systems. A web
-view lives beside GPUI's windows: on macOS a WKWebView is a plain AppKit
-view (it sits in the content view beside GPUI's view, so the system offers
-it ⌘C, ⌘V and ⌘A); on Windows WebView2 takes a window handle and the thread
-GPUI runs (an OLE single-threaded apartment), and is made outside GPUI's
-update, as it waits for its environment by running the thread's messages;
-on Linux WebKitGTK needs GTK, which GPUI's back ends are not, so it gets a
-GTK window of its own on both X11 and Wayland. Cookies are read without
-blocking (`WKHTTPCookieStore`, `ICoreWebView2CookieManager`, WebKitGTK's
-cookie manager), since `wry`'s own cookie calls run the event loop until
-they answer, which would re-enter GPUI. The system browser was not used: a
-login there leaves its cookies in the browser, and production accepts a
-pasted value only for OnlyFans (offered here too). Reading the cookies of
-the user's installed browsers is not done.
+**Settings and state** (`settings/`, `state.rs`). One settings model from the
+library's rows with production's fallbacks, edited as a draft. What
+production keeps per machine is kept in `state.json` under `Picto GPUI` in
+the platform's configuration folder, never in the Electron app's folder or
+a library; written 250 ms after the last change and on quit; an unreadable
+file is set aside as `state.json.corrupt`.
 
-**The keychain.** The core files a login's secret in the system's keychain
-under `picto` and the service's name alone, not under a library, so a login
-saved, removed or settled by a copy would replace or delete the one the
-user's Picto keeps, whichever library is open. This app therefore sets `PICTO_EPHEMERAL_CREDENTIALS=1`
-first thing in `main` (`logins::keep_credentials_in_process`): logins live in
-the core's process-local store and go when the app quits, while the copy's
-`credential` rows (what the Accounts dialog lists) are written as production
-writes them. A login is not saved or removed if the switch is not set, and
-Pixiv's code exchange, which saves its login inside the core, is refused
-then too. This
-also keeps the core's opening pass, which removes retired services' secrets,
-away from the keychain.
+## 5. Rules of the codebase
 
-**Libraries** (`src/libraries/`). Which library opens (`admission.rs`, the
-rules above), this app's list of libraries and the consents in
-`state.json` (`mod.rs`, production's `globalConfig.mjs` rules), the main
-window's content (`host/`: opening, switching as production's
-`switchLibrary` and closing in `mod.rs`, rename, move, delete and the
-consent in `disk.rs`, a cloud restore or join in `cloud.rs`, and the view,
-the gate or the library's shell with the consent dialog and the blocking
-notice, in `view.rs`), the Library Manager window (`manager/`: its actions
-in `mod.rs`, its panes in `panes.rs`, its questions in `dialogs.rs`, cloud
-sync in `cloud.rs`), and the platform leaves for the process probe
-(`platform/`). Rule: every open goes
-through `host::request` (or `host::create` for New Library), and every
-change on disk through `host::rename`, `move_library` or `delete`, which
-decide whether it may happen now (`host::permit`).
-
-**Desktop** (`src/desktop/`). What production's main process does around the
-window: the Inbox badge, the "Subscriptions finished" system notification,
-and the guarded file hand-offs. `mod.rs` is portable; `macos.rs`,
-`windows.rs` and `linux.rs` hold each platform's calls.
-
-**Languages** (`src/i18n/`). Production's eight catalogs
-(`src/i18n/locales/*.json` at the repository root, included when the app is
-built; there is no copy here) and its rules: `t("English text")` looks a
-message up by production's English key and shows English when no catalog
-holds it; `tf!("… {value0} …", a)` fills the placeholders in order; plurals
-are what production passes (`plural_s`, its `'' : 's'`, in every language).
-The language is the one chosen in Settings (kept as `locale` in
-`state.json`), else the system's when it is one of the eight, else English;
-choosing one shows it at once in every window, as production's `setLocale`
-does. The shared menu, select and text field translate the labels and
-placeholders they are given, and the sidebar and the titlebar's title show
-names through `t()` when drawn, as production's `translateMessage` does, so a
-name read in the previous language is shown in the new one. Numbers and
-dates are written in the system's language, not the interface's, as
-production's `toLocaleString()` and `Intl` without a locale write them
-(`format.rs`: grouping, dates and relative times for the eight languages,
-checked against ICU; any other system language writes them as American
-English); undo history counts use the interface's language, as
-`historyMessages.ts` does. `guard.rs` reads the sources (below).
-
-**Settings and state** (`src/settings/`, `state.rs`). One settings model
-loaded from the library's `setting` row `application` and `view_pref` row
-`grid:defaults` with production's per-field fallbacks; the Settings window
-edits a draft and Save & Close or Apply write it back. What production keeps
-per machine (window bounds, rail widths and visibility, folded sidebar
-sections, filter bar pins and saved filters, the tag picker's layout, recent
-tags and folders, keyboard preset and rebound shortcuts, language, audio
-visualization, interface zoom) is kept in `state.json` in the platform's configuration folder
-under `Picto GPUI` (`~/Library/Application Support`, `%APPDATA%`,
-`$XDG_CONFIG_HOME` or `~/.config`), never in the Electron app's folder or the
-copy. It is written 250 ms after the last change through a renamed temporary
-file and at once on quit; a field that cannot be read takes its default, an
-unreadable file is set aside as `state.json.corrupt`, and fields of a newer
-version are kept. The app starts on All each launch, as production does.
-
-## Rules of the codebase
-
-- **One implementation of each shared thing.** Before writing a control, a
-  placement, a menu, a dialog, a tag or folder list, or a notification, use
-  the one in section 4: floating panels `ui/popover.rs`, drawing order
-  `ui/layer.rs`, focus `ui/focus.rs`, menus `ui/menu.rs`, dialogs
-  `ui/modal.rs` and `ui/confirm.rs`, text fields `ui/text_input/`,
-  notifications `ui/notify.rs`, tags `tags.rs`, the folder tree
-  `inspector/folder_picker.rs`, the grid's destination `GridScope`, item
-  actions `shell/item_menu/actions.rs`. Fix the shared one rather than adding
-  a variant beside it.
-- **Library edits** go through `session::edit_then` (or `edit_then_in` when
-  the follow-up needs the window) or `Session::edit_reporting`, with a
-  `Report` (the failure's title as production words it, a broad change
-  announced with Undo) and a `Reread` (what to read again: details, the
-  selection's summary, results in place, the destination list). Reads a
-  screen needs go through `Session::run`, commands through
-  `Session::dispatch`.
-- **A view that changes state while a frame is drawn** (in `render`,
-  `prepaint` or `paint`) and notifies must also call
-  `window.request_animation_frame()`. Otherwise nothing schedules the next
-  frame and the view looks stuck until the pointer moves. The off-screen
-  tool's lazy mode exists to catch this (section 6).
-- **Pictures** the app decodes leave the sprite atlas through
-  `crate::atlas::release`, which defers the drop so it reaches every window.
+- **One implementation of each shared thing.** Use the one in section 4
+  (floating panels, layers, focus, menus, dialogs and their `Host`, text
+  fields, notifications, `tags.rs`, the folder tree in
+  `inspector/folder_picker.rs`, `GridScope`, item actions in
+  `shell/item_menu/actions.rs`); fix it rather than adding a variant.
+- **Library edits** go through `session::edit_then` (`edit_then_in` when the
+  follow-up needs the window) or `Session::edit_reporting`, with a `Report`
+  (the failure's title as production words it, a broad change announced
+  with Undo) and a `Reread` (what to read again). **Reads** go through
+  `session::read_then` (`read_then_in`), or `Session::run` when nothing
+  follows on a view; core commands through `Session::dispatch` or
+  `Session::call`.
+- **The selection is addressed, not listed.** An edit of the grid's selection
+  takes `Session::selection_target`; the loaded items stand for it only
+  where every selected item is loaded (names, batch rename).
+- **A view that changes state while a frame is drawn** and notifies also
+  calls `window.request_animation_frame()`, or it looks stuck until the
+  pointer moves; the off-screen tool's lazy mode catches this.
+- **Pictures** leave the sprite atlas through `crate::atlas::release`.
 - **Layers by name** from `ui/layer.rs`; no literal priorities.
-- **Shortcuts** come from the registry through `keymap.rs`; a key that is
-  not in the registry but differs by platform is bound with
-  `keymap::bind_written`. Every registry id is either bound or listed with
-  its reason in `keymap::NOT_YET`, and a test keeps it so.
-- **Platform code** lives only in the platform leaves: `src/desktop/macos.rs`,
-  `windows.rs` and `linux.rs` for the desktop hand-offs,
-  `src/libraries/platform/macos.rs`, `windows.rs` and `linux.rs` for the
-  Electron app's process probe and a file's identity,
-  `src/opening/instance/unix.rs` and `windows.rs` for the single-instance
-  socket and pipe, and
-  `src/platform/macos.rs` and `windows.rs` for window-level calls (AppKit and
-  Core Animation for the pop-up menus, the traffic lights, the aspect lock,
-  the window level; `SetWindowPos` on Windows), each reached through one
-  shared function in `ui/window_chrome.rs`, and `src/platform/login_window/`
-  for the sign-in window (`LoginWindow`, one interface over WKWebView,
-  WebView2 and WebKitGTK). All three platforms are required: a feature that
-  works on one and not the others is listed in section 8 with what is
-  missing.
-- **Test seams are debug-build only.** Environment variables that drive or
-  observe the app are read in `src/seams.rs` under `cfg(debug_assertions)`;
-  a release build does not hold their names. The off-screen tool's
-  variables, its dialog answers (`prompt.rs`) and the record of desktop
-  requests (`desktop/`) exist in test builds only.
-- **Every shown text goes through `t`.** Write production's English key
-  exactly (its punctuation, `…`, capitals): `t("Move to Trash")`,
-  `tf!("Delete {value0} items", count)`, or hand a menu row, a select's
-  choice or a placeholder the key itself (they translate it). A text
-  production has no key for stays English and is written `en("…")` and
-  listed in `src/i18n/gpui_only.txt`. A literal that is a key but is not
-  shown (an id, a key context, a JSON field, a file name production writes
-  in English) carries `// i18n: <why>` on its line or the line above;
-  `// i18n: translated where drawn` covers a table up to the next blank
-  line. `i18n::guard::every_shown_text_goes_through_t` fails on a literal
-  given to `t` that is not a key, on a key left outside `t`, and on a
-  literal handed straight to a drawing call (`.child`, `.label`, a tooltip,
-  a notification, …), and on a `format!` whose template is a key once its
-  placeholders are set aside (`{name}` against `{value0}`); it cannot see
-  a text of this app's own built with `format!` and drawn later, or a
-  literal kept in a variable that is not a key.
-- **Every control says what it is.** A clickable element sets a role
-  (`.role(Role::Button)`, …) and a name, its visible label through `t` or
-  production's `aria-label`, else its tooltip's text (shared controls do
-  this themselves; give `icon_button` a `.tip` or a `.name`). A click that
-  is not a control (a backdrop, a drag strip) says so with
-  `.a11y_presentational()`. Work done only to describe something (a name
-  formatted per tile or row) is gated on `ui::a11y::active(window)`. Ids
-  must not repeat under one node with a role: a debug build stops on a
-  repeated id while the tree is built. `ui::a11y::tests` guards it: every
-  glyph button is named, every interactive file of `ui/` sets a role, and
-  each shared control's tree is asserted (role, name, states, actions, no
-  clickable element without a role); `i18n::guard` reads `aria_label`,
-  `aria_value`, `aria_placeholder` and `aria_description` as drawn text.
-- **Comments describe behaviour**: no ticket numbers. A missing behaviour is
-  a `TODO:` saying what is missing, and a `TODO` is never removed until the
-  behaviour exists.
+- **Shortcuts** come from the registry through `keymap.rs`; a key outside
+  the registry that differs by platform is bound with `keymap::bind_written`.
+  Every registry id is bound or listed with its reason in `keymap::NOT_YET`
+  (`every_id_is_bound_or_listed_as_not_yet`).
+- **Platform code** lives only in platform leaves: `desktop/{macos,windows,linux}.rs`,
+  `libraries/platform/`, `opening/instance/{unix,windows}.rs`,
+  `platform/{macos,windows}.rs` (reached through `ui/window_chrome.rs`),
+  `platform/login_window/`, `viewer/video/avf.rs` (AVFoundation) and the
+  per-platform thread clock in `stats.rs`. Win32 is called through the
+  `windows` crate. All three platforms are required: a feature that works on
+  one only is listed in section 7.
+- **Test seams are debug-build only**, read in `src/seams.rs` under
+  `cfg(debug_assertions)`; the off-screen tool's variables, dialog answers
+  and the record of desktop requests exist in test builds only.
+- **Every shown text goes through `t`**, written as production's English key
+  (`t("Move to Trash")`, `tf!("Delete {value0} items", count)`). Text
+  production has no key for is `en("…")` and listed in
+  `src/i18n/gpui_only.txt`; a key-like literal that is not shown carries
+  `// i18n: <why>`. `i18n::guard::every_shown_text_goes_through_t` enforces
+  it.
+- **Every control says what it is**: a role and a name (its label, its
+  `aria-label`, else its tooltip); a click that is not a control is
+  `.a11y_presentational()`; ids do not repeat under one node. `ui::a11y::tests`
+  guards it.
+- **Comments describe behaviour**, with no ticket numbers. A missing
+  behaviour is a `TODO:` saying what is missing, kept until it exists.
 
-## Verifying a change
+## 6. Verifying a change
 
 ### Tests
 
@@ -1000,120 +461,76 @@ cd experiments/gpui
 cargo test --locked
 ```
 
-About 700 tests, most of them pure: layout geometry against hand-computed
-values, the grid's window and banded visibility (including
-`a_frame_does_the_same_work_whatever_the_library_size`, at 3,000, a million
-and fifty million items), the context menus against the cases of production's
-`gridContextMenu.test.tsx`, the smart-folder rule model and the filter model
-compiled to the library's `FilterExpr` and back, the keymap and text-field
-keys per platform, the viewers' arithmetic, the media player's model and
-audio processing, the safety guard and detach, the state file, the
-format matrix's fixtures, and the accessibility tree of each shared control
-(`ui::a11y::tests`, in a test window with the tree switched on: its role,
-name, states and the actions assistive technology performs).
-
-The ignored tests need something a plain run does not have. Run them by
-name:
+Most tests are pure (layout geometry, the grid's window, the context menus
+against production's `gridContextMenu.test.tsx` cases, the filter model, the
+keymap, the viewers' arithmetic, the safety guard and detach, the state
+file, the format matrix's fixtures, each shared control's accessibility
+tree). The ignored ones need something a plain run lacks; run them by name:
 
 | Test | Needs |
 | --- | --- |
-| `real_copy_answers_commands_and_reports_changes`, `real_snapshot_query_details_rating_undo_redo`, `real_snapshot_subscriptions_read`, `real_snapshot_tags_browse_rename_and_groups` | `PICTO_GPUI_TEST_LIBRARY` naming a copy; they write to it |
-| `window_reads_stay_flat_across_the_library` | the same; it times every grid read (use `--nocapture`) |
+| `real_copy_answers_commands_and_reports_changes`, `real_snapshot_*` | `PICTO_GPUI_TEST_LIBRARY` naming a copy; they write to it |
+| `window_reads_stay_flat_across_the_library` | the same; times every grid read (`--nocapture`) |
 | `offscreen::plays_a_script` | `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` (below) |
-| `viewers_render_off_screen` | a GPU; pictures saved when `PICTO_GPUI_MATRIX_OUT` is set |
-| `renders_a_real_file` | `PICTO_GPUI_MEDIA=<file>` (type from the extension, or `PICTO_GPUI_MEDIA_MIME`) |
-| `stop_reloads_the_movie_at_its_first_frame`, `real_swf_produces_frames_and_responds_to_mouse` | a native GPU adapter (Flash) |
-| `real_webm_produces_frames` | `PICTO_GPUI_TEST_WEBM` and the `ffmpeg` binary |
-| `decodes_and_seeks_a_real_audio_file` | `PICTO_GPUI_TEST_AUDIO` |
-| `plays_through_the_output_device` | `PICTO_GPUI_TEST_AUDIO` and a sound device |
+| `viewers_render_off_screen` | a GPU; pictures when `PICTO_GPUI_MATRIX_OUT` is set |
+| `renders_a_real_file` | `PICTO_GPUI_MEDIA=<file>` (`PICTO_GPUI_MEDIA_MIME` for its type) |
+| `stop_reloads_the_movie_at_its_first_frame`, `real_swf_produces_frames_and_responds_to_mouse` | a native GPU adapter |
+| `real_webm_produces_frames` | `PICTO_GPUI_TEST_WEBM` and `ffmpeg` |
+| `decodes_and_seeks_a_real_audio_file`, `plays_through_the_output_device` | `PICTO_GPUI_TEST_AUDIO` (and a sound device) |
 
-```sh
-PICTO_GPUI_TEST_LIBRARY="$(PICTO_GPUI_COPY_ONLY=1 ./run.sh /path/to/Main.library)" \
-  cargo test --locked -- --ignored --test-threads=1 --nocapture \
-  real_copy real_snapshot window_reads_stay_flat
-PICTO_GPUI_TEST_WEBM=/path/to/video.webm PICTO_GPUI_TEST_AUDIO=/path/to/audio.mp3 \
-  cargo test --locked -- --ignored real_webm decodes_and_seeks plays_through
-PICTO_GPUI_TEST_VIDEO=/path/to/video.mov cargo test --locked --test avfoundation_frames
-```
-
-The last is a plain program (`tests/avfoundation_frames.rs`), since
-AVFoundation reports to the main thread, which the test harness does not give
-a test; it skips without the variable. It checks that frames arrive as the
-buffers GPUI draws, at the item's size, with the BT.601 matrix, at advancing
-times, and that a seek and a paused picture arrive.
-`real_copy_answers_commands_and_reports_changes` also resolves a duplicate
-pair and checks the source library's blob is unchanged.
+`PICTO_GPUI_TEST_VIDEO=<file> cargo test --locked --test avfoundation_frames`
+checks AVFoundation's frames on macOS (a plain program, since AVFoundation
+reports to the main thread).
 
 ### The off-screen tool
 
 `offscreen::plays_a_script` (`src/offscreen.rs`) opens the whole app on a
-copy in a headless window, plays a script and saves a PNG per `shot`. On
-macOS it draws with Metal and the system's text; on Linux and Windows with
-GPUI's wgpu renderer (a software adapter where there is no GPU: lavapipe on
-Linux, WARP through Direct3D 12 on Windows) and a text system holding only
-the bundled fonts.
+copy in a headless window (Metal and the system's text on macOS; wgpu with a
+software adapter and the bundled fonts elsewhere), plays a script and saves
+a PNG per `shot`.
 
 ```sh
-cd experiments/gpui
 PICTO_GPUI_SILENT=1 PICTO_GPUI_MENU=window \
 PICTO_GPUI_COPY=/tmp/picto-gpui-library.XXXXXX/Name.library \
 PICTO_GPUI_SCRIPT=steps.txt PICTO_GPUI_OUT=shots \
   cargo test --locked -- --ignored --exact offscreen::plays_a_script --nocapture
 ```
 
-The window is 1213×865 unless `PICTO_GPUI_WINDOW=WxH` says otherwise; the
-app settles for 3 s before the first line. Set `PICTO_GPUI_MENU=window` on
-macOS, where menus would otherwise be pop-up windows of their own, which a
-shot of the main window does not show. Without `PICTO_GPUI_STATE=<folder>` the tool keeps no state, so
-pictures never depend on how the app was left; two runs with the same folder
-show a restart. Script lines (blank lines and `#` comments are skipped):
+The window is 1213×865 (`PICTO_GPUI_WINDOW=WxH`). Set `PICTO_GPUI_MENU=window`
+on macOS so menus are in the shot. Without `PICTO_GPUI_STATE=<folder>`
+nothing is kept between runs. Script lines (`#` comments and blank lines
+skipped):
 
 | Line | Effect |
 | --- | --- |
-| `move X Y`, `drag X Y` | pointer moved, `drag` with the left button held (window points as the system gives them; a zoomed window divides them by its zoom) |
-| `down X Y [clicks]`, `up X Y [clicks]` | left button, with a click count |
-| `rdown X Y`, `rup X Y` | right button |
+| `move X Y`, `drag X Y` | pointer moved; `drag` with the left button held (window points) |
+| `down X Y [clicks]`, `up X Y [clicks]`, `rdown X Y`, `rup X Y` | buttons (no modifiers; use `key` for those) |
 | `scroll X Y DISTANCE` | wheel by DISTANCE points (negative scrolls down) |
-| `key <keystroke>` | a keystroke as GPUI writes them (`space`, `cmd-shift-j`; `secondary-` is Command on macOS, Control elsewhere), held modifiers reported around it |
-| `type <text>` | text typed into the focused field |
-| `dragfiles X Y PATH…`, `drop X Y PATH…`, `dragexit` | files from the system over the window, dropped there (imports into the copy), or taken away; paths cannot hold spaces |
-| `dropdata X Y KIND=VALUE…` | what a web browser drags, dropped with no files: `image=PATH` (that file's bytes, in memory), `uri=`, `text=`, `download=` (a `DownloadURL`), `html=PATH` (that file's text); released without the platform's drop, so the app is not brought forward |
-| `wait <ms>` | let the app run |
-| `pace <ms>` | how long the app runs after each input line (default 200) |
+| `key <keystroke>` | as GPUI writes them (`secondary-` is Command on macOS, Control elsewhere) |
+| `type <text>` | text into the focused field |
+| `dragfiles X Y PATH…`, `drop X Y PATH…`, `dragexit` | files from the system over the window, dropped, or taken away |
+| `dropdata X Y KIND=VALUE…` | a browser's drag without files: `image=PATH`, `uri=`, `text=`, `download=`, `html=PATH` |
+| `wait <ms>`, `pace <ms>` | let the app run; how long it runs after each input line (default 200) |
 | `shot <name>` | save `<name>.png` |
-| `window <n>` | send what follows to the nth window (0 is the main one, others in the order they opened) |
-| `lazy`, `eager` | draw only when a real window would / redraw every tick (default) |
-| `notify <tone>[+] <title> \| <message>` | show a notification (`error`, `warning`, `info`, `success`; `+` adds a Redo button) |
-| `update <status> [darwin\|win32\|linux]`, `update dialog` | put the update state where a check would (`downloading` at 42%, `downloaded`, `available`, `error`, `unavailable`, …) with its notification; open the update dialog |
-| `action <name> [n]` | choose an application menu row (`action app_menu::SetRating 3`) |
+| `window <n>` | send what follows to the nth window (0 is the main one) |
+| `lazy`, `eager` | draw only when a real window would / every tick (default) |
+| `notify <tone>[+] <title> \| <message>` | show a notification |
+| `update <status> [darwin\|win32\|linux]`, `update dialog` | put the update state where a check would; open the dialog |
+| `action <name> [n]` | perform an action by name (`action app_menu::SetRating 3`, `action shortcut::Rate 3`) |
 | `invoke <command> <json>` | send a core command and print its answer |
-| `focused` | print the control with the keyboard and whether Tab put it there |
-| `a11y <name>` | build the window's accessibility tree from then on, as when a screen reader is attached, and write it to `<name>.a11y.txt` as indented text (role, name, value, states; then every element that took a click without a role); with `PICTO_GPUI_STATS` also print its node count and, at the end, the eager frames' drawing times |
-| `answer <path>`, `answer` | answer the next system file, folder or save dialog with that path, or cancel it; give it before the line that opens the dialog |
-| `desktop` | append the desktop requests since the last one, and the clipboard's text, to `desktop.log` in the output folder |
-| `reload`, `size W H`, `js …` | for the reference only; skipped here |
+| `focused` | print the control with the keyboard |
+| `a11y <name>` | write the window's accessibility tree to `<name>.a11y.txt` |
+| `answer <path>`, `answer` | answer or cancel the next system file dialog (give it first) |
+| `desktop` | append the desktop requests and the clipboard's text to `desktop.log` |
+| `reload`, `size W H`, `js …` | the reference's; skipped here |
 
-Nothing in the tool reaches the desktop: opening, revealing, Open With and
-clipboard writes are recorded for `desktop` instead. Video does not play
-off-screen (AVFoundation needs the main run loop), and the tool cannot resize
-a window.
-
-Eager mode redraws every tick, which hides a view that changes state during a
-draw without asking for a frame. `lazy` (or `PICTO_GPUI_LAZY=1`) draws only
-after something invalidated the window outside a draw or asked for an
-animation frame, as a real window does; `PICTO_GPUI_LAZY_DEBUG=1` prints a
-line for each lazy frame. Run a script both ways and treat any difference as
-a fault.
+Nothing reaches the desktop; video does not play off-screen. Run a script
+both eager and `lazy` and treat any difference as a fault.
 
 ### Driving a real window
 
-A debug build plays input lines into its windows from
-`PICTO_GPUI_POINTER=<path>` (`src/pointer.rs`), so hover, pressed, tooltip,
-menu, rubber-band and keyboard states can be checked without taking the real
-pointer. The path must be a FIFO: the reader reopens it each time it ends, so
-a plain file is played again from the start every 20 ms, forever. It takes
-the input lines of the table above (`move` to `dragexit`, and `window`);
-clicks carry no modifiers, so use `key` for modifier shortcuts.
+A debug build plays the input lines above into its windows from the FIFO
+`PICTO_GPUI_POINTER` names (`src/pointer.rs`):
 
 ```sh
 mkfifo /tmp/picto-pointer
@@ -1122,764 +539,204 @@ PICTO_GPUI_POINTER=/tmp/picto-pointer PICTO_GPUI_BACKGROUND=1 PICTO_GPUI_WINDOW=
 echo "move 320 24" > /tmp/picto-pointer
 ```
 
-A `window <n>` line sends the lines after it to the app's nth window (0 the
-main one, the others in the order they opened, pop-up menus included, as the
-off-screen tool counts them); when that window closes they go to the main
-one again.
-
-GPUI stops painting a window that is fully covered; `PICTO_GPUI_BACKGROUND=1`
-opens every window of the app (main, detail and Settings) without taking the
-keyboard and keeps them drawing behind other applications
-(`src/covered.rs`). `PICTO_GPUI_WINDOW=WxH` opens the main window centred at
-that size and does not remember it; any value that is not a size (`none`)
-opens it where `state.json` says. `PICTO_GPUI_MENU=window` keeps menus in the
-window; a pop-up menu window opened while the app is not the active one
-stays above every application until Escape or a press elsewhere closes it,
-so keep such checks short.
-
-What a window driven this way shows differs from what a person sees in
-three ways. A window fully covered by another application's (which is where
-`PICTO_GPUI_BACKGROUND` keeps it) still draws, but the system takes its
-finished frames back slowly: after about three frames in a row the next
-waits up to a second for a drawable (`CAMetalDisplayLink` delivers no
-update until one is free). A change can therefore show up to a second
-late, an animation advances in steps, and a capture taken sooner shows the
-frame before; leave 1.5 s before a capture. The app had already drawn the
-change: its views render within 10 ms of the input. (The 30-frame limit
-GPUI puts on a window without the keyboard is switched off for every
-window of the app, as Electron's windows keep their rate.) While the
-display sleeps the system slows the frame source further (4 frames a
-second were seen). Lines written together are
-played in one tick, before the next frame: a click right after the move
-that reveals a control (a detail window's toolbar, a fading button) is
-tested against the frame before it and goes to what was under it, so leave
-a frame (50 ms) between them. And a capture of one window (`screencapture
--l`) shows that window alone: neither a pop-up menu's blur of what lies
-behind it nor its pop-in scale (a Core Animation transform) can be seen in
-one.
+`PICTO_GPUI_BACKGROUND=1` opens every window without the keyboard and keeps
+it drawing behind other applications (`src/covered.rs`). A covered window's
+frames come back slowly from the system (up to a second), so leave 1.5 s
+before a capture, and leave a frame (50 ms) between a move that reveals a
+control and a click on it. A capture of one window shows neither a pop-up
+menu's blur nor its pop-in scale.
 
 ### The production reference
 
 `reference.sh /path/to/Name.library [n]` starts the Electron app from this
-checkout as an isolated reference: a development build in its automation
-mode (`PICTO_E2E=1`), on its own copy made by `run.sh` and detached by the
-GPUI binary (`--detach`), with its own application data (`electron-data/`
-beside the copy) and a DevTools port 9222 + n. It needs `node_modules` at
-the repository root and in `native/picto-node`, the native addon built
-(`node scripts/build-native-dev.mjs`) and the GPUI app built; one Vite server
-on port 8181 serves every instance.
-
-`node reference.mjs steps.txt outdir` plays the same script lines into it
-over the DevTools protocol (port from `PICTO_REFERENCE_PORT`, default 9222),
-plus `size W H` (viewport in points, pictures at twice that), `reload` (start
-from a freshly loaded window) and `js <expression>` (print its value). Start
-a script with `reload` and `size 1213 865`; the GPUI tool skips those lines.
-The reference does not take `answer`, `notify`, `action`, `focused`,
-`desktop`, `lazy` or `eager`, and its system dialogs cannot be answered from
-a script. Its CSS animations do not run while its window is hidden; a script
-that photographs a dialog first sets their durations to 0 with `js`. Both
-apps open the inspector at its default width; the reference has no traffic
-lights and shows the default library avatar.
-
-`pixel_diff.py reference.png candidate.png outdir [--region NAME=X,Y,W,H]…`
-compares two captures with the Python standard library only and reports the
-share of pixels differing by more than `--threshold` (default 16) for the
-whole image and each region, with a side-by-side image and a mask.
-`--shift DX,DY` moves the candidate first, to tell a uniform offset from real
-differences; `--crop` compares the shared top-left area of captures a few
-pixels apart. Capture both apps at the same size with the same content,
-scroll, selection and focus; never stretch a capture.
+checkout on its own copy (detached by `--detach`) with its own data and a
+DevTools port 9222 + n; it needs `node_modules`, the native addon built
+(`node scripts/build-native-dev.mjs`) and this app built. `node reference.mjs
+steps.txt outdir` plays the same script lines into it (port from
+`PICTO_REFERENCE_PORT`), plus `size W H`, `reload` and `js <expression>`;
+start a script with `reload` and `size 1213 865`. `pixel_diff.py reference.png
+candidate.png outdir [--region NAME=X,Y,W,H]…` reports the share of pixels
+that differ, with a side-by-side image and a mask. Capture both apps at the
+same size, content, scroll, selection and focus.
 
 ### Environment variables
 
 | Variable | Read by | Effect |
 | --- | --- | --- |
-| `PICTO_GPUI_FPS`, `PICTO_GPUI_STATS` | every build | frame meter, counters (section 2) |
+| `PICTO_GPUI_FPS` | every build | frame meter in the bottom-left corner (`meter.rs`) |
+| `PICTO_GPUI_STATS` | every build | per-second counters and timings on standard error (`stats.rs`) |
 | `PICTO_FFMPEG_DIR` | every build | where `ffmpeg` is |
-| `PICTO_GPUI_POINTER` | debug builds | input lines from a FIFO |
-| `PICTO_GPUI_BACKGROUND` | debug builds | every window opens without the keyboard and keeps drawing while covered |
-| `PICTO_GPUI_WINDOW=WxH` | debug builds, off-screen tool | exact window size, not remembered |
-| `PICTO_GPUI_MENU=window` | debug builds | menus in the window on macOS |
-| `PICTO_GPUI_APP_MENU=window` | debug builds | the in-window application menu button on macOS |
-| `PICTO_GPUI_STATE=<folder>` | debug builds, off-screen tool | keep per-machine state there |
-| `PICTO_GPUI_INSPECTOR=<width>` | debug builds | inspector width whatever was kept |
-| `PICTO_GPUI_HOLD_RUNS` | debug builds | the Subscriptions screen logs its commands and answers runs and gallery downloads itself instead of starting network work |
-| `PICTO_GPUI_SILENT` | debug builds | every player and Flash movie starts muted |
-| `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` | debug builds | every site login's addresses move onto that loopback origin, the sign-in window loads nothing outside it, and a login saved or removed is reported on standard error as its `auth.credentials.list` row and the names (never the values) of the cookies the core's store holds; OnlyFans' own-browser login and Pixiv's code exchange, which would reach the real site whatever the window loads, are refused; for checking sign-ins against local pages |
-| `PICTO_GPUI_LOGIN_CHECK=<folder>` | debug builds | with `PICTO_GPUI_LOGIN_ORIGIN`, the app serves a login of its own at that origin and signs in through the system's sign-in window (`src/logins/check.rs`): a page that cannot load, Cancel, the window closed as by its close button, and a sign-in whose session cookie is saved through `auth.credentials.set`, read back and removed; it writes `login-check.log` (last line `result: pass` or `result: fail`) and pictures of the window to the folder, then quits |
-| `PICTO_GPUI_APP_DATA=<folder>` | debug builds | the core's application data (AI models in `models/`) there instead of beside the copy |
-| `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug builds | AI model commands are logged (`picto: AI command …`) and downloads are answered by the app instead of the network: held at that share until Cancel, or failed at once; an update's installer likewise (held at that share, or the update fails) |
-| `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>` | debug builds | the update feed and its downloads, the search engines' pages and the site icons are fetched from that loopback origin instead, each address with its host as the first part of the path (`https://tineye.com/` is `<origin>/tineye.com/`); a redirect off it is not followed, the search's web view loads nothing outside it, and a page that would open in the browser (a results page, a release page) is written on standard error instead (`src/net.rs`); update checks, automatic checks, a version's first-start notes and the install run as in a packaged build (`updates::packaged`). Under any other seam, or in a test build, without this one nothing is fetched (the icons stay the globe, update checks say they are not available, a search does nothing) |
-| `PICTO_GPUI_NET_CHECK=<folder>` | debug builds | with `PICTO_GPUI_NET_ORIGIN`, the app serves those fixtures itself and checks the three network features against them (`src/net_check.rs`: icons fetched, kept, decoded or the globe; this version's notes, then an update found, its installer (a stand-in the check builds, which only writes how it was started to `installer-ran.txt`) downloaded and verified on Windows and Linux, a mismatching one refused and one changed after its verification never started, or the release page on macOS; a search on every engine in the hidden web view, each engine receiving exactly the file); last, Restart and Install starts the stand-in and quits the app (with a file `install-on-quit` in the folder, the app quits with the update waiting instead, which installs it silently), or on macOS Open Download Page writes the page down; it writes `net-check.log` (last line `result: pass` or `result: fail`), then quits |
-| `PICTO_GPUI_UPDATE_PLATFORM=darwin\|win32\|linux` | debug builds | the update check follows that system's flow (the release page, or the `latest.yml` / `latest-linux.yml` installer) on any machine; another system's installer is verified but never started |
-| `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT` | off-screen tool | the copy, the script, the output folder |
-| `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen tool | start lazy; log lazy frames |
-| `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen tool | start at the gate; the generated libraries directly in that temporary folder may be listed and opened |
-| `PICTO_DROPBOX_ROOT`, `PICTO_GOOGLE_DRIVE_ROOT` (the core's) | every build; while a seam is active, the only cloud folders | a folder standing in for that desktop app's folder (section 2, "Cloud") |
-| `PICTO_GPUI_TEST_PICTO_RUNNING` | off-screen tool | the Electron app's probe says it runs (`after-open`: from after the open on) |
-| `PICTO_GPUI_TEST_LIBRARY`, `PICTO_GPUI_TEST_WEBM`, `PICTO_GPUI_TEST_AUDIO`, `PICTO_GPUI_TEST_VIDEO` | ignored tests | inputs |
-| `PICTO_GPUI_MATRIX_OUT`, `PICTO_GPUI_MEDIA`, `PICTO_GPUI_MEDIA_MIME` | format matrix tests | pictures folder, a real file, its type |
-| `PICTO_GPUI_COPY_ONLY` | `run.sh` | make the copy, print it, stop |
-| `PICTO_GPUI_MILLION_ONLY` | `million.sh` | make the library, print it, stop |
-| `PICTO_REFERENCE_PORT` | `reference.mjs` | DevTools port |
+| `PICTO_DROPBOX_ROOT`, `PICTO_GOOGLE_DRIVE_ROOT` | every build (the core's) | a folder standing in for that app's; the only cloud folders under a seam |
+| `PICTO_GPUI_POINTER` | debug | input lines from a FIFO |
+| `PICTO_GPUI_BACKGROUND` | debug | windows open without the keyboard and draw while covered |
+| `PICTO_GPUI_WINDOW=WxH` | debug, off-screen | exact window size, not remembered |
+| `PICTO_GPUI_MENU=window`, `PICTO_GPUI_APP_MENU=window` | debug | menus in the window on macOS; the in-window application menu |
+| `PICTO_GPUI_STATE=<folder>` | debug, off-screen | keep per-machine state there |
+| `PICTO_GPUI_INSPECTOR=<width>` | debug | inspector width |
+| `PICTO_GPUI_HOLD_RUNS` | debug | Subscriptions answers runs and downloads itself, starting no network work |
+| `PICTO_GPUI_HOLD_DOWNLOADS[=<percent>\|fail]` | debug | AI model downloads and update installers answered by the app |
+| `PICTO_GPUI_SILENT` | debug | players and Flash start muted |
+| `PICTO_GPUI_APP_DATA=<folder>` | debug | the core's application data there |
+| `PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:<port>` | debug | site logins moved onto that loopback origin (`logins/`) |
+| `PICTO_GPUI_LOGIN_CHECK=<folder>` | debug | sign-in window check against the app's own local login (`logins/check.rs`); writes `login-check.log` ending `result: pass` or `fail` |
+| `PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:<port>` | debug | update feed, search engines and site icons from that loopback origin (`net.rs`); otherwise a seam fetches nothing |
+| `PICTO_GPUI_NET_CHECK=<folder>` | debug | network features checked against the app's own fixtures (`net_check.rs`); writes `net-check.log` |
+| `PICTO_GPUI_UPDATE_PLATFORM=darwin\|win32\|linux` | debug | the update check follows that system's flow |
+| `PICTO_GPUI_COPY`, `PICTO_GPUI_SCRIPT`, `PICTO_GPUI_OUT`, `PICTO_GPUI_LAZY`, `PICTO_GPUI_LAZY_DEBUG` | off-screen | the copy, script, output folder; start lazy; log lazy frames |
+| `PICTO_GPUI_TEST_LIBRARIES=<folder>` | off-screen | start at the gate; generated libraries in that temporary folder may be listed and opened |
+| `PICTO_GPUI_TEST_PICTO_RUNNING[=after-open]` | off-screen | the Electron app's probe says it runs |
+| `PICTO_GPUI_TEST_LIBRARY`, `_TEST_WEBM`, `_TEST_AUDIO`, `_TEST_VIDEO`, `PICTO_GPUI_MATRIX_OUT`, `PICTO_GPUI_MEDIA`, `PICTO_GPUI_MEDIA_MIME` | ignored tests | inputs |
+| `PICTO_GPUI_COPY_ONLY`, `PICTO_GPUI_MILLION_ONLY`, `PICTO_REFERENCE_PORT` | `run.sh`, `million.sh`, `reference.mjs` | make and print only; DevTools port |
 
 ### CI
 
-`.github/workflows/gpui-experiment.yml` runs on pushes to `feature/163-**`
-that touch `experiments/gpui/`, `core/`, `picto-library/` or the workflow,
-and by hand. On Ubuntu 24.04 and Windows (there is no macOS job; macOS is
-built locally) it runs `cargo build --locked` and `cargo test --locked`, then
-generates a 2,000-item synthetic library in the system's temporary folder,
-copies it with `--make-copy`, and plays `ci/smoke.txt` with the off-screen
-tool: the grid, a hovered tile, the grid scrolled, the viewer, an item's
-menu, the window's close button hovered, the application menu (both drawn by
-the app on these platforms) and the Settings window, then the interface
-zoomed to 150% (the grid; an item's menu opened by a press at window
-points) and to 80% (the grid; the Settings window). The twelve pictures are
-uploaded as the `pictures-linux` and `pictures-windows` artifacts
-(`gh run download <run> -n pictures-linux`). They show the app's own drawing
-on each system, not the system's: no window frame, no system menus, no
-pointer. Then the app runs for real on that copy, with a screen (Xvfb on
-Linux, the runner's desktop on Windows, where the WebView2 Runtime is
-installed first if the image lacks it), and `PICTO_GPUI_LOGIN_CHECK` opens
-the sign-in window on the system's web view against the app's own local
-login; the step fails unless `login-check.log` ends `result: pass`. The
-log, the app's output and two pictures of the sign-in window are the
-`login-check-linux` and `login-check-windows` artifacts. Then
-`PICTO_GPUI_NET_CHECK` runs the network features against the app's own
-loopback fixtures (icons, the update check and download of that system's
-installer with its verification, Search by Image on every engine in the
-system's web view, then Restart and Install of a stand-in installer); the
-step fails unless `net-check.log` ends `result: pass`, the app ended by
-itself, and the stand-in ran as electron-updater runs the installer (on
-Windows from `updates/` with `--updated --force-run`; on Linux moved over a
-stand-in `$APPIMAGE` under its new name and run with
-`APPIMAGE_SILENT_INSTALL=true`). A second run quits with the update waiting
-and expects the silent install (`--updated /S`; on Linux run to its end with
-`APPIMAGE_EXIT_AFTER_INSTALL=true`). The logs, the app's output and what the
-stand-in wrote are the `net-check-linux` and `net-check-windows` artifacts.
-The Cloud step
-plays `ci/cloud.txt`: a library made in a test folder (three of
-`resources/tutorial`'s pictures dropped in), connected to a folder standing
-in for Dropbox, paused, a folder made, a snapshot taken, another folder
-made, then restored from Settings › Cloud's Restore History; the step fails
-unless the later folder is gone and the earlier one there after the
-restore, the snapshot is listed, an emergency copy was kept, and Stop
-Syncing cleared the folder. Its log and pictures are the `cloud-linux` and
-`cloud-windows` artifacts.
+`.github/workflows/gpui-experiment.yml` builds and tests on Ubuntu 24.04 and
+Windows, plays `ci/smoke.txt` and `ci/cloud.txt` with the off-screen tool on
+a generated library, and runs the sign-in and network checks in a real
+window; each step's comments say what it checks, and its pictures and logs
+are the run's artifacts (`gh run download <run> -n pictures-linux`). There is
+no macOS job.
 
-## What works
+## 7. Status
 
-How parity was established, per area: **pictures** — the same script
-photographed in this app and in the production reference and compared;
-**values** — numbers ported and asserted against production's own tests or
-hand-computed geometry; **tests** — unit tests of the port only; **read** —
-ported by reading production's code, seen in this app but not compared. The
-pictures were compared when each area was built and are not kept in the
-repository. The whole main window at 1213×865, same item selected, differed
-from production in 4.4% of pixels by more than 16 levels (titlebar buttons
-0.2%, toolbar 0.2%, library header 1.1%, system rows 1.4%, section headers
-2.2%, sidebar filter 1.6%, grid 5.2%, mostly originals production loads for
-large tiles; inspector fields 0.9%, chips 4.3%).
+### What works
 
-| Area | At parity with production | Established by |
-| --- | --- | --- |
-| Shell | titlebar, rails that slide and resize (sidebar 220–500 px, inspector 260–550 px), window rim, Back and Forward over places, destination fades, themes (all seven, previewed in every window) | pictures; values (rail limits) |
-| Sidebar | system rows in production's order, Quick Access, Folders and Smart Folders with counts, tree guides, folding, filter, multi-selection, rename in place, drag reorder and nesting, items dropped from the grid, every context menu row, smart-folder editor, auto tags, watched folders, keyboard | pictures (sidebar, rules dialog); values (drop positions, rule model) |
-| Grid | three layouts placing tiles where production does, tiles and badges, windowed model over the whole destination, selection by item (click, platform key toggle, shift ranges, Select All, rubber band with auto-scroll), keyboard movement, hover preview, thumbnail reveal, originals for large tiles, subfolder tiles, empty and error states, drag out, drop import | pictures; values (layout, visibility, marquee, menus) |
-| Filter bar and view menu | every filter control and editor, saved filters, lock, view options saved to the destination's view | pictures (bar, tag picker in filter mode, colour editor, view menu); read (calendar, range editors, saved filters) |
-| Inspector | one item, several items, the destination; name, notes, sources, folders and tags, rating, palette, properties; tag and folder pickers; Add Tags and Folders dialogs; pin | pictures |
-| Item menus | tile, empty space, viewer and inspector preview menus with production's rows, order, labels and enabled rules; copy, open with, batch rename, regenerate thumbnails, grouping, export, Set as Library Cover, Set as Thumbnail | pictures (grid menu); values (production's menu test cases) |
-| Application menu | production's menus and rows, keys from the registry, enabled by production's rules; in-window button off macOS | values (model tests); pictures of the in-window menu off-screen (CI) |
-| Viewer | media view, zoom and pan, navigator, Quick Look, detail windows, Inbox review, collections (reader and editor), Recently Viewed recording | pictures (Quick Look, detail window, JPEG, GIF, JPEG XL, a PDF collection); values (camera arithmetic, detail window size) |
-| Documents | PDF, DjVu, CBZ, EPUB, text, Markdown, JSON, RTF, fonts, JPEG XL, SVG; others show the unsupported view; a font's sample and waterfall edited in place, its preview sized by ⌘= / ⌘+ (⌘⇧=) / ⌘− and Control with them on the Mac | tests (format matrix decodes every fixture and draws every viewer off-screen; real PDFs, a JPEG XL, a text file, a GIF and a WebP from a library); pictures of the font viewer (preview, an edit, the waterfall: 3% of the page differing) |
-| Document thumbnails | the first page of a text, Markdown, JSON or RTF file, and an EPUB's first chapter when the book has no cover, drawn as the viewer lays the page out, at production's size (the 816-point page at two pixels a point, as the hidden window shows it), through the same queue as PDF and Flash; the application's own thumbnail work finds the picture and stops retrying | pictures of the thumbnails against production's (0.1–0.9% of pixels differing for text, JSON, RTF and a short Markdown file; 2.5% for a Markdown file with code, quotes and a table, where the viewers differ) |
-| Video and audio | the media player, its controls, speeds, loop, volume, visualizer; AVFoundation and `ffmpeg` paths on macOS | pictures (`.mov`, `.webm`, MP3); seen playing in a real window on macOS |
-| Flash | Ruffle playback, controls, Set as Thumbnail | tests (GPU tests: frames, mouse, Stop) |
-| Tags screen | rail, groups, sections, paging, search, every edit | pictures |
-| Subscriptions screen | grid of cards, workspace, Sources, History and Problems tables (a problem's message and detail in its tooltip), every dialog and command | pictures; commands checked with `PICTO_GPUI_HOLD_RUNS` |
-| Subscription run pop-ups | "Subscription paused" and "Gallery download paused", "Query completed", "Subscription completed", and a settled gallery download's "Gallery downloaded", "Gallery already exists" or "Gallery import failed" with its transient subscription removed, for the whole app whichever view shows | tests (production's settle test cases as recorded sequences of `subscriptions.list`, `subscriptions.runs.get` and `subscriptions.runs.list` answers); pictures of the pop-ups; never seen after a real run (no network) |
-| Duplicates screen | queue, linked zoom, difference view, every decision, scan | pictures; values |
-| Imports and exports | drops (files, files a drag promises, offers to save or holds as virtual files, and a browser's image data with its addresses as sources), choosers, paste import, folder and collection questions, task dialog and bar; Export Originals, Export As, Picto Packs | pictures (drop, folder dialog, collection question, task dialog and bar); read (exports, with dialogs answered off-screen) |
-| Settings | every section and row in production's wording; the settings that change the app apply on Save; shortcut capture and conflicts | pictures |
-| Keyboard | every registry shortcut bound or listed in `NOT_YET`; Tab order and focus rings in dialogs, popovers and Settings | values (keymap test); read |
-| Text fields | Chromium's editing on each platform: words (with Chinese, Japanese and Thai dictionaries), rows, paragraphs, Emacs keys, the field's own undo, input method | tests |
-| Glass and blur | backdrop blur behind panels on Metal and wgpu, shadows cut out as CSS draws them, menus in pop-up windows over the system's blur on macOS | read; seen on macOS |
-| Notifications and undo | production's notifications, tones and words; Undo and Redo announced | read |
-| Kept across launches | window place, rails, folds, filters, recents, shortcuts, interface zoom | tests (pure parts); off-screen restart with `PICTO_GPUI_STATE` (zoom) |
-| Interface zoom | Cmd+= / Cmd++ / Cmd+− / Cmd+0 by production's steps and limits in the main window; the viewer's Actual Size and a font's preview size first, as production's scopes order them; the grid's `+` and `−` unchanged; every window and pop-up drawn zoomed; kept per machine | tests (steps, limits, conversion, a press at screen points hitting the element drawn there, a window opened later); pictures off-screen at 80% and 150% (macOS; CI on Windows and Linux); a real window and pop-up menu at 150% (macOS); 100% byte-identical to before |
-| AI tagger | Settings' AI Tagging: each model's state (not downloaded, downloading with its percentage, bar and Cancel, downloaded or optimized, a failure's message), Download, Cancel, Optimize (where supported) and Delete sent at once, model storage, the six thresholds and the auto-tag switches in the draft; Auto Tag in the grid's and viewer's item menus, Organize › Auto Tag… and ⇧⌘A (the item viewed, else the selection, Select All addressed through its query), the inspector's Auto Tag / Auto Tag N Images with "Suggest tags with AI", or disabled with "AI tagging requires an explicit image selection"; the review: models chosen and remembered, each model run over every image one at a time with the progress hairline and "Analyzing n of m", Suggested and Below cutoff, per-tag checks, the cutoff, filter, item stepping, thumbnails, pin, the failure wording, Apply as one undoable edit announced with Undo | pictures (Settings panel 3.1% of pixels differing, its Models card 2.0%; review panel opened 3.2%, rail 12% from text weight; the same predictions in both, list 3.1%; disabled button and its tooltip 2.3%); tests (merging, checks, assignments, starting models, cutoff, empty states, failure words, progress, auto-tag fallback); a real inference run of E621 ConvNext on four images with the tags read back and undone; downloads with `PICTO_GPUI_HOLD_DOWNLOADS` |
-| Log window | View › Log Window and ⌘L: the core's log lines, slow and failed commands, level, source and text filters, following the end, Copy, Save support report (scrubbed, written only where the save dialog says, readable by the user only), Clear, the workers read every 750 ms, the resizing edge, Escape; a panic is logged at once and written with its backtrace to `logs/` in the app's own folder, and shown at the next launch | pictures (header 4.2%, workers 3.6% of pixels differing; the lines differ in content); tests (production's store and report tests, the panic record); off-screen (filters, Escape, a saved report, Copy, a previous session's panic) |
-| Site logins | the Accounts dialog (Subscriptions' Accounts, a source's login chip, Problems' Fix login): every service, its state, facts, Log In / Refresh Login / Logging in… with Cancel, Remove, the SubscribeStar service, OnlyFans' manual session, the notice, the login under way, its login problems; the sign-in window; production's success rules per service; save and sign out through the application's commands | tests (production's `authSessions.test.mjs` cases as recorded pages, cookies and answers, the session machine, OAuth 1 signing against a published example, cookie matching, OnlyFans' DevTools parsing and frames); the sign-in window end to end against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`: a page that cannot load, Cancel, the window closed by its close button, and a cookie set after a form post and a redirect, captured, saved, read back through `auth.credentials.list` and the core's store, then removed) on macOS locally and on Linux and Windows in CI; the masked Cookie and X-BC fields (picture, accessibility tree); pictures (the dialog 2.3% of pixels differing, its list 4.7% from the services' icons, measured while they were the globe); the services' icons (`siteIconService.mjs`: the touch icon, then the favicon, at most 512 KB, a picture by its first bytes, kept in `site-icons/` of this app's folder, asked again after 30 s while shown, the globe when there is none or it cannot be drawn) fetched, kept and drawn against loopback fixtures (`PICTO_GPUI_NET_CHECK` on macOS and in CI on Linux and Windows; pictures off-screen with PNG and ICO icons, and the globe when nothing answers) |
-| Software updates | File › Check for Updates… (a check, then the update dialog; at the gate, without a library, the outcome as a notification), Settings' Updates (Installed version, the status line, Check Now, the next step) and About's Check Now; production's feed (GitHub's releases, the newest application release newer than `package.json`'s version, drafts and model releases skipped), then on Windows and Linux that release's `latest.yml` / `latest-linux.yml`, its `.exe` or `.AppImage` downloaded into `updates/` in this app's folder with its progress and kept only if its SHA-512 and size match the feed; the dialog's states (checking, up to date, error, unavailable, downloading with its bar, downloaded, available on macOS, this version's notes) with the release's name, date and notes as headings, bullets and paragraphs; the "is available" and "is ready" notifications with View; on macOS Open Download Page; elsewhere Restart and Install as electron-updater's `quitAndInstall(false, true)` (Windows: the NSIS installer started detached with `--updated --force-run`, elevated through `runas` when the feed's `isAdminRightsRequired` says so or Windows asks for it, opened as a file when it cannot be run; Linux: `$APPIMAGE` removed, the new AppImage made executable and moved into its place, under its own name when the old name held a version, then started with `APPIMAGE_SILENT_INSTALL=true`; then the app quits), and `autoInstallOnAppQuit` (quitting with an update downloaded installs it silently: `--updated /S`, or the AppImage run to its end with `APPIMAGE_EXIT_AFTER_INSTALL=true`); only the installer in `updates/` that still matches the feed's SHA-512 and size when it starts is started, and a failed start leaves the app running with the error in the dialog; production's words throughout (the dialog's "The update is ready. Picto will close before the installer starts." and English Restart and Install / Open Download Page, Settings' translated buttons and "install after Picto closes" description, the notifications' "Restart to finish updating."); "unavailable" ("Update checks are available in packaged builds.") where production's `app.isPackaged` would be false: a debug build (except under `PICTO_GPUI_NET_ORIGIN`), a release build run from Cargo's `target/`, or on Linux one not run from an AppImage; a version's bundled notes shown at its first start until the dialog is closed; automatic checks 15 s after start and every six hours in a packaged build. The feed is production's, so the installer it names is the Electron app's until this app publishes its own | `PICTO_GPUI_NET_CHECK` against loopback fixtures on macOS (all three systems' flows through `PICTO_GPUI_UPDATE_PLATFORM`) and in CI on Linux and Windows (their own flow); tests that an installer not matching the feed (another checksum, cut short) is never kept, and that only the verified installer in `updates/` is ever started (changed after download, elsewhere, renamed or a link refused); in CI on Windows and Linux the real start of a stand-in installer, with production's arguments or AppImage replacement, after Restart and Install and on quit; pictures off-screen (the off-screen tool's `update <status> <system>`: the dialog and Settings in each state, the notifications, a failed start) |
-| Search by Image | every engine production offers (TinEye, SauceNAO, Yandex Images, Sogou, Bing Visual Search) in the grid's, viewer's, group's and detail window's item menus for one image; the original file handed to the engine's own page in a web view that is never shown, with production's scripts per engine, and the results address (SauceNAO's built from the uploaded picture's address, as production's) opened in the browser; failures as production's "Reverse image search failed" | `PICTO_GPUI_NET_CHECK` (every engine against loopback pages, each receiving exactly the file's bytes, name and type, the results address as production's; nothing reaches an engine before) on macOS (WKWebView) and in CI on Linux (WebKitGTK) and Windows (WebView2); off-screen: the rows enabled, the submenu opened and hovered without any request, and a click on TinEye reaching the search (which off-screen, without a native window for the web view, ends in the failure notification) |
-| Accessibility | roles, names, values, states and actions for every shared control, dialogs, menus, notifications (live region), the sidebar tree, the grid's list of tiles, the inspector, viewer and media controls, the Tags, Subscriptions and Duplicates screens and Settings; production's `aria-label` texts through `t()`; no clickable element without a role in the views dumped | tests (`ui::a11y::tests`: each shared control's tree and actions, two source guards); off-screen dumps of the main window, a dialog, two menus, the screens, the viewer and all fourteen Settings sections; pictures byte-identical before and after; never heard through a screen reader |
-| Libraries | the gate, the Library Manager (list, Open Library, New Library, Open Existing…, Add to and Remove from Quick Access, Rename, Show in File Manager, Remove from List, the cover, statistics), Open Library…, Recent Libraries and Clear History, the switcher's rows and functions, switching, the last library at start, under the rules of section 2 | pictures (Library Manager against production's: same layout, header, sidebar and footer; the switcher; production's gate could not be shown, its reference opens a library by itself); tests (each rule; an open and a switch of generated libraries); off-screen with `PICTO_GPUI_TEST_LIBRARIES` (consent, open, switch, statistics, an incompatible schema refused) |
-| Cloud | Settings › Cloud, the Library Manager's Cloud Sync card, menu rows, row dot, Connect…, Open from Cloud…, the sync bar and blocking restore dialog, `cloudSettle`'s notifications, through the core's commands (section 2, "Cloud") | off-screen on macOS against a folder standing in for Dropbox: connect, first sync, a change synced, pause and resume, Sync Now, Create snapshot, retention, restore (a later change undone; another library's change brought in), Open from Cloud… into a new library with its media restored, Stop Syncing and reconnecting, Show Cloud Folder, an unreachable folder, a library whose originals do not match their hashes ("Needs attention"); CI on Linux and Windows (`ci/cloud.txt`); never against a real provider or account |
-| Languages | production's eight catalogs and lookup, the system default, live switching in every window, numbers and dates in the system's language, every view's text through `t()` | tests (catalogs, placeholders, fallback, formats against ICU, the source guard); pictures off-screen in English (unchanged), German and Japanese (macOS) |
+Established by: **pictures** (the same script photographed in this app and
+in the production reference and compared), **values** (asserted against
+production's tests or hand-computed geometry), **tests** (unit tests of the
+port), **checks** (the app's own end-to-end checks), **read** (ported by
+reading production's code, seen in this app).
 
-Shortcuts `keymap::NOT_YET` leaves unbound: command palette, go to folder,
-add to last folder, copy and paste tags, slideshow, navigator, the layout and
-tile-label keys (all deferred in production too).
-
-Measured once on the million-item synthetic library on a macOS development
-machine: every grid window read took 0.3–9 ms wherever it lay; the summary of
-a million selected items 0.6 ms; opening the database and its resident
-indexes 1.2–11 s (varying with the file cache); the core's recovery passes
-13 s alone and 28–30 s with the app drawing beside them. A copy of a 24 GB
-library through `run.sh` took about 8 s.
-
-## What does not work
-
-Entries marked † were observed when the area was built and could not be
-re-checked by reading the code; the rest were checked against it.
-
-### Never seen in a real window or on a real machine
-
-- **Anything on Windows or Linux.** No one has used the app on a screen
-  there. CI builds, tests and photographs its own drawing; the systems' window
-  frames, titlebar dragging, resize edges, double-click on the titlebar, the
-  clipboard, notifications, the badge, keyboard input, video and sound have
-  never been exercised. The `ffmpeg` video path and the Symphonia and CPAL
-  audio path are built and unit-tested there but have never played a file
-  (CI has no `ffmpeg` and no sound device).
-- **macOS menu bar.** Read and pressed through the system's accessibility
-  interface on a running window, not looked at as pixels: the titles
-  (Apple, the application's, Library, File, Edit, Organize, View, Window,
-  Help), rows enabling with the selection, View › Inbox navigating,
-  Window › Zoom filling the screen and going back (the grid, sidebar and
-  inspector laid out again at each size), View › Toggle Full Screen entering
-  the system's full screen and leaving it, File › Close Window hiding the
-  window with the process alive and a reopen (what a click on the Dock icon
-  sends) bringing it back. AppKit's own Enter Full Screen row is kept out
-  of View (`platform::macos::one_full_screen_row`); its other rows stay, as
-  in production's bar (Edit's AutoFill, Dictation and Emoji & Symbols, the
-  Window menu's tiling rows), and it titles the application menu with the
-  process's name.
-- **The tail of a flick after an Inbox review.** Accept and Reject
-  swallow the rest of the scroll gesture under way, by production's rule
-  (`ui::momentum`, `scrollMomentum.ts`: until a 90 ms pause, a reversal, a
-  push 1.6 times stronger, or 1.2 s). Only the rule is tested: the
-  off-screen tool spends about 170 ms per input in the viewer, longer than
-  the pause that ends a gesture, so it cannot play a flick, and no
-  trackpad or wheel has tried it.
-- **Drops from a web browser.** The owner has dropped from a real browser
-  on macOS; none has been dropped on Windows or Linux. On macOS the pasteboard reading was checked on a pasteboard
-  of a test's own, and a drop of in-memory image data (played with
-  `dropdata`) was imported into a real window with its addresses as
-  sources, and a drop of links only was refused with its notification; on Windows and Linux only the parsing of
-  `HTML Format` and the media types read is tested, and the reading code
-  is compiled in CI.
-- **Files a drag promises, offers to save or holds as virtual files.**
-  Received into a folder made for the drop in the session's scratch folder
-  (`gpui::PromisedFiles`), then imported as dropped files are, of any type
-  and under their own names, and deleted once imported (the folder with the
-  last of them); a file reported failed, cut short or never reported is
-  removed and never imported, and when none arrives the drop's in-memory
-  image is imported instead if it had one, else it is refused with the
-  reason. On macOS the window takes `NSFilePromiseReceiver`'s types and asks
-  the receivers for the files while the drop is performed, delivered on an
-  operation queue of their own (Photos, Mail, Safari, Messages, Notes drag
-  so); on Windows a drag's virtual files (`FileGroupDescriptorW` with
-  `FileContents`, from global memory or a stream: Outlook, browsers,
-  Photos) are written while the drop is delivered; on X11 a drag that
-  offers XDS (`XdndDirectSave0`: browsers, archive managers) is asked to
-  save its file on a thread and a connection of their own, which sends
-  `XdndFinished` once the source has answered. Wayland has no such
-  protocol (its drags give data by media type, read as above). Checked:
-  the settling of what arrived (a test); Windows' reading of virtual files
-  from a data object of the test's own, through the platform's reading
-  code (`cargo test` in CI); X11's direct save against a source of the
-  test's own on Xvfb (`Drop check (Linux)` in CI). On macOS a real
-  drag was played onto a window (AppKit lets receivers deliver only during
-  a real drop, so a pasteboard alone cannot show it): a small program began
-  a dragging session with an `NSFilePromiseProvider` and let go over the
-  grid; the promised picture was delivered into the drop's folder and
-  imported, and a source that wrote half its file and failed imported
-  nothing and left no file behind. No drag from Photos, Mail or a browser
-  has been tried. Production (Electron 43's Chromium links no
-  `NSFilePromiseReceiver`) imports no promised file at all on macOS, which
-  this app now does.
-- **macOS system integration.** Seen on a library copy: Reveal in Finder
-  opened a Finder window with the copy's file selected; Open with Default
-  App opened the copy's file in Preview; Open With Other listed the
-  applications the system gives for the file's type, with their icons and
-  the default marked, and choosing one (ColorSync Utility) started it with
-  the copy's file; Copy put the copy's file on the real pasteboard as a
-  file address; the Dock tile carried the Inbox count (read through the
-  Dock's accessibility label: "99+" for 955, as production's tile beside
-  it); the video player's F took the window to the system's full screen
-  with the video alone and back to its place and size. The owner has
-  resized windows by their edges and dropped from a real browser. With
-  the real pointer (posted events) on an instance with no seam set: a
-  tile was dragged out into a Finder folder and its stored file arrived
-  there (under its stored name, as production's drag gives it); a
-  right-click opened the item menu and its Search by Image submenu, and
-  TinEye searched a generated test picture for real, its results page
-  opening in the browser (after more than a minute); File › Check for
-  Updates… read the real feed ("Picto is up to date"). Not
-  seen: the system notification (which needs
-  a run to finish); files arriving through `application:openURLs:` (the
-  hand-over between two launches and packs on the command line were seen
-  working); restoring the window maximised or on a second display (a kept
-  place and size was seen restored and written back; only the pure
-  placement code is tested for the rest); the detail window's aspect lock
-  while its edge is dragged. The detail window's always-on-top was seen raising
-  and lowering its window level. Opened, a detail window takes the
-  media's shape (3926×2474 opened at 1330×838); a very narrow picture
-  (200×640) is grown to 400 wide as production grows it, which is taller
-  than the work area, and the system cuts the window to the screen
-  (400×989), so it opens off the shape its lock keeps, as production's
-  would.
-- **Pop-up menus on macOS.** Seen: placed on the screen from a press near
-  the window's edges (moved up to stay above the Dock, left of the pointer
-  near the right edge), a submenu in a pop-up window of its own, closing on
-  Escape and on a press in the main window, and opening with another
-  application active (a window entirely covered by another application's
-  draws nothing, so a menu asked for there by input playback opens only
-  when the window shows again); at 80%, 125% and 150% its
-  window scaled with the zoom and its panel's corner on the pointer;
-  its shadow is alpha in the window's transparent margin (dark theme: 14%
-  just outside the panel, falling to 2% at the window's edge, a 1px ring
-  of 57%; light theme at 150%: 7%, a 1.5px ring of 21%). Not seen: their blur over
-  colourful content and their pop-in scale (a capture of one window shows
-  neither, and capturing the screen was not allowed); the pointing-hand
-  cursor in them (GPUI sets the cursor from the key window); the input
-  method's candidate window for the menu's search field. A select's list
-  inside a pop-up menu is checked by placement tests only.
-- **The interface zoom, partly.** Seen on macOS in a real window at 80%,
-  125% and 150% (crisp text, the traffic lights unchanged; the main,
-  Settings and detail windows following at once; presses landing on what
-  is drawn; tooltips, the grid scrollbar's thumb under the pointer while
-  dragged, a rubber band, a tile drag over the sidebar) with a pop-up menu
-  window opened by a press at each level. Not seen zoomed: the pop-up's blur over colourful content, the input method's
-  candidate window, a file dropped from Finder, a trackpad scroll, the
-  resize edges on Linux, and anything on a Windows or Linux screen.
-- **Network work.** No subscription run, source run, gallery download or AI
-  model download has been started from this app; their commands were checked
-  with `PICTO_GPUI_HOLD_RUNS` and `PICTO_GPUI_HOLD_DOWNLOADS`. Optimize (a
-  Core ML compile, macOS only) has not been pressed.
-- **System dialogs with the pointer.** Paste Import, the file and folder
-  choosers, the export and Picto Pack dialogs and the empty states' import
-  buttons have been driven only off-screen with `answer`.
-- **Not checked in any window:** a value typed into the filter bar's range
-  editors (the Resolution editor was seen opening below its chip); the
-  volume drag; Set as Thumbnail end to end; the log window's Copy and Save
-  support report (they write the clipboard and a file the save dialog
-  names). (Seen in a real window: the calendar and saved filters, a PDF collection scrolled,
-  the media player's seek, hover time, rate list, loop and controls' fade,
-  the audio visualizer; EPUB pages and their buttons, text and Markdown
-  pages, the font viewer's preview, an edit of its sample, waterfall,
-  glyphs and page colours; a Flash movie's button and Pause; a collection
-  made with Group…, its reader scrolled, and its editor's drag reorder with
-  the insertion mark, rubber band, Sort by menu, Remove from Group and Undo;
-  Delete Permanently's confirmation and the delete; text and Markdown
-  thumbnails appearing in the grid by themselves after a drop; the filter
-  bar's field menu adding Resolution, Duration and File Size; Settings'
-  language switched to German, Japanese and back, applying at once in the
-  main and Settings windows, with Settings' panels, an item menu, the Add
-  Tags dialog, the Tags, Subscriptions and Duplicates screens, the viewer's
-  toolbar and its tooltip and a notification in each; the log window
-  filling, its level, source and text filters, following the end, resized
-  by its top edge and closed with Escape; the AI tagger's Settings panel
-  with cloned models and a held download, Auto Tag from the item menu and
-  the inspector, a real run of two models over four images with the
-  review's progress advancing by itself, the cutoff, the filter, Apply,
-  "Added AI tags" and Undo and Redo from the notification and the keys;
-  the glass panels' shadow and dark ring outside menus, dialogs, pickers,
-  popovers, tooltips (shadow only, as production) and notifications in the
-  dark theme and a light one, at 100% and 150% (dark: the ring at 42% of
-  what is behind, the shadow 10–16% darker beside a panel; light: 21% and
-  7%), with no artefact at tile or preview corners; a second launch on the
-  open copy handing over and exiting; a pack given on the command line.)
-- **Performance.** No frame-time or decode-latency benchmark has been
-  completed. One real-window session on this library (2,673 items, debug
-  build) measured: physical footprint 308 MB after opening, 754 MB after
-  scrolling through about 900 items, 683 MB further down and 595 MB back at
-  the top, 542 MB after opening and closing fifty media views (peak 884 MB),
-  538 MB after ten minutes idle; no view repainted and CPU read 0.0% while
-  idle; a scroll in an active state of the window drew a frame every 8 ms.
-  A later session (2,674 items, the AI tagger's models loaded once) read
-  370 MB after opening, 619 MB with the log window open and closed, 537 MB
-  after a tagger run (peak 1.6 GB while two models ran), 824 MB after
-  scrolling through several hundred items and 937 MB after fifty media
-  views (peak 1.7 GB); a fresh launch read 458 MB before and 299 MB after
-  ten minutes idle, in which every view repainted once at three moments
-  with nothing logged around them (one frame each) and the process used
-  5.1 s of CPU (0.9%), all of it outside the views. Idle with the log
-  window open the process used 0.56 s of CPU in 20 s, against 0.63 s with
-  it closed.
-  A covered window's frames are paced by the system (section 6). Do not call the app faster or flicker-free on this
-  evidence.
-
-### Seen wrong in a real window, not fixed
-
-- With a video playing, Playback speed's tooltip covers the bottom row (3x)
-  of the speed list while the pointer stays on the button, as in production.
-- A sidebar drag that moves a smart folder under another is two undo steps
-  (reorder, then move), as production's two commands are.
-
-### Missing features
-
-- Libraries, partly: no library has ever
-  been opened in a real window, nor the consent, the blocking notice or a
-  switch seen on a screen.
-- Localization, partly: the application menu stays English, as production's
-  (`menu.mjs` is not translated); texts production writes without a key
-  stay English (`src/i18n/gpui_only.txt`), and so do texts built with
-  `format!` from English words in both apps (count rows such as "Move 3 to
-  Trash", the Tags screen's delete messages, the overwrite confirmation's
-  message, the export report this app adds). Han characters are drawn with
-  the system's fallback font, chosen by the system's languages, not the
-  interface's: with Japanese chosen on a system without Japanese among its
-  languages, CoreText may draw Chinese glyph forms where production (which
-  sets `<html lang>`) draws Japanese ones. The off-screen tool on Windows and
-  Linux (CI) holds only the bundled Roboto and Fira Mono, which have no
-  Chinese or Japanese glyphs, so pictures in those languages show missing
-  glyphs there; real windows use DirectWrite's system fallback on Windows
-  and the system's fonts through fontconfig on Linux (a CJK font must be
-  installed).
-- Accessibility, partly (see section 4): no screen reader has been run
-  against the app; the tree has been read only through the off-screen
-  tool and tests, and has not been compared with production's live
-  accessibility tree (only with production's source). On macOS the
-  pop-up menu windows hold their rows while the keyboard stays in the main
-  window, so the highlighted row is not read as focused there (it is with
-  `PICTO_GPUI_MENU=window` and on Windows and Linux); while a menu's
-  search field has the keyboard, the highlighted row is not read as
-  focused either. Text the app draws as plain text (a tile's badges, a
-  table's cells, most of the viewer's document text, the Subscriptions
-  screen's tables) is not in the tree unless the container was made text;
-  a dialog's body text is, its other plain text is not. Settings' row
-  labels are text beside their controls rather than their names. A radio
-  group's arrows do not move the choice (as for the keyboard). The import
-  task bar is a live region too; whether any platform announces a change
-  there, or a notification, has not been heard.
-- Installing an update: no real installer has been started and no real
-  feed read; the install was run only with a stand-in installer from
-  loopback fixtures, in debug builds, on Windows and Linux in CI. No
-  packaged copy of this app exists, so the packaged rule (a release build
-  outside `target/`, an AppImage on Linux) has not run as such. Production,
-  packaged on Linux but not run from an AppImage (an extracted one), stays
-  at "Checking…"; here that case is "unavailable". The installer the feed
-  names is the Electron app's until this app publishes its own.
-- Cloud sync has never run against a real Google Drive or Dropbox desktop
-  app or account, nor been used in a real window: only off-screen against a
-  plain folder (macOS locally, Linux and Windows in CI). The provider
-  detection of installed apps (`~/Library/CloudStorage`, Dropbox's
-  `info.json`, Windows drive letters) is the core's and was not run by any
-  check. The row dot has no hover tooltip (production's `title`); its name
-  is read by assistive technology.
-- Site logins, partly. The sign-in window has run on all three systems,
-  only against the app's own local login (`PICTO_GPUI_LOGIN_CHECK`): on
-  macOS locally (WKWebView), on Linux in CI (WebKitGTK in a GTK window on
-  Xvfb's X11, no window manager; Wayland not run) and on Windows in CI
-  (WebView2 Runtime 156 on the runner); see the Per platform table. No real
-  service has been signed in to on any of them (no check contacts a real
-  site), and no login other than Danbooru's cookie rule has run in a web
-  view (the others are tested against recorded pages). The window has not
-  been used by a person off macOS (typing, IME, the system's copy and paste
-  in a page's field). FANBOX's login keeps only the web view's User-Agent
-  as its headers (production keeps the headers Chromium sent to FANBOX's
-  API, `sec-ch-ua` among them, which WebKit does not send). The services'
-  icons have been fetched only from loopback fixtures, never from a real
-  site. The OnlyFans browser login has never run (it starts a browser of
-  the user's, which would reach the network; the local seam refuses it).
-  A password field (the manual session's Cookie and X-BC) does not switch
-  the system's input method off or turn on macOS's secure keyboard entry
-  as a system password field does; what an input method composes is drawn
-  as bullets. Logins last only as long as the app (see "The keychain" in
-  section 4), and the dialog says so ("Login saved for this session; it is
-  not kept after the app quits." where production says the system
-  credential store). Accounts' buttons are the shared action button at
-  production's 30px with 13px sides; its Log In and Remove keep that
-  button's medium weight and 1px dark ring, which production's dialog
-  buttons do not have. (Production derives no Retry now or Review source
-  action for a problem, so neither button shows in either app.)
-- Search by Image, partly: no real engine has been searched (their pages
-  change; the scripts are production's as of this writing), and a click on
-  an engine's row has been seen reaching the search only off-screen, where
-  the web view cannot be made; the search itself has run in the system's
-  web view only from `PICTO_GPUI_NET_CHECK`. The file goes in through the
-  page's own `DataTransfer` and file field events rather than production's
-  DevTools `DOM.setFileInputFiles`.
-- Opening another library from the file manager or a second launch
-  (production's `switchLibrary` from `drainAssociatedFiles`): refused with
-  a notification, on purpose (rule 4 above).
-- On macOS, a pack opened with the app while no instance runs: the system
-  launches the bundle without a copy, which the app refuses.
-- Document viewers: PDF text selection, text selection on text and book
-  pages, WOFF2 fonts, RTF character formatting,
-  Markdown images and raw HTML (shown as text)†, an EPUB chapter's own
-  stylesheet†.
-- Detail windows: per-image zoom memory, "Loading..." placeholder†, a menu on
-  a collection's members, and keeping the toolbar shown while the window is
-  dragged.
-- Reduced motion: the system setting is not read.
-- File choosers take every file type (GPUI's prompt has no type filter).
-
-### Decided by the owner, and what follows from each
-
-- Real libraries are to be opened, created and switched as production does
-  (Library Manager): built under the rules of "Opening a library you keep"
-  (section 2); a debug build stays copy-only without
-  `--allow-real-libraries`.
-- Site logins use a web view inside the app, as production's do: built
-  (section 4, "Site logins"; the gaps are under Missing features).
-- The two changes to the core made for this app stay: "Add
-  open_library_reporting, which hands over the library before recovery
-  runs" (the app depends on it) and "Make the open's media recovery pass
-  list thumbnails once instead of looking for each".
-- Auto Tag from a menu or its shortcut over the grid opens its review
-  centred over a dimmed window with the dialogs' close button in place of
-  its pin and sidebar buttons (the sidebar always shown), as Add Tags and Add to Folder open their dialogs there; the inspector's Auto Tag button still docks it beside the
-  inspector at the button, and the viewer's menu beside the inspector as it
-  docks its pickers. (Production docks it beside the inspector from every
-  menu.) Its footer names what the models it ran ran on, each once, where
-  production names the first loaded session's.
-- A menu's glass lets more through than the other floating surfaces'
-  (78% of the background colour over the blur, 76% in the light themes,
-  against `--glass-bg`'s 92% and 90%, which production's menus also take
-  and which reads as nearly opaque).
-- A window in full screen draws no rim, and looping indicators (the
-  Subscriptions row's dot, a running badge, an indeterminate progress bar)
-  are drawn thirty times a second rather than at the display's rate.
-- A release build keeps the AI models where production keeps them, so both
-  apps share them; a debug build keeps them beside the copy (or, for a
-  library the user keeps, in this app's own folder).
-- The context menu's look in its pop-up window (shadow, outline, blur) is
-  accepted as it is.
-- File › New Folder starts a rename here (production's only creates the
-  folder), and the sidebar's row keyboard stays.
-- The Word and PowerPoint viewers are dropped. A `.doc`, `.docx`, `.ppt` or
-  `.pptx` file is a file with no viewer, as any other: the viewer shows
-  production's unsupported view (the document shell with "Preview is not
-  available for …" and no page), and its tile shows the picture the core
-  takes from the file when it holds one, else the torn page. Production
-  views and draws them with its document viewers.
-
-### Waiting on the owner
-
-- Before a library the user keeps is first opened with this app: whether
-  Picto (the Electron app) adopts the core's `.picto-library.lock` (its
-  own commit, "core/src/state.rs: hold an exclusive lock…"); until it
-  does, only the process probe keeps the two apart, and it cannot see a
-  Picto started from an unusual name.
-- Site logins: whether this app should ever write the system keychain
-  (shared with the user's Picto, under the service's name alone, whatever
-  the library) or keep its process-local store, as now, also when it opens
-  a library the user keeps.
-- Network features: AI model download; this app's own update feed and
-  packages, without which Restart and Install installs production Picto.
-- Cloud: whether a disposable copy should be allowed to connect to a cloud
-  folder at all. It may now, under a cloud identity of its own, and is
-  disconnected again at its next launch.
-
-### Kept different on purpose
-
-- A switch closes detail, Settings and log windows; production leaves them
-  open, where their commands would reach the library opened next.
-- New Library makes a library only in a new folder (production opens an
-  existing one of the same name), and Open of a `.library` folder without
-  a database is refused (production creates a library there). A `.library`
-  the system hands over is refused, as before (production switches to it).
-- The list of libraries, the last library and the consents live in this
-  app's `state.json`, not production's `config.json`. Cover › Choose… in
-  the Library Manager opens the cover dialog in the main window.
-- An incompatible or older library is refused; production migrates an
-  older one on open.
-
-- The interface zoom reaches every window at once: the main window, detail
-  windows, Settings and the pop-up menus. Production zooms the main window
-  and takes the kept zoom into a detail window only when it opens (its
-  bundle loads `zoomController.ts`); its Settings window is never zoomed.
-  The keys work in the main window only, as there. Settings' Zoom Level is
-  the library's `zoomFactor`, saved and not applied, as in production.
-
-- PDF, DjVu and comic pages scroll as one continuous column, because the
-  owner asked; production shows one page at a time. In a collection the
-  pages run inline at the member's width.
-- Organize › Tags opens the Tags screen; production's row does nothing.
-- On "Find Items with This Media" the inspector shows the destination's
-  covers, item count and size; production shows its empty, unavailable
-  layout there.
-- Copy in the application menu, outside a text field, copies the selection's
-  files as ⌘C does; production's row, chosen with the pointer, copies nothing.
-- Failures production leaves silent are reported: a failed Copy, Regenerate
-  Thumbnail or Set as Thumbnail, and every export's result and first skipped
-  file.
-- Set as Library Cover writes `.picto-library-cover.*` beside the copy's
-  database, not production's global configuration.
-- Keyboard moves, Home, End and the page keys go across the whole
-  destination; production's stop at the ends of the loaded window.
-- On macOS, Close Window hides the main window and the Dock icon brings it
-  back with its state; production makes a fresh one. Off macOS, closing the
-  main window quits, and detail and Settings windows go with it; production
-  can leave them open on their own.
-
-### Production bugs not copied
-
-- Production translates its shortcut registry and Settings' sections once,
-  when a window loads (`t()` in module-level tables), so a language chosen
-  later shows the shortcuts' labels in the old one until a restart; here
-  they follow at once. Where production calls `t()` on a key in one place
-  and forgets it in another for the same text (the new-folder tooltip, the
-  filter chips' labels and units, the Resolution editor's rows, the smart
-  folder dialog's create title), this app translates both.
-
-- Production's window-wide shortcut handler swallows Tab on every control
-  that is not a text field (toggling both panels, behind a dialog too), sends
-  Enter, Space and the arrows to the grid or viewer behind a dialog, and
-  traps no focus in dialogs. Here Tab cycles inside a dialog, popover or
-  Settings and keys act on the focused control; outside them Tab still
-  toggles the panels.
-- Production's folder drag ghost is drawn 48 px below the pointer; here it
-  sits on the pointer as `Sidebar.tsx` intends.
-- In a folder showing its subfolders' items production shows a reorder
-  marker and then fails; here there is no marker.
-- With one subfolder tile selected the inspector shows that folder;
-  production keeps the parent's scope (or shows no covers or size).
-- A folder's or smart folder's inspector shows Export here. Production's
-  inspector offers it too (`exportScope` in `Inspector.tsx`), but the
-  sidebar nodes it reads carry no `folder_id` or `smart_folder_id`
-  (`sidebarController.ts`), so it never shows, and Auto tags always reads
-  No there.
-- A cover saved as a rendered crop shows here; production's media protocol
-  falls back to the download glyph for it.
-- One dropped path that is not a directory is never sent to the folder
-  import dialog; production sends any one path without a media extension
-  there (a single Flash, EPUB or audio file), where it cannot be imported.
-
-### Known differences not yet fixed
-
-Text and keyboard
-- A line starting with right-to-left text is laid out right to left with no
-  selection drawn†; no spell-check underline; Home and End in the
-  inspector's fields move the caret where production's only scroll†.
-- A radio group is one tab stop but its arrows do not move the choice; a
-  select has no typeahead.
-- `+` also answers to Shift+= (GPUI matches the typed character)†; Space
-  pages the grid at once rather than smoothly†.
-- A review key held down is told from its repeats by its release or the
-  next key (GPUI hands an action no repeat flag)†.
-
-Navigation and results
-- A detail window on one item whose details cannot be read keeps the
-  thumbnail and never opens the file; production opens the file by its hash
-  without reading details.
-- Settings reads the library's statistics once when it opens (the cloud
-  state follows the core's events); the keyboard preset, audio visualization and shortcut edits apply
-  only on Save, without production's live preview†; an undo that reverts a
-  settings write does not reload the model†.
-
-Drawing (GPUI cannot scale or rotate an element's contents, and has no
-radial gradients, masks or blend modes)
-- Where production scales a panel (menus, dialogs, tooltips, the library
-  popover, the task dialog, the volume display), only the surface, border and
-  shadow scale; the contents stay at full size.
-- Radial gradients drawn as linear (folder card, subfolder tile cover, audio
-  tile) and the audio tile's `brightness(1.5)` not applied†; the turned stack
-  card in the inspector is a bitmap made off the drawing thread and lies
-  straight until it is ready.
-- Rounded corners do not clip a zoomed image (Quick Look, Duplicates); the
-  difference picture is computed from decoded images, at most 4,096 px on its
-  longest side.
-- A fading rail or dialog still takes the pointer (production sets
-  `pointer-events: none`)†.
-- The glyph grid's hovered glyph is not enlarged.
-
-Smaller differences by area†
-- Inspector: a selection's covers follow the order items were chosen in, not
-  the query order, for shift ranges.
-- AI tagger review: the confidence cutoff filters the list while the slider
-  is dragged (production applies it on release); the side arrows step
-  through the items while the filter field is empty (production's
-  `view.prevImage`/`nextImage` scope does not act while the field has the
-  keyboard, which it has from the moment the panel opens, so there they
-  work only after a row or button took the keyboard, and `A`/`D` too); the
-  items' details are read one window at a time rather than the next window
-  prefetched during the run; the model progress fill does not slide.
-- Pickers and dialogs: with several items selected a picker starts from the
-  tags or folders they share; the dialogs' fold chevron turns at once and row
-  highlights do not fade; a folder with its own glyph shows the plain folder.
-- Sidebar: the activity button's tooltip opens below it, not to its right;
-  section headers are not in the keyboard order; the smart-folder notes field
-  does not scroll past three lines; its file types are the six built-in
-  choices; the icon picker shows the sidebar's filled glyphs.
-- Filter bar: the colour editor's hue strip is six bands, its square is not
-  clipped round, and the hex field neither capitalises nor stops at seven
-  characters; menus that hold editors stay inside the window.
-- Library popover: only its surface scales in; a library's folder has no
-  hover title; a cover changed elsewhere shows the old one until restart; a
-  library with an icon and no cover shows the books glyph.
-- Duplicates: the progress bar over a shown pair is a 2 px row above the
-  cards; the Smart merge ring follows the pointer, not keyboard focus; no
-  per-card "Loading metadata…".
-- Quick Look: its counter follows the selection at once; stepping scrolls the
-  grid only enough to show the item; closing does not scroll back.
-- Detail window: the pinned button rests at full strength (production 94%);
-  its size uses the primary display's work area, as production's does.
-- Subscriptions: the cover's crop is drawn from the thumbnail; truncated
-  cells have no title tooltip; the History tab does not fall back to "N
-  invalid metadata".
-- Imports: the task dialog does not grow in from 96% and its focus rings are
-  not drawn.
-- Media player: the rate menu is production's own small list, not the shared
-  menu; the visualizer's reflection and glow are approximations; an APNG
-  plays as a still image; Flash's stage is 960×720 rather than fitted to the
-  movie, and the media keys do not reach Flash.
-- Document thumbnails: drawn with cosmic-text rather than the system's text,
-  so on macOS the system font's optical sizes are approximated by spacing;
-  they follow this app's viewer where it differs from production's (RTF
-  character formatting, a code block's tint, a table's header, a nested
-  list's marker); a text page taller than the window is drawn from its top,
-  where production's capture starts wherever its viewer had scrolled and
-  takes the page buttons in.
-- Font viewer: the sample is edited block by block (its heading, paragraph
-  and alphabet each a field), not as one region as production's
-  `contentEditable` article; a waterfall line wider than the page is cut
-  off rather than scrolled sideways.
-- Documents: a page larger than the view starts at its top-left; only the
-  vertical scrollbar is drawn; text files over 4 MB show their first 4 MB and
-  say so; a PDF page is drawn at most 8,192 px on its longest side;
-  encrypted PDFs show a message; Quick Look scrolls a document's pages with
-  the pointer only.
-- Log window: its lines cannot be selected with the pointer (Copy copies
-  them); the `main` source holds only panics of earlier sessions, since this
-  app's own messages go to standard error, not to the log; a command's time
-  is its whole round trip, without production's native and delivery split.
-- Settings: a stored vibrancy, Liquid Glass, Mica or Acrylic theme shows as
-  Dark; a shortcut field cannot capture keys the app binds itself (⌘Q, ⌘,);
-  "Pixelated" scaling does not apply to a collection's members or the
-  navigator, as in production.
+| Area | Established by |
+| --- | --- |
+| Shell: titlebar, rails, themes, Back and Forward | pictures; values |
+| Sidebar: rows, folders and smart folders, drag reorder and nesting, every menu row, smart-folder editor | pictures; values |
+| Grid: three layouts, windowed results, selection, keyboard, hover preview, subfolder tiles, drag out, drop import | pictures; values |
+| Filter bar and view menu | pictures; read |
+| Inspector: destination, one item, several items, pickers and dialogs | pictures |
+| Item menus and application menu | pictures; values (production's menu cases); off-screen in CI |
+| Viewer: media view, Quick Look, detail windows, Inbox review, collections | pictures; values |
+| Documents and document thumbnails | tests (format matrix); pictures |
+| Video and audio; Flash | pictures; seen playing on macOS; GPU tests |
+| Tags, Subscriptions, Duplicates screens | pictures; commands with `PICTO_GPUI_HOLD_RUNS` |
+| Imports and exports | pictures; read |
+| Settings, keyboard, text fields | pictures; values; tests |
+| Interface zoom | tests; pictures off-screen on all three systems; a real window on macOS |
+| AI tagger | pictures; tests; a real run on macOS with downloads held |
+| Log window | pictures; tests; off-screen |
+| Site logins | tests; `PICTO_GPUI_LOGIN_CHECK` on macOS and in CI |
+| Software updates | `PICTO_GPUI_NET_CHECK` on macOS and in CI |
+| Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views |
+| Accessibility | tests; off-screen tree dumps |
+| Libraries | tests (each rule); off-screen with generated libraries |
+| Cloud | off-screen against a stand-in folder on macOS and in CI |
+| Languages | tests; pictures in German and Japanese |
 
 ### Per platform
 
 | | Windows | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- |
-| Backdrop blur | none (the DirectX renderer ignores it); a more opaque glass instead | yes (wgpu) | yes (wgpu) |
-| Context menus | in the window | in the window (an X11 pop-up takes no keyboard) | in the window (GPUI cannot place a pop-up there) |
+| Backdrop blur | none (DirectX); a more opaque glass | yes | yes |
+| Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
-| Window buttons and drag | the app's buttons as system caption areas; the titlebar is the system's caption | the app's buttons, client-side resize edges | same as X11 |
 | Inbox badge | none (as production) | Unity launcher D-Bus signal | same |
-| System notification | toast through GPUI under the app's identity | freedesktop notification | same |
-| Copy files | `CF_HDROP` | `text/uri-list` through `xclip`, which must be installed | through `wl-copy`, which must be installed |
-| Open With Other | the system's chooser (`rundll32 shell32.dll,OpenAs_RunDLL`) | none (as production) | none |
-| Drag items out of the window | OLE drag of a `CF_HDROP` data object (`DoDragDrop` run from a task after the event that started it); never run | XDND source (versions 3 to 5, `text/uri-list`, proxies followed; Escape does not cancel it); never run | GPUI's native drag |
-| Drops from a browser (in-memory image, addresses, HTML) | `PNG`, `CF_DIBV5` or `CF_DIB`; `UniformResourceLocatorW`, `HTML Format`, `CF_UNICODETEXT` | XDND: the first `image/*` offered, `text/uri-list`, `text/html` and text, read from `XdndSelection` on the drop | the same types from the data offer, read when the drag enters |
-| Files a drag promises (macOS: `NSFilePromiseReceiver`) | virtual files (`FileGroupDescriptorW`/`FileContents`, global memory or stream), written on the drop; checked in CI on a data object of the test's own | XDS (`XdndDirectSave0`), asked on a thread after the drop; checked in CI on Xvfb against a source of the test's own | none (no such protocol) |
-| Single instance per copy | named pipe; the instance may take the foreground (`AllowSetForegroundWindow`) | Unix socket in `$XDG_RUNTIME_DIR` (else the temporary folder) | same as X11 |
-| Packs opened from the file manager | command-line arguments | command-line arguments | same as X11 |
+| System notification | toast | freedesktop | same |
+| Copy files | `CF_HDROP` | `text/uri-list` via `xclip` | via `wl-copy` |
+| Open With Other | the system's chooser | none (as production) | none |
+| Drag items out | OLE `CF_HDROP`; never run | XDND `text/uri-list`; never run | GPUI's native drag |
+| Promised files | virtual files; checked in CI on test data | XDS; checked in CI on Xvfb | none |
+| Single instance | named pipe | Unix socket | same |
+| Detail window always on top | yes | no (pin hidden) | no |
 | Detail window aspect lock | not built | not built | not built |
-| Detail window always on top | yes | no; the pin is hidden | no; the pin is hidden |
-| UI font | the system's (production bundles Geist) | the system's | the system's |
-| Video | bundled `ffmpeg`, frames uploaded per frame | same | same |
-| Site sign-in window | WebView2 in a GPUI window; needs the WebView2 Runtime. Run in CI against the local login (a failed load, reported as WebView2's status, e.g. `HTTP_INVALID_SERVER_RESPONSE`; Cancel; the window closed with `WM_CLOSE`; a saved login), with a GPUI task ready throughout while the web view starts; not used by a person | WebKitGTK in a GTK window of its own (GTK 3, WebKitGTK 4.1). Run in CI on Xvfb against the local login (the same four, the failure in WebKitGTK's words, e.g. "Connection terminated unexpectedly"; the window closed through `delete-event`); not used by a person | same, over GTK's own Wayland connection; never run |
+| Video | `ffmpeg` binary | same | same |
+| Sign-in window | WebView2; CI check only | WebKitGTK; CI check on Xvfb | never run |
 
-On every platform the Ruffle frame path reads back from the GPU and uploads
-again, and only AVFoundation video is drawn without a copy.
+### Deliberate differences
 
-## Attribution
+- A switch closes detail, Settings and log windows; an older or incompatible
+  library is refused, never migrated; New Library only makes a new folder;
+  a `.library` the system hands over is refused; libraries, consents and
+  the last library live in this app's `state.json`.
+- Logins last only as long as the app (process-local store); a disposable
+  copy may connect to a cloud folder under its own identity and is
+  disconnected at its next launch.
+- Commands the application menu and the keys share follow the menu's rule:
+  Restore and its key work wherever the selection is in the Trash, Accept
+  and Reject wherever it is in the Inbox (production's keys look at the
+  destination only).
+- File › New Folder starts a rename; Organize › Tags opens the Tags screen;
+  Copy in the application menu copies the selection's files.
+- Auto Tag from a menu or its key opens centred over the window (the
+  inspector's button still docks it).
+- PDF, DjVu and comic pages scroll as one continuous column.
+- The interface zoom reaches every window at once.
+- A menu's glass lets more through than other floating surfaces; a window in
+  full screen draws no rim; looping indicators draw at 30 frames a second.
+- Word and PowerPoint files have no viewer.
+- Keyboard moves, Home, End and the page keys go across the whole
+  destination.
+- On macOS Close Window hides the main window; elsewhere closing it quits.
+- Failures production leaves silent are reported (Copy, Regenerate
+  Thumbnail, Set as Thumbnail, exports).
+- Production bugs not copied: live translation of shortcut labels, Tab
+  trapped in dialogs, the folder drag ghost on the pointer, no reorder
+  marker where reordering cannot work, Export on a folder's inspector, a
+  rendered cover crop shown.
+- Files promised by a drag are imported on macOS (production imports none).
+
+### Open
+
+Not done:
+
+- Opening another library from the file manager or a second launch is
+  refused (rule 4); on macOS a pack opened while no instance runs is
+  refused.
+- Document viewers: PDF and page text selection, WOFF2 fonts, RTF character
+  formatting, Markdown images and raw HTML, an EPUB chapter's stylesheet.
+- Detail windows: per-image zoom memory, a loading placeholder, a menu on a
+  collection's members, an item whose details cannot be read never opens
+  its file, the aspect lock off macOS.
+- File choosers take every file type (GPUI's prompt has no filter).
+- Reduced motion is not read; right-to-left text and spell-check are not
+  supported; a radio group's arrows and a select's typeahead do not work.
+- GPUI cannot scale an element's contents, clip a zoomed image to rounded
+  corners, or draw radial gradients, masks or blend modes; where production
+  does, the drawing differs.
+- The DirectX renderer draws no blur.
+- Detail window always-on-top on Linux.
+- Logins: FANBOX keeps only the User-Agent as its headers; password fields
+  do not turn on secure keyboard entry; the OnlyFans browser login has never
+  run.
+
+Not verified:
+
+- Anything on a Windows or Linux screen: window frames, dragging, resize
+  edges, the clipboard, notifications, the badge, keyboard input, video and
+  sound, drag out, drops from a browser.
+- A library the user keeps opened, consented to or switched in a real
+  window.
+- Cloud sync against a real provider or account; network work (a real
+  subscription run, gallery or model download, update install, sign-in to a
+  real service, engine search).
+- A screen reader on any platform.
+- Promised files from Photos, Mail or a browser; files arriving through
+  `application:openURLs:`; restoring a maximised window or on a second
+  display.
+- Pop-up menus' blur and pop-in scale on macOS, and the input method's
+  candidate window in them.
+- Performance: no frame-time or decode-latency benchmark has been completed.
+
+### Waiting on the owner
+
+- Whether Picto adopts the core's `.picto-library.lock`; until it does only
+  the process probe keeps the two apps apart.
+- Whether this app should ever write the system keychain, or keep its
+  process-local logins also for libraries the user keeps.
+- AI model download, and this app's own update feed and packages (the feed
+  now names production Picto's installer).
+- Whether a disposable copy may connect to a cloud folder at all.
+
+## 8. Attribution
 
 `src/ui/text_input/` adapts GPUI 0.2.2's official `examples/input.rs`,
 Apache-2.0; see `LICENSE-gpui`. The vendored GPUI crates are Apache-2.0; see
@@ -1890,5 +747,4 @@ under their licences (`assets/LICENSE-Roboto.txt`,
 `assets/LICENSE-FiraMono.txt`). `assets/fixtures/interactive.swf` comes from
 Ruffle's `tests/tests/swfs/avm1/button_goto/test.swf` at the Ruffle revision
 pinned in `Cargo.toml`; see `assets/LICENSE-Ruffle.md`. The files in
-`assets/fixtures/documents/` were made for this project (drawn pages, encoded
-with zip, djvu-rs and zune-jpegxl, a hand-written PDF and text).
+`assets/fixtures/documents/` were made for this project.

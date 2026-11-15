@@ -8,6 +8,7 @@ use crate::theme;
 use gpui::*;
 use picto_library::RootId;
 use picto_library::query::ItemScope;
+use picto_library::selection::SelectionTarget;
 use std::path::PathBuf;
 
 /// A press on a tile becomes a drag once the pointer has moved this far.
@@ -51,7 +52,13 @@ pub fn pin_covers(thumbnails: &Entity<Thumbnails>, covers: &[Cover], cx: &mut Ap
 /// The items being dragged.
 #[derive(Clone)]
 pub struct ItemDrag {
+    /// The items dragged by id, in grid order (of a query-wide selection,
+    /// the loaded ones), which a reorder moves.
     pub roots: Vec<RootId>,
+    /// What a drop addresses: the grid's selection, loaded or not, or the
+    /// one tile dragged; and how many items that is.
+    pub target: SelectionTarget,
+    pub count: u64,
     /// The scope they were dragged from: a drop into a folder from the Inbox
     /// or the Trash also makes them active.
     pub source: ItemScope,
@@ -152,7 +159,7 @@ pub fn ghost(drag: &ItemDrag, thumbnails: &Entity<Thumbnails>, cx: &App) -> impl
                 ),
         );
     }
-    let count = drag.roots.len();
+    let count = drag.count;
     if count > 1 {
         frame = frame.child(
             div()
@@ -381,17 +388,33 @@ impl super::GridView {
             let theme = theme::theme(cx);
             // The selection, loaded or not, when the tile is in it; the
             // ghost shows the loaded ones.
-            let (roots, chosen) = if session.is_selected(ordinal) {
-                (session.selected_ids(), session.selected_loaded())
-            } else {
-                let item = session.item_at(ordinal);
-                (
-                    item.iter().map(|item| item.root_id).collect(),
-                    item.into_iter().collect(),
-                )
+            let selection = session
+                .selection_target()
+                .filter(|_| session.is_selected(ordinal));
+            let (roots, chosen, target, count) = match selection {
+                Some(target) => {
+                    let chosen = session.selected_loaded();
+                    (
+                        session.selected_ids(),
+                        chosen,
+                        target,
+                        session.selection_count(),
+                    )
+                }
+                None => {
+                    let item = session.item_at(ordinal);
+                    let roots: Vec<RootId> = item.iter().map(|item| item.root_id).collect();
+                    let count = roots.len() as u64;
+                    let target = SelectionTarget::Explicit {
+                        root_ids: roots.clone(),
+                    };
+                    (roots, item.into_iter().collect(), target, count)
+                }
             };
             drag::ItemDrag {
                 roots,
+                target,
+                count,
                 source: session
                     .nav
                     .get(session.displayed)
@@ -412,7 +435,7 @@ impl super::GridView {
                 position,
             }
         };
-        if items.roots.is_empty() {
+        if items.count == 0 {
             self.press = None;
             return;
         }
@@ -548,41 +571,39 @@ impl super::GridView {
         }
         let reselect = items.roots.clone();
         let source = items.source.clone();
-        let answer = self.session.update(cx, |session, _| {
-            session.dispatch(
-                "folders.items.reorder",
-                serde_json::json!({ "folder_id": folder.0, "root_ids": order }),
-            )
-        });
-        let session = self.session.clone();
-        cx.spawn(async move |_, cx| {
-            match answer.await {
-                Ok(Ok(_)) => {
-                    let _ = session.update(cx, |session, cx| {
-                        // The folder is shown in its new order only while it
-                        // is still the destination: the view preferences
-                        // written are the destination's.
-                        if !shows(session.nav.get(session.scope), &source) {
-                            return;
-                        }
-                        session.reselect = Some(reselect);
-                        session.update_view(
-                            serde_json::json!({
-                                "sort_field": "folder_order",
-                                "sort_order": "ascending",
-                                "show_subfolders": false,
-                            }),
-                            true,
-                            cx,
-                        )
-                    });
+        let order = order.into_iter().map(RootId).collect::<Vec<_>>();
+        // A failed drop goes to the console, as production leaves it. The
+        // folder is read again in its new order below.
+        crate::session::edit_then(
+            &self.session,
+            crate::session::Report::default(),
+            crate::session::Reread::NOTHING,
+            move |library| library.reorder_folder_items(folder, &order),
+            cx,
+            move |this, reordered, cx| {
+                if reordered.is_err() {
+                    return;
                 }
-                // Production leaves a failed drop to the console.
-                Ok(Err(error)) => eprintln!("picto: [drag] drop failed: {error}"),
-                Err(_) => {}
-            }
-        })
-        .detach();
+                this.session.update(cx, |session, cx| {
+                    // The folder is shown in its new order only while it is
+                    // still the destination: the view preferences written
+                    // are the destination's.
+                    if !shows(session.nav.get(session.scope), &source) {
+                        return;
+                    }
+                    session.reselect = Some(reselect);
+                    session.update_view(
+                        serde_json::json!({
+                            "sort_field": "folder_order",
+                            "sort_order": "ascending",
+                            "show_subfolders": false,
+                        }),
+                        true,
+                        cx,
+                    )
+                });
+            },
+        );
     }
 
     /// The reorder marker beside the target tile, placed in the whole

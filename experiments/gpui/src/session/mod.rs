@@ -8,7 +8,7 @@ mod results;
 mod selection;
 pub mod settle;
 
-pub use edits::{Report, Reread, edit_then, edit_then_in};
+pub use edits::{Report, Reread, edit_then, edit_then_in, read_then, read_then_in};
 
 use crate::application::{Application, Event};
 use crate::backend::{self, Arrived, Navigation, Reply, Request};
@@ -321,7 +321,7 @@ pub struct Session {
     pub tile: f32,
     /// The selected items, by id, or query-wide: everything, or spans of
     /// the order. Edits address query-wide selections through the query
-    /// (`target_for`), as production's do.
+    /// (`selection_target`), as production's do.
     pub selection: Selection,
     /// The subfolder tiles selected in the grid (`folderNodeIds`), by node
     /// id (`folder:5`). Selecting items clears them, and the other way round.
@@ -726,8 +726,8 @@ impl Session {
     }
 
     /// The selected items by id, in the grid's order: every item chosen one
-    /// by one, loaded or not; of a query-wide selection, the ones loaded
-    /// (an edit of them addresses the whole selection, see `target_for`).
+    /// by one, loaded or not; of a query-wide selection, the ones loaded.
+    /// An edit of the selection addresses [`Session::selection_target`].
     pub fn selected_ids(&self) -> Vec<RootId> {
         if self.selection.query_wide() {
             self.selected_loaded()
@@ -789,6 +789,37 @@ impl Session {
         args: serde_json::Value,
     ) -> futures::channel::oneshot::Receiver<Result<serde_json::Value, String>> {
         self.application.dispatch(command, args)
+    }
+
+    /// `media.resolve_target_paths`: the content hash and path of every
+    /// file `target` holds, collection members included, in its order,
+    /// resolved by the library in one request however large the selection.
+    pub fn resolve_files(
+        &self,
+        target: &picto_library::selection::SelectionTarget,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, std::path::PathBuf)>, String>> + use<>
+    {
+        let answer = serde_json::to_value(target)
+            .map_err(|error| error.to_string())
+            .map(|target| {
+                self.call(
+                    "media.resolve_target_paths",
+                    serde_json::json!({ "target": target }),
+                )
+            });
+        async move {
+            let found = answer?.await?;
+            Ok(found
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| {
+                    let hash = file.get("file_hash")?.as_str()?.to_owned();
+                    let path = file.get("path")?.as_str()?;
+                    Some((hash, std::path::PathBuf::from(path)))
+                })
+                .collect())
+        }
     }
 
     /// [`Session::dispatch`]'s answer, as a future of its own.

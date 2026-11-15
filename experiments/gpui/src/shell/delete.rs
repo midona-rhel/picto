@@ -3,7 +3,7 @@
 use super::item_menu::{Run, Target};
 use crate::i18n::format::grouped;
 use crate::i18n::t;
-use crate::session::{Report, Reread, edit_then_in};
+use crate::session::{Report, Reread, edit_then_in, read_then_in};
 use crate::shell::Shell;
 use gpui::*;
 use picto_library::query::ItemScope;
@@ -69,14 +69,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.request_deletion(
-            target.selection(self.session.read(cx)),
-            reject,
-            false,
-            None,
-            window,
-            cx,
-        );
+        self.request_deletion(target.selection(), reject, false, None, window, cx);
     }
 
     /// `rejectTarget` when the setting deletes rejected items: deletes
@@ -116,10 +109,8 @@ impl Shell {
     ) {
         let undo_limit = crate::settings::current(cx).undo_delete_limit;
         let read = selection.clone();
-        edit_then_in(
+        read_then_in(
             &self.session,
-            Report::default(),
-            Reread::NOTHING,
             move |library| library.selection_summary(&read),
             window,
             cx,

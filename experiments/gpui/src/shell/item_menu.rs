@@ -45,11 +45,17 @@ pub(super) struct ItemMenus {
     applications: std::collections::HashMap<String, Vec<crate::desktop::Application>>,
 }
 
-/// The items a menu acts on.
+/// The items a menu acts on, decided when it opens.
 #[derive(Clone, Default)]
 pub(super) struct Target {
-    /// In the order the grid shows them.
+    /// In the order the grid shows them; of the grid's selection, the ones
+    /// loaded.
     items: Vec<RootSummary>,
+    /// The grid's selection, when the menu acts on it: what an edit
+    /// addresses, loaded or not, and how many items it holds. Otherwise
+    /// the menu acts on `items` alone (the viewer's item, a member's
+    /// collection, the preview's).
+    selection: Option<(SelectionTarget, u64)>,
     /// The one file the single-item rows act on: the cover of a grid tile,
     /// the member the viewer shows, or the preview's.
     file: Option<File>,
@@ -84,10 +90,29 @@ impl Target {
     fn ids(&self) -> Vec<RootId> {
         self.items.iter().map(|item| item.root_id).collect()
     }
-    /// What an edit of these items addresses: the destination's query when
-    /// they are the whole destination selected, else the items themselves.
-    pub(super) fn selection(&self, session: &crate::session::Session) -> SelectionTarget {
-        session.target_for(self.ids())
+    /// What an edit addresses: the grid's selection, which the library
+    /// resolves, or the items themselves.
+    pub(super) fn selection(&self) -> SelectionTarget {
+        match &self.selection {
+            Some((selection, _)) => selection.clone(),
+            None => SelectionTarget::Explicit {
+                root_ids: self.ids(),
+            },
+        }
+    }
+
+    /// How many items the menu acts on, loaded or not.
+    pub(super) fn count(&self) -> u64 {
+        match &self.selection {
+            Some((_, count)) => *count,
+            None => self.items.len() as u64,
+        }
+    }
+
+    /// Whether every item the menu acts on is loaded, so that what the grid
+    /// holds of them (names, kinds) is all of them.
+    fn loaded(&self) -> bool {
+        self.count() == self.items.len() as u64
     }
 }
 
@@ -121,13 +146,14 @@ pub(crate) fn media_link(hash: &str, mime: &str) -> String {
 impl Shell {
     // ── Opening ─────────────────────────────────────────────────
 
-    /// The grid's selection, in grid order, with the one item's cover file.
+    /// The grid's selection, loaded or not, with the one item's cover file.
     fn selection_target(&self, cx: &App) -> Option<Target> {
         let session = self.session.read(cx);
+        let selection = session.selection_target()?;
+        let count = session.selection_count();
         let items: Vec<RootSummary> = session.selected_loaded().into_iter().cloned().collect();
         let file = match items.as_slice() {
-            [] => return None,
-            [item] => Some(File {
+            [item] if count == 1 => Some(File {
                 root: item.root_id,
                 hash: item.content_hash.clone(),
                 mime: item.mime.clone(),
@@ -138,6 +164,7 @@ impl Shell {
         Some(Target {
             items,
             file,
+            selection: Some((selection, count)),
             folder: self.grid_scope(cx).folder(),
             ..Default::default()
         })
@@ -180,27 +207,30 @@ impl Shell {
         self.items.surface = None;
         let grid = self.grid_scope(cx);
         let folder = grid.folder();
-        let Some(Target { items, file, .. }) = self.selection_target(cx) else {
+        let Some(target) = self.selection_target(cx) else {
             return;
         };
-        let count = items.len();
+        // How many items are selected, loaded or not: one item's rows only
+        // for one, even when another selected item is out of the window.
+        let count = target.count() as usize;
+        let items = &target.items;
         let collections = items
             .iter()
             .filter(|item| item.kind == RootKind::Collection)
             .count();
-        let single = (count == 1).then(|| &items[0]);
-        let status = grid.tile_status(shared_lifecycle(&items));
+        let single = items.first().filter(|_| count == 1);
+        let status = grid.tile_status(shared_lifecycle(items));
         let media = single.is_some_and(|item| item.kind == RootKind::Media);
         let last_folder_name = self.last_folder_name(cx);
         let whole = self.session.read(cx).selects_whole();
         // `selectionLoaded`: the loaded items are the whole selection, so
         // they say how many collections it holds. Otherwise only the
         // library knows, and the menu asks it once open.
-        let loaded = !whole && self.session.read(cx).selection_count() as usize == count;
+        let loaded = !whole && target.loaded();
         let description = Description {
             surface: Surface::Grid,
             // With the whole destination selected, all of it.
-            selection_count: self.session.read(cx).selection_count() as usize,
+            selection_count: count,
             query_selection: whole,
             ai_tag_enabled: Some(count > 0),
             single: single.is_some(),
@@ -267,20 +297,15 @@ impl Shell {
         let pending = description.open_with == OpenWith::Pending;
         let hints = |id: &str| crate::keymap::hint(id, cx).map(String::from);
         let built = rows::tile_menu(&description, &hints);
-        let target = Target {
-            items,
-            file: file.clone(),
-            folder,
-            ..Default::default()
-        };
-        let ids = target.ids();
+        let file = target.file.clone();
+        let selection = target.selection();
         let menu = self.show_item_menu(built, target, true, position, window, cx);
         if pending && let Some(file) = file {
             self.look_up_applications(file, menu.downgrade(), cx);
         }
         if !loaded {
             let organize = count > 1 && collections == 0;
-            self.count_collections(ids, organize, menu.downgrade(), cx);
+            self.count_collections(selection, organize, menu.downgrade(), cx);
         }
     }
 
@@ -291,13 +316,12 @@ impl Shell {
     /// `organize`: the menu offers Group and no loaded item is a collection.
     fn count_collections(
         &mut self,
-        ids: Vec<RootId>,
+        selection: SelectionTarget,
         organize: bool,
         menu: WeakEntity<Menu>,
         cx: &mut Context<Self>,
     ) {
         let session = self.session.read(cx);
-        let selection = session.target_for(ids);
         let job = session.run(move |library| library.selection_collection_count(&selection));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(count)) = job.await else {
@@ -358,10 +382,8 @@ impl Shell {
     fn look_up_applications(&mut self, file: File, menu: WeakEntity<Menu>, cx: &mut Context<Self>) {
         let key = type_key(&file.mime);
         let File { root, hash, .. } = file;
-        crate::session::edit_then(
+        crate::session::read_then(
             &self.session,
-            crate::session::Report::default(),
-            crate::session::Reread::NOTHING,
             move |library| file_path(library, root, &hash),
             cx,
             move |_, path, cx| {

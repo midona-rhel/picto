@@ -178,71 +178,17 @@ fn status_name(status: COREWEBVIEW2_WEB_ERROR_STATUS) -> &'static str {
 /// as the system composed it.
 #[cfg(debug_assertions)]
 pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), String> {
-    use std::ffi::c_void;
-    #[repr(C)]
-    #[derive(Default)]
-    struct Rect {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
-    #[repr(C)]
-    #[derive(Default)]
-    struct BitmapInfo {
-        size: u32,
-        width: i32,
-        height: i32,
-        planes: u16,
-        bit_count: u16,
-        compression: u32,
-        size_image: u32,
-        x_pels_per_meter: i32,
-        y_pels_per_meter: i32,
-        clr_used: u32,
-        clr_important: u32,
-        colors: [u32; 1],
-    }
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetWindowRect(window: isize, rect: *mut Rect) -> i32;
-        fn GetDC(window: isize) -> isize;
-        fn ReleaseDC(window: isize, dc: isize) -> i32;
-    }
-    #[link(name = "gdi32")]
-    unsafe extern "system" {
-        fn CreateCompatibleDC(dc: isize) -> isize;
-        fn CreateCompatibleBitmap(dc: isize, width: i32, height: i32) -> isize;
-        fn SelectObject(dc: isize, object: isize) -> isize;
-        fn BitBlt(
-            to: isize,
-            x: i32,
-            y: i32,
-            width: i32,
-            height: i32,
-            from: isize,
-            from_x: i32,
-            from_y: i32,
-            operation: u32,
-        ) -> i32;
-        fn GetDIBits(
-            dc: isize,
-            bitmap: isize,
-            start: u32,
-            lines: u32,
-            bits: *mut c_void,
-            info: *mut BitmapInfo,
-            usage: u32,
-        ) -> i32;
-        fn DeleteObject(object: isize) -> i32;
-        fn DeleteDC(dc: isize) -> i32;
-    }
-    /// `SRCCOPY | CAPTUREBLT`.
-    const COPY: u32 = 0x00CC_0020 | 0x4000_0000;
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap,
+        CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC,
+        SRCCOPY, SelectObject,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
     let hwnd = crate::platform::windows::hwnd(window).ok_or("The sign-in window has no handle.")?;
-    let mut rect = Rect::default();
+    let mut rect = RECT::default();
     // SAFETY: `hwnd` is the live window; the rectangle is written in full.
-    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
         return Err("The sign-in window has no rectangle.".into());
     }
     let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
@@ -255,33 +201,46 @@ pub fn capture(window: &gpui::Window, path: &std::path::Path) -> Result<(), Stri
     // `height` top-down rows of `width` 32-bit pixels into `pixels`, which
     // holds exactly that.
     let copied = unsafe {
-        let screen = GetDC(0);
-        let memory = CreateCompatibleDC(screen);
+        let screen = GetDC(None);
+        let memory = CreateCompatibleDC(Some(screen));
         let bitmap = CreateCompatibleBitmap(screen, width, height);
-        let previous = SelectObject(memory, bitmap);
-        let blitted = BitBlt(memory, 0, 0, width, height, screen, rect.left, rect.top, COPY);
-        SelectObject(memory, previous);
-        let mut info = BitmapInfo {
-            size: (std::mem::size_of::<BitmapInfo>() - 4) as u32,
+        let previous = SelectObject(memory, bitmap.into());
+        let blitted = BitBlt(
+            memory,
+            0,
+            0,
             width,
-            height: -height,
-            planes: 1,
-            bit_count: 32,
-            ..BitmapInfo::default()
+            height,
+            Some(screen),
+            rect.left,
+            rect.top,
+            SRCCOPY | CAPTUREBLT,
+        );
+        SelectObject(memory, previous);
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                ..Default::default()
+            },
+            ..Default::default()
         };
         let lines = GetDIBits(
             memory,
             bitmap,
             0,
             height as u32,
-            pixels.as_mut_ptr().cast(),
+            Some(pixels.as_mut_ptr().cast()),
             &mut info,
-            0,
+            DIB_RGB_COLORS,
         );
-        DeleteObject(bitmap);
-        DeleteDC(memory);
-        ReleaseDC(0, screen);
-        blitted != 0 && lines == height
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteDC(memory);
+        ReleaseDC(None, screen);
+        blitted.is_ok() && lines == height
     };
     if !copied {
         return Err("The screen could not be read.".into());

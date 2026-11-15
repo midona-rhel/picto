@@ -18,7 +18,7 @@ use gpui::*;
 pub struct CloudPanel {
     restore_points: Vec<RestorePoint>,
     busy: bool,
-    asking: Option<(String, ui::modal::Presence)>,
+    asking: ui::modal::Host<String>,
 }
 
 /// `formatCloudDate`: a stored timestamp in the local time, as
@@ -109,10 +109,7 @@ impl SettingsWindow {
     /// replaced by the snapshot's (the current one kept as an emergency
     /// copy) and opened again, which closes this window too.
     fn restore(&mut self, snapshot: String, cx: &mut Context<Self>) {
-        if let Some((_, presence)) = &mut self.cloud_panel.asking {
-            presence.close();
-        }
-        self.cloud_panel.asking = None;
+        self.cloud_panel.asking.dismiss(cx);
         self.cloud_panel.busy = true;
         cx.notify();
         cx.defer(move |cx| {
@@ -124,17 +121,23 @@ impl SettingsWindow {
     }
 
     /// The question before a restore (`window.confirm`).
-    pub(in crate::settings) fn restore_question(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (snapshot, presence) = self.cloud_panel.asking.as_ref()?;
+    pub(in crate::settings) fn restore_question(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.cloud_panel.asking.layer(window, cx)?;
+        let (snapshot, presence, focus) = (
+            dialog.content.clone(),
+            dialog.presence,
+            dialog.focus.clone(),
+        );
+        let close = cx.listener(|this: &mut Self, _: &(), _, cx| {
+            this.cloud_panel.asking.dismiss(cx)
+        });
         let cancel = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.cloud_panel.asking = None;
-            cx.notify();
+            this.cloud_panel.asking.close(cx);
         });
-        let cancel_too = cx.listener(|this: &mut Self, _: &(), _, cx| {
-            this.cloud_panel.asking = None;
-            cx.notify();
-        });
-        let snapshot = snapshot.clone();
         let accept =
             cx.listener(move |this: &mut Self, _: &(), _, cx| this.restore(snapshot.clone(), cx));
         Some(
@@ -143,10 +146,11 @@ impl SettingsWindow {
                 t("Restore"),
                 t("Restore this recovery snapshot? Picto will preserve the current database as an emergency copy."),
                 t("Restore"),
-                *presence,
+                presence,
             )
-            .on_close(move |window, cx| cancel(&(), window, cx))
-            .on_cancel(move |window, cx| cancel_too(&(), window, cx))
+            .focus(&focus)
+            .on_close(move |window, cx| close(&(), window, cx))
+            .on_cancel(move |window, cx| cancel(&(), window, cx))
             .on_confirm(move |window, cx| accept(&(), window, cx))
             .into_any_element(),
         )
@@ -336,9 +340,11 @@ impl SettingsWindow {
                             .label(t("Restore"))
                             .disabled(busy || !point.verified)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.cloud_panel.asking =
-                                    Some((snapshot.clone(), ui::modal::Presence::new()));
-                                cx.notify();
+                                this.cloud_panel.asking.open(
+                                    snapshot.clone(),
+                                    ui::menu::Return::Opener,
+                                    cx,
+                                );
                             })),
                     ),
             ));

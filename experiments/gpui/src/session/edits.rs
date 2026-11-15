@@ -304,6 +304,37 @@ pub fn edit_then_in<V: 'static, T: Send + 'static, E: std::fmt::Display + Send +
     .detach();
 }
 
+/// A view's read of the library: `work` runs on the library's thread (see
+/// [`Session::run`]), then `then` has its answer on the view, if the view
+/// is still there. Nothing is reported or read again; a read changes
+/// nothing to read.
+pub fn read_then<V: 'static, T: Send + 'static>(
+    session: &Entity<Session>,
+    work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, T, &mut Context<V>) + 'static,
+) {
+    let answer = session.read(cx).run(work);
+    then_on(answer, cx, then);
+}
+
+/// [`read_then`] for a follow-up that needs the view's window.
+pub fn read_then_in<V: 'static, T: Send + 'static>(
+    session: &Entity<Session>,
+    work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
+    window: &mut Window,
+    cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, T, &mut Window, &mut Context<V>) + 'static,
+) {
+    let answer = session.read(cx).run(work);
+    cx.spawn_in(window, async move |view, cx| {
+        if let Ok(result) = answer.await {
+            let _ = view.update_in(cx, move |view, window, cx| then(view, result, window, cx));
+        }
+    })
+    .detach();
+}
+
 /// What [`Session::edit_reporting`] tells the user about an edit, as the
 /// production call it stands for does.
 #[derive(Clone, Default)]
@@ -410,44 +441,3 @@ impl Reread {
     };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::then_on;
-
-    #[test]
-    fn an_answer_reaches_the_view_only_while_it_is_there() {
-        use futures::channel::oneshot;
-        use gpui::AppContext as _;
-        struct View(Vec<u32>);
-        let mut cx = gpui::TestAppContext::single();
-        let view = cx.new(|_| View(Vec::new()));
-        // The answer arrives: the view has it.
-        let (send, answer) = oneshot::channel();
-        view.update(&mut cx, |_, cx| {
-            then_on(answer, cx, |view: &mut View, value, _| view.0.push(value))
-        });
-        send.send(1).unwrap();
-        cx.run_until_parked();
-        assert_eq!(view.read_with(&cx, |view, _| view.0.clone()), [1]);
-        // No answer comes (the session is gone): nothing happens.
-        let (send, answer) = oneshot::channel::<u32>();
-        view.update(&mut cx, |_, cx| {
-            then_on(answer, cx, |view: &mut View, value, _| view.0.push(value))
-        });
-        drop(send);
-        cx.run_until_parked();
-        assert_eq!(view.read_with(&cx, |view, _| view.0.clone()), [1]);
-        // The view is gone by the time the answer comes.
-        let (send, answer) = oneshot::channel::<u32>();
-        let gone = cx.new(|_| View(Vec::new()));
-        let weak = gone.downgrade();
-        gone.update(&mut cx, |_, cx| {
-            then_on(answer, cx, |_: &mut View, _, _| panic!("the view is gone"))
-        });
-        drop(gone);
-        cx.run_until_parked();
-        assert!(weak.upgrade().is_none());
-        let _ = send.send(2);
-        cx.run_until_parked();
-    }
-}

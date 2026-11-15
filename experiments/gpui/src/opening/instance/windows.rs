@@ -4,42 +4,23 @@
 //! that name made by another process makes the listener fail rather than
 //! be joined.
 use super::Request;
-use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::ffi::OsStrExt as _;
 use std::os::windows::io::FromRawHandle as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn CreateNamedPipeW(
-        name: *const u16,
-        open_mode: u32,
-        pipe_mode: u32,
-        max_instances: u32,
-        out_buffer: u32,
-        in_buffer: u32,
-        default_timeout: u32,
-        security: *const c_void,
-    ) -> *mut c_void;
-    fn ConnectNamedPipe(pipe: *mut c_void, overlapped: *mut c_void) -> i32;
-    fn CloseHandle(handle: *mut c_void) -> i32;
-    fn GetLastError() -> u32;
-}
-
-#[link(name = "user32")]
-unsafe extern "system" {
-    fn AllowSetForegroundWindow(process: u32) -> i32;
-}
-
-const PIPE_ACCESS_DUPLEX: u32 = 0x3;
-const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
-/// `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS`.
-const PIPE_MODE: u32 = 0x0000_0008;
-const PIPE_UNLIMITED_INSTANCES: u32 = 255;
-const ERROR_PIPE_CONNECTED: u32 = 535;
-const INVALID_HANDLE_VALUE: *mut c_void = -1isize as *mut c_void;
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows::Win32::Storage::FileSystem::{
+    FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAGS_AND_ATTRIBUTES, PIPE_ACCESS_DUPLEX,
+};
+use windows::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+};
+use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+use windows::core::PCWSTR;
 
 /// `%TEMP%\picto-gpui-instances`.
 pub fn folder() -> std::io::Result<PathBuf> {
@@ -70,26 +51,26 @@ fn pipe(key: &str) -> Vec<u16> {
         .collect()
 }
 
-fn create(name: &[u16], first: bool) -> std::io::Result<*mut c_void> {
+fn create(name: &[u16], first: bool) -> std::io::Result<HANDLE> {
     let mode = PIPE_ACCESS_DUPLEX
         | if first {
             FILE_FLAG_FIRST_PIPE_INSTANCE
         } else {
-            0
+            FILE_FLAGS_AND_ATTRIBUTES(0)
         };
     // SAFETY: `name` is a nul-terminated wide string; no security
     // attributes, so the default ones (the creator and administrators
     // write, others read) apply.
     let handle = unsafe {
         CreateNamedPipeW(
-            name.as_ptr(),
+            PCWSTR(name.as_ptr()),
             mode,
-            PIPE_MODE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
             PIPE_UNLIMITED_INSTANCES,
             4096,
             4096,
             0,
-            std::ptr::null(),
+            None,
         )
     };
     if handle == INVALID_HANDLE_VALUE {
@@ -106,25 +87,25 @@ pub fn serve(
     deliver: Arc<dyn Fn(Request) + Send + Sync>,
 ) -> std::io::Result<()> {
     let name = pipe(key);
-    let first = create(&name, true)? as usize;
+    let first = create(&name, true)?.0 as usize;
     std::thread::Builder::new()
         .name("instance".into())
         .spawn(move || {
-            let mut waiting = first as *mut c_void;
+            let mut waiting = HANDLE(first as _);
             loop {
                 // SAFETY: `waiting` is a pipe instance this thread made and
                 // owns; no overlapped structure, so the call blocks.
-                let connected = unsafe { ConnectNamedPipe(waiting, std::ptr::null_mut()) } != 0
+                let connected = unsafe { ConnectNamedPipe(waiting, None) }.is_ok()
                     || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
                 if connected {
                     // SAFETY: the handle is a connected pipe this thread
                     // owns; the file takes it and closes it when dropped.
-                    let stream = unsafe { File::from_raw_handle(waiting) };
+                    let stream = unsafe { File::from_raw_handle(waiting.0) };
                     let deliver = deliver.clone();
                     std::thread::spawn(move || super::answer(stream, &*deliver));
                 } else {
                     // SAFETY: the handle is ours and not used again.
-                    unsafe { CloseHandle(waiting) };
+                    let _ = unsafe { CloseHandle(waiting) };
                 }
                 match create(&name, false) {
                     Ok(next) => waiting = next,
@@ -148,5 +129,5 @@ pub fn connect(_folder: &Path, key: &str) -> std::io::Result<File> {
 /// system otherwise refuses to a process that is not in front.
 pub fn allow_foreground(pid: u32) {
     // SAFETY: takes a process id; failing leaves the window where it is.
-    unsafe { AllowSetForegroundWindow(pid) };
+    let _ = unsafe { AllowSetForegroundWindow(pid) };
 }

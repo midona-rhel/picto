@@ -9,25 +9,9 @@ use crate::grid::menu::Action as Row;
 use crate::keymap::*;
 use crate::settings;
 use gpui::*;
-use picto_library::RootKind;
 use picto_library::query::ItemScope;
 
 impl Shell {
-    /// Whether the grid shows this kind of destination.
-    fn in_scope(&self, kind: ScopeKind, cx: &App) -> bool {
-        self.grid_scope(cx).kind() == kind
-    }
-
-    /// The one selected item, unless it is a collection (`singleFileHash`
-    /// with `kind !== 'collection'`).
-    fn single_media(&self, cx: &App) -> bool {
-        let session = self.session.read(cx);
-        session.selection_count() == 1
-            && session
-                .selected_item()
-                .is_some_and(|item| item.kind != RootKind::Collection)
-    }
-
     /// Whether the grid's selection is what the window shows: the grid or
     /// the viewer, not a screen.
     fn selection_shown(&self, cx: &App) -> bool {
@@ -89,17 +73,6 @@ impl Shell {
         }
     }
 
-    /// `rate.0`–`rate.5`: the selection in the grid, the item shown in the
-    /// viewer, as Set Rating's rows rate them.
-    fn rate(&mut self, stars: u8, window: &mut Window, cx: &mut Context<Self>) {
-        let session = self.session.read(cx);
-        if !session.viewer && session.selection.is_empty() {
-            cx.propagate();
-            return;
-        }
-        self.act_on_selection(Row::Rate(stars), window, cx);
-    }
-
     /// Runs a menu row on the selection when there is one, else lets the
     /// key go on.
     fn on_selection(
@@ -130,18 +103,6 @@ impl Shell {
         self.on_selection(grid.folder().is_none(), row, window, cx);
     }
 
-    /// `edit.copyFilePath`: the file shown of one item, as the context menu
-    /// copies it, or every file of several, one per line.
-    fn copy_file_paths(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let row = if self.session.read(cx).selection_count() == 1 {
-            Row::CopyPath
-        } else {
-            Row::CopySelectionPaths
-        };
-        let shown = self.selection_shown(cx);
-        self.on_selection(shown, row, window, cx);
-    }
-
     /// `edit.copy`: the files themselves on the clipboard. Over the grid,
     /// the items chosen one by one (`copyTarget`; a Select All or a range
     /// is not copied, as in production); in the viewer and Quick Look, the
@@ -152,16 +113,19 @@ impl Shell {
             return;
         }
         let session = self.session.read(cx);
-        if session.selection.is_empty() || session.selection.query_wide() {
-            cx.propagate();
-            return;
+        let selection = session
+            .selection_target()
+            .filter(|_| !session.selection.query_wide());
+        match selection {
+            Some(selection) => self.copy_files(selection, cx),
+            None => cx.propagate(),
         }
-        let ids = session.selected_ids();
-        self.copy_files(ids, cx);
     }
 
-    /// `edit.rename`: the inspector's name field for one item.
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// `edit.rename`: the inspector's name field for one item, or the
+    /// batch rename dialog for several (the Edit menu's Rename and Batch
+    /// Rename… rows, whose keys these are).
+    pub(super) fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.read(cx).selection_count() {
             1 if self.selection_shown(cx) => {
                 if self.inspector_collapsed {
@@ -170,10 +134,7 @@ impl Shell {
                 self.inspector
                     .update(cx, |inspector, cx| inspector.edit_name(window, cx));
             }
-            // Several items chosen one by one, all loaded: the batch rename
-            // dialog (the Edit menu's Batch Rename… row, whose keys these
-            // are).
-            count if count > 1 && self.menu_context(cx).names => self.rename_selected(cx),
+            count if count > 1 => self.rename_selected(cx),
             _ => cx.propagate(),
         }
     }
@@ -184,7 +145,7 @@ impl Shell {
     /// does; the viewer's menu opens the inspector's pickers instead
     /// (`useViewerEntityContextMenu`), docked 80px below the inspector's
     /// top, or centred while it is hidden.
-    fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn pick(&mut self, picker: Picker, window: &mut Window, cx: &mut Context<Self>) {
         let (empty, viewer) = {
             let session = self.session.read(cx);
             (session.selection.is_empty(), session.viewer)
@@ -203,6 +164,26 @@ impl Shell {
                     inspector.add_to_folder(visible, window, cx)
                 }
             });
+    }
+
+    /// Accept: the item being viewed, as its review pill takes it, or the
+    /// selection.
+    pub(super) fn accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing(cx) {
+            self.review_key(crate::viewer::review::Decision::Accept, window, cx);
+        } else {
+            self.act_on_selection(Row::Accept, window, cx);
+        }
+    }
+
+    /// Reject: the item being viewed, or the selection, sent to the Trash
+    /// or deleted as the Inbox & Deleting setting says (`rejectTarget`).
+    pub(super) fn reject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.viewing(cx) {
+            self.review_key(crate::viewer::review::Decision::Reject, window, cx);
+        } else {
+            self.act_on_selection(Row::Reject, window, cx);
+        }
     }
 
     /// `view.zoomIn` / `view.zoomOut` in the grid: the tile size one step
@@ -236,68 +217,12 @@ impl Shell {
         )
         .on_action(cx.listener(|this, _: &ShowTrash, _, cx| this.show_scope(ItemScope::Trash, cx)))
         .on_action(cx.listener(|this, _: &QuickLook, window, cx| this.quick_look(window, cx)))
-        .on_action(cx.listener(|this, _: &OpenDefaultApp, window, cx| {
-            if this.single_media(cx) {
-                this.act_on_selection(Row::OpenDefault, window, cx);
-            } else {
-                cx.propagate();
-            }
-        }))
-        .on_action(cx.listener(|this, _: &RevealInFinder, window, cx| {
-            if this.single_media(cx) {
-                this.act_on_selection(Row::Reveal, window, cx);
-            } else {
-                cx.propagate();
-            }
-        }))
-        .on_action(
-            cx.listener(|this, _: &CopyFilePath, window, cx| this.copy_file_paths(window, cx)),
-        )
         .on_action(cx.listener(|this, _: &CopyFiles, window, cx| this.copy_files_key(window, cx)))
-        .on_action(
-            cx.listener(|this, _: &RegenerateThumbnails, _, cx| this.regenerate_selected(cx)),
-        )
         .on_action(cx.listener(|this, _: &ToggleGrayscale, _, cx| {
             this.session
                 .update(cx, |session, cx| session.toggle_grayscale(cx))
         }))
-        .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
-        .on_action(cx.listener(|this, _: &Rate0, window, cx| this.rate(0, window, cx)))
-        .on_action(cx.listener(|this, _: &Rate1, window, cx| this.rate(1, window, cx)))
-        .on_action(cx.listener(|this, _: &Rate2, window, cx| this.rate(2, window, cx)))
-        .on_action(cx.listener(|this, _: &Rate3, window, cx| this.rate(3, window, cx)))
-        .on_action(cx.listener(|this, _: &Rate4, window, cx| this.rate(4, window, cx)))
-        .on_action(cx.listener(|this, _: &Rate5, window, cx| this.rate(5, window, cx)))
         .on_action(cx.listener(|this, _: &DeleteItems, window, cx| this.delete_items(window, cx)))
-        .on_action(cx.listener(|this, _: &RemoveFromFolder, window, cx| {
-            let folder = this.grid_scope(cx).folder().is_some();
-            this.on_selection(folder, Row::RemoveFromFolder, window, cx)
-        }))
-        .on_action(cx.listener(|this, _: &RestoreItems, window, cx| {
-            let trash = this.in_scope(ScopeKind::Trash, cx);
-            this.on_selection(trash, Row::Restore, window, cx)
-        }))
-        // Over the media view or Quick Look, the keys review the item
-        // being viewed (`InboxReviewControls`); over the grid, the
-        // selection.
-        .on_action(cx.listener(|this, _: &AcceptInbox, window, cx| {
-            if this.viewing(cx) {
-                this.review_key(crate::viewer::review::Decision::Accept, window, cx);
-                return;
-            }
-            let inbox = this.in_scope(ScopeKind::Inbox, cx);
-            this.on_selection(inbox, Row::Accept, window, cx)
-        }))
-        // Reject sends the selection to the Trash or deletes it, as the
-        // Inbox & Deleting setting says (`rejectTarget`).
-        .on_action(cx.listener(|this, _: &RejectInbox, window, cx| {
-            if this.viewing(cx) {
-                this.review_key(crate::viewer::review::Decision::Reject, window, cx);
-                return;
-            }
-            let inbox = this.in_scope(ScopeKind::Inbox, cx);
-            this.on_selection(inbox, Row::Reject, window, cx)
-        }))
         .on_action(cx.listener(|this, _: &NewFolder, window, cx| {
             this.sidebar
                 .update(cx, |sidebar, cx| sidebar.new_folder(window, cx));
@@ -322,31 +247,12 @@ impl Shell {
                 cx.propagate();
             }
         }))
-        .on_action(cx.listener(|this, _: &AddTags, window, cx| this.pick(Picker::Tags, window, cx)))
-        // `organize.autoTag`: the review of the item viewed, else of the
-        // selection, when there is one.
-        .on_action(cx.listener(|this, _: &AutoTag, window, cx| {
-            let session = this.session.read(cx);
-            if session.selection.is_empty() && !session.viewer {
-                cx.propagate();
-                return;
-            }
-            this.act_on_selection(Row::AutoTag, window, cx)
-        }))
-        .on_action(
-            cx.listener(|this, _: &AddToFolders, window, cx| {
-                this.pick(Picker::Folders, window, cx)
-            }),
-        )
-        .on_action(cx.listener(|this, _: &AddToFolder, window, cx| {
-            this.pick(Picker::AddToFolder, window, cx)
-        }))
     }
 }
 
 /// The pickers the organize shortcuts open.
 #[derive(Clone, Copy)]
-enum Picker {
+pub(super) enum Picker {
     Tags,
     Folders,
     AddToFolder,

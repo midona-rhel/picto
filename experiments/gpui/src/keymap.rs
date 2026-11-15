@@ -37,12 +37,6 @@ actions!(
         RevealInFinder,
         CopyFilePath,
         Rename,
-        Rate0,
-        Rate1,
-        Rate2,
-        Rate3,
-        Rate4,
-        Rate5,
         DeleteItems,
         RemoveFromFolder,
         RestoreItems,
@@ -68,6 +62,13 @@ actions!(
         ToggleGrayscale
     ]
 );
+
+/// `rate.0`–`rate.5` and Set Rating's rows: the stars, 0 for none.
+#[derive(Clone, Debug, PartialEq, Action)]
+#[action(namespace = shortcut, no_json)]
+pub struct Rate {
+    pub stars: u8,
+}
 
 /// Where a shortcut listens. Each is a key-context predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,12 +229,12 @@ pub fn targets(id: &str) -> Vec<Target> {
         "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
         "inbox.reject" => vec![to!(Grid, RejectInbox), to!(Viewer, RejectInbox)],
         // Rating: the selection in the grid, the shown item in the viewer.
-        "rate.0" => vec![to!(Grid, Rate0), to!(Viewer, Rate0)],
-        "rate.1" => vec![to!(Grid, Rate1), to!(Viewer, Rate1)],
-        "rate.2" => vec![to!(Grid, Rate2), to!(Viewer, Rate2)],
-        "rate.3" => vec![to!(Grid, Rate3), to!(Viewer, Rate3)],
-        "rate.4" => vec![to!(Grid, Rate4), to!(Viewer, Rate4)],
-        "rate.5" => vec![to!(Grid, Rate5), to!(Viewer, Rate5)],
+        "rate.0" => vec![to!(Grid, Rate { stars: 0 }), to!(Viewer, Rate { stars: 0 })],
+        "rate.1" => vec![to!(Grid, Rate { stars: 1 }), to!(Viewer, Rate { stars: 1 })],
+        "rate.2" => vec![to!(Grid, Rate { stars: 2 }), to!(Viewer, Rate { stars: 2 })],
+        "rate.3" => vec![to!(Grid, Rate { stars: 3 }), to!(Viewer, Rate { stars: 3 })],
+        "rate.4" => vec![to!(Grid, Rate { stars: 4 }), to!(Viewer, Rate { stars: 4 })],
+        "rate.5" => vec![to!(Grid, Rate { stars: 5 }), to!(Viewer, Rate { stars: 5 })],
         // View. Enter and Space open the viewer from the grid and close it
         // from inside, as `MediaView` treats both as its close keys.
         "view.detailView" => vec![
@@ -327,10 +328,7 @@ pub const NOT_YET: &[(&str, &str)] = &[
         "deferred in production; no command palette",
     ),
     ("nav.goToFolder", "deferred in production; no folder jump"),
-    (
-        "file.addToLastFolder",
-        "deferred in production; no last-folder memory",
-    ),
+    ("file.addToLastFolder", "deferred in production"),
     ("edit.copyTags", "deferred in production"),
     ("edit.pasteTags", "deferred in production"),
     ("view.slideshow", "deferred in production"),

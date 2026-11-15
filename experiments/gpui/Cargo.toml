@@ -127,22 +127,16 @@ gpui_macos = { package = "gpui-pre-macos", version = "=0.3.12" }
 # Elsewhere the off-screen checks draw with GPUI's wgpu renderer and its
 # portable text system (on Windows too, where GPUI's own DirectX platform has
 # no headless renderer).
-# The drop reading of the Windows platform, checked on data of a test's own.
-[target.'cfg(windows)'.dev-dependencies]
-gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
-
-# The drop reading of the X11 and Wayland platforms, checked on data of a
-# test's own.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gpui_linux = { package = "gpui-pre-linux", version = "=0.3.12" }
-
 [target.'cfg(not(target_os = "macos"))'.dev-dependencies]
 gpui_wgpu = { package = "gpui-pre-wgpu", version = "=0.3.12", features = ["test-support"] }
 
 # The launcher badge's D-Bus signal on Linux; the version the notification
-# service GPUI uses already builds.
+# service GPUI uses already builds. The file list Copy puts on the clipboard
+# is the one the vendored X11 drag source builds (the tests also check the
+# platform's drop reading).
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 zbus = "5"
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.12" }
 
 # The sign-in window on Linux: a GTK window holding WebKitGTK, and its
 # cookie manager; the versions wry builds.
@@ -151,10 +145,28 @@ gtk = "0.18"
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 # The sign-in window's cookies on Windows (`ICoreWebView2CookieManager`);
-# the versions wry builds.
+# the versions wry builds. The Win32 calls the app makes itself (the
+# clipboard, window placement, the instance pipe, the process list).
+# The file list Copy puts on the clipboard is the one the vendored drag
+# source builds (the tests also check the platform's drop reading).
 [target.'cfg(windows)'.dependencies]
+gpui_windows = { package = "gpui-pre-windows", version = "=0.3.12" }
 webview2-com = "0.39"
-windows = { version = "0.62", features = ["Win32_Foundation"] }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 windows-core = "0.62"
 
 # The user's id, for the single-instance folder (`opening/instance/unix.rs`);
