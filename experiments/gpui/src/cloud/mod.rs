@@ -319,24 +319,3 @@ pub fn last_sync(value: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Str
     }
     crate::i18n::format::date_time(at.with_timezone(&chrono::Local).naive_local())
 }
-
-/// `formatBytes` (Settings' and the sync bar's): `512 B`, `1.50 KB`,
-/// `12.3 MB`.
-pub fn bytes(value: i64) -> String {
-    if value < 1024 {
-        return format!("{value} B");
-    }
-    // i18n: units production writes in English
-    let units = ["KB", "MB", "GB", "TB"];
-    let mut amount = value as f64 / 1024.;
-    let mut unit = 0;
-    while amount >= 1024. && unit < units.len() - 1 {
-        amount /= 1024.;
-        unit += 1;
-    }
-    format!(
-        "{amount:.precision$} {}",
-        units[unit],
-        precision = if amount >= 10. { 1 } else { 2 }
-    )
-}

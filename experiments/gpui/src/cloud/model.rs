@@ -129,11 +129,9 @@ impl Cloud {
         cx: &mut Context<Self>,
         done: impl FnOnce(Result<serde_json::Value, String>, &mut App) + 'static,
     ) {
-        let answer = self.session.read(cx).dispatch(command.to_owned(), args);
+        let answer = self.session.read(cx).call(command.to_owned(), args);
         cx.spawn(async move |this, cx| {
-            let result = answer
-                .await
-                .unwrap_or_else(|_| Err("The application has stopped".to_owned()));
+            let result = answer.await;
             let _ = this.update(cx, |this, cx| this.refresh(cx));
             cx.update(|cx| done(result, cx));
         })
