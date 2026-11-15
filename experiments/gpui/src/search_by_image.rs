@@ -161,7 +161,10 @@ pub fn search(engine: Engine, upload: Upload, cx: &mut App) {
         let outcome = found.await;
         cx.update(|cx| match outcome {
             Ok(url) => crate::net::open_in_browser(&url, cx),
-            Err(message) => crate::ui::notify::error(t("Reverse image search failed"), message, cx),
+            Err(message) => {
+                eprintln!("picto: Search by Image failed: {message}");
+                crate::ui::notify::error(t("Reverse image search failed"), message, cx)
+            }
         });
     })
     .detach();

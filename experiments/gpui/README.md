@@ -1378,8 +1378,15 @@ re-checked by reading the code; the rest were checked against it.
   Dock's accessibility label: "99+" for 955, as production's tile beside
   it); the video player's F took the window to the system's full screen
   with the video alone and back to its place and size. The owner has
-  resized windows by their edges and dropped from a real browser. Not
-  seen: dragging items out to Finder; the system notification (which needs
+  resized windows by their edges and dropped from a real browser. With
+  the real pointer (posted events) on an instance with no seam set: a
+  tile was dragged out into a Finder folder and its stored file arrived
+  there (under its stored name, as production's drag gives it); a
+  right-click opened the item menu and its Search by Image submenu, and
+  TinEye searched a generated test picture for real, its results page
+  opening in the browser (after more than a minute); File › Check for
+  Updates… read the real feed ("Picto is up to date"). Not
+  seen: the system notification (which needs
   a run to finish); files arriving through `application:openURLs:` (the
   hand-over between two launches and packs on the command line were seen
   working); restoring the window maximised or on a second display (a kept
