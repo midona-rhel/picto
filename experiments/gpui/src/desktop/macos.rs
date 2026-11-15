@@ -384,3 +384,18 @@ mod tests {
         assert_eq!(badge_label(9_999).as_deref(), Some("99+"));
     }
 }
+
+/// Production opens the release page on macOS and installs nothing.
+pub fn install_update(
+    _installer: &std::path::Path,
+    _silent: bool,
+    _run_after: bool,
+    _admin: bool,
+) -> Result<(), String> {
+    Err("Updates are installed from the release page on macOS.".to_owned())
+}
+
+/// Only Linux runs from an AppImage.
+pub fn app_image() -> Option<std::path::PathBuf> {
+    None
+}

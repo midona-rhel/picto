@@ -155,6 +155,22 @@ pub struct FeedFile {
     pub url: String,
     pub sha512: String,
     pub size: Option<u64>,
+    /// `isAdminRightsRequired`: the Windows installer is started elevated
+    /// (`NsisUpdater.doInstall`).
+    pub admin: bool,
+}
+
+impl FeedFile {
+    /// The installer's file name: the last part of its `url`, which must be
+    /// a plain name.
+    pub fn name(&self) -> Option<String> {
+        self.url
+            .split(['?', '#'])
+            .next()
+            .and_then(|path| path.rsplit('/').next())
+            .map(str::to_owned)
+            .filter(|name| !name.is_empty() && !name.contains(['/', '\\']) && name != "..")
+    }
 }
 
 /// Reads the YAML electron-builder writes: top-level `key: value` lines,
@@ -216,6 +232,7 @@ pub fn parse_feed(text: &str) -> Result<Feed, String> {
                         "url" => file.url = value,
                         "sha512" => file.sha512 = value,
                         "size" => file.size = value.parse().ok(),
+                        "isAdminRightsRequired" => file.admin = value == "true",
                         _ => {}
                     }
                 }
@@ -230,6 +247,7 @@ pub fn parse_feed(text: &str) -> Result<Feed, String> {
             url,
             sha512,
             size: None,
+            admin: false,
         });
     }
     if feed.version.is_empty() {
