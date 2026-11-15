@@ -1,7 +1,9 @@
-//! The difference view of two images. The Electron screen stacks the right
-//! image over the left with `mix-blend-mode: difference` on black; GPUI has
-//! no blend modes, so the same picture is computed once per pair, off the
-//! drawing thread, from the decoded images.
+//! The difference view of two images, and what it measures. The Electron
+//! screen stacks the right image over the left with `mix-blend-mode:
+//! difference` on black; GPUI has no blend modes, so the same picture is
+//! computed once per pair, off the drawing thread, from the decoded
+//! originals, and counted: how many pixels differ at all, and how many by
+//! enough to see.
 use gpui::RenderImage;
 use image::{ImageBuffer, Rgba, imageops};
 use std::sync::Arc;
@@ -12,19 +14,59 @@ const LIMIT: u32 = 4096;
 
 type Buffer = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
-/// The difference of two decoded images, at the left image's proportions:
-/// the right one is stretched onto it, as `object-fit: fill` does in the
-/// composite. `None` if either image is empty.
-pub fn compute(left: &RenderImage, right: &RenderImage) -> Option<Arc<RenderImage>> {
+/// A channel apart by more than this (of 255) is a difference the eye can
+/// see; less is the noise of a format's own compression.
+const VISIBLE: u8 = 24;
+
+/// What comparing two pictures found.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Measure {
+    /// The two pictures' sizes in pixels, when they differ: the right one
+    /// was stretched onto the left one's to compare them.
+    pub sizes: Option<((u32, u32), (u32, u32))>,
+    /// The share of pixels that differ at all, 0 to 1.
+    pub changed: f32,
+    /// The share of pixels that differ by enough to see, 0 to 1.
+    pub visible: f32,
+}
+
+/// The difference of two decoded images, at the left image's proportions
+/// (the right one is stretched onto it, as `object-fit: fill` does in the
+/// composite), and what it measures. `None` if either image is empty.
+pub fn compute(left: &RenderImage, right: &RenderImage) -> Option<(Arc<RenderImage>, Measure)> {
     let buffer = |image: &RenderImage| -> Option<Buffer> {
         let size = image.size(0);
         let (width, height) = (size.width.0 as u32, size.height.0 as u32);
         Buffer::from_raw(width, height, image.as_bytes(0)?.to_vec())
     };
-    let pixels = difference(&buffer(left)?, &buffer(right)?)?;
-    Some(Arc::new(RenderImage::new(smallvec::smallvec![
-        image::Frame::new(pixels)
-    ])))
+    let (left, right) = (buffer(left)?, buffer(right)?);
+    let sizes =
+        (left.dimensions() != right.dimensions()).then(|| (left.dimensions(), right.dimensions()));
+    let pixels = difference(&left, &right)?;
+    let measure = measure(&pixels, sizes);
+    Some((
+        Arc::new(RenderImage::new(smallvec::smallvec![image::Frame::new(
+            pixels
+        )])),
+        measure,
+    ))
+}
+
+/// Counts the difference picture's pixels that are not black, and those
+/// past [`VISIBLE`].
+fn measure(pixels: &Buffer, sizes: Option<((u32, u32), (u32, u32))>) -> Measure {
+    let (mut changed, mut visible) = (0u64, 0u64);
+    for pixel in pixels.pixels() {
+        let most = pixel.0[0].max(pixel.0[1]).max(pixel.0[2]);
+        changed += (most > 0) as u64;
+        visible += (most > VISIBLE) as u64;
+    }
+    let total = (pixels.width() as u64 * pixels.height() as u64).max(1) as f32;
+    Measure {
+        sizes,
+        changed: changed as f32 / total,
+        visible: visible as f32 / total,
+    }
 }
 
 /// Each channel is `|left − right|` of the two images laid on black, and the

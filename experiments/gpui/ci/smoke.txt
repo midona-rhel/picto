@@ -11,8 +11,7 @@
 # page with its rail, the page with the rail hidden, and the page at 150%,
 # where the actions show their glyphs alone. Then the Duplicates screen
 # after a scan, at 125% (the window about 970 points wide, near the
-# smallest it may be): the list of sets, Compare with its rail, and the
-# check before merging.
+# smallest it may be): the desk on its first set, and on the next.
 reload
 size 1213 865
 wait 800
@@ -165,14 +164,7 @@ key secondary-=
 wait 100
 key secondary-=
 wait 1200
-shot 17-duplicates-list
-key space
+shot 17-duplicates-desk
+key down
 wait 2500
-shot 18-duplicates-compare
-key escape
-wait 600
-move 1121 832
-down 1121 832
-up 1121 832
-wait 1500
-shot 19-duplicates-verify
+shot 18-duplicates-next

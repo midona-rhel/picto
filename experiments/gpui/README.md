@@ -358,14 +358,14 @@ subscription's page puts its counters, schedule and destination in a rail
 the shell shows in the inspector's place, with the inspector's width,
 toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
 may give the shell such a rail (`shell::ScreenRail`). Duplicates
-gathers the core's matching pairs into sets of files that match one another
-(`duplicates/sets.rs`), each with the file Smart merge would keep marked,
-in Identical and Similar tabs; a set is merged, compared one file at a time
-(Compare, a place of the screen, whose facts are its rail), kept apart,
-or checked for the bulk
-merge, which shows the check before merging only for sets whose names,
-links, folders, tags or notes differ. Each decision on a set, or on all
-checked sets, is one undoable step (`Library::resolve_duplicates`).
+is one desk: the core's matching pairs gathered into sets of files that
+match one another (`duplicates/sets.rs`), queued most alike first in
+Identical and Similar tabs; the set's files flipping in place on the stage,
+the pixel difference while Show Difference is held and what comparing the
+pixels measured, in words; and in the inspector's place the files side by
+side and what the item left after the merge will hold, worked out with the
+library's own rules. The file shown is the one kept; each decision on a set
+is one undoable step (`Library::resolve_duplicates`).
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.

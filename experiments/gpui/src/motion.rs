@@ -209,10 +209,6 @@ pub const STACK_ENTER_RIGHT: Duration = Duration::from_millis(250);
 pub const STACK_EXIT_FADE: Duration = Duration::from_millis(200);
 pub const STACK_EXIT_REMOVE: Duration = Duration::from_millis(220);
 
-/// Eagle's `data-hover-delay="500"`: how long the pointer rests on a
-/// duplicate's tile before its larger preview opens.
-pub const DUPLICATE_PREVIEW_DELAY: Duration = Duration::from_millis(500);
-
 /// The grid's hover preview (`HoverPreviewPortal.tsx`):
 /// `HOVER_PREVIEW_DELAY_MS`, how long the pointer rests on the magnifier;
 /// `HOVER_HIDE_DELAY_MS`, how long after leaving it the preview stays; and

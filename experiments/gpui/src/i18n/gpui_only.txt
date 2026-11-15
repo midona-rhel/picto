@@ -139,68 +139,37 @@ Syncing library changes
 Estimating time remaining…
 The library is still in use; nothing was restored.
 The dropped files did not arrive.
-Twice the resolution or more
-Higher resolution
-Same resolution
-Lower resolution
-Half the resolution or less
-the others are
-1 tag
-tags
-the most
-the fewest
-Added first
-Added last
-Same picture
-Keeping this one
-Kept when the set is merged
-Merged away when the set is merged
-This file
 Keep this, merge the rest
 Keep the shown file and merge the others into it
-Keep all, related
 Skip to the next set
 You have no identical items.
-You have no similar items at this similarity.
 Enjoy your day
-identical files
-similar files
-the best one is chosen
-look before merging
-saves
-Merge
-Include in merge
-Compare the files one at a time
-Keep the marked file and merge the rest into it
 Remove from This Set
-Merge every checked set, keeping each marked file
-set, merging saves
-sets, merging saves
-Similarity
-kept
-Verify Before Merge
 files
-merged into the marked one
-The most descriptive name is kept.
 Links
-Every link is kept.
-The kept file is placed in every folder.
-The kept file has every tag. These are not on every file:
-more
 You have no duplicated items.
 Identical
 Similar
-Largest saving
-Most files
-Most alike
-Sort sets
-Set
 of
-file
-sets differ
-Compare
 Showing
 pairs; settle these to see the rest.
-The kept file's notes after the merge:
 Keep this
 ZIP Archive
+Merged
+You have no similar items.
+larger picture
+lossless format
+more data
+Kept
+drops
+After merge
+Not measured: only still images are compared pixel by pixel.
+Comparing the pixels…
+Against file
+is in a collection: it leaves it and hands nothing over.
+Pixels identical
+of pixels differ slightly
+differs visibly
+differ at all
+sizes differ,
+compared stretched

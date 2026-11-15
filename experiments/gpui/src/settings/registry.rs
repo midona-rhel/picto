@@ -227,20 +227,16 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
         .about("Reset playback speed to 1x"),
     def("video.fullscreen", "Toggle Fullscreen", VIDEO, "F")
         .about("Enter or leave fullscreen playback"),
-    def("dup.merge", "Merge Set", DUPLICATES, "Enter")
-        .about("Keep the marked file and merge the rest of the set into it"),
-    def("dup.compare", "Compare Set", DUPLICATES, "Space")
-        .about("Compare the set's files one at a time; in Compare, skip to the next set"),
-    def("dup.keepAll", "Keep All, Related", DUPLICATES, "A")
-        .about("Keep every file of the set as versions of one picture"),
+    def("dup.merge", "Keep and Merge", DUPLICATES, "Enter")
+        .about("Keep the file shown and merge the rest of the set into it"),
+    def("dup.skip", "Skip Set", DUPLICATES, "Space").about("Leave this set for later"),
     def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "N").about("Mark the set as not duplicates"),
     def("dup.previous", "Previous File", DUPLICATES, "ArrowLeft")
-        .about("Go to the previous file, or the set before"),
+        .about("Show the set's previous file in place"),
     def("dup.next", "Next File", DUPLICATES, "ArrowRight")
-        .about("Go to the next file, or the set after"),
-    def("dup.setAbove", "Set Above", DUPLICATES, "ArrowUp").about("Go to the set above"),
-    def("dup.setBelow", "Set Below", DUPLICATES, "ArrowDown").about("Go to the set below"),
-    def("dup.back", "Back to Sets", DUPLICATES, "Escape").about("Leave Compare or the check before merging"),
+        .about("Show the set's next file in place"),
+    def("dup.previousSet", "Previous Set", DUPLICATES, "ArrowUp"),
+    def("dup.nextSet", "Next Set", DUPLICATES, "ArrowDown"),
     def("dup.fitToWindow", "Fit to Window", DUPLICATES, "F")
         .about("Reset zoom to fit images in view"),
 ];

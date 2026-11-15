@@ -1,22 +1,24 @@
-//! The Duplicates screen: the library's matching files gathered into sets
-//! (`sets`), each with the file to keep marked, merged, compared or kept
-//! apart one set at a time or checked and merged together. Three views
-//! share the screen: the list of sets (`list`), Compare, one picture at a
-//! time flipping between a set's files in place (`compare_view`), and the
-//! check before a merge of sets whose names, links, folders, tags or notes
-//! differ (`verify`). Their controls sit in the titlebar
-//! ([`DuplicatesToolbar`]).
+//! The Duplicates screen: one desk for deciding on the library's matching
+//! files. The core reports matching pairs; files that match one another are
+//! reviewed together as a set (`sets`). Down the left, the queue of sets,
+//! most alike first, in Identical and Similar tabs (`queue`). In the middle,
+//! the stage: one file of the set at a time, flipping in place at the same
+//! place and scale, its difference from the other file while the
+//! difference button is held, and what was measured between them, in words
+//! (`stage`). In the inspector's place, the rail: the files side by side,
+//! and what the one item left after the merge will hold (`rail`). The file
+//! shown is the one kept: the user flips to the file to keep and merges
+//! the rest into it, or says they are not duplicates, or skips.
 mod compare;
-mod compare_view;
 mod difference;
-mod list;
+mod queue;
+mod rail;
 mod sets;
-mod verify;
+mod stage;
 mod view;
 
 use crate::application::Event as BackendEvent;
 use crate::backend::Screen;
-use crate::grid::preview::HoverPreview;
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::{en, t};
 use crate::motion;
@@ -29,37 +31,30 @@ use sets::Set;
 use std::collections::HashMap;
 use std::{path::PathBuf, sync::Arc};
 
-// The screen's actions. Their keys come from the shortcut registry
+// The desk's actions. Their keys come from the shortcut registry
 // (`crate::keymap`) and win over the grid's while the screen has the
 // keyboard.
 actions!(
     duplicates,
     [
-        Previous,
-        Next,
-        SetAbove,
-        SetBelow,
+        PreviousFile,
+        NextFile,
+        PreviousSet,
+        NextSet,
         Merge,
-        OpenCompare,
-        KeepAll,
+        Skip,
         NotDuplicate,
         FitPair,
-        ActualPixels,
-        Leave
+        ActualPixels
     ]
 );
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-/// The session's place for the check before merging; Compare's place is
-/// its set's key.
-const VERIFY_PLACE: i64 = -1;
 /// The library hands at most this many pairs at a time.
 const QUEUE_LIMIT: usize = 500;
 /// `scanDuplicates(distanceThreshold = 16)`.
 const SCAN_DISTANCE: u32 = 16;
-/// The Similar tab's similarity floor, in whole percent: Eagle's range.
-const SIMILARITY_MIN: u32 = 80;
 
 /// A file of a set, with its item's details once read.
 #[derive(Clone)]
@@ -90,10 +85,6 @@ impl Facts {
             .find(|media| media.facts.content_hash == hash)
             .or(details.media.first())
     }
-
-    fn tags(&self) -> Option<usize> {
-        self.details.as_ref().map(|details| details.tag_ids.len())
-    }
 }
 
 /// A set as the screen holds it: the set and its files' facts.
@@ -102,57 +93,25 @@ pub struct Entry {
     pub facts: Vec<Facts>,
 }
 
-/// The two tabs of the list.
+/// The queue's two tabs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Identical,
     Similar,
 }
 
-/// The list's order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Sort {
-    Saving,
-    Files,
-    Alike,
-}
-
-impl Sort {
-    // i18n: values, not shown
-    const VALUES: [(Sort, &'static str); 3] = [
-        (Sort::Saving, "saving"),
-        (Sort::Files, "files"),
-        (Sort::Alike, "alike"),
-    ];
-}
-
-/// Which view of the screen shows.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Mode {
-    List,
-    /// One set's files one at a time, `shown` the one on screen.
-    Compare {
-        set: u32,
-        shown: usize,
-    },
-    /// The check before merging the checked sets that differ, `current` the
-    /// one shown of `sets`.
-    Verify {
-        sets: Vec<u32>,
-        current: usize,
-    },
-}
-
-/// Compare's pictures and pointer state.
+/// The stage's pictures and pointer state.
 #[derive(Default)]
-struct CompareState {
+struct StageState {
     zoom: LinkedZoom,
     /// Each file's original, by file, once decoded.
     originals: HashMap<u32, Arc<RenderImage>>,
     loads: HashMap<u32, Task<()>>,
-    /// The shown file against the kept one, and the two it was made from.
-    difference: Option<((u32, u32), Arc<RenderImage>)>,
+    /// The difference of the shown file from its partner, what it measured,
+    /// and the two files it was made from.
+    difference: Option<((u32, u32), Arc<RenderImage>, difference::Measure)>,
     difference_task: Option<Task<()>>,
+    /// The difference button is held under the pointer.
     difference_hovered: bool,
     pane: Bounds<Pixels>,
     drag: Option<(Point<Pixels>, (f32, f32))>,
@@ -176,21 +135,11 @@ pub struct DuplicatesScreen {
     /// kind), how many were read and how many there are.
     capped: Option<(usize, u64)>,
     tab: Tab,
-    sort: Sort,
-    /// The Similar tab shows sets at least this alike, in percent.
-    similarity: u32,
-    /// The file to keep where the user chose one, by set.
-    keepers: HashMap<u32, FileId>,
-    /// Sets checked or unchecked by the user, by set.
-    checks: HashMap<u32, bool>,
-    /// The sets the tab shows, in order, as indices of `entries`.
+    /// The tab's sets, most alike first, as indices of `entries`.
     order: Vec<usize>,
-    /// The keyboard's place: a set and one of its files.
-    cursor: Option<(u32, usize)>,
-    mode: Mode,
-    /// The sets the check before merging shows, kept while it is open so
-    /// Back and Forward can return to it.
-    verify_sets: Vec<u32>,
+    /// The set on the stage, by its key, and the file shown of it.
+    current: Option<u32>,
+    shown: usize,
     /// The pairs are being read for the first time.
     loading: bool,
     /// The loading message, which waits 200 ms.
@@ -206,15 +155,15 @@ pub struct DuplicatesScreen {
     /// The scan's progress bar, which waits 200 ms.
     scan_progress: bool,
     scan_task: Option<Task<()>>,
-    /// The list's scroll and the area it was last laid out in.
-    scroll: ScrollHandle,
-    bounds: Bounds<Pixels>,
-    /// A set wider than its place scrolls sideways, each with its own.
-    rows: HashMap<u32, ScrollHandle>,
+    /// The queue's scroll and the area it was last laid out in.
+    queue_scroll: ScrollHandle,
+    queue_bounds: Bounds<Pixels>,
+    /// The screen's width as last laid out, which decides whether the
+    /// queue shows its sets' names or only their pictures.
+    width: f32,
     art: Option<crate::grid::art::Art>,
-    preview: HoverPreview,
-    compare: CompareState,
-    /// A tile's menu.
+    stage: StageState,
+    /// A file's menu.
     menu: ui::menu::Host,
     _session: Vec<Subscription>,
 }
@@ -266,14 +215,9 @@ impl DuplicatesScreen {
             entries: Vec::new(),
             capped: None,
             tab: Tab::Identical,
-            sort: Sort::Saving,
-            similarity: SIMILARITY_MIN,
-            keepers: HashMap::new(),
-            checks: HashMap::new(),
             order: Vec::new(),
-            cursor: None,
-            mode: Mode::List,
-            verify_sets: Vec::new(),
+            current: None,
+            shown: 0,
             loading: true,
             loading_message: false,
             busy: false,
@@ -284,12 +228,11 @@ impl DuplicatesScreen {
             scanning: false,
             scan_progress: false,
             scan_task: None,
-            scroll: ScrollHandle::new(),
-            bounds: Bounds::default(),
-            rows: HashMap::new(),
+            queue_scroll: ScrollHandle::new(),
+            queue_bounds: Bounds::default(),
+            width: 0.,
             art: None,
-            preview: HoverPreview::after(motion::DUPLICATE_PREVIEW_DELAY),
-            compare: CompareState::default(),
+            stage: StageState::default(),
             _session: subscriptions,
         }
     }
@@ -337,101 +280,6 @@ impl DuplicatesScreen {
         if !chosen && !displayed {
             self.release_originals(cx);
         }
-        if chosen {
-            self.sync_place(cx);
-        }
-    }
-
-    /// Shows the view the session's place names: Compare and the check
-    /// before merging are places of the screen, so the scope title names
-    /// them and Back and Forward step between them and the list.
-    fn sync_place(&mut self, cx: &mut Context<Self>) {
-        let place = self.session.read(cx).place();
-        let mode = match place {
-            None => Mode::List,
-            Some(VERIFY_PLACE) if !self.verify_sets.is_empty() => Mode::Verify {
-                sets: self.verify_sets.clone(),
-                current: match &self.mode {
-                    Mode::Verify { current, .. } => *current,
-                    _ => 0,
-                },
-            },
-            Some(key) => match self.entry_index(key as u32) {
-                Some(index) => {
-                    let set = key as u32;
-                    let shown = match self.mode {
-                        Mode::Compare { set: now, shown } if now == set => shown,
-                        _ => self
-                            .cursor
-                            .filter(|(cursor, _)| *cursor == set)
-                            .map_or_else(|| self.keeper(index), |(_, file)| file),
-                    };
-                    Mode::Compare { set, shown }
-                }
-                None => Mode::List,
-            },
-        };
-        if mode != self.mode {
-            self.show(mode, cx);
-        }
-        self.name_place(cx);
-    }
-
-    /// Puts `mode` on screen without a step of history.
-    fn show(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        let leaving = matches!(self.mode, Mode::Compare { .. })
-            && !matches!(&mode, Mode::Compare { set, .. } if Some(*set) == self.compared_set());
-        if leaving {
-            self.compare.drag = None;
-            self.compare.difference_hovered = false;
-            self.compare.zoom.fit();
-            self.release_originals(cx);
-        }
-        if let Mode::Verify { sets, .. } = &mode {
-            self.verify_sets = sets.clone();
-        }
-        if let Mode::Compare { set, shown } = mode {
-            self.cursor = Some((set, shown));
-        }
-        self.mode = mode;
-        self.preview.close(cx);
-        self.load_compared(cx);
-        self.changed(cx);
-    }
-
-    /// Goes to `mode` as a step of Back and Forward.
-    fn go(&mut self, mode: Mode, cx: &mut Context<Self>) {
-        let place = match &mode {
-            Mode::List => None,
-            Mode::Compare { set, .. } => Some(*set as i64),
-            Mode::Verify { .. } => Some(VERIFY_PLACE),
-        };
-        self.show(mode, cx);
-        self.session
-            .update(cx, |session, cx| session.open_place(place, cx));
-        self.name_place(cx);
-    }
-
-    fn compared_set(&self) -> Option<u32> {
-        match self.mode {
-            Mode::Compare { set, .. } => Some(set),
-            _ => None,
-        }
-    }
-
-    /// Names the open place in the scope title.
-    fn name_place(&self, cx: &mut Context<Self>) {
-        let label = match &self.mode {
-            Mode::List => None,
-            Mode::Compare { set, .. } => self.entry_index(*set).map(|index| {
-                let keeper = self.keeper(index);
-                let entry = &self.entries[index];
-                SharedString::from(entry.facts[keeper].name(&entry.set, keeper))
-            }),
-            Mode::Verify { .. } => Some(SharedString::from(en("Verify Before Merge"))),
-        };
-        self.session
-            .update(cx, |session, cx| session.set_place_label(label, cx));
     }
 
     fn opened(&mut self, cx: &mut Context<Self>) {
@@ -449,6 +297,8 @@ impl DuplicatesScreen {
                     }
                 });
             }));
+        } else {
+            self.load_compared(cx);
         }
         self.fetch(cx);
     }
@@ -458,10 +308,9 @@ impl DuplicatesScreen {
         // stays while the screen fades out.
         self.generation += 1;
         self.fetch_task = None;
-        self.compare.drag = None;
-        self.compare.difference_hovered = false;
+        self.stage.drag = None;
+        self.stage.difference_hovered = false;
         self.focused_once = false;
-        self.preview.close(cx);
         if self.focus.contains_focused(window, cx) {
             match self.return_focus.take() {
                 Some(handle) => window.focus(&handle, cx),
@@ -471,17 +320,17 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Lets Compare's originals and difference picture go once the screen
-    /// is no longer painted.
+    /// Lets the originals and the difference picture go once the screen is
+    /// no longer painted.
     fn release_originals(&mut self, cx: &mut Context<Self>) {
-        let compare = &mut self.compare;
-        compare.loads.clear();
-        compare.difference_task = None;
-        let images = compare
+        let stage = &mut self.stage;
+        stage.loads.clear();
+        stage.difference_task = None;
+        let images = stage
             .originals
             .drain()
             .map(|(_, image)| image)
-            .chain(compare.difference.take().map(|(_, image)| image))
+            .chain(stage.difference.take().map(|(_, image, _)| image))
             .collect::<Vec<_>>();
         for image in images {
             crate::atlas::release(image, cx);
@@ -576,19 +425,7 @@ impl DuplicatesScreen {
                 cx.emit(Change::Navigation);
             }
         });
-        // Choices about sets that are gone are forgotten; a chosen file
-        // that is no longer in its set is too.
-        let alive = entries
-            .iter()
-            .map(|entry| (entry.set.key, &entry.set))
-            .collect::<HashMap<_, _>>();
-        self.keepers.retain(|key, file| {
-            alive
-                .get(key)
-                .is_some_and(|set| set.index_of(*file).is_some())
-        });
-        self.checks.retain(|key, _| alive.contains_key(key));
-        self.rows.retain(|key, _| alive.contains_key(key));
+        let shown_file = self.shown_file();
         self.entries = entries;
         self.capped = capped.map(|shown| (shown, count));
         // A tab with nothing in it gives way to the other.
@@ -601,126 +438,55 @@ impl DuplicatesScreen {
             self.tab = other(self.tab);
         }
         self.reorder();
-        self.settle_mode(cx);
+        // The set on the stage stays, showing the same file, if it is still
+        // there; else the first of the queue.
+        let still = self
+            .current
+            .and_then(|key| self.entry_index(key))
+            .filter(|index| self.order.contains(index));
+        match still {
+            Some(index) => {
+                self.shown = shown_file
+                    .and_then(|file| self.entries[index].set.index_of(file))
+                    .unwrap_or(0);
+            }
+            None => self.show_set(self.order.first().copied(), cx),
+        }
+        self.load_compared(cx);
         self.changed(cx);
     }
 
-    /// The tab's sets in the chosen order.
+    /// The tab's sets, most alike first: the queue's order is how alike
+    /// the files are, nothing else, so the surest sets come first.
     fn reorder(&mut self) {
         let identical = self.tab == Tab::Identical;
-        let floor = 10_000u32.saturating_sub(self.similarity * 100);
         let mut order = (0..self.entries.len())
-            .filter(|&index| {
-                let set = &self.entries[index].set;
-                set.identical() == identical && (identical || set.distance() <= floor)
-            })
+            .filter(|&index| self.entries[index].set.identical() == identical)
             .collect::<Vec<_>>();
-        let entries = &self.entries;
-        let saving = |index: usize| entries[index].set.saving(self.keeper(index));
-        match self.sort {
-            Sort::Saving => order.sort_by_key(|&index| std::cmp::Reverse(saving(index))),
-            Sort::Files => order.sort_by_key(|&index| {
-                (
-                    std::cmp::Reverse(entries[index].set.files.len()),
-                    std::cmp::Reverse(saving(index)),
-                )
-            }),
-            Sort::Alike => order.sort_by_key(|&index| entries[index].set.distance()),
-        }
+        order.sort_by_key(|&index| self.entries[index].set.distance());
         self.order = order;
-        // The keyboard stays on its set if it is still shown.
-        let still = self.cursor.filter(|(key, _)| {
-            self.order
-                .iter()
-                .any(|&index| entries[index].set.key == *key)
-        });
-        self.cursor = still.or_else(|| {
-            self.order
-                .first()
-                .map(|&index| (entries[index].set.key, self.keeper(index)))
-        });
-    }
-
-    /// Leaves a view whose sets are gone.
-    fn settle_mode(&mut self, cx: &mut Context<Self>) {
-        match &self.mode {
-            Mode::Compare { set, .. } if self.entry(*set).is_none() => {
-                self.go(Mode::List, cx);
-            }
-            Mode::Verify { sets, .. } => {
-                let left = sets
-                    .iter()
-                    .copied()
-                    .filter(|key| self.entry(*key).is_some())
-                    .collect::<Vec<_>>();
-                if left.is_empty() {
-                    self.verify_sets.clear();
-                    self.go(Mode::List, cx);
-                } else {
-                    self.verify_sets = left.clone();
-                    self.mode = Mode::Verify {
-                        sets: left,
-                        current: 0,
-                    };
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The set `delta` sets after (or before) the set `key`, as the list
-    /// reads on screen, as an index of `entries`.
-    fn neighbour(&self, key: u32, delta: isize) -> Option<usize> {
-        let at = self
-            .order
-            .iter()
-            .position(|&index| self.entries[index].set.key == key)?;
-        let reading = self.layout().reading_order(&self.order, &self.entries);
-        let here = reading.iter().position(|&position| position == at)?;
-        let there = here.checked_add_signed(delta)?;
-        reading.get(there).map(|&position| self.order[position])
-    }
-
-    fn entry(&self, key: u32) -> Option<&Entry> {
-        self.entries.iter().find(|entry| entry.set.key == key)
     }
 
     fn entry_index(&self, key: u32) -> Option<usize> {
         self.entries.iter().position(|entry| entry.set.key == key)
     }
 
-    /// The file kept of the set at `index` of `entries`.
-    fn keeper(&self, index: usize) -> usize {
-        let set = &self.entries[index].set;
-        self.keepers
-            .get(&set.key)
-            .and_then(|file| set.index_of(*file))
-            .unwrap_or(set.best)
+    /// The set on the stage, as an index of `entries`.
+    fn current_index(&self) -> Option<usize> {
+        self.current.and_then(|key| self.entry_index(key))
     }
 
-    /// Whether the set at `index` is in the bulk merge: identical sets and
-    /// sets with a clear best file are, unless the user said otherwise.
-    fn checked(&self, index: usize) -> bool {
-        let set = &self.entries[index].set;
-        self.checks
-            .get(&set.key)
-            .copied()
-            .unwrap_or(set.verdict != sets::Verdict::Unsure)
+    /// The file shown, which is the one a merge keeps.
+    fn shown_file(&self) -> Option<FileId> {
+        let index = self.current_index()?;
+        Some(self.entries[index].set.files.get(self.shown)?.file.file_id)
     }
 
-    /// The tab's checked sets and what merging them frees.
-    fn selected(&self) -> (Vec<usize>, i64) {
-        let chosen = self
-            .order
-            .iter()
-            .copied()
-            .filter(|&index| self.checked(index))
-            .collect::<Vec<_>>();
-        let saving = chosen
-            .iter()
-            .map(|&index| self.entries[index].set.saving(self.keeper(index)))
-            .sum();
-        (chosen, saving)
+    /// The file the shown one is compared with: the next of the set.
+    fn partner(&self) -> Option<usize> {
+        let index = self.current_index()?;
+        let count = self.entries[index].set.files.len();
+        (count > 1).then(|| (self.shown + 1) % count)
     }
 
     /// How many sets each tab holds.
@@ -794,21 +560,21 @@ impl DuplicatesScreen {
 
     // ── Decisions ───────────────────────────────────────────────
 
-    /// Settles `steps` as one undoable step, then reads the pairs again.
-    /// A merge says what it did, with Undo.
+    /// Settles `steps` as one undoable step, moves to the next set, then
+    /// reads the pairs again. A merge says what it did, with Undo.
     fn resolve(
         &mut self,
         steps: Vec<(FileId, FileId, DuplicateResolutionChoice)>,
-        merged: Option<(usize, i64)>,
+        merged: bool,
         cx: &mut Context<Self>,
     ) {
         if self.busy || steps.is_empty() {
             return;
         }
         self.busy = true;
-        self.preview.close(cx);
-        self.compare.difference_hovered = false;
-        let label = if merged.is_some() {
+        self.stage.difference_hovered = false;
+        self.advance(cx);
+        let label = if merged {
             "Merge duplicates"
         } else {
             "Keep duplicates apart"
@@ -821,13 +587,11 @@ impl DuplicatesScreen {
             cx,
             move |this: &mut Self, result, cx| {
                 this.busy = false;
-                if result.is_ok()
-                    && let Some((sets, saving)) = merged
-                {
+                if result.is_ok() && merged {
                     let session = this.session.clone();
                     ui::notify::show(
                         ui::notify::Tone::Success,
-                        ui::notify::Options::new(merged_message(sets, saving), "")
+                        ui::notify::Options::new(en("Merged"), "")
                             .action(t("Undo"), move |_, cx| {
                                 session.update(cx, |session, cx| session.undo(cx))
                             }),
@@ -840,230 +604,201 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Merges one set into the file kept.
-    fn merge_set(&mut self, key: u32, cx: &mut Context<Self>) {
-        let Some(index) = self.entry_index(key) else {
+    /// Enter: keeps the file shown and merges the rest of its set into it.
+    fn merge(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
             return;
         };
-        let keeper = self.keeper(index);
-        let set = &self.entries[index].set;
-        let steps = set.merge_steps(keeper);
-        let saving = set.saving(keeper);
-        self.advance_from(key, cx);
-        self.resolve(steps, Some((1, saving)), cx);
+        let steps = self.entries[index].set.merge_steps(self.shown);
+        self.resolve(steps, true, cx);
     }
 
-    /// Keeps every file of a set: "Not duplicates" and "Keep all, related"
-    /// both record its pairs as different files, which a later scan does
-    /// not bring back.
-    fn keep_apart(&mut self, key: u32, cx: &mut Context<Self>) {
-        let Some(entry) = self.entry(key) else {
+    /// N: the set's files are different pictures; none is touched, and a
+    /// later scan does not bring the pairs back.
+    fn not_duplicates(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
             return;
         };
-        let steps = entry.set.apart_steps();
-        self.advance_from(key, cx);
-        self.resolve(steps, None, cx);
+        let steps = self.entries[index].set.apart_steps();
+        self.resolve(steps, false, cx);
     }
 
-    /// Takes one file out of its set.
-    fn remove_file(&mut self, key: u32, file: usize, cx: &mut Context<Self>) {
-        let Some(entry) = self.entry(key) else {
+    /// Takes one file out of the set on the stage.
+    fn remove_file(&mut self, file: usize, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
             return;
         };
-        let steps = entry.set.without_steps(file);
-        self.resolve(steps, None, cx);
-    }
-
-    /// Merges every checked set of the tab, as one undoable step.
-    fn merge_checked(&mut self, cx: &mut Context<Self>) {
-        let (chosen, saving) = self.selected();
-        let steps = chosen
-            .iter()
-            .flat_map(|&index| self.entries[index].set.merge_steps(self.keeper(index)))
-            .collect::<Vec<_>>();
-        if self.mode != Mode::List {
-            self.go(Mode::List, cx);
-        }
-        self.verify_sets.clear();
-        self.resolve(steps, Some((chosen.len(), saving)), cx);
-    }
-
-    /// The footer's button: the check first when a checked set differs in
-    /// what a merge combines, else the merge.
-    fn next_or_merge(&mut self, cx: &mut Context<Self>) {
-        let (chosen, _) = self.selected();
-        let differing = chosen
-            .iter()
-            .filter(|&&index| verify::differs(&self.entries[index]))
-            .map(|&index| self.entries[index].set.key)
-            .collect::<Vec<_>>();
-        if differing.is_empty() {
-            self.merge_checked(cx);
-        } else {
-            self.go(
-                Mode::Verify {
-                    sets: differing,
-                    current: 0,
-                },
-                cx,
-            );
-        }
-    }
-
-    /// Moves the keyboard, and Compare, past a set about to go.
-    fn advance_from(&mut self, key: u32, cx: &mut Context<Self>) {
-        let next = self.neighbour(key, 1).or_else(|| self.neighbour(key, -1));
-        let next = next.map(|index| (self.entries[index].set.key, self.keeper(index)));
-        if self.cursor.is_some_and(|(cursor, _)| cursor == key) {
-            self.cursor = next;
-        }
-        if matches!(self.mode, Mode::Compare { set, .. } if set == key) {
-            let mode = match next {
-                Some((set, shown)) => Mode::Compare { set, shown },
-                None => Mode::List,
-            };
-            self.go(mode, cx);
-        }
-    }
-
-    /// Makes `file` the one kept of its set.
-    fn choose_keeper(&mut self, key: u32, file: usize, cx: &mut Context<Self>) {
-        let Some(index) = self.entry_index(key) else {
+        let steps = self.entries[index].set.without_steps(file);
+        if self.busy || steps.is_empty() {
             return;
-        };
-        let id = self.entries[index].set.files[file].file.file_id;
-        self.keepers.insert(key, id);
-        self.cursor = Some((key, file));
+        }
+        self.busy = true;
+        crate::session::edit_then(
+            &self.session,
+            Report::failure(t("Unable to resolve duplicate pair")),
+            Reread::NOTHING,
+            move |library| {
+                library.resolve_duplicates(&steps, "Keep duplicates apart", crate::now_ms())
+            },
+            cx,
+            move |this: &mut Self, _, cx| {
+                this.busy = false;
+                this.fetch(cx);
+            },
+        );
         self.changed(cx);
     }
 
-    fn toggle_check(&mut self, key: u32, cx: &mut Context<Self>) {
-        let Some(index) = self.entry_index(key) else {
+    /// Puts the next set of the queue on the stage, or the one before it
+    /// when this was the last.
+    fn advance(&mut self, cx: &mut Context<Self>) {
+        let Some(at) = self
+            .current_index()
+            .and_then(|index| self.order.iter().position(|&each| each == index))
+        else {
             return;
         };
-        let checked = !self.checked(index);
-        self.checks.insert(key, checked);
+        let next = self
+            .order
+            .get(at + 1)
+            .or_else(|| at.checked_sub(1).and_then(|before| self.order.get(before)))
+            .copied();
+        self.show_set(next, cx);
+    }
+
+    /// Space: the next set, this one left for later.
+    fn skip(&mut self, cx: &mut Context<Self>) {
+        self.step_set(1, cx);
+    }
+
+    /// ↑ and ↓: the set before or after in the queue.
+    fn step_set(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let at = self
+            .current_index()
+            .and_then(|index| self.order.iter().position(|&each| each == index));
+        let target = match at {
+            Some(at) => at.checked_add_signed(delta),
+            None => Some(0),
+        };
+        if let Some(index) = target.and_then(|target| self.order.get(target)).copied() {
+            self.show_set(Some(index), cx);
+            self.reveal_current();
+            self.changed(cx);
+        }
+    }
+
+    /// Puts a set on the stage, its first file shown, at the fitted zoom.
+    fn show_set(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+        let key = index.map(|index| self.entries[index].set.key);
+        if key == self.current {
+            return;
+        }
+        self.current = key;
+        self.shown = 0;
+        self.stage.zoom.fit();
+        self.stage.wheel = 0.;
+        self.stage.drag = None;
+        self.release_originals(cx);
+        self.load_compared(cx);
         self.changed(cx);
     }
 
     fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if self.tab != tab {
             self.tab = tab;
-            self.cursor = None;
-            self.scroll.set_offset(point(px(0.), px(0.)));
+            self.queue_scroll.set_offset(point(px(0.), px(0.)));
             self.reorder();
+            self.show_set(self.order.first().copied(), cx);
             self.changed(cx);
         }
     }
 
-    fn set_sort(&mut self, sort: Sort, cx: &mut Context<Self>) {
-        self.sort = sort;
-        self.reorder();
-        self.changed(cx);
-    }
-
-    fn set_similarity(&mut self, similarity: u32, cx: &mut Context<Self>) {
-        if self.similarity != similarity {
-            self.similarity = similarity;
-            self.reorder();
-            self.changed(cx);
+    /// ← and →, a click on the strip: another file of the set, at the same
+    /// place and scale.
+    fn show_file(&mut self, file: usize, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
+            return;
+        };
+        if file >= self.entries[index].set.files.len() || file == self.shown {
+            return;
         }
-    }
-
-    // ── Compare ─────────────────────────────────────────────────
-
-    /// Opens a set in Compare at one of its files.
-    fn open_compare(&mut self, key: u32, shown: usize, cx: &mut Context<Self>) {
-        self.compare.zoom.fit();
-        self.compare.wheel = 0.;
-        self.go(Mode::Compare { set: key, shown }, cx);
-    }
-
-    fn back_to_list(&mut self, cx: &mut Context<Self>) {
-        self.go(Mode::List, cx);
-    }
-
-    /// Shows another file of the set in Compare, keeping the zoom.
-    fn flip(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Mode::Compare { set, shown } = self.mode else {
-            return;
-        };
-        let Some(count) = self.entry(set).map(|entry| entry.set.files.len()) else {
-            return;
-        };
-        let next = (shown as isize + delta).rem_euclid(count as isize) as usize;
-        self.mode = Mode::Compare { set, shown: next };
-        self.cursor = Some((set, next));
+        self.shown = file;
         self.load_compared(cx);
         self.changed(cx);
     }
 
-    /// Skips to the next set in Compare, or back to the list after the last.
-    fn skip(&mut self, cx: &mut Context<Self>) {
-        let Mode::Compare { set, .. } = self.mode else {
+    fn flip(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(index) = self.current_index() else {
             return;
         };
-        match self.neighbour(set, 1) {
-            Some(index) => {
-                let key = self.entries[index].set.key;
-                let keeper = self.keeper(index);
-                self.open_compare(key, keeper, cx);
-            }
-            None => self.back_to_list(cx),
-        }
+        let count = self.entries[index].set.files.len() as isize;
+        let next = (self.shown as isize + delta).rem_euclid(count.max(1)) as usize;
+        self.show_file(next, cx);
     }
 
-    /// Loads the originals Compare needs: the shown file, the kept one and
-    /// the shown file's neighbours, each once.
+    /// Scrolls the queue so the set on the stage shows.
+    fn reveal_current(&mut self) {
+        let Some(at) = self
+            .current_index()
+            .and_then(|index| self.order.iter().position(|&each| each == index))
+        else {
+            return;
+        };
+        let top = queue::row_top(at);
+        let bottom = top + queue::ROW;
+        let view = f32::from(self.queue_bounds.size.height);
+        let scrolled = -f32::from(self.queue_scroll.offset().y);
+        let target = if top < scrolled {
+            top
+        } else if bottom > scrolled + view {
+            bottom - view
+        } else {
+            scrolled
+        };
+        self.queue_scroll
+            .set_offset(point(px(0.), px(-target.max(0.))));
+    }
+
+    // ── The stage's pictures ───────────────────────────────────
+
+    /// Loads the originals the stage needs: the shown file, its partner and
+    /// the file after, each once.
     fn load_compared(&mut self, cx: &mut Context<Self>) {
-        let Mode::Compare { set, shown } = self.mode else {
+        let Some(index) = self.current_index() else {
             return;
         };
-        let Some(index) = self.entry_index(set) else {
-            return;
-        };
-        let keeper = self.keeper(index);
         let entry = &self.entries[index];
         let count = entry.set.files.len();
         let wanted = [
-            shown,
-            keeper,
-            (shown + 1) % count,
-            (shown + count - 1) % count,
+            self.shown,
+            (self.shown + 1) % count,
+            (self.shown + 2) % count,
         ];
         let mut paths = Vec::new();
         for file in wanted {
             let side = &entry.set.files[file];
             let id = side.file.file_id.0;
-            if self.compare.originals.contains_key(&id) || self.compare.loads.contains_key(&id) {
+            if self.stage.originals.contains_key(&id) || self.stage.loads.contains_key(&id) {
                 continue;
             }
-            let path = side
-                .file
-                .mime_type
-                .starts_with("image/")
-                .then(|| entry.facts[file].media(&side.file.file_hash))
-                .flatten()
-                .filter(|media| media.facts.content_hash == side.file.file_hash)
-                .map(|media| PathBuf::from(&media.file_path));
-            if let Some(path) = path {
+            if let Some(path) = original(entry, file) {
                 paths.push((id, path));
             }
         }
         for (id, path) in paths {
             let load = load_image(path, cx);
-            self.compare.loads.insert(
+            self.stage.loads.insert(
                 id,
                 cx.spawn(async move |this, cx| {
                     let image = load.await;
                     let _ = this.update(cx, |this, cx| {
-                        this.compare.loads.remove(&id);
+                        this.stage.loads.remove(&id);
                         if let Some(image) = image {
-                            if let Some(old) = this.compare.originals.insert(id, image) {
+                            if let Some(old) = this.stage.originals.insert(id, image) {
                                 crate::atlas::release(old, cx);
                             }
                             this.refresh_difference(cx);
-                            cx.notify();
+                            this.changed(cx);
                         }
                     });
                 }),
@@ -1072,85 +807,94 @@ impl DuplicatesScreen {
         self.refresh_difference(cx);
     }
 
-    /// The shown file and the kept one in Compare, by file id.
+    /// The shown file and its partner, by file id.
     fn compared_pair(&self) -> Option<(u32, u32)> {
-        let Mode::Compare { set, shown } = self.mode else {
-            return None;
-        };
-        let index = self.entry_index(set)?;
+        let index = self.current_index()?;
         let files = &self.entries[index].set.files;
         Some((
-            files[shown].file.file_id.0,
-            files[self.keeper(index)].file.file_id.0,
+            files[self.shown].file.file_id.0,
+            files[self.partner()?].file.file_id.0,
         ))
     }
 
-    /// Makes the difference of the shown file against the kept one, from
-    /// their originals, when both are decoded and it is not made yet.
+    /// Makes the difference of the shown file from its partner, and what it
+    /// measures, from their originals once both are decoded.
     fn refresh_difference(&mut self, cx: &mut Context<Self>) {
-        let Some((shown, kept)) = self.compared_pair().filter(|(shown, kept)| shown != kept) else {
+        let Some((shown, partner)) = self.compared_pair() else {
             return;
         };
         if self
-            .compare
+            .stage
             .difference
             .as_ref()
-            .is_some_and(|(pair, _)| *pair == (shown, kept))
+            .is_some_and(|(pair, _, _)| *pair == (shown, partner))
         {
             return;
         }
         let (Some(left), Some(right)) = (
-            self.compare.originals.get(&kept).cloned(),
-            self.compare.originals.get(&shown).cloned(),
+            self.stage.originals.get(&shown).cloned(),
+            self.stage.originals.get(&partner).cloned(),
         ) else {
             return;
         };
         let work = cx
             .background_executor()
-            .spawn(async move { difference::compute(&right, &left) });
-        self.compare.difference_task = Some(cx.spawn(async move |this, cx| {
-            let image = work.await;
+            .spawn(async move { difference::compute(&left, &right) });
+        self.stage.difference_task = Some(cx.spawn(async move |this, cx| {
+            let made = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.compared_pair() != Some((shown, kept)) {
-                    if let Some(image) = image {
+                if this.compared_pair() != Some((shown, partner)) {
+                    if let Some((image, _)) = made {
                         crate::atlas::release(image, cx);
                     }
                     return;
                 }
-                if let Some(image) = image
-                    && let Some((_, old)) = this.compare.difference.replace(((shown, kept), image))
+                if let Some((image, measure)) = made
+                    && let Some((_, old, _)) =
+                        this.stage
+                            .difference
+                            .replace(((shown, partner), image, measure))
                 {
                     crate::atlas::release(old, cx);
                 }
-                if this.compare.difference_hovered {
-                    cx.notify();
-                }
+                cx.notify();
             });
         }));
     }
 
+    /// What comparing the shown file with its partner measured, once it
+    /// has.
+    fn measure(&self) -> Option<difference::Measure> {
+        let pair = self.compared_pair()?;
+        self.stage
+            .difference
+            .as_ref()
+            .filter(|(made, _, _)| *made == pair)
+            .map(|(_, _, measure)| *measure)
+    }
+
     fn fit(&mut self, cx: &mut Context<Self>) {
-        self.compare.zoom.fit();
+        self.stage.zoom.fit();
         self.changed(cx);
     }
 
     fn actual(&mut self, cx: &mut Context<Self>) {
-        self.compare.zoom.actual();
+        self.stage.zoom.actual();
         self.changed(cx);
     }
 
-    /// The window's wheel over the picture: with Command (Control elsewhere)
-    /// it zooms about the pointer; otherwise it flips between the files,
-    /// one file per notch of travel.
+    /// The wheel over the picture: with Command (Control elsewhere) it
+    /// zooms about the pointer; otherwise it flips between the files, one
+    /// file per notch of travel.
     fn wheel(&mut self, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(window.line_height());
         if event.modifiers.secondary(cx) {
             let Some(image) = self.shown_extent() else {
                 return;
             };
-            let bounds = self.compare.pane;
+            let bounds = self.stage.pane;
             let offset = event.position - bounds.center();
-            self.compare.zoom.wheel(
+            self.stage.zoom.wheel(
                 pane_extent(bounds),
                 image,
                 (f32::from(offset.x), f32::from(offset.y)),
@@ -1160,169 +904,35 @@ impl DuplicatesScreen {
             return;
         }
         const NOTCH: f32 = 60.;
-        self.compare.wheel += f32::from(delta.y) + f32::from(delta.x);
-        if self.compare.wheel.abs() >= NOTCH {
-            let step = if self.compare.wheel > 0. { -1 } else { 1 };
-            self.compare.wheel = 0.;
+        self.stage.wheel += f32::from(delta.y) + f32::from(delta.x);
+        if self.stage.wheel.abs() >= NOTCH {
+            let step = if self.stage.wheel > 0. { -1 } else { 1 };
+            self.stage.wheel = 0.;
             self.flip(step, cx);
         }
     }
 
     /// The shown file's size in pixels.
     fn shown_extent(&self) -> Option<compare::Extent> {
-        let Mode::Compare { set, shown } = self.mode else {
-            return None;
-        };
-        let file = &self.entry(set)?.set.files[shown].file;
+        let index = self.current_index()?;
+        let file = &self.entries[index].set.files[self.shown].file;
         Some(compare::Extent::new(
             file.pixel_width? as f32,
             file.pixel_height? as f32,
         ))
     }
+}
 
-    // ── Keys ────────────────────────────────────────────────────
-
-    /// ← and →: the files of a set, running on into the sets before and
-    /// after; in Compare, the set's files.
-    fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if matches!(self.mode, Mode::Compare { .. }) {
-            self.flip(delta, cx);
-            return;
-        }
-        if self.mode != Mode::List {
-            return;
-        }
-        let Some((key, file)) = self.cursor else {
-            self.reorder();
-            return self.changed(cx);
-        };
-        let Some(index) = self.entry_index(key) else {
-            return;
-        };
-        let count = self.entries[index].set.files.len();
-        let target = file as isize + delta;
-        self.cursor = if (0..count as isize).contains(&target) {
-            Some((key, target as usize))
-        } else {
-            match self.neighbour(key, delta.signum()) {
-                Some(index) => {
-                    let files = self.entries[index].set.files.len();
-                    Some((
-                        self.entries[index].set.key,
-                        if delta > 0 { 0 } else { files - 1 },
-                    ))
-                }
-                None => Some((key, file)),
-            }
-        };
-        self.reveal_cursor();
-        self.changed(cx);
-    }
-
-    /// ↑ and ↓: the set above or below in the list.
-    fn step_row(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.mode != Mode::List {
-            return;
-        }
-        let layout = self.layout();
-        let Some((key, file)) = self.cursor else {
-            return;
-        };
-        let Some(next) = layout.vertical(&self.order, &self.entries, key, delta) else {
-            return;
-        };
-        let index = self.order[next];
-        let files = self.entries[index].set.files.len();
-        self.cursor = Some((self.entries[index].set.key, file.min(files - 1)));
-        self.reveal_cursor();
-        self.changed(cx);
-    }
-
-    /// Scrolls the list so the keyboard's set shows.
-    fn reveal_cursor(&mut self) {
-        let Some((key, file)) = self.cursor else {
-            return;
-        };
-        let layout = self.layout();
-        let Some(place) = layout.place_of(&self.order, &self.entries, key) else {
-            return;
-        };
-        let top = place.top;
-        let bottom = top + place.height();
-        let view = f32::from(self.bounds.size.height);
-        let scrolled = -f32::from(self.scroll.offset().y);
-        let target = if top < scrolled {
-            top
-        } else if bottom > scrolled + view {
-            bottom - view
-        } else {
-            scrolled
-        };
-        self.scroll.set_offset(point(px(0.), px(-target.max(0.))));
-        // A set wider than its place brings the file into view.
-        if let Some(row) = self.rows.get(&key) {
-            let left = file as f32 * (list::TILE + list::TILE_GAP);
-            let width = place.width - 2. * list::PAD_X;
-            let scrolled = -f32::from(row.offset().x);
-            let x = if left < scrolled {
-                left
-            } else if left + list::TILE > scrolled + width {
-                left + list::TILE - width
-            } else {
-                scrolled
-            };
-            row.set_offset(point(px(-x.max(0.)), px(0.)));
-        }
-    }
-
-    /// Enter: merges the set (in Compare, keeping the file shown).
-    fn merge_key(&mut self, cx: &mut Context<Self>) {
-        match self.mode {
-            Mode::List => {
-                if let Some((key, _)) = self.cursor {
-                    self.merge_set(key, cx);
-                }
-            }
-            Mode::Compare { set, shown } => {
-                self.choose_keeper(set, shown, cx);
-                self.merge_set(set, cx);
-            }
-            Mode::Verify { .. } => self.merge_checked(cx),
-        }
-    }
-
-    /// Space: opens Compare on the keyboard's file; in Compare, skips.
-    fn compare_key(&mut self, cx: &mut Context<Self>) {
-        match self.mode {
-            Mode::List => {
-                if let Some((key, file)) = self.cursor {
-                    self.open_compare(key, file, cx);
-                }
-            }
-            Mode::Compare { .. } => self.skip(cx),
-            Mode::Verify { .. } => {}
-        }
-    }
-
-    /// N and A: the set on screen, or the keyboard's.
-    fn apart_key(&mut self, cx: &mut Context<Self>) {
-        let key = match self.mode {
-            Mode::Compare { set, .. } => Some(set),
-            Mode::List => self.cursor.map(|(key, _)| key),
-            Mode::Verify { .. } => None,
-        };
-        if let Some(key) = key {
-            self.keep_apart(key, cx);
-        }
-    }
-
-    /// Escape: back to the list.
-    fn leave(&mut self, cx: &mut Context<Self>) {
-        match self.mode {
-            Mode::Compare { .. } | Mode::Verify { .. } => self.back_to_list(cx),
-            Mode::List => {}
-        }
-    }
+/// Where the library keeps a file's original, when it is a still image.
+fn original(entry: &Entry, file: usize) -> Option<PathBuf> {
+    let side = &entry.set.files[file];
+    side.file
+        .mime_type
+        .starts_with("image/")
+        .then(|| entry.facts[file].media(&side.file.file_hash))
+        .flatten()
+        .filter(|media| media.facts.content_hash == side.file.file_hash)
+        .map(|media| PathBuf::from(&media.file_path))
 }
 
 fn other(tab: Tab) -> Tab {
@@ -1346,16 +956,6 @@ fn scan_message(found: u64) -> String {
     }
 }
 
-/// What a merge says it did.
-fn merged_message(sets: usize, saving: i64) -> String {
-    let size = crate::text::size_to_megabytes(saving);
-    if sets == 1 {
-        format!("Merged 1 set, {size} freed")
-    } else {
-        format!("Merged {sets} sets, {size} freed")
-    }
-}
-
 /// Starts decoding an image file off the drawing thread.
 fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
     let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
@@ -1363,9 +963,9 @@ fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
         .spawn(async move { load.await.ok() })
 }
 
-/// Compare's rail, for the shell to show in the inspector's place while
-/// Compare shows: between Compare and the grid or the viewer it stays in
-/// place, and only what is in it changes.
+/// The desk's rail, for the shell to show in the inspector's place while a
+/// set is on the stage: between the desk and the grid or the viewer it
+/// stays in place, and only what is in it changes.
 pub fn rail(screen: &Entity<DuplicatesScreen>, cx: &mut App) -> crate::shell::ScreenRail {
     let view = cx
         .new(|cx| DuplicatesRail {
@@ -1379,12 +979,12 @@ pub fn rail(screen: &Entity<DuplicatesScreen>, cx: &mut App) -> crate::shell::Sc
         shows: Box::new(move |cx| {
             screen
                 .upgrade()
-                .is_some_and(|screen| matches!(screen.read(cx).mode, Mode::Compare { .. }))
+                .is_some_and(|screen| screen.read(cx).current_index().is_some())
         }),
     }
 }
 
-/// Compare's rail; it follows the screen.
+/// The desk's rail; it follows the screen.
 pub struct DuplicatesRail {
     screen: WeakEntity<DuplicatesScreen>,
     _observing: Subscription,
@@ -1395,12 +995,11 @@ impl Render for DuplicatesRail {
         let Some(screen) = self.screen.upgrade() else {
             return div().into_any_element();
         };
-        screen.update(cx, |screen, cx| screen.compare_rail(window, cx))
+        screen.update(cx, |screen, cx| screen.rail(window, cx))
     }
 }
 
-/// The screen's titlebar controls: the tabs and the order in the list, the
-/// set and its file in Compare.
+/// The screen's titlebar controls: the stage's zoom and the scan.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
     /// The row's width as last laid out: on Windows and Linux the window's
