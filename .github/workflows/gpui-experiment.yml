@@ -198,6 +198,47 @@ jobs:
           test -f "$out/login-check.log"
           grep -qx 'result: pass' "$out/login-check.log"
 
+      # The network features in the app on the copy above, against fixtures
+      # the app serves itself on the loopback (`src/net_check.rs`): the
+      # services' icons fetched, kept and drawn or left as the globe; an
+      # update found, its installer downloaded and verified against this
+      # system's feed (`latest.yml` on Windows, `latest-linux.yml` on Linux),
+      # then a mismatching one refused and not kept; and Search by Image on
+      # every engine in the hidden web view, each receiving exactly the
+      # file's bytes, name and type. No real service is contacted.
+      - name: Network features
+        shell: bash
+        run: |
+          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          out="$(unix "$RUNNER_TEMP")/net-check"
+          mkdir -p "$out/state" "$out/data"
+          export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_SILENT=1
+          export PICTO_GPUI_STATE="$(native "$out/state")" PICTO_GPUI_APP_DATA="$(native "$out/data")"
+          export PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:47614
+          export PICTO_GPUI_NET_CHECK="$(native "$out")"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
+          else
+            run=()
+          fi
+          status=0
+          timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+          echo "app ended with $status"
+          grep -i "net check\|panic\|search by image\|web view" "$out/app.log" || true
+          test -f "$out/net-check.log"
+          grep -qx 'result: pass' "$out/net-check.log"
+
+      - name: Upload network check
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: net-check-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/net-check/*.log
+          if-no-files-found: warn
+
       - name: Upload sign-in window check
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
