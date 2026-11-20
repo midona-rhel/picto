@@ -1,357 +1,581 @@
 # Patched GPUI crates
 
-The vendored `gpui-pre` crate leaves out the published package's `examples/`
-folder (4.9 MB of sample programs and images) and the `[[example]]` entries
-of its manifest that name them; nothing else differs from 0.3.12 apart from
-the changes described here.
+The vendored `gpui-pre` crate does not contain the `examples/` folder of the
+published package (4.9 MB of sample programs and images), and its manifest
+does not contain the `[[example]]` entries that name those examples. Nothing
+else in it differs from 0.3.12 apart from the changes described here.
 
-These are the crates.io sources of `gpui-pre`, `gpui-pre-apple`,
-`gpui-pre-wgpu`, `gpui-pre-windows`, `gpui-pre-macos` and `gpui-pre-linux`
-version 0.3.12 (snapshot of
-zed-industries/zed at d2a4fb6), Apache-2.0 (each keeps its `LICENSE-APACHE`),
-with a backdrop-blur primitive, nearest-neighbour image sampling, an
-interface zoom and the reading of what a drop from another application
-carries besides files added.
-`../Cargo.toml` substitutes them for the
-published crates with `[patch.crates-io]`; every other GPUI crate still comes
-from crates.io. Everything else in them is byte-for-byte the published
-package, so the diff at the end of this file is the whole change.
+The six folders next to this file hold the crates.io sources of `gpui-pre`,
+`gpui-pre-apple`, `gpui-pre-wgpu`, `gpui-pre-windows`, `gpui-pre-macos` and
+`gpui-pre-linux`, version 0.3.12. That version is a snapshot of
+zed-industries/zed at d2a4fb6. The licence is Apache-2.0, and each crate
+keeps its `LICENSE-APACHE` file. This project added the following to them:
+
+- a backdrop-blur primitive;
+- nearest-neighbour image sampling;
+- an interface zoom;
+- the reading of what a drop from another application carries besides
+  files;
+- a way to ask whether the system blurs what is behind a window;
+- Acrylic on Windows 11, set through the system's documented window
+  attribute.
+
+The section "What changed, and why" describes these and the smaller changes
+that this list leaves out. `../Cargo.toml` substitutes the six folders for
+the published crates with `[patch.crates-io]`. Every other GPUI crate still
+comes from crates.io. Everything else in the six crates is byte-for-byte the
+published package, so the diff at the end of this file is the whole change.
 
 The design follows dux-web's port of backdrop materials to gpui-pre 0.3.4
 (github.com/dux-web/gpui, commit b9b7df7, from crabtalk/zed's `bezel-gpui`;
-proposed upstream in longbridge/gpui-component#3598): a blur list outside the
-primitive batches, ordered by draw order, with the batch iterator ending a
-batch at each blur so a renderer can stop, read what it has drawn and go on;
-and a drop shadow that cuts its element out. The blur itself is written anew
-(dux-web uses Metal Performance Shaders on Metal and leaves out what this app
-does not need: lens, dispersion, tint and rim light).
+proposed upstream in longbridge/gpui-component#3598). Two parts of that
+design are used here. The first is how the scene stores blurs: it keeps them
+in a list of their own, outside the batches of primitives, sorted by draw
+order, and the batch iterator ends a batch at each blur. A renderer can
+therefore stop at a blur, read what it has drawn so far, and then go on. The
+second is a drop shadow that has the shape of its element cut out of it. The
+blur itself is written anew: dux-web uses Metal Performance Shaders on
+Metal, and the blur here uses shaders of its own. The blur here also leaves
+out what this app does not need: lens, dispersion, tint and rim light.
 
 ## What changed, and why
 
 `gpui-pre`
-- `src/scene.rs`: `BackdropBlur` (rounded rectangle, clip, gaussian standard
-  deviation, CSS `saturate()` and `brightness()`, opacity) and
-  `Scene::backdrop_blurs`, kept in draw order and replayed with the cached
-  paint operations (`PaintOperation::BackdropBlur`). `Scene::insert_backdrop_blur`
-  gives a blur the next draw order over its bounds, like a primitive.
-  `BatchIterator` ends a batch before the next blur; `Scene::batch_order`
-  tells a renderer a batch's order. `BackdropBlur::plan` and
-  `BackdropBlurKernel` are the arithmetic both renderers share: the pixels
-  the blur covers and reads, the downsample factor (1, or even so that about
-  three reduced texels of gaussian remain), and a separable gaussian as
-  linear-sampled tap pairs. `Shadow::inset == 2` is documented as a drop
-  shadow with its element cut out.
-- `src/window.rs`: `BackdropFilter` and `Window::paint_backdrop_blur`, which
-  inserts a blur at the element opacity; `Window::paint_drop_shadows_outside`,
-  which paints drop shadows with `inset: 2`, so that a translucent panel does
-  not show (or blur in) its own shadow, as CSS never draws a `box-shadow`
-  under its element. `Window::is_dirty` (test support only), so the
-  off-screen checks can draw only the frames a real window would.
-  `Window::start_platform_drag`, which hands files to the platform's native
-  drag session (the published `start_external_drag` of the macOS and Wayland
-  windows) for a view that follows the pointer itself: the grid's item drag
-  leaving the window. GPUI otherwise does this only for drags started with
-  `on_drag` and `external_drag_payload`.
-- Interface zoom (the app's Cmd+= / Cmd+− / Cmd+0, a browser's page zoom):
-  `App::set_ui_zoom` and `App::ui_zoom` (`src/app.rs`) hold one zoom for
-  every window. A window (`src/window.rs`) takes it when it opens and, when
-  it changes, at the start of its next frame (`Window::apply_ui_zoom`): its
-  `scale_factor` becomes the display's times the zoom and its
-  `viewport_size` the platform's content size divided by it, so layout,
-  hit-testing and the scene stay in one space of points while text and
-  paths are rasterized at the zoomed size (glyphs keyed by that scale in the
-  sprite atlas), blur radii and corner radii scale with them, and the
-  renderers, which draw the scene in device pixels, are unchanged.
-  `Window::ui_zoom` reads it. Input from the platform goes through
-  `Window::dispatch_platform_input`, which divides every position (and a
-  precise scroll's distance) by the zoom before `dispatch_event`; the
-  platform's input callback uses it, and the app's playback of input
-  (`src/pointer.rs`) does too. What goes back to the platform is multiplied
-  by it: the input method's rectangles and hit point
-  (`PlatformInputHandler::bounds_for_range`, `selection_bounds_for_range`,
-  `element_bounds`, `character_index_for_point` in `src/platform.rs`, and
-  the candidate position `Window` sends), `show_window_menu`,
-  `set_input_region`, `set_client_inset`, `set_client_corner_radii`;
-  `visual_viewport_bounds` is divided. The frame (`Window::bounds`,
-  `window_bounds`, the minimum size, the traffic lights' position) stays in
-  screen points. At zoom 1 every conversion returns its input unchanged, so
-  nothing draws or hit-tests differently. Not converted: `Window::insets`
-  (safe areas, which the desktop platforms do not report) and
-  `Window::resize`, which take the platform's points.
-- `src/platform/test/window.rs`: the test window keeps the decorations the
-  window asked for and reports them (`Decorations::Client` with nothing
-  tiled when the client's were asked for), as a Linux desktop that grants
-  them does, so the off-screen checks draw a frameless window's own chrome
-  (its buttons and resize edges) as on Linux.
-- Nearest-neighbour images (CSS `image-rendering: pixelated`, the Preview
-  setting "Scaling: Pixelated"): `PolychromeSprite`'s padding word after
-  `order` becomes `nearest` (a `PaddedBool32`, so the layout every shader
-  reads is unchanged; `src/scene.rs`); `Window::paint_image_sampled` takes
-  the choice and `Window::paint_image` calls it with `false`
-  (`src/window.rs`); `ImageStyle::pixelated` and `StyledImage::pixelated`
-  pass it from the `img` element (`src/elements/img.rs`). Each renderer's
-  sprite fragment shader then reads its linear sampler at the centre of the
-  texel the position falls in, which returns that texel alone; no sampler,
-  binding or pipeline is added.
-- `src/elements/img.rs`: an animated image (GIF, animated WebP) plays
-  whenever its window draws, not only while the window is the active one,
-  as a browser plays it: a detail window beside the main window, or the
-  main window while another application is in front, kept its GIFs on one
-  frame. A covered or minimised window still draws nothing. Its view is
-  drawn again when the frame shown has been shown for its delay, by a timer
-  the element keeps in its state, not on every frame the display can show,
-  which redrew the whole window at the display's rate for as long as an
-  animated image was on screen. A frame of 10 ms or less is shown for
-  100 ms, as browsers show it (`shown_for`); it used to advance once per
-  frame drawn.
+- `src/scene.rs`: This file has these changes.
+  - `BackdropBlur` is a new struct. It describes one region in which
+    everything drawn beneath it so far is shown blurred. It holds the
+    rounded rectangle, the clip, the standard deviation of the gaussian, the
+    factors of CSS `saturate()` and `brightness()`, and an opacity.
+  - `Scene::backdrop_blurs` is the list of the blurs of a frame. It is kept
+    in draw order. Each blur is also recorded with the cached paint
+    operations, as `PaintOperation::BackdropBlur`, so that it is inserted
+    again when those operations are replayed.
+  - `Scene::insert_backdrop_blur` gives a blur the next draw order over its
+    bounds, in the same way that a primitive gets its draw order.
+  - `BatchIterator` ends a batch before the next blur. `Scene::batch_order`
+    returns the draw order of the first primitive of a batch, so that a
+    renderer can tell which blurs come before the batch.
+  - `BackdropBlur::plan` and `BackdropBlurKernel` are the arithmetic that
+    the Metal renderer and the wgpu renderer share. They work out three
+    things. The first is which pixels the blur covers and which pixels it
+    reads. The second is the downsample factor: it is 1, or an even number
+    chosen so that a gaussian of about three reduced texels remains. The
+    third is a separable gaussian whose taps are sampled linearly: each tap
+    is placed between two texels, so that one linear sample reads both
+    texels at their weights.
+  - The documentation of `Shadow::inset` now says that the value 2 means a
+    drop shadow with its element cut out.
+- `src/window.rs`: This file has four additions.
+  - `BackdropFilter` is a new struct. It holds the blur radius, the
+    saturation, the brightness and an opacity.
+    `Window::paint_backdrop_blur` takes one and inserts a blur into the
+    scene at the element opacity, so a panel that fades also fades its
+    blur.
+  - `Window::paint_drop_shadows_outside` paints drop shadows with
+    `inset: 2`. A shadow painted this way is not drawn where its element
+    is, so a translucent panel does not show its own shadow through its
+    fill. It can also be painted after the panel's backdrop blur, so the
+    blur does not blur the panel's own shadow into the panel. CSS behaves
+    the same way: it never draws a `box-shadow` under its element.
+  - `Window::is_dirty` (test support only) answers whether the window has
+    been invalidated since it was last drawn. With it, the off-screen
+    checks can draw only the frames that a real window would draw.
+  - `Window::start_platform_drag` hands files to the platform's native drag
+    session. It calls `start_external_drag`, which the macOS and Wayland
+    windows of the published crates already have. It is for a view that
+    follows the pointer itself. The app uses it when the grid's item drag
+    leaves the window. Without it, GPUI starts a native drag only for drags
+    that were started with `on_drag` and `external_drag_payload`.
+- Interface zoom. The app's Cmd+= / Cmd+− / Cmd+0 change it, and it works
+  like the page zoom of a browser.
+  - `App::set_ui_zoom` and `App::ui_zoom` (`src/app.rs`) hold one zoom for
+    every window.
+  - A window (`src/window.rs`) takes the zoom when it opens. When the zoom
+    changes, an open window takes the new value at the start of its next
+    frame (`Window::apply_ui_zoom`). The window's `scale_factor` becomes
+    the display's scale factor multiplied by the zoom, and its
+    `viewport_size` becomes the platform's content size divided by the
+    zoom. This has four effects. Layout, hit-testing and the scene stay in
+    one space of points. Text and paths are rasterized at the zoomed size,
+    and the sprite atlas keys glyphs by that scale factor. Blur radii and
+    corner radii scale with them. The renderers, which draw the scene in
+    device pixels, are unchanged. `Window::ui_zoom` returns the zoom that
+    the window is laid out at.
+  - Input from the platform goes through the new
+    `Window::dispatch_platform_input`. It divides every position, and the
+    distance of a precise scroll, by the zoom, and then calls
+    `dispatch_event`. The platform's input callback calls it. The app's
+    playback of input (`src/pointer.rs` in the app, `experiments/gpui`)
+    calls it too.
+  - What the window gives back to the platform is multiplied by the zoom.
+    This applies to the rectangles for the input method
+    (`PlatformInputHandler::bounds_for_range`, `selection_bounds_for_range`
+    and `element_bounds` in `src/platform.rs`, and the candidate position
+    that `Window` sends) and to what the window passes to
+    `show_window_menu`, `set_input_region`, `set_client_inset` and
+    `set_client_corner_radii`.
+  - Two values that come from the platform are divided by the zoom: the
+    point that the input method passes to
+    `PlatformInputHandler::character_index_for_point` (`src/platform.rs`),
+    and what `visual_viewport_bounds` returns.
+  - The frame of the window stays in screen points: `Window::bounds`,
+    `window_bounds`, the minimum size and the position of the traffic
+    lights are not converted.
+  - At zoom 1 every conversion returns its input unchanged, so nothing is
+    drawn or hit-tested differently.
+  - `Window::insets` and `Window::resize` are not converted either. They
+    use the platform's points. `Window::insets` reports safe areas, which
+    the desktop platforms do not report.
+- `src/platform/test/window.rs`: The test window now keeps the decorations
+  that the window asked for, and reports them. When the client's
+  decorations were asked for, it reports `Decorations::Client` with nothing
+  tiled. A Linux desktop that grants the request reports the same. The
+  off-screen checks therefore draw the chrome that a frameless window draws
+  itself (its buttons and resize edges), as it is drawn on Linux.
+- Nearest-neighbour images. This is CSS `image-rendering: pixelated`. The
+  app uses it for the Preview setting "Scaling: Pixelated".
+  - `src/scene.rs`: In `PolychromeSprite`, the padding word after `order`
+    becomes the field `nearest`. It is a `PaddedBool32`, so the layout that
+    every shader reads is unchanged.
+  - `src/window.rs`: `Window::paint_image_sampled` takes the choice between
+    linear and nearest-neighbour sampling. `Window::paint_image` calls it
+    with `false`.
+  - `src/elements/img.rs`: `ImageStyle::pixelated` and
+    `StyledImage::pixelated` pass the choice on from the `img` element.
+  - In each renderer, the fragment shader for these sprites then reads its
+    linear sampler at the centre of the texel that the position falls in,
+    when `nearest` is set. A read at the centre of a texel returns that
+    texel alone. No sampler, binding or pipeline is added.
+- `src/elements/img.rs`: These changes are to when an animated image (GIF,
+  animated WebP) plays and to how often its window is redrawn.
+  - An animated image now plays whenever its window draws, as a browser
+    plays it. Before, it played only while its window was the active one.
+    A detail window beside the main window, or the main window while
+    another application was in front, kept its GIFs on one frame. A covered
+    or minimised window still draws nothing.
+  - The view that the image is in is now drawn again when the frame on
+    screen has been shown for its delay. A timer that the element keeps in
+    its state does this. Before, the view was drawn again on every frame
+    that the display can show, which redrew the whole window at the
+    display's rate for as long as an animated image was on screen.
+  - A frame with a delay of 10 ms or less is shown for 100 ms, as browsers
+    show it (`shown_for`). Before, the image advanced by one such frame for
+    each frame that was drawn.
 - Accessibility. 0.3.12 already builds an AccessKit tree from every element
-  with an id and a role, hands it to each platform's adapter (macOS
-  NSAccessibility, Windows UI Automation, Linux AT-SPI) only while
-  assistive technology is attached, and routes its actions back. Added,
-  because the app needs them and they cannot be set from outside:
-  - `src/elements/div.rs`: the states `aria_disabled`, `aria_read_only`,
-    `aria_modal`, `aria_busy`, `aria_multiselectable` and a live region
-    (`aria_live`), written to the node like the published `aria_*`
-    properties (a disabled node offers no `Click`);
-    `StatefulInteractiveElement::a11y_focus(&FocusHandle)`, which makes an
-    element's node stand for a focus handle a descendant without a node
-    tracks (the app's controls keep their tab stop in a child of no size, so
-    that a click leaves the keyboard where it was): the node reads as
-    focused while the handle is, and its `Focus` action focuses it;
-    `a11y_presentational()`, which marks a click that is not a control (a
-    dialog's backdrop, a drag strip); and, while the tree is built, a record
-    of every element that takes a click but has no role.
-  - `src/window/a11y.rs`: the root node carries the interface zoom as a
-    scale transform, since nodes' bounds are in the window's zoomed points.
+  that has an id and a role. It hands the tree to each platform's adapter
+  (macOS NSAccessibility, Windows UI Automation, Linux AT-SPI) only while
+  assistive technology is attached, and it routes the actions that come
+  from the adapter back to the elements. The following were added because
+  the app needs them and they cannot be set from outside the crate.
+  - `src/elements/div.rs`: This file has four additions.
+    - The states `aria_disabled`, `aria_read_only`, `aria_modal`,
+      `aria_busy` and `aria_multiselectable`, and a live region
+      (`aria_live`). They are written to the node in the same way as the
+      published `aria_*` properties. A disabled node does not offer the
+      `Click` action.
+    - `StatefulInteractiveElement::a11y_focus(&FocusHandle)` makes the node
+      of an element stand for a focus handle that a descendant without a
+      node tracks. The node is reported as focused while the handle is
+      focused, and the `Focus` action of the node focuses the handle. The
+      app needs this because its controls keep their tab stop in a child of
+      no size, so that a click leaves the keyboard focus where it was.
+    - `a11y_presentational()` marks an element whose click is not a
+      control, such as the backdrop of a dialog or a drag strip.
+    - While the tree is built, every element that takes a click but has no
+      role is recorded. An element marked with `a11y_presentational()` is
+      left out of this record.
+  - `src/window/a11y.rs`: The root node carries the interface zoom as a
+    scale transform. The transform is needed because the bounds of the
+    nodes are in the window's zoomed points.
   - `src/window.rs`, `src/window/a11y/debug.rs` (test support only):
     `Window::set_a11y_active_for_test`, `last_a11y_tree_update`,
-    `dispatch_a11y_action_for_test` and `a11y_unexposed_clickables`, so
-    tests and the off-screen tool can build the tree without a screen
-    reader, read it and act on it.
+    `dispatch_a11y_action_for_test` and `a11y_unexposed_clickables` are
+    new. With them, tests and the off-screen tool can build the tree
+    without a screen reader, read it and act on it.
 
 `gpui-pre-apple` (Metal)
-- `src/shaders.metal`: the shadow shader takes `inset == 2` (geometry of a
-  drop shadow, coverage times the outside of the element). The fragment
-  shader's inset branch is taken for `inset == 1` only: upstream tests
-  `inset != 0`, which sent mode 2 down the inset path and left every glass
-  panel without its outer shadow (the same in the WGSL and HLSL). New blur shaders:
-  downsample (box average with bilinear taps), gaussian (one direction,
-  clamped to the reduced region), composite (rounded-rectangle coverage,
-  clip, saturate, brightness, premultiplied output).
-- `src/metal_renderer.rs`: three pipelines, two scratch textures (made on the
-  first blur, grown in steps of 128 texels), and the frame loop: before each
-  batch, every blur ordered at or before it ends the render pass, runs
-  downsample, across, down and composite passes, and starts a load pass. A
-  drawable from a framebuffer-only layer cannot be read, so the window's
-  layer is made readable the first time a frame has a blur (and stays so);
-  a frame whose drawable is still framebuffer-only skips its blurs.
-- `src/metal_atlas.rs`: `PlatformAtlas::contains` (test support only), so
-  `Window::has_image_atlas_entry` answers on Metal as it does headless and
-  the off-screen checks can tell whether a released picture left the atlas.
-- `src/shaders.metal`, `polychrome_sprite_fragment`: the nearest-neighbour
-  read. `vendor/gpui/src/scene.rs` (the copy the Metal header is generated
-  from) has the same `nearest` field.
+- `src/shaders.metal`: This file has the shadow change and the blur shaders.
+  - The shadow shader accepts `inset == 2`. For this value it uses the
+    geometry of a drop shadow, and it multiplies the coverage of the shadow
+    by the coverage of the area outside the element.
+  - The inset branch of the vertex shader and the inset branch of the
+    fragment shader are now taken for `inset == 1` only. Upstream tests
+    `inset != 0`. With that test a shadow with `inset == 2` was drawn as an
+    inset shadow, which left every glass panel without its outer shadow.
+    The WGSL and the HLSL have the same change.
+  - There are three new blur shaders. The downsample shader writes each
+    reduced texel as the average of a box of frame pixels, which it reads
+    with bilinear taps. The gaussian shader blurs in one direction, and its
+    reads are clamped to the reduced region. The composite shader draws the
+    blurred backdrop at the coverage of the rounded rectangle, applies the
+    clip, the saturation and the brightness, and writes premultiplied
+    output.
+- `src/metal_renderer.rs`: This file draws the blurs.
+  - It has three new pipelines and two scratch textures. The textures are
+    made on the first blur and grown in steps of 128 texels.
+  - The frame loop draws the blurs between the batches. Before each batch,
+    for every blur whose draw order is at or before the order of the batch,
+    the renderer ends the render pass, runs the downsample pass, the
+    gaussian pass across, the gaussian pass down and the composite pass,
+    and then starts a render pass that loads what the frame already holds.
+  - A drawable from a framebuffer-only layer cannot be read. The renderer
+    therefore makes the layer of the window readable the first time a frame
+    has a blur, and the layer stays readable after that. A frame whose
+    drawable is still framebuffer-only skips its blurs.
+- `src/metal_atlas.rs`: The Metal atlas now implements
+  `PlatformAtlas::contains` (test support only). With it,
+  `Window::has_image_atlas_entry` answers on Metal as it does headless, and
+  the off-screen checks can tell whether a released picture has left the
+  atlas.
+- `src/shaders.metal`, `polychrome_sprite_fragment`: This shader does the
+  nearest-neighbour read. `vendor/gpui/src/scene.rs` is the copy of
+  `scene.rs` that the Metal header is generated from, and it has the same
+  `nearest` field.
 
 `gpui-pre-wgpu` (Linux; also the web)
-- `src/backdrop_blur.rs`, `src/backdrop_blur.wgsl`: the same passes. A
-  surface texture can only be drawn to, so a frame with blurs is drawn into a
-  texture of this module's and copied to the surface at the end; a frame
-  without blurs is drawn as before.
-- `src/wgpu_renderer.rs`: holds the blur renderer with the other device
-  resources (dropped on device loss) and interleaves blurs in `record_frame`
-  as the Metal renderer does. `src/gpui_wgpu.rs` declares the module.
-- `src/shaders.wgsl`: the shadow shader takes `inset == 2`; the
+- `src/backdrop_blur.rs`, `src/backdrop_blur.wgsl`: These new files run the
+  same passes as the Metal renderer. A surface texture can only be drawn
+  to; it cannot be read. A frame with blurs is therefore drawn into a
+  texture that this module owns, and is copied to the surface at the end. A
+  frame without blurs is drawn as before.
+- `src/wgpu_renderer.rs`: The renderer holds the blur renderer with its
+  other device resources, so the blur renderer is dropped with them when
+  the device is lost. `record_frame` draws the blurs between the batches as
+  the Metal renderer does. `src/gpui_wgpu.rs` declares the module.
+- `src/shaders.wgsl`: The shadow shader accepts `inset == 2`. The
   `PolychromeSprite` struct names its second word `nearest`, and
-  `fs_poly_sprite` does the nearest-neighbour read (by `select`, so the
-  texture sample stays in uniform control flow).
-- `src/wgpu_context.rs`: on Windows the instance also offers Direct3D 12.
-  This crate is used there only by the off-screen checks (GPUI's Windows
-  platform draws with DirectX itself), and a machine without a GPU, such as
-  a CI runner, has Direct3D 12 through the WARP software adapter but
-  neither Vulkan nor a usable OpenGL.
+  `fs_poly_sprite` does the nearest-neighbour read. It chooses the position
+  with `select`, so the texture sample stays in uniform control flow.
+- `src/wgpu_context.rs`: On Windows the instance also offers Direct3D 12.
+  On Windows this crate is used only by the off-screen checks, because
+  GPUI's Windows platform draws with DirectX itself. A machine without a
+  GPU, such as a CI runner, has Direct3D 12 through the WARP software
+  adapter, but it has neither Vulkan nor a usable OpenGL.
 
 `gpui-pre-windows` (DirectX)
-- `src/shaders.hlsl`: the shadow shader takes `inset == 2`; the
+- `src/shaders.hlsl`: The shadow shader accepts `inset == 2`. The
   `PolychromeSprite` struct names its second word `nearest`, and
-  `polychrome_sprite_fragment` does the nearest-neighbour read
-  (`GetDimensions` for the atlas size). The DirectX
-  renderer ignores `Scene::backdrop_blurs`, so on Windows a glass panel shows
-  its translucent fill over an unblurred backdrop.
+  `polychrome_sprite_fragment` does the nearest-neighbour read. It gets the
+  size of the atlas from `GetDimensions`. The DirectX renderer ignores
+  `Scene::backdrop_blurs`, so on Windows a glass panel shows its
+  translucent fill over a backdrop that is not blurred.
 
 Drops from other applications. GPUI hands an application only the paths of
-dropped files, so what a web browser drags (an image's data, its address,
-the page's HTML for it) never arrived, nor did files a drag only promises
-(macOS's file promises, Windows' virtual files, X11's direct save). Each
-platform now reads the data while the drop is delivered, and has the
-promised files written into a folder made for the drop.
+dropped files. What a web browser drags (the data of an image, its address,
+the page's HTML for it) therefore never arrived. Files that a drag only
+promises did not arrive either: macOS's file promises, Windows' virtual
+files and X11's direct save. Each platform now reads the data while the
+drop is delivered, and has the promised files written into a folder that is
+made for the drop. In the lists below, a drag "enters with no paths" when
+the window receives `FileDropEvent::Entered` with an empty list of paths.
 
 `gpui-pre`
-- `src/interactive.rs`: `ExternalDropData` (in-memory files as
-  `ExternalDropFile`: bytes, name, media type; address lists, HTML, text,
-  Chromium `DownloadURL`s) and the hand-over: a platform calls
-  `set_external_drop_data` just before `FileDropEvent::Submit`, and the
-  application calls `take_external_drop_data` while it handles that drop. A
-  drag that carries only such data enters with no paths.
-  `ExternalDropData::promised` holds `PromisedFiles`: the folder made for
-  the drop, how many files were promised, and a stream (`arrival`, taken
-  once) on which the platform reports each file once, as its path or why it
-  was not written; the stream ends when the platform drops its sender.
-  `set_promised_files_directory` names the folder each drop's folder is
-  made in (`promised_files_directory`, the system's temporary folder until
-  set).
+- `src/interactive.rs`: This file has the types for the data of a drop and
+  the functions that hand the data over.
+  - `ExternalDropData` holds what a drop carries besides files on disk:
+    in-memory files (`ExternalDropFile`, with bytes, name and media type),
+    address lists, HTML, text and Chromium `DownloadURL`s.
+  - The data is handed over in two steps. A platform calls
+    `set_external_drop_data` just before `FileDropEvent::Submit`. The
+    application calls `take_external_drop_data` while it handles that
+    drop.
+  - A drag that carries only such data enters with no paths.
+  - `ExternalDropData::promised` holds `PromisedFiles`. That struct has the
+    folder that was made for the drop, the number of files that were
+    promised, and a stream (`arrival`, which can be taken once). On the
+    stream the platform reports each file once: either its path, or why it
+    was not written. The stream ends when the platform drops its sender.
+  - `set_promised_files_directory` names the folder in which the folder of
+    each drop is made. `promised_files_directory` returns it. Until it is
+    set, it is the system's temporary folder.
 
 `gpui-pre-macos` (AppKit)
-- `src/drop_data.rs`: the types a window registers besides
-  `NSFilenamesPboardType` (`public.png`, `public.jpeg`,
+- `src/drop_data.rs`: This new file has the pasteboard types that a window
+  registers besides `NSFilenamesPboardType`: `public.png`, `public.jpeg`,
   `com.compuserve.gif`, `org.webmproject.webp`, `public.tiff`,
-  `public.url`, `public.html`, `public.utf8-plain-text`), and
-  `read_drop_pasteboard`, which reads each pasteboard item's first image
-  type, link, HTML and text (no image data or link from an item that is a
-  file, whose path the drop has). Public so the application's test can read
-  a pasteboard of its own.
-- `src/drop_data.rs` also: `promise_types` (`NSFilePromiseReceiver`'s
-  `readableDraggedTypes`), `offers_promised_files`, and
-  `receive_promised_files`, which reads the pasteboard's
-  `NSFilePromiseReceiver`s and asks each to deliver into a new folder in
-  `promised_files_directory`, on an `NSOperationQueue` of its own, its
-  reader block reporting each file (one per promised type) through
-  `PromisedFiles`. AppKit allows this only during the drop.
-- `src/window.rs`: registers those types and the promise types; a drag
-  with no file names that offers one of them enters with no paths;
-  `performDragOperation:` reads the drag pasteboard and, for a drag without
-  file names that holds a promise, asks for the promised files, then hands
-  both over before `Submit`.
-- `src/gpui_macos.rs`: declares the module and exports
+  `public.url`, `public.html` and `public.utf8-plain-text`. It also has
+  `read_drop_pasteboard`. For each pasteboard item, that function reads the
+  data of the first of those image types that the item has, its link, its
+  HTML and its text. It reads no image data and no link from an item that
+  is a file, because the drop already has the path of that file. The
+  function is public so that the application's test can read a pasteboard
+  of its own.
+- `src/drop_data.rs` also: Three functions are for promised files.
+  `promise_types` returns the `readableDraggedTypes` of
+  `NSFilePromiseReceiver`. `offers_promised_files` answers whether a
+  pasteboard holds a file promise. `receive_promised_files` reads the
+  `NSFilePromiseReceiver`s of the pasteboard and asks each one to deliver
+  into a new folder in `promised_files_directory`. The delivery runs on an
+  `NSOperationQueue` of its own. The reader block reports each file through
+  `PromisedFiles`; there is one file for each promised type. AppKit allows
+  this request only during the drop.
+- `src/window.rs`: The window registers those types and the promise types.
+  A drag that has no file names and offers one of them enters with no
+  paths. `performDragOperation:` reads the drag pasteboard. For a drag
+  without file names that holds a promise, it also asks for the promised
+  files. It then hands both over before `Submit`.
+- `src/gpui_macos.rs`: This file declares the module and exports
   `read_drop_pasteboard`.
 
 `gpui-pre-windows` (OLE drop target)
-- `src/drop_data.rs`: whether a data object offers what is read, and the
-  reading, for a drag without `CF_HDROP`: virtual files
-  (`FileGroupDescriptorW`; folders skipped) written into a new folder in
-  `promised_files_directory`, each under the last part of its name (without
-  the characters a Windows name cannot hold, a device name prefixed with
-  `_`, `name (2).ext` when taken) from its `FileContents` in global memory
-  (cut to the size the descriptor gives) or a stream, a file shorter than
-  its descriptor says or failing part-way removed, each reported through
-  `PromisedFiles`; `PNG`, else `CF_DIBV5` or `CF_DIB` made a BMP file;
-  `UniformResourceLocatorW` (else `UniformResourceLocator`), `HTML Format`
-  (its fragment) and `CF_UNICODETEXT`. `html_fragment` and
-  `read_drop_data` are public for the application's test, with
-  `virtual_files_object` (`VirtualFile`), a data object holding virtual
-  files as Outlook and browsers drag them.
-- `src/window.rs`: `DragEnter` takes such a drag with no paths;
-  `Drop` reads the data object and hands it over before `Submit`.
-- `src/clipboard.rs`: `convert_dib_to_bmp` and `LockedGlobal` are shared
-  with the drop reading (`pub(crate)`).
-- `src/gpui_windows.rs`: declares the module and exports those.
+- `src/drop_data.rs`: This new file answers whether a data object offers
+  anything that is read, and it does the reading. Both are for a drag
+  without `CF_HDROP`.
+  - It reads virtual files (`FileGroupDescriptorW`) and skips folders. Each
+    file is written into a new folder in `promised_files_directory`. The
+    contents come from the `FileContents` of the file, either in global
+    memory or as a stream. Contents from global memory are cut to the size
+    that the descriptor gives.
+  - A virtual file is written under the last part of its name, without the
+    characters that a Windows name cannot hold. A device name gets the
+    prefix `_`. When the name is taken, the file is written as
+    `name (2).ext`.
+  - A file that is shorter than its descriptor says, or whose writing fails
+    part-way, is removed. Each file is reported through `PromisedFiles`.
+  - It reads an image from `PNG`. If there is no `PNG`, it reads `CF_DIBV5`
+    or `CF_DIB` and makes a BMP file from it.
+  - It reads an address from `UniformResourceLocatorW`, or else from
+    `UniformResourceLocator`. It reads the fragment of `HTML Format`, and
+    it reads `CF_UNICODETEXT`.
+  - `html_fragment` and `read_drop_data` are public for the application's
+    test. So are `virtual_files_object` and `VirtualFile`, which make a
+    data object that holds virtual files as Outlook and browsers drag
+    them.
+- `src/window.rs`: `DragEnter` takes such a drag, and the drag enters with
+  no paths. `Drop` reads the data object and hands the data over before
+  `Submit`.
+- `src/clipboard.rs`: `convert_dib_to_bmp` and `LockedGlobal` are now
+  `pub(crate)`, so that the drop reading can use them too.
+- `src/gpui_windows.rs`: This file declares the module and exports
+  `html_fragment`, `read_drop_data`, `virtual_files_object` and
+  `VirtualFile`.
 
 `gpui-pre-linux` (X11 and Wayland)
-- `src/linux/drop_data.rs`: which offered media types are taken
-  (`takes`), which are read from a drag without files (`wanted`: the first
-  of `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/bmp`,
-  `image/tiff`; `text/uri-list`; `text/html`; the first of
-  `text/plain;charset=utf-8`, `UTF8_STRING`, `text/plain`), and what they
-  come to (`assemble`; text is UTF-8, or UTF-16 after a byte order mark, as
-  Firefox sends HTML). `wanted` and `assemble` are exported for the
-  application's test.
-- `src/linux/x11/client.rs`: `XdndEnter` notes the offered types' names (the
-  three in the message or `XdndTypeList`); a drag with no supported text
-  type that offers an image enters with no paths at its first position; on
-  `XdndDrop`, before `XdndFinished`, a drag that brought no paths and that
-  no window of this process started is read and handed over.
-- `src/linux/x11/clipboard.rs`: `Clipboard::read_xdnd` reads given types
-  from `XdndSelection` on a connection of its own with the clipboard's
-  reader (`INCR` included); `read_single` takes the selection by atom
-  (`read_single_from`) and a `SelectionNotify` for `XdndSelection` is
+- `src/linux/drop_data.rs`: This new file has three functions.
+  - `takes` answers whether a drag is taken, given the media types that it
+    offers.
+  - `wanted` lists the types that are read from a drag without files: the
+    first of `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+    `image/bmp` and `image/tiff`; `text/uri-list`; `text/html`; and the
+    first of `text/plain;charset=utf-8`, `UTF8_STRING` and `text/plain`.
+  - `assemble` builds the drop data from what was read. Text is read as
+    UTF-8, or as UTF-16 when it starts with a byte order mark, which is how
+    Firefox sends HTML.
+  - `wanted` and `assemble` are exported for the application's test.
+- `src/linux/x11/client.rs`: This file changes three steps of a drag.
+  - On `XdndEnter`, the client notes the names of the offered types. They
+    are the three types in the message, or the `XdndTypeList` of the source
+    when it offers more.
+  - A drag that offers no supported text type, but offers a type that
+    `takes` accepts (for example an image), enters with no paths at its
+    first position.
+  - On `XdndDrop`, before `XdndFinished`, the client reads the data of a
+    drag that brought no paths and that no window of this process started,
+    and hands the data over.
+- `src/linux/x11/clipboard.rs`: `Clipboard::read_xdnd` reads the given
+  types from `XdndSelection`. It uses a connection of its own and the
+  reader of the clipboard, which includes `INCR` transfers. To allow this,
+  `read_single` now calls the new `read_single_from`, which takes the
+  selection as an atom, and a `SelectionNotify` for `XdndSelection` is
   accepted.
-- `src/linux/wayland/client.rs`: an offer's taken types are accepted; on
-  `Enter` the file list and the wanted types are received through a pipe
-  each and read off the main thread; a drag without paths whose data is not
-  empty enters with no paths, its data kept in `DragState::drop_data` and
-  handed over on `Drop` (cleared on `Leave`).
-- `src/linux/wayland/clipboard.rs`: `DataOffer::mime_types`.
-- `src/linux/x11/direct_save.rs`: XDS (`XdndDirectSave0`), the Direct Save
-  protocol: on a thread and a connection of its own, the source's suggested
-  name (its window's `XdndDirectSave0` property) as a file in a new folder
-  in `promised_files_directory`, its `file://host/path` address put in that
-  property, the `XdndDirectSave0` target of `XdndSelection` asked for on a
-  window of the connection's own, the source's answer awaited (two minutes
-  at most; `S` with the file there is the file, anything else removes what
-  is there), then `XdndFinished` sent to the source for the target, and the
-  file reported through `PromisedFiles`. `receive_direct_save` and
-  `DirectSaveSource` (a source answering one request, for the
-  application's test) are exported.
-- `src/linux/x11/client.rs`: on `XdndDrop`, a drag from another process
-  without paths that offers `XdndDirectSave0` gets the direct save, which
-  sends `XdndFinished` itself. `src/linux/drop_data.rs`: `takes` the type,
-  so such a drag enters with no paths. `src/linux/x11/clipboard.rs`:
-  `Clipboard::display`.
-- `src/linux.rs`, `src/gpui_linux.rs`, `src/linux/x11.rs`: declare and
-  export the modules.
+- `src/linux/wayland/client.rs`: The types of an offer that `takes` accepts
+  are accepted. On `Enter`, the file list and the wanted types are
+  received, each through a pipe of its own, and are read off the main
+  thread. A drag without paths whose data is not empty enters with no
+  paths. Its data is kept in `DragState::drop_data`, handed over on `Drop`
+  and cleared on `Leave`.
+- `src/linux/wayland/clipboard.rs`: `DataOffer::mime_types` is new. It
+  returns the types that the offer has announced.
+- `src/linux/x11/direct_save.rs`: This new file is the receiving side of
+  XDS, the Direct Save protocol (`XdndDirectSave0`). It runs on a thread
+  and a connection of its own, in these steps.
+  - It reads the name that the source suggests from the `XdndDirectSave0`
+    property of the source's window. It uses that name for a file in a new
+    folder in `promised_files_directory`.
+  - It puts the `file://host/path` address of the file in that property.
+  - It asks for the `XdndDirectSave0` target of `XdndSelection`, on a
+    window that it creates on its own connection.
+  - It waits for the answer of the source, for two minutes at most. If the
+    answer is `S` and the file is there, the file is the result. After any
+    other answer it removes what is at that path.
+  - It sends `XdndFinished` to the source on behalf of the target, and
+    reports the file through `PromisedFiles`.
+  - `receive_direct_save` and `DirectSaveSource` are exported.
+    `DirectSaveSource` is a source that answers one request, for the
+    application's test.
+- `src/linux/x11/client.rs`: On `XdndDrop`, a drag from another process
+  that has no paths and offers `XdndDirectSave0` gets the direct save. The
+  direct save sends `XdndFinished` itself. `src/linux/drop_data.rs`:
+  `takes` accepts that type, so such a drag enters with no paths.
+  `src/linux/x11/clipboard.rs`: `Clipboard::display` is new. It returns the
+  X display that the direct save connects to.
+- `src/linux.rs`, `src/gpui_linux.rs`, `src/linux/x11.rs`: These files
+  declare and export the modules.
 
-Dragging files out on Windows and X11. `Window::start_platform_drag` had a
-platform drag on macOS and Wayland only.
+Dragging files out on Windows and X11. `Window::start_platform_drag` needs
+a platform window that implements `start_external_drag`. In 0.3.12 only the
+macOS and Wayland windows implement it, so there was a platform drag on
+macOS and Wayland only.
 
 `gpui-pre-windows`
-- `src/drag_source.rs`: a data object holding the files as `CF_HDROP`
-  (`DROPFILES`, wide names; `GetData`, `QueryGetData` and `EnumFormatEtc`
-  answer it, the rest is not implemented) and a drop source (drop when the
-  left button is up, cancel on Escape, the system's cursors). `drag` runs
-  `DoDragDrop` with copy allowed. `drop_files` is exported
-  (`drag_drop_files`) for the application's test.
-- `src/window.rs`: `can_start_external_drag` and `start_external_drag`.
-  `DoDragDrop` runs the system's drag loop until the drop, so it is run from
-  a foreground task, after the event that asked for it has been handled
-  (the application is not borrowed then, and the loop's messages reach the
-  window as from the main loop); `FileDropEvent::Ended` follows its return.
+- `src/drag_source.rs`: This new file has four parts.
+  - A data object that holds the files as `CF_HDROP` (`DROPFILES` with wide
+    names). Its `GetData`, `QueryGetData` and `EnumFormatEtc` answer for
+    that format. The rest of the interface is not implemented.
+  - A drop source. It drops when the left button is up, cancels on Escape,
+    and uses the system's cursors.
+  - `drag`, which runs `DoDragDrop` with copy allowed.
+  - `drop_files`, which is exported as `drag_drop_files` for the
+    application's test.
+- `src/window.rs`: `can_start_external_drag` and `start_external_drag` are
+  new. `DoDragDrop` runs the system's drag loop until the drop. It is
+  therefore run from a foreground task, after the event that asked for the
+  drag has been handled. At that point the application is not borrowed, and
+  the messages of the loop reach the window as they do from the main loop.
+  When `DoDragDrop` returns, the window receives `FileDropEvent::Ended`.
 
 `gpui-pre-linux`
-- `src/linux/x11/xdnd_source.rs`: the source side of XDND. Each motion finds
-  the `XdndAware` window under the pointer (down from the root's child under
-  it, following an `XdndProxy` that names itself; a window of this process
-  is not a target), sends `XdndLeave`/`XdndEnter` (the version the target
-  and this side share, at most 5, `text/uri-list` the one type) when it
-  changes, and `XdndPosition` with the copy action, one at a time until its
-  `XdndStatus`; the release sends `XdndDrop` to a target that accepted and
-  `XdndLeave` otherwise; `SelectionRequest`s for `XdndSelection` get
-  `TARGETS` or the files' `file:` addresses (`uri_list`, exported as
-  `xdnd_uri_list` for the application's test).
-- `src/linux/x11/client.rs`: `X11ClientState::xdnd_source`;
-  `start_xdnd_drag` takes `XdndSelection` for the window; the window's own
-  pointer motion (which its button's implicit grab keeps delivering outside
-  it) and release drive the source; `XdndStatus`, `XdndFinished` and
-  `SelectionRequest` reach it; the drag ends (selection let go,
-  `FileDropEvent::Ended` to the window) at `XdndFinished`, ten seconds after
-  a drop that got none, or at once when nothing took the drop.
+- `src/linux/x11/xdnd_source.rs`: This new file is the source side of XDND.
+  - On each motion of the pointer it finds the `XdndAware` window under the
+    pointer. It searches downward from the child of the root window that
+    is under the pointer. It follows an `XdndProxy` that names itself. A
+    window of this process is not a target.
+  - When the target changes, it sends `XdndLeave` to the old target and
+    `XdndEnter` to the new one. `XdndEnter` carries the version that the
+    target and this side share, which is at most 5, and `text/uri-list` as
+    the one type.
+  - It sends `XdndPosition` with the copy action. It sends one at a time:
+    the next one waits until the `XdndStatus` for the last one has arrived.
+  - On the release it sends `XdndDrop` to a target that accepted, and
+    `XdndLeave` otherwise.
+  - It answers a `SelectionRequest` for `XdndSelection` with `TARGETS` or
+    with the `file:` addresses of the files. `uri_list` builds those
+    addresses. It is exported as `xdnd_uri_list` for the application's
+    test.
+- `src/linux/x11/client.rs`: This file connects the source to the client's
+  events.
+  - `X11ClientState::xdnd_source` holds the source of the drag in progress.
+  - `start_xdnd_drag` takes `XdndSelection` for the window.
+  - The window's own pointer motion and button release drive the source.
+    The implicit grab of the button press keeps delivering the motion to
+    the window while the pointer is outside it.
+  - `XdndStatus`, `XdndFinished` and `SelectionRequest` are passed to the
+    source.
+  - The drag ends at `XdndFinished`, or ten seconds after a drop that got
+    no `XdndFinished`, or at once when nothing took the drop. When the
+    drag ends, the selection is let go and the window receives
+    `FileDropEvent::Ended`.
 - `src/linux/x11/window.rs`: `can_start_external_drag`,
-  `start_external_drag`, and the atoms `XdndProxy` and `TARGETS`.
-- `src/linux/x11.rs`, `src/linux.rs`, `src/gpui_linux.rs`: declare and
-  export.
+  `start_external_drag`, and the atoms `XdndProxy` and `TARGETS` are new.
+- `src/linux/x11.rs`, `src/linux.rs`, `src/gpui_linux.rs`: These files
+  declare and export the new modules.
 
 `gpui-pre`, drawing once more before a frame is shown
-- `src/window.rs`: a view notified while a frame is being drawn (one that
-  read its size from this frame's layout and has to lay out again for it)
-  used to wait for the next frame, so every change of size, a window being
-  resized or a rail hidden, showed one frame laid out for the size before.
-  `WindowInvalidator` now remembers that it happened (`invalidated_in_draw`),
-  and the frame callback draws again, once, before it presents. What the
-  second pass invalidates waits for the next frame, as before.
+- `src/window.rs`: A view can be notified while a frame is being drawn.
+  This happens to a view that read its size from the layout of this frame
+  and has to lay out again for that size. Such a view used to wait for the
+  next frame. Every change of size, such as a window being resized or a
+  rail being hidden, therefore showed one frame that was laid out for the
+  previous size. `WindowInvalidator` now remembers that a view was notified
+  during the draw (`invalidated_in_draw`), and the frame callback draws
+  again, once, before it presents. What the second pass invalidates waits
+  for the next frame, as before.
+
+Whether the system blurs behind a window, and Acrylic on Windows. The app
+can show the system's frosted material behind the sidebar and the inspector
+of its main window (`src/ui/window_chrome.rs`, `show_rail_material`). It
+does that by giving the window the background appearance
+`WindowBackgroundAppearance::Blurred`. Two things were missing in 0.3.12.
+First, the app could not find out whether `Blurred` really blurs on the
+system it runs on. Where it does not, the window would show what is behind
+it without blur, or show nothing behind it. Second, on Windows `Blurred`
+used only an undocumented call.
+
+`gpui-pre`
+- `src/platform.rs`: the trait `PlatformWindow` has a new method,
+  `is_background_blur_supported`. It answers whether `Blurred` makes the
+  system blur what is behind this window, as the system is set up now. Its
+  default answer is `false`, so the Linux windows and the test window
+  answer `false` without any change to them.
+- `src/window.rs`: `Window::is_background_blur_supported` is the public
+  method that an application calls. It passes the question on to the
+  platform's window.
+
+`gpui-pre-macos`
+- `src/window.rs`: `is_background_blur_supported` answers `true` unless the
+  user has turned on Reduce Transparency (`NSWorkspace`'s
+  `accessibilityDisplayShouldReduceTransparency`). With Reduce Transparency
+  on, AppKit fills an `NSVisualEffectView` with a solid colour and blurs
+  nothing, and `blurred_view_update_layer` removes that fill, so a `Blurred`
+  window would show what is behind it without blur.
+
+`gpui-pre-windows`
+- `src/window.rs`, `set_background_appearance`: on Windows 11 version 22H2
+  (build 22621) and later, `Blurred` now sets the window attribute
+  `DWMWA_SYSTEMBACKDROP_TYPE` to `DWMSBT_TRANSIENTWINDOW`, which is Acrylic,
+  and turns the accent policy off. This is the documented way to ask for
+  Acrylic, and it is the same attribute that 0.3.12 already sets for
+  `MicaBackdrop` and `MicaAltBackdrop`. On Windows 10 version 1809 (build
+  17763) up to Windows 11 version 21H2, which do not have the attribute,
+  `Blurred` is unchanged: it sets the accent policy
+  `ACCENT_ENABLE_ACRYLICBLURBEHIND` with the undocumented
+  `SetWindowCompositionAttribute`. When a window stops being `Blurred`, the
+  attribute is set back to `DWMSBT_AUTO`, the value a new window has;
+  otherwise Windows would go on drawing the backdrop behind an opaque
+  window.
+- `src/window.rs`: `is_background_blur_supported` answers `true` on build
+  17763 and later when the window was created without a redirection bitmap
+  (`WS_EX_NOREDIRECTIONBITMAP`). That is every window, unless the
+  environment variable `GPUI_DISABLE_DIRECT_COMPOSITION` is set. A window
+  with a redirection bitmap is drawn through a swap chain without an alpha
+  channel, so it cannot show anything behind it.
+- `windows_build_number`, `ACRYLIC_ACCENT_BUILD` and `SYSTEM_BACKDROP_BUILD`
+  are the helper and the two build numbers that these changes use.
+- None of this has been run on Windows. It is compiled and tested by the
+  repository's CI on a machine without a desktop, which does not show a
+  backdrop. Not known: whether Acrylic shows through the window, and
+  whether Windows replaces it with a solid colour while the window is not
+  the active one.
+
+`gpui-pre-linux` has no change for this. On Wayland, 0.3.12 asks the
+compositor to blur behind a `Blurred` window when the compositor has the
+ext-background-effect or the kde-blur protocol. The Linux windows do not
+answer `is_background_blur_supported` yet, so the app never asks for
+`Blurred` on Linux. To answer it, the Wayland window would have to report
+whether the compositor offers one of the two protocols, and for
+ext-background-effect also whether the compositor has announced the `blur`
+capability, which 0.3.12 does not record.
 
 ## Re-applying to a newer gpui-pre
 
-Copy the six new crates from `~/.cargo/registry/src/*/` over these folders,
-apply the diff below (`patch -p1` from this folder), and fix what moved. The
-Metal header is generated from the `vendor/gpui` copy inside
-`gpui-pre-apple`; the blur parameters are a struct of floats declared on both
-sides by hand, so no generated type changes. Check: `cargo test` in
-`experiments/gpui` (the blur arithmetic and batching tests are in
-`src/ui/glass.rs`) and an off-screen picture of a menu over the grid; for
-the interface zoom, `zoom::tests` (a press at screen points lands on what
-is drawn there) and the pictures `ci/smoke.txt` takes at 150% and 80%; for
-nearest sampling, an off-screen picture of a small image zoomed in the
-viewer with Settings > Preview > Scaling set to Pixelated. The WGSL was
-validated with naga 30.0.1 (the version `wgpu` 30 uses) in all three of its
-variants; the HLSL was not compiled here.
+Copy the six new crates from `~/.cargo/registry/src/*/` over these folders.
+Apply the diff below with `patch -p1` from this folder. Then fix the parts
+that the patch could not apply because the code has moved.
+
+The Metal header is generated from the `vendor/gpui` copy inside
+`gpui-pre-apple`. The blur parameters are a struct of floats that is
+declared by hand on both sides (in `gpui-pre-apple/src/metal_renderer.rs`
+and in `gpui-pre-apple/src/shaders.metal`), so no generated type changes.
+
+Check the result in these ways:
+
+- For the blur, run `cargo test` in `experiments/gpui` (the blur arithmetic
+  and batching tests are in `src/ui/glass.rs`), and take an off-screen
+  picture of a menu over the grid.
+- For the interface zoom, run `zoom::tests`, which check that a press at
+  screen points lands on what is drawn there, and look at the pictures that
+  `ci/smoke.txt` takes at 150% and 80%.
+- For nearest sampling, take an off-screen picture of a small image zoomed
+  in the viewer with Settings > Preview > Scaling set to Pixelated.
+- For the frosted material, turn on Settings > General > Appearance >
+  "Frosted glass sidebar and inspector" in a real window on macOS with
+  another window behind it. On Windows, do the same with "Acrylic sidebar
+  and inspector".
+
+The WGSL was validated with naga 30.0.1 (the version `wgpu` 30 uses) in all
+three of its variants (`STORAGE_BUFFER_SHADERS`, `WEBGL_SHADERS` and
+`SUBPIXEL_SHADERS` in `gpui-pre-wgpu/src/wgpu_renderer.rs`). The HLSL was
+not compiled here.
 
 ## The diff against 0.3.12
 
@@ -888,7 +1112,20 @@ diff --color -ruN gpui-pre-0.3.12/src/interactive.rs b/gpui-pre/src/interactive.
 diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
 --- a/gpui-pre/src/platform.rs
 +++ b/gpui-pre/src/platform.rs
-@@ -2147,9 +2147,17 @@
+@@ -1300,6 +1300,12 @@
+     fn background_appearance(&self) -> WindowBackgroundAppearance;
+     fn set_title(&mut self, title: &str);
+     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
++    /// Whether [`WindowBackgroundAppearance::Blurred`] makes the system blur
++    /// what is behind this window, as the system is set up now. A platform
++    /// that does not implement this answers `false`.
++    fn is_background_blur_supported(&self) -> bool {
++        false
++    }
+     fn minimize(&self);
+     fn zoom(&self);
+     fn toggle_fullscreen(&self);
+@@ -2147,9 +2153,17 @@
              .ok();
      }
  
@@ -907,7 +1144,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              .ok()
              .flatten()
      }
-@@ -2157,8 +2165,12 @@
+@@ -2157,8 +2171,12 @@
      pub fn selection_bounds_for_range(&mut self, range_utf16: Range<usize>) -> Vec<Bounds<Pixels>> {
          self.cx
              .update(|window, cx| {
@@ -920,7 +1157,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              })
              .unwrap_or_default()
      }
-@@ -2226,7 +2238,10 @@
+@@ -2226,7 +2244,10 @@
      #[allow(unused)]
      pub fn character_index_for_point(&mut self, point: Point<Pixels>) -> Option<usize> {
          self.cx
@@ -932,7 +1169,7 @@ diff --color -ruN gpui-pre-0.3.12/src/platform.rs b/gpui-pre/src/platform.rs
              .ok()
              .flatten()
      }
-@@ -2244,7 +2259,11 @@
+@@ -2244,7 +2265,11 @@
      /// See [`InputHandler::element_bounds`].
      pub fn element_bounds(&mut self) -> Option<Bounds<Pixels>> {
          self.cx
@@ -1365,22 +1602,24 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  update_count: 0,
                  #[cfg(feature = "profiler")]
                  frame_dirty: FrameDirtyAccumulator::default(),
-@@ -191,8 +195,15 @@
+@@ -191,10 +195,17 @@
              }
              true
          } else {
 +            inner.invalidated_in_draw = true;
              false
          }
-+    }
-+
+     }
+ 
 +    /// Whether a view was invalidated during a draw since this was last
 +    /// asked.
 +    pub fn take_invalidated_in_draw(&self) -> bool {
 +        mem::take(&mut self.inner.borrow_mut().invalidated_in_draw)
-     }
- 
++    }
++
      pub fn is_dirty(&self) -> bool {
+         self.inner.borrow().dirty
+     }
 @@ -1266,7 +1277,13 @@
      mouse_hit_test: HitTest,
      modifiers: Modifiers,
@@ -1501,21 +1740,21 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Return the `WindowBounds` to indicate that how a window should be opened
-@@ -2956,6 +3023,14 @@
-             callback(self, cx);
-         }
+@@ -2958,6 +3025,14 @@
          count
-+    }
-+
+     }
+ 
 +    /// Whether the window has been invalidated since it was last drawn: what
 +    /// the platform's frame loop asks before drawing a frame. Tests use it to
 +    /// draw only the frames a real window would.
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn is_dirty(&self) -> bool {
 +        self.invalidator.is_dirty()
-     }
- 
++    }
++
      /// Spawn the future returned by the given closure on the application thread pool.
+     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
+     /// use within your future.
 @@ -3001,9 +3076,9 @@
      /// the platform window, then notifies observers. Normally called automatically
      /// by the platform's resize callback, but exposed publicly for test infrastructure.
@@ -1569,7 +1808,30 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns the client_inset value by [`Self::set_client_inset`].
-@@ -3331,10 +3413,32 @@
+@@ -3297,6 +3379,22 @@
+             .set_background_appearance(background_appearance);
+     }
+ 
++    /// Whether [`WindowBackgroundAppearance::Blurred`] makes the system blur
++    /// what is behind this window, as the system is set up now. Where this is
++    /// `false`, a window with that appearance shows what is behind it without
++    /// blur, or shows nothing behind it at all, so an application that wants
++    /// the blur should keep the window opaque.
++    ///
++    /// - macOS: `true` unless the user has turned on Reduce Transparency.
++    /// - Windows: `true` on Windows 10 version 1809 (build 17763) and later,
++    ///   in a window that is drawn through DirectComposition.
++    /// - Linux: always `false`. The Linux windows do not answer the question
++    ///   yet, although a Wayland compositor with a blur protocol does blur
++    ///   behind a `Blurred` window.
++    pub fn is_background_blur_supported(&self) -> bool {
++        self.platform_window.is_background_blur_supported()
++    }
++
+     /// Mark the window as dirty at the platform level.
+     pub fn set_window_edited(&mut self, edited: bool) {
+         self.platform_window.set_edited(edited);
+@@ -3331,10 +3429,32 @@
      /// Overrides the display scale factor for tests.
      #[cfg(any(test, feature = "test-support"))]
      pub fn set_scale_factor(&mut self, scale_factor: f32) {
@@ -1603,7 +1865,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// The size of an em for the base font of the application. Adjusting this value allows the
      /// UI to scale, just like zooming a web page.
      pub fn rem_size(&self) -> Pixels {
-@@ -3672,6 +3776,7 @@
+@@ -3672,6 +3792,7 @@
          if self.platform_window.prepare_frame() {
              self.refresh();
          }
@@ -1611,7 +1873,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidate_entities();
          cx.entities.clear_accessed();
          debug_assert!(self.rendered_entity_stack.is_empty());
-@@ -3907,7 +4012,7 @@
+@@ -3907,7 +4028,7 @@
  
          self.a11y.sync_active_flag();
          if self.a11y.is_active() {
@@ -1620,7 +1882,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          }
  
          let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
-@@ -4811,6 +4916,31 @@
+@@ -4811,6 +4932,31 @@
          corner_radii: Corners<Pixels>,
          shadows: &[BoxShadow],
      ) {
@@ -1652,7 +1914,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
-@@ -4832,10 +4962,50 @@
+@@ -4832,12 +4978,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -1661,8 +1923,8 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  pad: 0,
              });
          }
-+    }
-+
+     }
+ 
 +    /// Show what has been painted beneath `bounds` so far blurred inside its
 +    /// rounded shape, as CSS `backdrop-filter` does; paint the element's
 +    /// fill and contents after it. The blur follows the element opacity, so
@@ -1701,10 +1963,12 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +            brightness: filter.brightness,
 +            opacity: opacity.min(1.),
 +        });
-     }
- 
++    }
++
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
-@@ -5215,7 +5385,7 @@
+     /// be called after the element's background so the shadow layers on top of the fill.
+     /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
+@@ -5215,7 +5401,7 @@
  
              self.next_frame.scene.insert_primitive(PolychromeSprite {
                  order: 0,
@@ -1713,7 +1977,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  grayscale: false.into(),
                  bounds,
                  corner_radii: Default::default(),
-@@ -5309,6 +5479,31 @@
+@@ -5309,6 +5495,31 @@
          frame_index: usize,
          grayscale: bool,
      ) -> Result<()> {
@@ -1745,7 +2009,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let visible_bounds = bounds.intersect(&image_bounds);
-@@ -5387,7 +5582,7 @@
+@@ -5387,7 +5598,7 @@
  
          self.next_frame.scene.insert_primitive(PolychromeSprite {
              order: 0,
@@ -1754,7 +2018,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
              grayscale: grayscale.into(),
              bounds: visible_bounds_snapped,
              content_mask,
-@@ -5861,7 +6056,23 @@
+@@ -5861,7 +6072,23 @@
              .unwrap_or_else(|| action.name().to_string())
      }
  
@@ -1779,12 +2043,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      #[profiling::function]
      pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
          #[cfg(feature = "profiler")]
-@@ -6035,6 +6246,16 @@
-             propagate: cx.propagate_event,
-             default_prevented: self.default_prevented,
+@@ -6037,6 +6264,16 @@
          }
-+    }
-+
+     }
+ 
 +    /// Hands `payload` to the platform as a native drag session continuing
 +    /// the left-button drag in progress, for a view that follows the pointer
 +    /// itself rather than through [`Interactivity::on_drag`] (whose drags
@@ -1793,10 +2055,12 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    pub fn start_platform_drag(&mut self, payload: &crate::ExternalDragPayload) -> bool {
 +        self.platform_window.can_start_external_drag()
 +            && self.platform_window.start_external_drag(payload)
-     }
- 
++    }
++
      fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
-@@ -6946,7 +7167,9 @@
+         let PlatformInput::MouseMove(mouse_move) = event else {
+             return;
+@@ -6946,7 +7183,9 @@
          self.on_next_frame(|window, cx| {
              if let Some(mut input_handler) = window.platform_window.take_input_handler() {
                  if let Some(bounds) = input_handler.selected_bounds(window, cx) {
@@ -1807,12 +2071,10 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  }
                  window.platform_window.set_input_handler(input_handler);
              }
-@@ -7302,6 +7525,41 @@
-     /// Debug representation of the last frame's accessibility information.
-     pub fn debug_a11y_tree_json(&self) -> Option<String> {
+@@ -7304,6 +7543,41 @@
          self.a11y.debug_tree_json()
-+    }
-+
+     }
+ 
 +    /// Builds the accessibility tree from the next frame on as though
 +    /// assistive technology had asked for it (or stops, with `false`), for
 +    /// tests and off-screen tools, whose platform never asks.
@@ -1846,10 +2108,12 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
 +    #[cfg(any(test, feature = "test-support"))]
 +    pub fn a11y_unexposed_clickables(&self) -> Vec<(String, Bounds<Pixels>)> {
 +        self.a11y.unexposed_clickables.clone()
-     }
- 
++    }
++
      /// Register a listener for an accessibility action on a specific node.
-@@ -8160,6 +8418,104 @@
+     /// The listener will be called when a screen reader requests the given
+     /// action on the node identified by `node_id`.
+@@ -8160,6 +8434,104 @@
          Ok(())
      } else {
          ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))
@@ -4359,7 +4623,72 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/shaders.hlsl b/gpui-pre-windows/sr
 diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/window.rs
 --- a/gpui-pre-windows/src/window.rs
 +++ b/gpui-pre-windows/src/window.rs
-@@ -974,6 +974,38 @@
+@@ -909,6 +909,18 @@
+         true
+     }
+ 
++    fn is_background_blur_supported(&self) -> bool {
++        // `Blurred` is Acrylic, which Windows has had since Windows 10 version
++        // 1809 (build 17763). Acrylic shows only where the window's pixels are
++        // transparent, and they can be transparent only in a window that
++        // DirectComposition draws. Such a window is created without a
++        // redirection bitmap. A window created while
++        // `GPUI_DISABLE_DIRECT_COMPOSITION` is set has one, and is opaque.
++        let ex_style = WINDOW_EX_STYLE(unsafe { get_window_long(self.0.hwnd, GWL_EXSTYLE) } as _);
++        ex_style.contains(WS_EX_NOREDIRECTIONBITMAP)
++            && windows_build_number() >= ACRYLIC_ACCENT_BUILD
++    }
++
+     fn set_title(&mut self, title: &str) {
+         unsafe { SetWindowTextW(self.0.hwnd, &HSTRING::from(title)) }
+             .inspect_err(|e| log::error!("Set title failed: {e}"))
+@@ -916,9 +928,22 @@
+     }
+ 
+     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
+-        self.state.background_appearance.set(background_appearance);
++        let previous = self
++            .state
++            .background_appearance
++            .replace(background_appearance);
+         let hwnd = self.0.hwnd;
+ 
++        // On Windows 11 version 22H2 and later, `Blurred` sets a system
++        // backdrop (see below). The backdrop stays on the window until it is
++        // taken off, so take it off when the window stops being `Blurred`.
++        // DWMSBT_AUTO (0) is the value a new window has.
++        if previous == WindowBackgroundAppearance::Blurred
++            && background_appearance != WindowBackgroundAppearance::Blurred
++        {
++            dwm_set_window_composition_attribute(hwnd, 0);
++        }
++
+         // using Dwm APIs for Mica and MicaAlt backdrops.
+         // others follow the set_window_composition_attribute approach
+         match background_appearance {
+@@ -929,7 +954,20 @@
+                 set_window_composition_attribute(hwnd, None, 2);
+             }
+             WindowBackgroundAppearance::Blurred => {
+-                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
++                if windows_build_number() >= SYSTEM_BACKDROP_BUILD {
++                    // Windows 11 version 22H2 and later: Acrylic through the
++                    // documented attribute `DWMWA_SYSTEMBACKDROP_TYPE`, as
++                    // DWMSBT_TRANSIENTWINDOW (3). The accent policy is turned
++                    // off, so the window shows only this backdrop.
++                    set_window_composition_attribute(hwnd, None, 0);
++                    dwm_set_window_composition_attribute(hwnd, 3);
++                } else {
++                    // Windows 10 version 1809 up to Windows 11 version 21H2
++                    // have no such attribute. There Acrylic is the accent
++                    // policy ACCENT_ENABLE_ACRYLICBLURBEHIND (4) of the
++                    // undocumented `SetWindowCompositionAttribute`.
++                    set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
++                }
+             }
+             WindowBackgroundAppearance::MicaBackdrop => {
+                 // DWMSBT_MAINWINDOW => MicaBase
+@@ -974,6 +1012,38 @@
          self.state.callbacks.request_frame.set(Some(callback));
      }
  
@@ -4398,7 +4727,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
      fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
          self.state.callbacks.input.set(Some(callback));
      }
-@@ -1204,6 +1236,24 @@
+@@ -1204,6 +1274,24 @@
                      paths: ExternalPaths(paths),
                  });
                  self.handle_drag_drop(input);
@@ -4423,7 +4752,7 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
              } else {
                  *pdweffect = DROPEFFECT_NONE;
              }
-@@ -1274,6 +1324,7 @@
+@@ -1274,6 +1362,7 @@
                  .ok()
                  .log_err();
          }
@@ -4431,6 +4760,33 @@ diff --color -ruN gpui-pre-windows-0.3.12/src/window.rs b/gpui-pre-windows/src/w
          let scale_factor = self.0.state.scale_factor.get();
          let input = PlatformInput::FileDrop(FileDropEvent::Submit {
              position: logical_point(
+@@ -1601,6 +1690,26 @@
+     let bounds = bounds.to_device_pixels(display.scale_factor());
+     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
+     Ok(placement)
++}
++
++/// The first build of Windows that has the Acrylic accent policy of
++/// `SetWindowCompositionAttribute`: Windows 10 version 1809.
++const ACRYLIC_ACCENT_BUILD: u32 = 17763;
++
++/// The first build of Windows that has the window attribute
++/// `DWMWA_SYSTEMBACKDROP_TYPE`: Windows 11 version 22H2.
++const SYSTEM_BACKDROP_BUILD: u32 = 22621;
++
++/// The build number of the Windows that is running, or 0 when it cannot be
++/// read.
++fn windows_build_number() -> u32 {
++    let mut version = unsafe { std::mem::zeroed() };
++    let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
++    if status.is_ok() {
++        version.dwBuildNumber
++    } else {
++        0
++    }
+ }
+ 
+ fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {
 diff --color -ruN gpui-pre-macos-0.3.12/src/drop_data.rs b/gpui-pre-macos/src/drop_data.rs
 --- a/gpui-pre-macos/src/drop_data.rs
 +++ b/gpui-pre-macos/src/drop_data.rs
@@ -4680,7 +5036,28 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
              ];
              let () = msg_send![
                  native_window,
-@@ -3749,6 +3753,20 @@
+@@ -1927,6 +1931,20 @@
+         self.0.as_ref().lock().background_appearance
+     }
+ 
++    fn is_background_blur_supported(&self) -> bool {
++        // With Reduce Transparency turned on (System Settings > Accessibility >
++        // Display), AppKit does not blur what is behind an `NSVisualEffectView`.
++        // It fills the view with a solid colour, and `blurred_view_update_layer`
++        // removes that fill, so the window would show what is behind it without
++        // any blur.
++        unsafe {
++            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
++            let reduce_transparency: Bool =
++                msg_send![workspace, accessibilityDisplayShouldReduceTransparency];
++            !reduce_transparency.as_bool()
++        }
++    }
++
+     fn is_subpixel_rendering_supported(&self) -> bool {
+         false
+     }
+@@ -3749,6 +3767,20 @@
  ) -> Bool {
      let window_state = unsafe { get_window_state(this) };
      let position = drag_event_position(&window_state, dragging_info);
@@ -4701,7 +5078,7 @@ diff --color -ruN gpui-pre-macos-0.3.12/src/window.rs b/gpui-pre-macos/src/windo
      send_file_drop_event(window_state, FileDropEvent::Submit { position }).to_objc()
  }
  
-@@ -3764,7 +3782,15 @@
+@@ -3764,7 +3796,15 @@
      )]
      let filenames: *mut NSArray<NSString> =
          unsafe { msg_send![pasteboard, propertyListForType: NSFilenamesPboardType] };

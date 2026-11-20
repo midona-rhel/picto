@@ -253,9 +253,11 @@ shadows, nearest-neighbour sampling, a native file drag the app starts
 itself (`Window::start_platform_drag`, with an OLE source on Windows and an
 XDND source on X11, whose file-list encoders the app's Copy uses too), what
 a drop carries besides files (`ExternalDropData`, `PromisedFiles`), an
-interface zoom (`App::set_ui_zoom`), and test-only hooks for the off-screen
-tool. `vendor/README.md` explains each change and holds the diff against
-0.3.12.
+interface zoom (`App::set_ui_zoom`), a way to ask whether the system blurs
+what is behind a window (`Window::is_background_blur_supported`), Acrylic on
+Windows 11 through the system's documented window attribute, and test-only
+hooks for the off-screen tool. `vendor/README.md` explains each change and
+holds the diff against 0.3.12.
 
 The `dev` profile builds this crate at `opt-level = 1` and dependencies at
 `opt-level = 2`, with line tables only and incremental compilation off, to
@@ -312,6 +314,56 @@ the text field (`text_input/`, editing as Chromium does per platform),
 notifications (`notify.rs`), glass (`glass.rs`) and accessibility
 (`a11y.rs`: roles, names, values, states and actions for AccessKit, built
 only while assistive technology is attached).
+
+**Window chrome and the frosted material** (`ui/window_chrome.rs`). This
+file holds the options that every window is opened with (no system
+titlebar), the parts of a window's frame that the app draws itself (the rim
+on macOS, the minimise, maximise and close buttons on Windows and Linux, and
+the resize edges on Linux), and the calls that ask the system to blur what
+is behind a window.
+
+The sidebar and the inspector of the main window can show the system's
+frosted material: what is behind the window is seen through them, blurred,
+under the theme's rail colour.
+
+- The switch is in Settings > General > Appearance. It is named "Frosted
+  glass sidebar and inspector" on macOS and "Acrylic sidebar and inspector"
+  on Windows. It is off by default, and with it off the window is drawn
+  exactly as before.
+- The row is shown only where the system can blur what is behind the main
+  window (`Window::is_background_blur_supported`, a change to the vendored
+  GPUI). It is never shown on Linux, and it is not shown on macOS while
+  Reduce Transparency is turned on in System Settings.
+- Turning the switch on or off changes the main window at once. Save &
+  Close or Apply stores the choice, and closing the Settings window without
+  saving puts the stored choice back, as for a theme.
+- The choice is stored in the library's application settings, under the key
+  `frostedGlassRails` for macOS and `acrylicRails` for Windows. A library
+  that is used on both systems therefore keeps one choice for each.
+- With the switch on, the main window's background is GPUI's
+  `WindowBackgroundAppearance::Blurred` (`window_chrome::show_rail_material`).
+  On macOS that is an `NSVisualEffectView` with the material
+  `UnderWindowBackground` behind the whole content, from which GPUI removes
+  the system's tint and extra saturation. On Windows 11 version 22H2 and
+  later it is the Acrylic system backdrop (`DWMWA_SYSTEMBACKDROP_TYPE`), and
+  on Windows 10 version 1809 up to Windows 11 version 21H2 it is the Acrylic
+  accent policy.
+- `Shell::render` fills the sidebar and the inspector with the theme's rail
+  colour at 80% opacity in the dark themes and 85% in the light themes
+  (`window_chrome::rail_fill`). Each of the two runs over the window's full
+  height, including its part of the titlebar. Everywhere else the shell
+  draws the opaque app background, so the grid, the viewer and the screens
+  look the same with the switch on or off.
+- While a rail slides out of or into the window, the centre is not drawn
+  under the part of the rail that is still inside the window. While the
+  inspector fades out or in because the user opened or left a screen, it is
+  drawn with the solid rail colour, and it changes to the material when the
+  fade has ended.
+- On Windows, GPUI draws text with subpixel antialiasing only in an opaque
+  window. While Acrylic is on, the text of the main window is therefore
+  drawn with greyscale antialiasing.
+- The Settings window, the detail windows and the Library Manager stay
+  opaque.
 
 **Theme, motion, zoom** (`theme.rs`, `motion.rs`, `zoom.rs`). Colours from a
 theme's background, contrast and text colours as `tokens.css` derives them;
@@ -749,6 +801,7 @@ reading production's code, seen in this app).
 | | Windows | Linux X11 | Linux Wayland |
 | --- | --- | --- | --- |
 | Backdrop blur | none (DirectX); a more opaque glass | yes | yes |
+| Frosted material behind the sidebar and inspector | Acrylic, off by default; never run | none | none |
 | Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
 | Inbox badge | none (as production) | Unity launcher D-Bus signal | same |
@@ -851,6 +904,17 @@ reading production's code, seen in this app).
     zoom step, and a trackpad makes one zoom step for every 60 px it
     scrolls. In production every wheel event changes the tile size by
     25 px.
+- The frosted material behind the sidebar and the inspector works
+  differently from production's. Production has four themes that make its
+  whole window translucent: `vibrancy` and `liquidglass` on macOS, and
+  `mica` and `acrylic` on Windows. This app does not draw those themes, and
+  a library that stores one of them opens in the Dark theme. Instead this
+  app has a switch that works with each of its six themes and makes only the
+  sidebar and the inspector of the main window translucent (section 4,
+  "Window chrome and the frosted material"). The switch is off by default
+  and is not shown on Linux. Its choice is stored in the library's
+  application settings under the keys `frostedGlassRails` and
+  `acrylicRails`, which production does not have.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge
@@ -878,6 +942,10 @@ Not done:
   corners, or draw radial gradients, masks or blend modes; where production
   does, the drawing differs.
 - The DirectX renderer draws no blur.
+- On Linux the sidebar and the inspector never show the frosted material.
+  GPUI blurs behind a window on a Wayland compositor that has a blur
+  protocol, but the vendored GPUI does not yet tell the app whether the
+  running compositor has one, and X11 has no blur at all.
 - Detail window always-on-top on Linux.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
   do not turn on secure keyboard entry; the OnlyFans browser login has never
@@ -899,6 +967,14 @@ Not verified:
   display.
 - Pop-up menus' blur and pop-in scale on macOS, and the input method's
   candidate window in them.
+- The frosted material behind the sidebar and the inspector. On macOS a
+  picture of one window (`screencapture -l`) shows the two rails lighter
+  than their solid colour, over a flat grey, and not the blurred picture of
+  what is behind the window, so no picture shows the blur itself. On
+  Windows the Acrylic code has been compiled and
+  has never been run: whether Acrylic shows, how it looks under each theme,
+  and whether Windows replaces it with a solid colour while the window is
+  not the active one are all unknown.
 - Performance: no frame-time or decode-latency benchmark has been completed.
 
 ### Waiting on the owner
