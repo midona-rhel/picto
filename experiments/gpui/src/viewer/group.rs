@@ -1,20 +1,19 @@
-//! A collection's members in one continuous column (`GroupSurface.tsx` in
-//! its reader mode), as the media view, Quick Look and the detail window
-//! show a collection. Each member sits in a glass frame of its own shape,
-//! the column's full width, one under the other; the column scrolls.
+//! Shows the members of a collection in one scrolling column, each as wide
+//! as the column, one under the other. The media view, Quick Look and the
+//! detail window use this when the item they show is a collection. The
+//! Electron app does the same in `GroupSurface.tsx`, in its reader mode.
 //!
-//! A member shows its thumbnail first. Once it has been in view for 200 ms
-//! its full media is asked for: an image's original fades in over the
-//! thumbnail, and any other member opens in a media surface of its own (the
-//! PDF viewer, the media player, ...), under its thumbnail, which fades out
-//! the same way once the surface has drawn its first frame or page. The
-//! last 100 members asked for stay loaded (`useWarmGroupMediaBudget`).
+//! A member is first drawn from its thumbnail. After it has been visible
+//! for 200 ms, its full media is loaded. For an image, the original file is
+//! decoded and fades in over the thumbnail. For anything else (a PDF, a
+//! video and so on), a media surface is created under the thumbnail, and
+//! the thumbnail fades out once that surface has drawn its first frame or
+//! page. Only the 100 most recently loaded members stay loaded.
 //!
-//! A PDF, DjVu or comic member shows all its pages, one under the other at
-//! the column's width, in its frame: the reader is where a collection of
-//! documents is read, so its pages scroll with the rest. Each such member is
-//! measured as the collection opens, so its frame has its final height
-//! before it is in view.
+//! A PDF, DjVu or comic member shows all of its pages, one under the other,
+//! at the column's width. The page sizes of every such member are read when
+//! the collection opens, so that the member already has its final height
+//! before it is scrolled into view.
 use super::Media;
 use super::document::geometry::PageSize;
 use super::document::kind::{RendererKind, renderer_kind};
@@ -31,19 +30,21 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// `.reader`'s padding and `.memberStack`'s gap (`--space-4`).
+/// The padding around the column and the gap between two members, in
+/// points. The Electron CSS uses `--space-4` for both.
 const SPACE: f32 = 16.;
-/// `.imageFrame` / `.mediaFrame`: `min-height: 180px`.
+/// The smallest height a member is given, in points, however flat its
+/// picture is (`min-height: 180px` in the Electron CSS).
 const MIN_HEIGHT: f32 = 180.;
-/// The frames' 1px glass border, inside which the media is drawn.
-const BORDER: f32 = 1.;
-/// `FULL_MEDIA_VISIBILITY_DELAY_MS`: how long a member must stay in view
-/// before its full media is asked for.
+/// How long a member must stay visible before its full media is loaded
+/// (`FULL_MEDIA_VISIBILITY_DELAY_MS` in the Electron app).
 const VISIBILITY_DELAY: Duration = Duration::from_millis(200);
-/// `MAX_WARM_GROUP_MEDIA`.
+/// How many members may have their full media loaded at the same time
+/// (`MAX_WARM_GROUP_MEDIA` in the Electron app).
 const WARM_LIMIT: usize = 100;
 
-/// A member was right-clicked at this window position.
+/// Sent when a member is right-clicked. `position` is where the pointer was,
+/// in window coordinates, and `member` is the member's index.
 pub struct MemberMenu {
     pub position: Point<Pixels>,
     pub member: usize,
@@ -51,19 +52,21 @@ pub struct MemberMenu {
 
 impl EventEmitter<MemberMenu> for GroupReader {}
 
-/// A member was double-clicked: it opens by itself in the media view
-/// (`setViewerIndex`).
+/// Sent when a member is double-clicked, with the member's index. The host
+/// then shows that member on its own in the media view.
 pub struct MemberOpened(pub usize);
 
-/// The space between the members was right-clicked at this window position:
-/// the collection's own menu (`openEmptyMenu`).
+/// Sent when the empty space between members is right-clicked, with the
+/// pointer's position in window coordinates. The host then opens the menu
+/// for the collection itself.
 pub struct CollectionMenu(pub Point<Pixels>);
 
 impl EventEmitter<MemberOpened> for GroupReader {}
 impl EventEmitter<CollectionMenu> for GroupReader {}
 
-/// How the media view shows a collection (`GroupSurface`'s `mode`): its
-/// members one under the other to read, or as a grid to arrange.
+/// The two ways the media view can show a collection: `Reader` shows the
+/// members one under the other, for reading; `Editor` shows them as a grid,
+/// for reordering.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
@@ -71,8 +74,9 @@ pub enum Mode {
     Editor,
 }
 
-/// `sortCollectionContents`: the members' order by name (natural, case
-/// ignored) or by size (largest first), ties by id.
+/// Returns the members sorted by name or by size. Names are compared
+/// ignoring case, and numbers inside a name are compared as numbers. Sizes
+/// are sorted largest first. Members that compare equal are ordered by id.
 pub fn sorted_members(members: &[(MediaId, &str, u64)], field: ContentSortField) -> Vec<MediaId> {
     let mut sorted = members.to_vec();
     sorted.sort_by(|left, right| {
@@ -85,8 +89,9 @@ pub fn sorted_members(members: &[(MediaId, &str, u64)], field: ContentSortField)
     sorted.into_iter().map(|(id, _, _)| id).collect()
 }
 
-/// `detachMembers`: takes `members` out of `collection`, into the Trash when
-/// `trash`, as one undoable change. The answer says whether it went through.
+/// Removes `members` from `collection` as one change that Undo reverses.
+/// When `trash` is true the removed members are also moved to the Trash.
+/// The returned task resolves to whether the change was saved.
 pub fn detach(
     session: &Entity<Session>,
     collection: RootId,
@@ -109,8 +114,8 @@ pub fn detach(
     })
 }
 
-/// `saveOrder`: the members of `collection` in this order, as one undoable
-/// change.
+/// Saves `order` as the order of the collection's members, as one change
+/// that Undo reverses.
 pub fn reorder(
     session: &Entity<Session>,
     collection: RootId,
@@ -131,8 +136,8 @@ pub fn reorder(
     })
 }
 
-/// The members of `details` sorted by `field`, saved as the collection's
-/// order.
+/// Sorts the members of the collection in `details` by `field` and saves
+/// that as the collection's order.
 pub fn sort(
     session: &Entity<Session>,
     details: &RootDetails,
@@ -154,8 +159,8 @@ pub fn sort(
     reorder(session, details.root.root_id, order, cx)
 }
 
-/// `.inlineError`: why an edit of the collection failed, in a band over its
-/// members.
+/// A red strip shown above the members when a change to the collection
+/// could not be saved. `message` is the reason.
 pub fn inline_error(message: SharedString, cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -170,31 +175,33 @@ pub fn inline_error(message: SharedString, cx: &App) -> Div {
         .child(message)
 }
 
-/// What a member's frame is shaped by.
+/// What decides a member's height in the column.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    /// A picture of this size, if known.
+    /// One picture, with its width and height in pixels when they are known.
     Picture(Option<(f32, f32)>),
-    /// Pages of these natural sizes, inline one under the other.
+    /// A document, with the size of each page. The pages are drawn one under
+    /// the other.
     Pages(Vec<PageSize>),
 }
 
-/// A member's frame height for a column `width` wide: a picture at that
-/// width, pages at the width inside the frame's border; never under 180px.
+/// The height a member takes in a column `width` points wide. A picture is
+/// scaled to the column's width; a document is the height of all its pages
+/// at that width. The result is never less than `MIN_HEIGHT`.
 pub fn frame_height(shape: &Shape, width: f32) -> f32 {
     match shape {
         Shape::Picture(size) => size
             .filter(|(w, h)| *w > 0. && *h > 0.)
             .map_or(0., |(w, h)| width * h / w),
         Shape::Pages(sizes) => {
-            paged::inline_height(sizes, (width - 2. * BORDER).max(1.)) + 2. * BORDER
+            paged::inline_height(sizes, width.max(1.))
         }
     }
     .max(MIN_HEIGHT)
 }
 
-/// Where each member's frame lies in the column: its top, from the top of
-/// the scrolled content, and its height, for a column `width` wide.
+/// For each member, where it starts (measured from the top of the column's
+/// content) and how tall it is, in a column `width` points wide.
 pub fn layout(shapes: &[Shape], width: f32) -> Vec<(f32, f32)> {
     let mut top = SPACE;
     shapes
@@ -208,8 +215,9 @@ pub fn layout(shapes: &[Shape], width: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The members any part of which is in the viewport, scrolled `offset`
-/// down, `height` tall.
+/// The indices of the members that are at least partly visible when the
+/// column is scrolled down by `offset` and the visible area is `height`
+/// tall. `places` is the result of [`layout`].
 pub fn in_view(places: &[(f32, f32)], offset: f32, height: f32) -> Vec<usize> {
     places
         .iter()
@@ -219,8 +227,9 @@ pub fn in_view(places: &[(f32, f32)], offset: f32, height: f32) -> Vec<usize> {
         .collect()
 }
 
-/// `retainWarmGroupMedia`: `member` becomes the most recent, and only the
-/// latest `limit` stay.
+/// Returns the list of loaded members after `member` is loaded: `member`
+/// moves to the end as the most recent, and the oldest entries are dropped
+/// so that at most `limit` remain.
 pub fn retain_warm(current: &[usize], member: usize, limit: usize) -> Vec<usize> {
     let mut next: Vec<usize> = current.iter().copied().filter(|m| *m != member).collect();
     next.push(member);
@@ -231,19 +240,21 @@ pub fn retain_warm(current: &[usize], member: usize, limit: usize) -> Vec<usize>
 
 struct Member {
     media: Media,
-    /// Shown as an image (`detailRendererKind` `image`); anything else
-    /// opens in a media surface once warm.
+    /// True when the member is a still image, which this view draws itself.
+    /// Any other kind of member is drawn by a media surface once it is
+    /// loaded.
     image: bool,
-    /// A PDF, DjVu or comic: shown as its pages, measured as the
-    /// collection opens.
+    /// Set when the member is a PDF, DjVu or comic, which is shown as all of
+    /// its pages. `pages` holds the page sizes once they have been read.
     paged: Option<RendererKind>,
     pages: Option<Vec<PageSize>>,
-    /// The thumbnail over a member's surface fading out once the surface
-    /// has drawn.
+    /// The fade that hides the thumbnail once the member's media surface
+    /// has drawn its first frame or page.
     uncover: motion::Fade,
     thumbnail: Option<Arc<RenderImage>>,
     full: Option<Arc<RenderImage>>,
-    /// `.fullImage`'s 130 ms fade in once the original has decoded.
+    /// The 130 ms fade that shows the original image once it has been
+    /// decoded.
     reveal: motion::Fade,
     surface: Option<Entity<MediaSurface>>,
     tasks: Vec<Task<()>>,
@@ -254,10 +265,11 @@ pub struct GroupReader {
     root: Option<RootId>,
     members: Vec<Member>,
     scroll: ScrollHandle,
-    /// The scroller's size, as last laid out.
+    /// The size of the scrolling area, as measured in the last frame drawn.
     viewport: Size<Pixels>,
     warm: Vec<usize>,
-    /// Members in view whose 200 ms wait is running.
+    /// The visible members that are still inside their 200 ms wait and have
+    /// not started loading yet.
     waiting: HashSet<usize>,
 }
 
@@ -360,7 +372,8 @@ impl GroupReader {
         cx.notify();
     }
 
-    /// Lets go of every member and what it loaded.
+    /// Removes every member and frees the images and media surfaces that
+    /// were loaded for them.
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         for member in self.members.drain(..) {
             for image in [member.thumbnail, member.full].into_iter().flatten() {
@@ -376,8 +389,8 @@ impl GroupReader {
         cx.notify();
     }
 
-    /// The column's width: the scroller less its padding and the scrollbar's
-    /// gutter (`scrollbar-gutter: stable`).
+    /// The width of the column: the scrolling area's width minus the padding
+    /// on both sides and the space reserved for the scrollbar.
     fn column_width(&self) -> f32 {
         (f32::from(self.viewport.width) - 2. * SPACE - ui::scrollbar::GUTTER).max(0.)
     }
@@ -385,7 +398,8 @@ impl GroupReader {
     fn shape(member: &Member) -> Shape {
         match (&member.pages, member.paged, member.media.natural) {
             (Some(pages), _, _) => Shape::Pages(pages.clone()),
-            // Until measured, the first page has the thumbnail's shape.
+            // The page sizes have not been read yet, so use the thumbnail's
+            // size as the size of a single page for now.
             (None, Some(_), Some(natural)) => Shape::Pages(vec![natural]),
             _ => Shape::Picture(member.media.natural),
         }
@@ -401,8 +415,10 @@ impl GroupReader {
         in_view(&self.places(), offset, f32::from(self.viewport.height))
     }
 
-    /// Starts the wait of each member that came into view; a member still
-    /// in view when it ends is loaded, one already loaded is only touched.
+    /// Starts the 200 ms wait for every member that has just become
+    /// visible. A member that is still visible when its wait ends is
+    /// loaded. A member that is already loaded is only marked as the most
+    /// recently used.
     fn watch(&mut self, cx: &mut Context<Self>) {
         if self.viewport.height <= px(0.) {
             return;
@@ -427,8 +443,8 @@ impl GroupReader {
         }
     }
 
-    /// `request`: loads `index`'s full media, and lets go of the members
-    /// that fell out of the budget.
+    /// Loads the full media of member `index`, and unloads the members that
+    /// no longer fit within `WARM_LIMIT`.
     fn warm_up(&mut self, index: usize, cx: &mut Context<Self>) {
         let next = retain_warm(&self.warm, index, WARM_LIMIT);
         for cold in self.warm.iter().filter(|member| !next.contains(member)) {
@@ -478,8 +494,9 @@ impl GroupReader {
             let surface = cx.new(|cx| {
                 let mut options = super::options(cx, false, true);
                 options.member = true;
-                // `GroupImage` and `GroupDeferredRenderer` follow neither
-                // preview setting: no checkerboard, smooth scaling.
+                // Members ignore the two preview settings, as they do in the
+                // Electron app: no checkerboard behind transparent images,
+                // and smooth scaling.
                 options.transparency_grid = false;
                 options.pixelated = false;
                 let mut surface = MediaSurface::new(options, cx);
@@ -503,32 +520,33 @@ impl GroupReader {
         cx.notify();
     }
 
-    /// One member's frame: `.imageFrame` or `.mediaFrame`, a glass panel of
-    /// the member's shape holding its thumbnail, then its full media.
+    /// Draws member `index` at `height` points tall: its thumbnail, and its
+    /// full media once that is loaded.
     fn frame(&self, index: usize, height: f32, cx: &mut Context<Self>) -> AnyElement {
         let member = &self.members[index];
-        let inner = theme::RADIUS_LG - BORDER;
+        let theme = theme::theme(cx);
+        let radius = theme::RADIUS_LG;
         let picture = |image: Arc<RenderImage>, id: String| {
             img(image)
                 .id(ElementId::Name(id.into()))
                 .absolute()
                 .inset_0()
                 .size_full()
-                .rounded(px(inner))
+                .rounded(px(radius))
                 .object_fit(ObjectFit::Fill)
         };
-        // A paged member: its pages at the width inside the border. The
-        // thumbnail is the first page's; the rest are blank sheets until
-        // the member's surface draws them.
+        // For a document, where each page goes at the column's width. Only
+        // the first page has a thumbnail. The other pages are drawn as blank
+        // sheets until the member's media surface draws them.
         let pages = match Self::shape(member) {
             Shape::Pages(sizes) if member.paged.is_some() => Some(
-                paged::inline_column(&sizes, (self.column_width() - 2. * BORDER).max(1.)).pages,
+                paged::inline_column(&sizes, self.column_width().max(1.)).pages,
             ),
             _ => None,
         };
         let warm = member.surface.is_some() && !member.image;
-        // Over a warm member's surface the thumbnail fades out once the
-        // surface has drawn.
+        // `cover` is the thumbnail's opacity. For a member drawn by a media
+        // surface it goes from 1 to 0 once the surface has drawn.
         let cover = if warm {
             1. - member.uncover.value_with(motion::EASE)
         } else {
@@ -541,7 +559,8 @@ impl GroupReader {
             .map(|thumbnail| {
                 let id = format!("group-thumb-{}", member.media.key);
                 let layer = match pages.as_ref().and_then(|pages| pages.first()) {
-                    // The first page's place: the frame's top, its width.
+                    // A document's thumbnail is drawn where its first page
+                    // is.
                     Some(first) => img(thumbnail)
                         .id(ElementId::Name(id.into()))
                         .absolute()
@@ -570,9 +589,9 @@ impl GroupReader {
         };
         let content = div()
             .absolute()
-            .inset(px(BORDER))
+            .inset_0()
             .overflow_hidden()
-            .rounded(px(inner))
+            .rounded(px(radius))
             .children(blank)
             .children(below)
             .when_some(member.full.clone(), |content, full| {
@@ -585,12 +604,14 @@ impl GroupReader {
                 content.child(div().absolute().inset_0().child(surface))
             })
             .children(above);
-        ui::glass_panel(
-            ElementId::NamedInteger("group-member".into(), index as u64),
-            theme::RADIUS_LG,
-            cx,
-        )
-        .relative()
+        // The member is drawn as the picture alone, with rounded corners
+        // and no outline. Until its thumbnail has loaded, this faint fill
+        // shows where it will be.
+        div()
+            .id(ElementId::NamedInteger("group-member".into(), index as u64))
+            .rounded(px(radius))
+            .bg(theme.subtle_overlay())
+            .relative()
         .flex_none()
         .w_full()
         .h(px(height))
@@ -605,8 +626,9 @@ impl GroupReader {
                 });
             }),
         )
-        // A double-click opens the member by itself (`setViewerIndex`); it
-        // is a picture to assistive technology, as production's `<img>`.
+        // Screen readers treat the member as a picture, not as a button, as
+        // they do in the Electron app. A double-click asks the host to show
+        // the member on its own.
         .a11y_presentational()
         .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
             if event.click_count() == 2 {
@@ -620,8 +642,8 @@ impl GroupReader {
 
 impl Render for GroupReader {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A warm member's thumbnail starts fading once its surface has
-        // drawn its first frame or page.
+        // Start fading out the thumbnail of each member whose media surface
+        // has now drawn its first frame or page.
         for member in &mut self.members {
             if let Some(surface) = &member.surface
                 && !member.image
@@ -639,9 +661,9 @@ impl Render for GroupReader {
             window.request_animation_frame();
         }
         self.watch(cx);
-        // Until the pane has been measured there is no column width to
-        // shape the frames by: nothing is drawn, rather than every member
-        // squashed into the minimum height.
+        // Before the first frame has measured this view, the column's width
+        // is unknown. Draw no members in that frame, because without a
+        // width each one would be laid out at the minimum height.
         let measured = self.viewport.width > px(0.);
         let empty = self.root.is_some() && self.members.is_empty();
         let places = if measured { self.places() } else { Vec::new() };
@@ -657,8 +679,8 @@ impl Render for GroupReader {
                     if this.viewport != bounds.size {
                         this.viewport = bounds.size;
                         cx.notify();
-                        // A notification made while a frame is being drawn
-                        // does not by itself bring another frame.
+                        // Ask for another frame as well, so that the members
+                        // are loaded for the size just measured.
                         window.request_animation_frame();
                     }
                 });
@@ -667,7 +689,7 @@ impl Render for GroupReader {
         )
         .absolute()
         .size_full();
-        // `.surface`: the app background under the column.
+        // The app's background colour fills the area behind the column.
         div()
             .relative()
             .size_full()
@@ -681,8 +703,9 @@ impl Render for GroupReader {
                     .overflow_y_scroll()
                     .size_full()
                     .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
-                    // A right-click that no member took is between them:
-                    // the collection's own menu.
+                    // A right-click that no member handled was on the empty
+                    // space between members, so ask the host for the
+                    // collection's menu.
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(|_, event: &MouseDownEvent, _, cx| {
@@ -700,7 +723,8 @@ impl Render for GroupReader {
                             .pl(px(SPACE))
                             .pr(px(SPACE + ui::scrollbar::GUTTER))
                             .children(frames)
-                            // `.empty`: a collection with no members says so.
+                            // A collection with no members shows a short
+                            // message instead of an empty column.
                             .when(empty, |column| {
                                 column.child(
                                     div()
@@ -751,14 +775,15 @@ mod tests {
 
     #[test]
     fn a_document_member_holds_all_its_pages() {
-        // Two letter pages at 502 inside a 1px border: 649.6 each, 8 apart.
+        // Two US Letter pages in a column 504 points wide, with the 8-point
+        // gap the document layout puts between pages.
         let places = layout(&[Shape::Pages(vec![(612., 792.), (612., 792.)])], 504.);
-        let height = 2. * 502. * 792. / 612. + 8. + 2.;
+        let height = 2. * 504. * 792. / 612. + 8.;
         assert!((places[0].1 - height).abs() < 0.01, "{places:?}");
-        // Before it is measured, the first page alone has the thumbnail's
-        // shape, which the measured first page keeps.
+        // Before the page sizes are read, a document is laid out as one page
+        // with the thumbnail's proportions.
         let one = layout(&[Shape::Pages(vec![(2550., 3300.)])], 504.);
-        assert!((one[0].1 - (502. * 3300. / 2550. + 2.)).abs() < 0.01);
+        assert!((one[0].1 - (504. * 3300. / 2550.)).abs() < 0.01);
     }
 
     #[test]
@@ -767,7 +792,8 @@ mod tests {
         assert_eq!(in_view(&places, 0., 300.), vec![0, 1]);
         assert_eq!(in_view(&places, 300., 300.), vec![1]);
         assert_eq!(in_view(&places, 2200., 400.), vec![1, 2]);
-        // Touching the edge is not in view.
+        // A member that only touches the edge of the visible area does not
+        // count as visible.
         assert_eq!(in_view(&places, 266., 16.), Vec::<usize>::new());
     }
 
@@ -786,7 +812,8 @@ mod tests {
             (MediaId(3), "Chapter 2", 300),
             (MediaId(1), "Epilogue", 50),
         ];
-        // Numbers in names compare as numbers; case is ignored, ties by id.
+        // Numbers inside names are compared as numbers, case is ignored, and
+        // members with equal names are ordered by id.
         assert_eq!(
             sorted_members(&members, ContentSortField::Name),
             [MediaId(2), MediaId(3), MediaId(4), MediaId(1)]
