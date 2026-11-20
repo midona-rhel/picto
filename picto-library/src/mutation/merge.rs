@@ -4,7 +4,8 @@
 //! A merge is a sequence of ordinary undoable changes, so a duplicate
 //! resolution can be undone exactly:
 //! 1. a merged-away collection member leaves its collection (a structural
-//!    detach); a collection it leaves empty is removed, and what pointed at the
+//!    detach) carrying the collection's tags, folders, rating and links; a
+//!    collection it leaves empty is removed, and what pointed at the
 //!    collection points at the item that stays;
 //! 2. a loose item hands its tags, folders, rating, lifecycle, notes and source
 //!    links to the root that stays;
@@ -112,18 +113,18 @@ pub(super) fn merge_media(
     }
     let survivor_root = owner(snapshot, survivor)?;
     let mut loser_root = owner(snapshot, loser)?;
-    let mut hands_over = true;
     if loser_root.0 != loser.0 {
         let collection = loser_root;
         let members = snapshot
             .collection_orders
             .get(&collection)
             .map_or(0, |members| members.len());
-        // A member leaves its collection alone; only a collection it empties
-        // hands its tags, folders and links on to the item that stays.
-        let empties = members == 1;
-        hands_over = empties;
-        if empties {
+        // A member leaves its collection carrying what it had as part of it
+        // (the collection's tags, folders, rating and links, and its own
+        // notes) and hands that on like any merged item; a collection that
+        // lives on keeps its own. A collection it empties goes, and what
+        // pointed at it points at the item that stays.
+        if members == 1 {
             let relink = relink_root(transaction, collection, survivor_root)?;
             push_relink(transaction, relink, merge)?;
             merge.removed_collections += 1;
@@ -160,7 +161,7 @@ pub(super) fn merge_media(
         loser_root = RootId(loser.0);
     }
 
-    if hands_over && loser_root != survivor_root {
+    if loser_root != survivor_root {
         for change in hand_over(transaction, snapshot, loser_root, survivor_root, now_ms)? {
             apply_semantic_change(
                 transaction,
