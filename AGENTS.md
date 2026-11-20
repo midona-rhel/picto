@@ -45,11 +45,24 @@ Writing that leaves the reader guessing is a defect, the same as a bug.
 - The same applies to code. A name says what the thing is. A comment says why
   the code is there, in a plain sentence. Do not write code or comments that a
   reader has to decode.
-- When you touch a file, leave what you touched readable by this standard,
-  including the comments and documentation around your change.
 - Read what you wrote before you send or commit it, as someone who was not
   there. If a sentence can be read two ways, or you are not sure a reader
   would understand it, rewrite it until you are sure.
+
+### Every file you modify
+
+Whenever you modify a file, you must also do this in the same change:
+
+1. Read all the comments and documentation in that file, not only the lines
+   next to your change.
+2. Rewrite every comment and every piece of documentation in it that fails
+   the standard above, so that the whole file passes when you are done.
+3. Do the same for the documentation that describes what you changed, such as
+   its paragraph in a README or in `docs/`.
+
+This applies every time, to you and to every agent you start, and it is how
+the existing text is brought up to the standard: one modified file at a time.
+You do not have to do it for a file you only read.
 
 ## Review guidelines
 
