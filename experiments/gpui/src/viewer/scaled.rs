@@ -16,18 +16,22 @@ const DECODE_LIMIT: usize = 512 << 20;
 /// allows it, else whole. `orient` applies the EXIF orientation, as GPUI's
 /// image loader does.
 pub fn decode(path: &Path, size: (u32, u32), orient: bool) -> Result<DynamicImage> {
-    let bytes = std::fs::read(path)?;
+    decode_bytes(&std::fs::read(path)?, size, orient)
+}
+
+/// The same as [`decode`], for a file whose bytes have already been read.
+pub fn decode_bytes(bytes: &[u8], size: (u32, u32), orient: bool) -> Result<DynamicImage> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff])
-        && let Some(image) = reduced_jpeg(&bytes, size)?
+        && let Some(image) = reduced_jpeg(bytes, size)?
     {
         let mut image = image;
         if orient {
-            let mut header = image::codecs::jpeg::JpegDecoder::new(Cursor::new(&bytes))?;
+            let mut header = image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes))?;
             image.apply_orientation(header.orientation()?);
         }
         return Ok(image);
     }
-    let mut decoder = image::ImageReader::new(Cursor::new(&bytes))
+    let mut decoder = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()?
         .into_decoder()?;
     let orientation = decoder.orientation()?;
