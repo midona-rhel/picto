@@ -2,8 +2,11 @@
 
 Use this document when a subscription provider stops discovering posts, skips media that is not in
 the library, repeats pages, downloads the wrong asset, or fails authentication. The current
-[gallery-dl extractors](https://github.com/mikf/gallery-dl/tree/master/gallery_dl/extractor) are the
-compatibility specification for ordinary providers. The current
+[gallery-dl extractors](https://codeberg.org/mikf/gallery-dl/src/branch/master/gallery_dl/extractor)
+are the compatibility specification for ordinary providers. gallery-dl is developed on Codeberg. Its
+GitHub repository is not a complete copy: in November 2026 it had no `exhentai`, `hentaifoundry` or
+`pawchive` extractor and its Twitter extractor was from April 2026. Read the Codeberg repository,
+and record Codeberg commit SHAs. The current
 [OF-Scraper implementation](https://github.com/datawhores/OF-Scraper/tree/main/ofscraper) is the
 compatibility specification for OnlyFans. Do not invent an alternative protocol when either
 reference already handles the case: reproduce its observable request and extraction behavior in
@@ -88,6 +91,26 @@ downloader it calls. Run the same known query through gallery-dl when permitted.
 - original-media selection, intermediary-page resolution, and fallback order;
 - empty, inaccessible, deleted, and end-of-history behavior.
 
+#### Revision last compared
+
+On 2026-11-20 every gallery-dl-backed provider was compared with gallery-dl `master` at Codeberg
+commit `552cb84a08c4f0a4c071a466573fe749269573a3`. Release 1.32.20 is commit
+`c3249c9f0d7bda3e097262389e0c1c4bb42d7181`; the e621 change for the new `posts.json` layout came
+after that release. The comparison started from commit `d05a77933a89a31ff9d57a2c12cda2ee336845e6`,
+the revision that Picto ran before the native providers replaced it. Start the next comparison from
+`552cb84a` and replace the SHAs in this paragraph when it is done.
+
+Two differences from that revision are known and were left in place:
+
+- Twitter / X. gallery-dl reads a user's media from the `UserPhotoTimeline` operation and then from
+  `UserVideoTimeline`, and uses a newer query id for `UserByScreenName`. Picto still uses the older
+  `UserMedia` operation and the older `UserByScreenName` id. Nothing shows that X has stopped
+  serving them, and the change cannot be checked without a signed-in session. The `TODO` at the top
+  of `picto-sources/src/providers/twitter.rs` describes what the move needs.
+- Hentai Foundry. The site answers a browser user agent with an Anubis challenge (401). gallery-dl
+  has no handling for it. Picto sends its own user agent to this site, which the site serves
+  directly.
+
 Never paste session cookies, authorization headers, OAuth secrets, signed URLs, or private response
 payloads into an issue, fixture, test output, or commit. Reduce a captured response to the smallest
 sanitized fixture that still reproduces the parser or cursor defect. Translate the complete behavior
@@ -134,6 +157,12 @@ regression fixture is `empty-timeline-continuation.json`.
 
 ### Known boundaries
 
+- Newgrounds can answer every request with its "NG Guard" browser check (403), a JavaScript puzzle
+  that Picto cannot pass. The run then fails with an authentication error. It does not record the
+  posts as having no media.
+- Pawchive files that are marked `preview_only` and have no `temp_url` are skipped, because the
+  archive has no original for them. A `temp_url` is signed and expires, so it is read from the post
+  detail immediately before the download.
 - Ordered booru queries are explicitly unsupported under Picto's serial newest-first contract.
 - Known OnlyFans DRM media fail explicitly before download rather than substituting a rendition.
 - Request errors omit URLs and private response bodies.
