@@ -34,6 +34,17 @@ impl NativeSourceAdapter for HentaiFoundrySource {
         }
     }
 
+    /// Hentai Foundry uses the Anubis bot check. A request whose user agent
+    /// names a browser gets a 401 response with a challenge page that only a
+    /// browser running JavaScript can pass. A request with any other user
+    /// agent gets the page it asked for. Every request therefore sends
+    /// Picto's own user agent. gallery-dl has no handling for this as of
+    /// Codeberg commit 552cb84a08c4f0a4c071a466573fe749269573a3; it was
+    /// found by requesting the site on 2026-11-20.
+    fn user_agent(&self) -> Option<&'static str> {
+        Some(crate::http::APPLICATION_USER_AGENT)
+    }
+
     fn validate_query(&self, query: &str) -> Result<(), SourceError> {
         normalize_username(query).map(|_| ())
     }
@@ -114,8 +125,10 @@ async fn visible_text(
     ensure_site_filters(credentials, http, cancel, false).await?;
     let mut html = http.get_text(url.clone(), credentials, cancel).await?;
     if is_entry_page(&html) {
-        // An expired captured PHP session overrides reqwest's fresh cookie jar.
-        // Recover with the new anonymous session the entry request established.
+        // The site returned its entry page again, which means it did not
+        // accept the saved PHPSESSID cookie. The saved cookies are sent in
+        // place of the ones the entry request just received, so the request
+        // is repeated without the saved cookies.
         let recovered = without_stored_session(credentials);
         ensure_site_filters(&recovered, http, cancel, true).await?;
         html = http.get_text(url, &recovered, cancel).await?;

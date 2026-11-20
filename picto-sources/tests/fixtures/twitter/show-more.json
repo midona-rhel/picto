@@ -1,0 +1,34 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "timeline": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "cursor-bottom-1900000000000000001",
+                    "content": {
+                      "cursorType": "Bottom",
+                      "value": "BOTTOM-CURSOR",
+                      "stopOnEmptyResponse": false
+                    }
+                  },
+                  {
+                    "entryId": "cursor-showmorethreads-1900000000000000002",
+                    "content": {
+                      "value": "SHOW-MORE-CURSOR",
+                      "displayTreatment": { "actionText": "Show more" }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
