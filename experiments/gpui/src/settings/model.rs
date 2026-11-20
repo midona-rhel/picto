@@ -1,11 +1,24 @@
-//! The application settings and the grid's default view, as
-//! `settingsApi.ts` reads and writes them: the library's `setting` row
-//! `application` and its `view_pref` row `grid:defaults`. A stored value that
-//! is missing or of the wrong kind falls back to its default, field by field.
+//! The application settings and the grid's default view, with the same JSON
+//! keys and values that production's `settingsApi.ts` reads and writes. The
+//! application settings are the JSON object in the `application` row of the
+//! library's `setting` table. The grid's default view is the JSON object in
+//! the `grid:defaults` row of the library's `view_pref` table.
+//!
+//! Each field is read on its own. A field of the application settings that
+//! is missing from the stored object takes its default, as in production. A
+//! field whose stored value has the wrong type, or is not one of the allowed
+//! values, also takes its default here, and the other fields are still read;
+//! production's `parseAppSettings` throws an error for such a value. A field
+//! of the grid's default view that is missing or has the wrong type is left
+//! unset.
 use serde_json::{Map, Value, json};
 
-/// `APP_SETTINGS_DEFAULTS` and the fields of `AppSettings`. Choices are kept
-/// as the strings production stores.
+/// The application settings, with the same fields and defaults as
+/// production's `AppSettings` type and `APP_SETTINGS_DEFAULTS`, and one more
+/// field, `grid_zoom_animation`, which production does not have. A setting
+/// with a fixed list of choices is kept as the string production stores for
+/// the chosen value, for example `"scroll"` or `"zoom"` for
+/// `grid_wheel_action`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppSettings {
     pub grid_spacing: &'static str,
@@ -26,6 +39,12 @@ pub struct AppSettings {
     pub show_sidebar_smart_folders: bool,
     pub sidebar_double_click_action: &'static str,
     pub grid_wheel_action: &'static str,
+    /// Whether the grid animates its tiles to their new positions and sizes
+    /// when the zoom changes. When it is off, the grid draws the new layout
+    /// in the next frame. Production has no such setting, so the key
+    /// `gridZoomAnimation` exists only in libraries this app has saved
+    /// settings to.
+    pub grid_zoom_animation: bool,
     pub viewer_trackpad_gestures: bool,
     pub grid_double_click_action: &'static str,
     pub grid_middle_click_action: &'static str,
@@ -88,6 +107,7 @@ impl Default for AppSettings {
             show_sidebar_smart_folders: true,
             sidebar_double_click_action: "collapse",
             grid_wheel_action: "scroll",
+            grid_zoom_animation: true,
             viewer_trackpad_gestures: false,
             grid_double_click_action: "detail",
             grid_middle_click_action: "new_window",
@@ -129,7 +149,15 @@ impl Default for AppSettings {
     }
 }
 
-/// Reads one stored field, keeping the default when it is absent or invalid.
+/// The stored application settings object. Each method reads the value
+/// stored under `key` as one type. `flag`, `number`, `integer` and `choice`
+/// return `fallback` when the key is missing or its value is not valid for
+/// that type: not a boolean, not a finite number, not an integer from `min`
+/// to `max`, or not one of the strings in `allowed`. `strings` returns `None`
+/// when the key is missing or its value is not an array of strings.
+/// Otherwise it returns the strings with the whitespace at both ends
+/// removed, leaving out empty strings and strings that are already in the
+/// list.
 struct Reader<'a>(&'a Map<String, Value>);
 
 impl Reader<'_> {
@@ -172,7 +200,11 @@ impl Reader<'_> {
 }
 
 impl AppSettings {
-    /// The stored settings over the defaults (`parseAppSettings`).
+    /// Reads the application settings from the stored JSON object `stored`.
+    /// This does the work of production's `parseAppSettings`. A field that
+    /// is missing or not valid takes the value it has in
+    /// `AppSettings::default()`. When `stored` is not a JSON object, every
+    /// field takes its default.
     pub fn from_json(stored: &Value) -> Self {
         let empty = Map::new();
         let read = Reader(stored.as_object().unwrap_or(&empty));
@@ -217,6 +249,7 @@ impl AppSettings {
                 &["scroll", "zoom"],
                 d.grid_wheel_action,
             ),
+            grid_zoom_animation: read.flag("gridZoomAnimation", d.grid_zoom_animation),
             viewer_trackpad_gestures: read
                 .flag("viewerTrackpadGestures", d.viewer_trackpad_gestures),
             grid_double_click_action: read.choice(
@@ -337,7 +370,11 @@ impl AppSettings {
         }
     }
 
-    /// Every field, as `settings.replace` stores it.
+    /// Returns every field as one JSON object, under production's key names
+    /// such as `gridSpacing`. The Settings window writes this object to the
+    /// library with the `settings.replace` command when it saves.
+    /// `SettingsModel::apply_now_reporting` also compares two of these
+    /// objects to find which fields a change altered.
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
         let mut put = |key: &str, value: Value| {
@@ -382,6 +419,7 @@ impl AppSettings {
             json!(self.sidebar_double_click_action),
         );
         put("gridWheelAction", json!(self.grid_wheel_action));
+        put("gridZoomAnimation", json!(self.grid_zoom_animation));
         put(
             "viewerTrackpadGestures",
             json!(self.viewer_trackpad_gestures),
@@ -458,10 +496,16 @@ impl AppSettings {
         Value::Object(map)
     }
 
-    /// The setting that shows or hides a sidebar system row or section,
-    /// by the row's node id (`system:inbox`) or the section's key
-    /// (`section:folders`), as `visibleSystemNodes` and the section flags in
-    /// `AppShell.tsx` map them. All and Trash have none: they always show.
+    /// Returns the setting that decides whether the sidebar shows one system
+    /// row or one section, as a mutable reference so that the caller can
+    /// switch it on or off. `key` is the row's node id, for example
+    /// `system:inbox`, or the section's key, for example `section:folders`.
+    /// Each node id is paired with the setting that production's
+    /// `AppShell.tsx` uses for it when it builds `visibleSystemNodes`, and
+    /// each section with the setting behind `showQuickAccess`, `showFolders`
+    /// or `showSmartFolders` there. Returns `None` for any other key. The
+    /// rows All (`system:active`) and Trash (`system:trash`) have no
+    /// setting, because the sidebar always shows them.
     pub fn sidebar_visibility(&mut self, key: &str) -> Option<&mut bool> {
         Some(match key {
             "system:inbox" => &mut self.show_sidebar_inbox,
@@ -479,12 +523,17 @@ impl AppSettings {
         })
     }
 
-    /// Whether the sidebar shows this system row or section.
+    /// Whether the sidebar shows the system row or section with this key. A
+    /// key that has no setting, such as `system:active` or `system:trash`,
+    /// is always shown.
     pub fn sidebar_shows(&self, key: &str) -> bool {
         self.clone().sidebar_visibility(key).is_none_or(|on| *on)
     }
 
-    /// The threshold for one confidence row, by its settings key.
+    /// Returns one of the six confidence threshold settings, for example
+    /// `ai_threshold_general` for `Threshold::General`. The value is a
+    /// fraction from 0 to 1. The Confidence card in the AI Models section of
+    /// the Settings window shows it as a percentage.
     pub fn threshold(&self, key: Threshold) -> f64 {
         match key {
             Threshold::General => self.ai_threshold_general,
@@ -507,7 +556,11 @@ impl AppSettings {
         } = value;
     }
 
-    /// Whether the model with this slug runs on new imports.
+    /// Whether the AI tagging model with this slug is switched on for
+    /// tagging new imports. Four models have such a setting, for example
+    /// `ai_tagger_wd14_enabled` for the slug `wd14-swinv2-v3`. Any other
+    /// slug returns `false`. New imports are tagged only while
+    /// `ai_tagger_auto_on_import` is also on.
     pub fn runs_model(&self, slug: &str) -> bool {
         match slug {
             "wd14-swinv2-v3" => self.ai_tagger_wd14_enabled,
@@ -518,8 +571,10 @@ impl AppSettings {
         }
     }
 
-    /// Sets whether the model with this slug runs on new imports
-    /// (`AUTO_MODEL_SETTING_KEYS`); an unknown model has no setting.
+    /// Switches the AI tagging model with this slug on or off for tagging
+    /// new imports. The four slugs and their settings are the ones in
+    /// production's `AUTO_MODEL_SETTING_KEYS`. Any other slug has no
+    /// setting, so the call changes nothing.
     pub fn set_runs_model(&mut self, slug: &str, on: bool) {
         let setting = match slug {
             "wd14-swinv2-v3" => &mut self.ai_tagger_wd14_enabled,
@@ -531,7 +586,9 @@ impl AppSettings {
         *setting = on;
     }
 
-    /// Whether the model with this slug has an import setting.
+    /// Whether the model with this slug is one of the four that have a
+    /// setting for tagging new imports. The AI Models section of the
+    /// Settings window shows a switch only for those models.
     pub fn has_model_setting(slug: &str) -> bool {
         matches!(
             slug,
@@ -552,7 +609,11 @@ impl AppSettings {
     }
 }
 
-/// The confidence rows of the AI Models panel, in their order.
+/// Names one of the six confidence threshold settings, the fields of
+/// `AppSettings` whose names start with `ai_threshold_`. The variants are in
+/// the order of the rows of the Confidence card in the AI Models section of
+/// the Settings window. That card labels `Copyright` as "Series" and
+/// `Artist` as "Creator".
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Threshold {
     General,
@@ -563,8 +624,11 @@ pub enum Threshold {
     Rating,
 }
 
-/// The `grid:defaults` view preferences (`ViewPrefsDto`). An unset field
-/// inherits the built-in default.
+/// The grid's default view: the view preferences stored in the
+/// `grid:defaults` row of the library's `view_pref` table. The fields are
+/// those of production's `ViewPrefsDto`, without its `scope_key`. A field
+/// that is `None` is not stored in the row, and the grid then uses its
+/// built-in default for that field.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GridDefaults {
     pub sort_field: Option<String>,
@@ -601,8 +665,10 @@ impl GridDefaults {
         }
     }
 
-    /// `viewPrefsToPatch`: every field, with unset ones as `null`, which
-    /// removes them from the stored row.
+    /// Returns every field as one JSON object, as production's
+    /// `viewPrefsToPatch` does. A field that is `None` becomes `null`. When
+    /// [`patched`] applies this object to the stored `grid:defaults` row, a
+    /// `null` removes that field from the row.
     pub fn to_patch(&self) -> Map<String, Value> {
         let value = json!({
             "sort_field": self.sort_field,
@@ -625,8 +691,13 @@ impl GridDefaults {
     }
 }
 
-/// Applies a view-preference patch to a stored row as `settings.view.patch`
-/// does: `null` removes a field, anything else replaces it.
+/// Returns the JSON object in `stored` with `patch` applied, in the way
+/// production's `settings.patch` and `settings.view.patch` commands change a
+/// stored row. A field that is `null` in `patch` is removed from the object.
+/// Any other field in `patch` replaces the stored value, or is added when
+/// the object does not have it. Fields that `patch` does not name are kept.
+/// When `stored` is `None`, is not valid JSON, or is not a JSON object, the
+/// patch is applied to an empty object.
 pub fn patched(stored: Option<&str>, patch: &Map<String, Value>) -> Value {
     let mut value = stored
         .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())

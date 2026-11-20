@@ -30,6 +30,7 @@ Show Name
 Show Resolution
 Show Sidebar
 Show Subfolder Content
+Animate zoom in the grid
 T
 W
 All your images are already assigned to folders

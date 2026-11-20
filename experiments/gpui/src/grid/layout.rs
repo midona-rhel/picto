@@ -1,16 +1,35 @@
-//! Grid geometry. A direct port of `src/features/grid/layout/layoutMath.ts`, so
-//! the same library, window width and view preferences place every tile where
-//! the Electron grid places it.
+//! Where each tile of the grid goes. Most of this file is a port of
+//! `src/features/grid/layout/layoutMath.ts`.
+//!
+//! It differs from production in how the zoom's tile size becomes a number
+//! of columns. Production rounds the tile size to a multiple of 50 px before
+//! it counts columns. Because of that rounding, some steps of production's
+//! zoom do not change the layout, and other steps skip a column count. This
+//! file uses the tile size without rounding it, and one step of the zoom
+//! adds or removes exactly one column ([`zoom`], [`zoom_step`]).
 
-/// The outer selection stroke reaches three pixels beyond the media rect.
+/// The selection stroke around a selected tile extends this many pixels beyond
+/// the picture's rectangle on every side.
 pub const SELECTION_EXTENT: f32 = 3.;
 pub const TEXT_ROW_HEIGHT: f32 = 20.;
-/// The selection extent in the layout's arithmetic.
+/// `SELECTION_EXTENT` as an `f64`, the type the layout computes in.
 const EXTENT: f64 = SELECTION_EXTENT as f64;
 const PADDING_TOP: f32 = 16.;
 const PADDING_BOTTOM: f32 = 16.;
-/// Tiles are looked up by the horizontal bands they touch.
+/// The layout divides its height into horizontal bands of this many pixels and
+/// records which tiles touch each band. [`Layout::visible`] then looks only at
+/// the bands the viewport covers, and not at every tile.
 const BAND: f32 = 256.;
+/// The smallest tile size the zoom allows, in pixels. The largest number of
+/// columns at a given width is the number of columns that tiles of this size
+/// give.
+pub const SMALLEST_TILE: f32 = 150.;
+/// The largest row height the zoom allows in the justified layout, in
+/// pixels. The justified layout has a target row height instead of columns.
+pub const TALLEST_ROW: f32 = 900.;
+/// In the justified layout, one step of the zoom multiplies or divides the
+/// row height by this factor.
+const ROW_HEIGHT_STEP_FACTOR: f32 = 1.1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
@@ -28,9 +47,10 @@ pub struct Tile {
 }
 
 impl Tile {
-    /// A tile from the layout's double-precision arithmetic, which is
-    /// `layoutMath.ts`'s own: a column chosen by a near tie lands where
-    /// JavaScript's numbers put it.
+    /// Builds a tile from `f64` values and stores them as `f32`. The layout
+    /// computes in `f64`, as `layoutMath.ts` does with JavaScript numbers.
+    /// When two waterfall columns are almost equally tall, this makes the tile
+    /// go into the same column as in production.
     fn new(x: f64, y: f64, w: f64, h: f64) -> Self {
         Self {
             x: x as f32,
@@ -45,7 +65,9 @@ impl Tile {
 pub struct Layout {
     pub tiles: Vec<Tile>,
     pub total_height: f32,
-    /// Read by the geometry tests; navigation computes its own step.
+    /// The number of columns the layout was computed with. Only the tests in
+    /// this file read it. Keyboard movement gets the number from
+    /// [`keyboard_step`].
     #[cfg(test)]
     pub column_count: usize,
     bands: Vec<Vec<u32>>,
@@ -56,7 +78,10 @@ struct Geometry {
     column_count: usize,
     column_width: f64,
     offset_x: f64,
-    snapped_size: f64,
+    /// The zoom's tile size minus the 3 px of selection stroke on each side:
+    /// the width, or in the justified layout the row height, that the
+    /// picture itself is asked to have.
+    target_media_size: f64,
     item_gap: f64,
 }
 
@@ -67,20 +92,143 @@ pub fn safe_aspect_ratio(value: f64) -> f64 {
     value.clamp(0.125, 8.)
 }
 
-/// JavaScript's `Math.round`: halves round toward positive infinity.
+/// Rounds as JavaScript's `Math.round` does: a value exactly halfway between
+/// two whole numbers is rounded up, toward positive infinity.
 fn js_round(value: f64) -> f64 {
     (value + 0.5).floor()
 }
 
-fn geometry(container_width: f64, target_size: f64, gap: f64) -> Geometry {
-    let snapped_size = (js_round(target_size / 50.) * 50.).max(50.) - 2. * EXTENT;
-    // Positions describe only the clickable media. The selection stroke lives
-    // outside that rect, so reserve its full extent on both sides of every tile.
+/// The number of columns whose tiles are closest to `target_size` in a grid
+/// `container_width` wide, at least one. It is not limited by
+/// [`most_columns`]. Each column takes `target_size + gap` pixels, because
+/// `target_size` includes the selection stroke around the picture.
+fn columns_that_fit(container_width: f64, target_size: f64, gap: f64) -> f64 {
+    js_round((container_width - gap) / (target_size + gap)).max(1.)
+}
+
+/// The largest number of columns the zoom allows in a grid `container_width`
+/// wide: the number that tiles of [`SMALLEST_TILE`] give.
+pub fn most_columns(container_width: f32, gap: f32) -> usize {
+    columns_that_fit(container_width.into(), SMALLEST_TILE.into(), gap.into()) as usize
+}
+
+/// The number of columns the grid and waterfall layouts have in a grid
+/// `container_width` wide at the tile size `target_size`. It is between one
+/// and [`most_columns`].
+pub fn columns(container_width: f32, target_size: f32, gap: f32) -> usize {
+    (columns_that_fit(container_width.into(), target_size.into(), gap.into()) as usize)
+        .min(most_columns(container_width, gap))
+}
+
+/// The tile size at which exactly `columns` columns fill a grid
+/// `container_width` wide. The session saves this size after a zoom step to
+/// that number of columns. With this size, [`columns`] returns the same
+/// number again at the same width, and a larger number at a larger width.
+pub fn size_for_columns(container_width: f32, columns: usize, gap: f32) -> f32 {
+    let (width, gap) = (f64::from(container_width), f64::from(gap));
+    ((width - gap) / columns.max(1) as f64 - gap) as f32
+}
+
+/// The current zoom, in the unit the zoom control shows for the layout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Zoom {
+    /// The grid and waterfall layouts: the grid has `count` columns, and the
+    /// zoom allows at most `most` columns at this width.
+    Columns { count: usize, most: usize },
+    /// The justified layout: the target row height in pixels.
+    Height(f32),
+}
+
+/// The zoom that the tile size `target_size` gives in a grid
+/// `container_width` wide.
+pub fn zoom(container_width: f32, target_size: f32, gap: f32, mode: ViewMode) -> Zoom {
+    match mode {
+        ViewMode::Justified => Zoom::Height(target_size.clamp(SMALLEST_TILE, TALLEST_ROW)),
+        ViewMode::Grid | ViewMode::Waterfall => Zoom::Columns {
+            count: columns(container_width, target_size, gap),
+            most: most_columns(container_width, gap),
+        },
+    }
+}
+
+/// The tile size after one step of the zoom, or `None` when the zoom is
+/// already at that end of its range. In the grid and waterfall layouts a
+/// step with `larger` set removes one column and a step without it adds one
+/// column. In the justified layout a step multiplies or divides the row
+/// height by 1.1.
+pub fn zoom_step(
+    container_width: f32,
+    target_size: f32,
+    gap: f32,
+    mode: ViewMode,
+    larger: bool,
+) -> Option<f32> {
+    // Before the grid has been drawn once its width is not known, so the
+    // number of columns cannot be counted.
+    if container_width <= 0. {
+        return None;
+    }
+    match zoom(container_width, target_size, gap, mode) {
+        Zoom::Columns { count, most } => {
+            let next = if larger { count - 1 } else { count + 1 };
+            (1..=most)
+                .contains(&next)
+                .then(|| size_for_columns(container_width, next, gap))
+        }
+        Zoom::Height(height) => {
+            let next = if larger {
+                height * ROW_HEIGHT_STEP_FACTOR
+            } else {
+                height / ROW_HEIGHT_STEP_FACTOR
+            };
+            let next = next.round().clamp(SMALLEST_TILE, TALLEST_ROW);
+            (next != height).then_some(next)
+        }
+    }
+}
+
+/// The two distances keyboard movement uses. The first is the number of
+/// items the Up and Down keys move by, which is the number of columns. The
+/// second is the height in pixels of one row including the gap below it,
+/// which Page Up and Page Down use to count the rows in the viewport.
+///
+/// The waterfall layout has no rows of one height, so it uses the height of
+/// a square tile. The justified layout has no columns, so it uses the number
+/// of square tiles of its row height that fit the width.
+pub fn keyboard_step(
+    container_width: f32,
+    target_size: f32,
+    gap: f32,
+    mode: ViewMode,
+    text_height: f32,
+) -> (usize, f32) {
+    let geometry = geometry(container_width.into(), target_size.into(), gap.into(), mode);
+    let row = match mode {
+        ViewMode::Justified => geometry.target_media_size,
+        ViewMode::Grid | ViewMode::Waterfall => geometry.column_width.max(0.),
+    };
+    (
+        geometry.column_count,
+        (row + f64::from(text_height) + geometry.item_gap) as f32,
+    )
+}
+
+fn geometry(container_width: f64, target_size: f64, gap: f64, mode: ViewMode) -> Geometry {
+    // A saved tile size can be outside the zoom's range: Settings used to
+    // allow 100 px, and a size saved for one wide column is larger than
+    // 900 px. Limit it here so the layout never has more columns than
+    // `most_columns`, and justified rows are never taller than `TALLEST_ROW`.
+    let target_size = match mode {
+        ViewMode::Justified => target_size.clamp(SMALLEST_TILE.into(), TALLEST_ROW.into()),
+        ViewMode::Grid | ViewMode::Waterfall => target_size.max(SMALLEST_TILE.into()),
+    };
+    // A tile's position and size are those of its picture. The selection
+    // stroke is drawn 3 px outside the picture, so 3 px are left free on
+    // each side of every tile.
     let outer_inset = gap + EXTENT;
     let item_gap = gap + 2. * EXTENT;
     let min_inner_width = container_width - 2. * outer_inset;
-    let column_count =
-        js_round((min_inner_width + item_gap) / (snapped_size + item_gap)).max(1.) as usize;
+    let column_count = columns_that_fit(container_width, target_size, gap) as usize;
     let columns = column_count as f64;
     let column_width = ((min_inner_width - (columns - 1.) * item_gap) / columns).floor();
     let used_width = columns * column_width + (columns - 1.) * item_gap;
@@ -89,7 +237,7 @@ fn geometry(container_width: f64, target_size: f64, gap: f64) -> Geometry {
         column_count,
         column_width,
         offset_x: ((container_width - used_width) / 2.).floor(),
-        snapped_size,
+        target_media_size: target_size - 2. * EXTENT,
         item_gap,
     }
 }
@@ -106,9 +254,9 @@ impl Layout {
         if aspect_ratios.is_empty() || container_width <= 0. {
             return Self::default();
         }
-        let geometry = geometry(container_width.into(), target_size.into(), gap.into());
-        // A pane narrower than the gaps around one column has no room for a
-        // tile.
+        let geometry = geometry(container_width.into(), target_size.into(), gap.into(), mode);
+        // When the grid is narrower than the gaps on both sides of one column,
+        // the column's width is zero or negative. Nothing is laid out then.
         if geometry.column_width <= 0. {
             return Self::default();
         }
@@ -142,7 +290,9 @@ impl Layout {
         }
     }
 
-    /// Indexes of the tiles touching `top..=bottom`, in item order.
+    /// The indexes of the tiles that touch the vertical range from `top` to
+    /// `bottom`, in ascending order. `top` and `bottom` are measured in pixels
+    /// from the top of the layout.
     pub fn visible(&self, top: f32, bottom: f32) -> Vec<usize> {
         if self.bands.is_empty() || bottom < 0. {
             return Vec::new();
@@ -168,14 +318,15 @@ fn waterfall(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
     let width = geometry.column_width;
     let gap = geometry.item_gap;
     let mut heights = vec![0f64; geometry.column_count];
-    // Which column is the shortest is decided at the size the slider asks
-    // for, not at the width the columns have now: the text and the gaps do
-    // not scale with a column, so at the real width two columns nearly as
-    // tall trade places as the window is resized by a few pixels, and every
-    // tile after them with them. Decided this way a tile changes column only
-    // when the number of columns does. (Production decides at the real
-    // width and has the swap.)
-    let reference = geometry.snapped_size;
+    // Each tile goes into the shortest column. The column heights that
+    // decide this are computed with the zoom's tile size (`reference`), not
+    // with the real column width. The text rows and the gaps keep their
+    // size when a column gets wider, so with the real width two columns of
+    // nearly the same height swap order when the window is resized by a few
+    // pixels, and every later tile changes column with them. With the
+    // zoom's tile size a tile changes column only when the number of
+    // columns changes. Production uses the real width and has the swap.
+    let reference = geometry.target_media_size;
     let mut decided = vec![0f64; geometry.column_count];
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
     for &aspect in aspect_ratios {
@@ -221,7 +372,7 @@ fn grid(count: usize, geometry: &Geometry, text_height: f64) -> (Vec<Tile>, f64)
 
 fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (Vec<Tile>, f64) {
     let container_width = geometry.used_width;
-    let target_row_height = geometry.snapped_size;
+    let target_row_height = geometry.target_media_size;
     let gap = geometry.item_gap;
     let mut tiles = Vec::with_capacity(aspect_ratios.len());
     let mut row_start = 0;
@@ -238,10 +389,12 @@ fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
                 break;
             }
         }
-        // An incomplete final row keeps the target height. If its final tile is
-        // also the tile that crosses the available width, that rule would make it
-        // paint beyond the grid. Finish the preceding row and let the tile begin
-        // a new final row instead.
+        // The last row of the items can be incomplete. An incomplete row keeps
+        // the target row height and is not stretched to the grid's width. If
+        // the last item's tile is also the tile that makes the row wider than
+        // the grid, the row would be drawn beyond the grid's right edge at
+        // that height. In that case the row ends before this tile, and the
+        // tile starts a new last row alone.
         let target_width =
             total_aspect * target_row_height + (row_end - row_start - 1) as f64 * gap;
         if row_end == aspect_ratios.len()
@@ -277,12 +430,19 @@ fn justified(aspect_ratios: &[f64], geometry: &Geometry, text_height: f64) -> (V
     (tiles, (y - gap).max(0.))
 }
 
-/// `resolveGridScrollAnchor`: where to scroll once the layout changes so
-/// the topmost visible tile stays where it was on screen. A selected tile in
-/// view is preferred. The anchor is followed by its item, so the items may
-/// have changed too (a refresh in place): `moved` says where a previous
-/// tile's item is now, if it still is (`Some` when the items are the same).
-/// `selected` are positions in the previous tiles.
+/// The scroll position that keeps one tile at the same place on screen after
+/// the layout changed (production's `resolveGridScrollAnchor`). The tile is
+/// the topmost tile in the viewport, or the topmost selected tile in the
+/// viewport when there is one.
+///
+/// `previous` and `next` are the tiles before and after the change. `selected`
+/// holds indexes into `previous`. `scroll_top` and `viewport` are the scroll
+/// position and the viewport's height before the change. The items can change
+/// too, for example when the results are read again: `moved` maps an index in
+/// `previous` to the index of the same item in `next`, or to `None` when the
+/// item is gone.
+///
+/// Returns `None` when no tile was in the viewport or the tile's item is gone.
 pub fn scroll_anchor(
     previous: &[Tile],
     next: &[Tile],
@@ -327,23 +487,35 @@ mod tests {
             for width in [1., 20., 33.] {
                 let layout = Layout::compute(&aspects(500), width, 150., 16., mode, 40.);
                 assert!(layout.tiles.iter().all(|tile| tile.w > 0. && tile.h > 0.));
-                // Looking tiles up never fails.
+                // `visible` must not panic when the layout has no tiles.
                 layout.visible(0., 10_000.);
             }
         }
     }
 
     #[test]
-    fn column_count_follows_the_snapped_target_size() {
-        // 1000px wide, tight spacing: inset 11, item gap 14, snapped 250 - 6.
+    fn column_count_follows_the_target_size() {
+        // The grid is 1000 px wide with tight spacing: the inset is 11 px
+        // and the gap between tiles is 14 px. A 260 px tile with its 8 px gap
+        // takes 268 px, and 992 px are available. 992 / 268 is 3.7, which
+        // rounds to four columns.
         let layout = Layout::compute(&aspects(40), 1000., 260., 8., ViewMode::Waterfall, 0.);
         assert_eq!(layout.column_count, 4);
         let width = layout.tiles[0].w;
         assert_eq!(width, ((1000. - 22. - 3. * 14.) / 4f32).floor());
-        // The used width is centred in the container.
+        // The columns and the gaps between them are centred together in the
+        // grid's width.
         let used = 4. * width + 3. * 14.;
         assert_eq!(layout.tiles[0].x, ((1000. - used) / 2.).floor());
         assert_eq!(layout.tiles[0].y, 16.);
+        // One zoom step toward larger tiles removes one column. The tile
+        // size it returns gives three columns at this width and six columns
+        // at twice the width. One step toward smaller tiles adds a column.
+        let larger = zoom_step(1000., 260., 8., ViewMode::Waterfall, true).unwrap();
+        assert_eq!(columns(1000., larger, 8.), 3);
+        assert_eq!(columns(2000., larger, 8.), 6);
+        let smaller = zoom_step(1000., 260., 8., ViewMode::Waterfall, false).unwrap();
+        assert_eq!(columns(1000., smaller, 8.), 5);
     }
 
     #[test]
@@ -352,7 +524,9 @@ mod tests {
         assert_eq!(layout.column_count, 3);
         let width = layout.tiles[0].w;
         assert_eq!(layout.tiles[1].h, width / 0.5);
-        // The fourth tile goes under the shortest column: the wide third tile.
+        // The fourth tile goes into the shortest column. That is the third
+        // column, because its tile is the widest picture and therefore the
+        // least tall.
         assert_eq!(layout.tiles[3].x, layout.tiles[2].x);
         assert_eq!(
             layout.tiles[3].y,
@@ -386,12 +560,14 @@ mod tests {
             .collect::<Vec<_>>();
         let right = first_row.last().map(|t| t.x + t.w).unwrap();
         let left = first_row[0].x;
-        // Five 184px columns and four 14px gaps: the used width is 976.
+        // The row is as wide as five 184 px columns and four 14 px gaps: 976
+        // px.
         assert!(
             (right - left - 976.).abs() < 0.01,
             "row spans the used width"
         );
-        // The incomplete last row keeps the target height: 200 snapped, less the stroke.
+        // The incomplete last row keeps the target row height: 200 px minus
+        // 3 px of selection stroke above and below.
         assert_eq!(layout.tiles.last().unwrap().h, 194.);
     }
 
@@ -436,19 +612,22 @@ mod tests {
         let previous = [tile(0.), tile(120.), tile(240.), tile(360.)];
         let next = [tile(0.), tile(200.), tile(400.), tile(600.)];
         let none = std::collections::BTreeSet::new();
-        // Scrolled 150px: tile 1 (top 120) is the topmost in view, 30px above
-        // the viewport; it stays 30px above it.
+        // The grid is scrolled 150 px. Tile 1, whose top is at 120, is the
+        // topmost tile in the viewport, 30 px above the viewport's top. After
+        // the change its top is at 200, so the scroll position becomes 230 to
+        // keep it 30 px above.
         assert_eq!(
             scroll_anchor(&previous, &next, &none, 150., 200., Some),
             Some(230.)
         );
-        // A selected tile in view is preferred.
+        // A selected tile in the viewport is used in preference to the topmost
+        // tile.
         let selected = [2].into_iter().collect();
         assert_eq!(
             scroll_anchor(&previous, &next, &selected, 150., 200., Some),
             Some(310.)
         );
-        // Nothing laid out before: nothing to keep.
+        // With no tiles before the change there is no tile to keep in place.
         assert_eq!(scroll_anchor(&[], &next, &none, 0., 200., Some), None);
     }
 
@@ -460,17 +639,19 @@ mod tests {
             w: 100.,
             h: 100.,
         };
-        // Items 0..3 at 0, 110, 220; two new items arrive above them, so the
-        // old item 1 (topmost in view at 150) is now the fourth tile.
+        // Items 0 to 2 are at 0, 110 and 220. Two new items are added before
+        // them, so old item 1, the topmost tile in the viewport at scroll
+        // position 150, becomes the fourth tile.
         let previous = [tile(0.), tile(110.), tile(220.)];
         let next = [tile(0.), tile(110.), tile(220.), tile(330.), tile(440.)];
         let none = std::collections::BTreeSet::new();
         assert_eq!(
             scroll_anchor(&previous, &next, &none, 150., 200., |index| Some(index + 2)),
-            // It was 40px above the viewport's top, and stays so.
+            // The tile was 40 px above the viewport's top. Its top is now at
+            // 330, so the scroll position is 370.
             Some(370.)
         );
-        // An anchor that is gone keeps nothing.
+        // When the tile's item is gone, no scroll position is returned.
         assert_eq!(
             scroll_anchor(&previous, &next, &none, 150., 200., |_| None),
             None

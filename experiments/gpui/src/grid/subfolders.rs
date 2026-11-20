@@ -1,9 +1,14 @@
-//! The subfolder tiles a folder's grid opens with (`SubfolderGrid.tsx`):
-//! "Folders (n)" with its disclosure, a card for each child folder with its
-//! cover, name and count, then "Content (n)" above the folder's items. A
-//! tile is selected with a click, opened with a double-click, has the
-//! folder's menu on a right-click, is renamed in place, and takes items
-//! dragged onto it.
+//! The subfolder header: the block at the top of a folder's grid that lists
+//! the folder's subfolders (`SubfolderGrid.tsx` in production). From top to
+//! bottom it shows the label "Folders (n)" with a chevron that collapses and
+//! expands the list, one tile for each subfolder, and the label "Content (n)"
+//! above the folder's own items. A tile is a card that shows the subfolder's
+//! cover picture, with the subfolder's name and item count below the card.
+//!
+//! A click selects a tile, a double-click opens that folder in the grid, and a
+//! right-click opens the folder's context menu. A tile's name can be edited in
+//! place, and items dragged from the grid can be dropped on a tile to put them
+//! into that folder.
 use super::GridView;
 use super::selection::Press;
 use crate::backend::Navigation;
@@ -17,20 +22,27 @@ use picto_library::query::ItemScope;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// A subfolder tile was right-clicked: the folder's menu, for this node (or
-/// the tiles selected with it) at this window position.
+/// The event the grid emits when a subfolder tile is right-clicked, or clicked
+/// with Control held on macOS. The shell responds by opening the folder's
+/// context menu at `position`, which is a position in the window. `node` is
+/// the node id of the tile that was clicked. `selected` holds the node ids of
+/// all the subfolder tiles that are selected, and `node` is always one of
+/// them. When more than one tile is selected, the menu acts on all of them.
 pub struct FolderMenuRequested {
     pub node: String,
     pub selected: Vec<String>,
     pub position: Point<Pixels>,
 }
 
-/// One child folder, as its tile shows it.
+/// One subfolder of the folder the grid shows, with the values its tile
+/// displays.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Child {
-    /// `folder:5`.
+    /// The folder's node id, for example `folder:5`. The sidebar uses the same
+    /// id for the folder (`Navigation::id`).
     pub node: String,
-    /// Its place in the destination list, which opening it navigates to.
+    /// The folder's index in the session's destination list (`Session::nav`).
+    /// Double-clicking the tile navigates to this index.
     pub index: usize,
     pub folder: FolderId,
     pub label: String,
@@ -39,9 +51,14 @@ pub struct Child {
     pub count: u64,
 }
 
-/// `gridChildFoldersAtom`: a folder's children, or, when it shows its
-/// subfolders' items, all its descendants depth first, each level in the
-/// sidebar's order. Anything that is not a folder has none.
+/// Returns the subfolders to show as tiles for the destination at index
+/// `displayed` of the destination list `nav` (`gridChildFoldersAtom` in
+/// production). When `descendants` is false, these are the folder's direct
+/// children. When it is true, which is when the folder shows its subfolders'
+/// items too, these are all of its descendants, depth first: each child is
+/// followed by its own children before its next sibling. Siblings keep the
+/// order they have in `nav`, which is the sidebar's order. The result is empty
+/// when the destination is not a folder or is a screen of its own.
 pub fn children(nav: &[Navigation], displayed: usize, descendants: bool) -> Vec<Child> {
     let Some(entry) = nav.get(displayed) else {
         return Vec::new();
@@ -55,8 +72,9 @@ pub fn children(nav: &[Navigation], displayed: usize, descendants: bool) -> Vec<
         return Vec::new();
     }
     let mut found = Vec::new();
-    // Depth first: each child, then its own children, before its next
-    // sibling.
+    // Adds the child folders of the destination at index `parent` to `found`.
+    // When `deep` is true, each child is followed at once by all of its own
+    // descendants, before its next sibling.
     fn walk(nav: &[Navigation], parent: usize, deep: bool, found: &mut Vec<Child>) {
         for (index, entry) in nav.iter().enumerate() {
             if entry.parent != Some(parent) {
@@ -85,64 +103,97 @@ pub fn children(nav: &[Navigation], displayed: usize, descendants: bool) -> Vec<
     found
 }
 
-/// The folder a `folder:5` node is.
+/// Returns the folder id contained in a node id such as `folder:5`. Returns
+/// `None` when the node id does not have that form.
 pub fn folder_of(node: &str) -> Option<FolderId> {
     node.strip_prefix("folder:")?.parse().ok().map(FolderId)
 }
 
-/// `.container`'s side padding and `.list`'s gap: 16px, or 8px with tight
-/// spacing.
+/// Returns the padding in pixels on the left and right of the header, which is
+/// the padding of `.container` in `SubfolderGrid.module.css`: 16px, or 8px
+/// when the grid's spacing `gap` is 8px or less (the `.tight` class in
+/// production). Production's `.list` uses the same two values for the gap
+/// between tiles.
 fn padding(gap: f32) -> f32 {
     if gap <= 8. { 8. } else { 16. }
 }
 
-/// `.sectionLabel`: 4px above, 6px below, on a 12px × 1.55 line.
+/// The "Folders (n)" label (`.sectionLabel`): a 4px margin above it, a line
+/// 18.6px tall (12px text at a line height of 1.55), and a 6px margin below
+/// it.
 const LABEL_TOP: f32 = 4.;
 const LABEL_HEIGHT: f32 = 18.6;
 const LABEL_BELOW: f32 = 6.;
-/// `.list`: 6px above, 30px below.
+/// The list of subfolder tiles (`.list`): a 6px margin above it and a 30px
+/// margin below it.
 const LIST_TOP: f32 = 6.;
 const LIST_BELOW: f32 = 30.;
-/// `.contentLabel`: 4px above (taken up by the list's 30px when it shows),
-/// 6px below, which also takes up the container's own 4px.
+/// The "Content (n)" label (`.contentLabel`): a 4px margin above it and a 6px
+/// margin below it. When the list of tiles is shown, the list's 30px bottom
+/// margin is the space above the label and the 4px is not added to it, because
+/// the two margins overlap in production's CSS. In the same way the 6px below
+/// the label is not added to the header's own 4px bottom margin
+/// (`CONTAINER_BELOW`).
 const CONTENT_TOP: f32 = 4.;
 const CONTENT_BELOW: f32 = 6.;
-/// `.container`'s `margin-bottom`.
+/// The margin in pixels below the whole header (the `margin-bottom` of
+/// `.container`). It is used only when the list of tiles is collapsed and
+/// there is no "Content (n)" label.
 const CONTAINER_BELOW: f32 = 4.;
-/// `.thumbnail`: `padding-bottom: calc(75% + 10px)`, 12px above the name.
+/// A tile's card (`.thumbnail`). Its height is 75% of the tile's width plus
+/// 10px (`padding-bottom: calc(75% + 10px)`), and there are 12px between the
+/// card and the name below it.
 const CARD_EXTRA: f32 = 10.;
 const CARD_BELOW: f32 = 12.;
-/// `.nameRow` sits on a line of the tile's 13px × 1.55 text, which the 19px
-/// glyph makes 24.1px tall; a name on two 15px lines adds 11px to it.
+/// The height in pixels of the row that holds the folder's icon and name
+/// (`.nameRow`). The row is one line of the tile's text, which is 13px at a
+/// line height of 1.55, and the 19px icon in the row makes that line 24.1px
+/// tall. A name that wraps onto a second 15px line makes the row 11px taller
+/// (`NAME_SECOND_LINE`).
 const NAME_LINE: f32 = 24.1;
 const NAME_SECOND_LINE: f32 = 11.;
-/// `.metas`: 10px on a 1.3 line.
+/// The height in pixels of the line that shows the folder's item count
+/// (`.metas`): 10px text at a line height of 1.3.
 const METAS: f32 = 13.;
-/// `.nameRow`'s glyph and the gap after it.
+/// The width in pixels of the folder icon in the name row (`.nameRow`), and
+/// the gap between the icon and the name.
 const NAME_ICON: f32 = 19.;
 const NAME_GAP: f32 = 6.;
-/// `FolderRenameInput`'s width in the reference.
+/// The width in pixels of the rename field (`FolderRenameInput`), as measured
+/// in production.
 const RENAME_WIDTH: f32 = 161.6;
-/// `.name`: 15px lines, at most two.
+/// The line height in pixels of a folder's name (`.name`). A name shows at
+/// most two lines.
 const NAME_LINE_HEIGHT: f32 = 15.;
 
-/// Where everything in the header lies, from the top of the grid's content.
+/// The positions and sizes of the parts of the subfolder header, in pixels.
+/// Vertical positions are measured from the top of the grid's scrolled
+/// content, which is where the header starts.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Geometry {
     pub padding: f32,
     pub gap: f32,
     pub columns: usize,
     pub tile_width: f32,
-    /// Each tile's top-left corner and height.
+    /// For each subfolder tile, in the order of `Header::children`: the x and
+    /// y of its top-left corner, and its height. Every tile is `tile_width`
+    /// wide. The list is empty when the list of tiles is collapsed.
     pub tiles: Vec<(f32, f32, f32)>,
-    /// The "Content (n)" label's top, when the folder holds items.
+    /// The y of the top of the "Content (n)" label. It is `None` when the
+    /// folder holds no items, and the label is then not shown.
     pub content: Option<f32>,
-    /// The height the item tiles start below.
+    /// The height of the whole header. The folder's item tiles start this far
+    /// below the top of the grid's scrolled content.
     pub height: f32,
 }
 
-/// `.list`'s `repeat(auto-fill, minmax(size, 1fr))` with the zoom's size
-/// clamped to 150–400px: as many columns as fit, sharing the width.
+/// Returns the number of columns of subfolder tiles and the width of one tile,
+/// for a list `width` pixels wide with `gap` pixels between tiles. `target` is
+/// the zoom's tile size. It is clamped to between 150px and 400px, and the
+/// result is the narrowest a tile may be. The list has as many columns as fit
+/// at that width, and at least one. The columns then share the whole width
+/// equally. This is `repeat(auto-fill, minmax(size, 1fr))` on `.list` in
+/// production.
 pub fn columns(width: f32, target: f32, gap: f32) -> (usize, f32) {
     let size = target.clamp(150., 400.);
     let columns = (((width + gap) / (size + gap)).floor() as usize).max(1);
@@ -150,13 +201,19 @@ pub fn columns(width: f32, target: f32, gap: f32) -> (usize, f32) {
     (columns, tile)
 }
 
-/// The tile's card height: three quarters of its width and 10px.
+/// Returns the height of a tile's card: three quarters of the tile's width,
+/// plus 10px.
 pub fn card_height(tile_width: f32) -> f32 {
     tile_width * 0.75 + CARD_EXTRA
 }
 
-/// Lays the header out for the grid's width. `two_lines` says which names
-/// wrap onto a second line. A row is as tall as its tallest tile.
+/// Computes the header's layout for a grid `width` pixels wide. `target` is
+/// the zoom's tile size and `gap` is the grid's spacing. `count` is the number
+/// of subfolders. `expanded` says whether the list of tiles is shown.
+/// `content` says whether the folder holds items, which decides whether the
+/// "Content (n)" label is shown. `two_lines(index)` says whether the name of
+/// the subfolder at `index` wraps onto a second line. Every tile in a row gets
+/// the height of the tallest tile in that row.
 pub fn geometry(
     width: f32,
     target: f32,
@@ -198,8 +255,11 @@ pub fn geometry(
         }
         bottom = y - gap;
     }
-    // The list's bottom margin takes up the content label's top margin, and
-    // the content label's bottom margin the container's.
+    // The space below the last part of the header depends on which parts are
+    // shown. When the list of tiles is shown, its 30px bottom margin is the
+    // only space below it, and the 4px top margin of the "Content (n)" label
+    // is not added. When the label is shown, its 6px bottom margin is the only
+    // space below it, and the header's own 4px bottom margin is not added.
     let shown = expanded && count > 0;
     let (content_top, height) = match (content, shown) {
         (true, true) => {
@@ -224,14 +284,21 @@ pub fn geometry(
     }
 }
 
-/// A folder's cover: its chosen item, else its first in its own order.
+/// The picture shown on a subfolder tile's card. It is the item set as the
+/// folder's cover (`Library::folder_cover`). When no cover is set, it is the
+/// first item of the folder in the folder's own order. `thumbnail` is the path
+/// of that item's thumbnail, and `font` says that the item is a font file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cover {
     pub thumbnail: PathBuf,
     pub font: bool,
 }
 
-/// `getFolderCover`, on the library's thread.
+/// Reads the cover of `folder` from the library (`getFolderCover` in
+/// production). It is called on the library's thread, not on the thread that
+/// draws. `blobs` is the library's blob store folder, which the path of the
+/// thumbnail is built from. Returns `None` when the folder has no cover set
+/// and either holds no items of its own or the query for its first item fails.
 fn read_cover(
     library: &picto_library::Library,
     folder: FolderId,
@@ -271,7 +338,8 @@ fn read_cover(
     })
 }
 
-/// A tile's name being edited in place (`FolderRenameInput`).
+/// A rename in progress: the name of the subfolder tile `node` is being edited
+/// in a text field on the tile (`FolderRenameInput` in production).
 pub struct Renaming {
     pub node: String,
     original: String,
@@ -279,35 +347,54 @@ pub struct Renaming {
     _subscription: Subscription,
 }
 
-/// The header's state, which the grid keeps across frames.
+/// The state of the subfolder header. The grid keeps it from one frame to the
+/// next in `GridView::subfolders`.
 pub struct Header {
-    /// The destination the children were listed for.
+    /// The index in the destination list of the destination the header was
+    /// last brought up to date for. When the grid shows a different
+    /// destination, the list of tiles is expanded again, and the drop target
+    /// and any rename in progress are cleared.
     shown_for: Option<usize>,
     pub children: Vec<Child>,
-    /// What the children were listed for: the destination, whether it shows
-    /// its subfolders' items, and whether the viewer covers the grid.
+    /// The values `children` was last computed from: the index of the
+    /// displayed destination, whether the folder shows its subfolders' items
+    /// too (the `show_subfolders` view preference), and whether the viewer is
+    /// open. `children` is computed again when any of the three changes.
     listed: Option<(usize, bool, bool)>,
-    /// The destination list changed: the children are listed again.
+    /// Set when the session reports that its destination list changed
+    /// (`Change::Navigation`). The next frame then computes `children` again.
     pub relist: bool,
-    /// Which names take two lines, and the room a line has they were
-    /// measured for.
+    /// For each entry of `children`, whether its name is too wide for one line
+    /// and wraps onto a second line, together with the width in pixels a name
+    /// had available when that was measured. It is measured again when that
+    /// width changes and when `children` is computed again.
     lines: Option<(f32, Vec<bool>)>,
     covers: HashMap<FolderId, Option<Cover>>,
-    /// The folders whose covers were last asked for; asked again when the
-    /// list changes or a folder changed.
+    /// The folders the most recent cover request was made for, in the order of
+    /// `children`. A new request is made when `stale` is set. That happens
+    /// when `children` is computed again and no longer lists these same
+    /// folders in this order, and when the session reports
+    /// `Change::Navigation`.
     asked: Vec<FolderId>,
-    /// The latest ask: an earlier one's covers arrive late and are dropped.
+    /// Numbers the cover requests (`Latest`). When the covers of a request
+    /// arrive after a newer request has been made, they are discarded.
     request: super::Latest,
     pub stale: bool,
-    /// The disclosure, open until it is closed; it opens again for the
-    /// next folder that has children.
+    /// Whether the list of subfolder tiles is shown. A click on the
+    /// "Folders (n)" label switches it. It is set back to `true` when the grid
+    /// shows a different destination, and whenever the destination has no
+    /// subfolders.
     pub expanded: bool,
     pub geometry: Geometry,
-    /// The tile items dragged from the grid would go into.
+    /// While items are dragged over the grid, the node id of the subfolder
+    /// tile under the pointer. Releasing the drag there puts the items into
+    /// that folder. The tile is drawn with the same ring as a selected tile.
     pub drop: Option<String>,
     pub renaming: Option<Renaming>,
-    /// A folder made or duplicated from a tile's menu, renamed once its
-    /// tile appears.
+    /// The node id of a folder that was just created or duplicated from a
+    /// tile's context menu. Its tile does not exist until the destination list
+    /// has been read again. When the tile is in `children`, its name is opened
+    /// for editing and this is cleared.
     pub rename_next: Option<String>,
 }
 
@@ -333,7 +420,8 @@ impl Default for Header {
 }
 
 impl Header {
-    /// The header's height, nothing when there are no subfolders.
+    /// Returns the height of the header in pixels. It is 0 when the
+    /// destination has no subfolders, and the header is then not drawn.
     pub fn height(&self) -> f32 {
         if self.children.is_empty() {
             0.
@@ -342,7 +430,11 @@ impl Header {
         }
     }
 
-    /// The covers the header wants loaded, when it is in view.
+    /// Returns the cover thumbnails the header needs loaded, in the order of
+    /// `children`: one for each subfolder whose cover has been read, except a
+    /// cover that is a font file, because a font file has no thumbnail.
+    /// Returns nothing while the list of tiles is collapsed. The grid asks for
+    /// these only while the header is inside the viewport.
     pub fn wanted(&self) -> Vec<Resource> {
         if !self.expanded {
             return Vec::new();
@@ -357,8 +449,21 @@ impl Header {
 }
 
 impl GridView {
-    /// Lists the destination's subfolders, asks for their covers when the
-    /// list or a folder changed, and lays the header out for `width`.
+    /// Brings the header's state up to date for this frame, for a grid `width`
+    /// pixels wide. It does four things, in this order:
+    ///
+    /// 1. It computes the list of subfolders again when the displayed
+    ///    destination, the destination list, the `show_subfolders` preference
+    ///    or whether the viewer is open has changed.
+    ///
+    /// 2. It requests the subfolders' covers from the library when the list of
+    ///    folders is different or the session reported a change to the
+    ///    destination list.
+    ///
+    /// 3. It opens the name of a folder that was just created or duplicated
+    ///    for editing, once that folder's tile exists.
+    ///
+    /// 4. It computes the header's layout.
     pub(super) fn sync_subfolders(
         &mut self,
         width: f32,
@@ -372,8 +477,10 @@ impl GridView {
                 session.prefs.show_subfolders,
                 session.viewer,
             );
-            // Listed again only when the destination, the list or what it
-            // shows changed, not every frame.
+            // Compute `children` again only when one of the values it is
+            // computed from has changed (`listed`) or the destination list has
+            // changed (`relist`). Computing it goes through the whole
+            // destination list, so it is not done on every frame.
             let header = &mut self.subfolders;
             if header.listed != Some(listing) || header.relist {
                 header.listed = Some(listing);
@@ -388,7 +495,9 @@ impl GridView {
                         session.prefs.show_subfolders,
                     )
                 };
-                // The covers are asked for again when the folders differ.
+                // Request the covers again when the folders listed now are not
+                // the same folders, in the same order, as the ones the last
+                // cover request was made for.
                 header.stale |= header
                     .children
                     .iter()
@@ -443,7 +552,9 @@ impl GridView {
             })
             .detach();
         }
-        // A folder just made from a tile's menu is renamed once it shows.
+        // A folder that was just created or duplicated from a tile's context
+        // menu is waiting to be renamed (`rename_next`). Once its tile is in
+        // `children`, open its name for editing.
         if let Some(node) = header.rename_next.clone()
             && let Some(child) = header.children.iter().find(|child| child.node == node)
         {
@@ -485,8 +596,10 @@ impl GridView {
         );
     }
 
-    /// The subfolder tile under a window position, by its place in the
-    /// list, when the header shows.
+    /// Returns the index in `Header::children` of the subfolder tile under
+    /// `position`, which is a position in the window. Returns `None` when no
+    /// tile is there, when the destination has no subfolders, and when the
+    /// list of tiles is collapsed.
     pub(super) fn subfolder_at(&self, position: Point<Pixels>) -> Option<usize> {
         let header = &self.subfolders;
         if header.children.is_empty() || !header.expanded {
@@ -508,15 +621,21 @@ impl GridView {
             .filter(|index| *index < header.children.len())
     }
 
-    /// Renames a folder's tile once it shows (`setRenamingSubfolderId` for
-    /// a folder just made).
+    /// Opens the name of the subfolder tile with node id `node` for editing as
+    /// soon as that tile exists. It is called for a folder that was just
+    /// created or duplicated, whose tile appears only after the destination
+    /// list has been read again (`setRenamingSubfolderId` in production).
     pub fn rename_subfolder_when_shown(&mut self, node: String, cx: &mut Context<Self>) {
         self.subfolders.rename_next = Some(node);
         cx.notify();
     }
 
-    /// The subfolder tiles a rubber band covers; the band is in the item
-    /// layout's coordinates, which start below the header.
+    /// Returns the node ids of the subfolder tiles that the rubber band
+    /// rectangle `rect` overlaps. `rect` is in the coordinates of the item
+    /// layout (`GridView::layout`), whose y = 0 lies `placement.top` below the
+    /// bottom of the header. The subfolder tiles are positioned from the top
+    /// of the header, so `placement.top` and the header's height are added to
+    /// `rect.top` before the two are compared.
     pub(super) fn subfolders_in(&self, rect: super::marquee::Rect) -> Vec<String> {
         let header = &self.subfolders;
         if header.children.is_empty() || !header.expanded {
@@ -538,7 +657,11 @@ impl GridView {
             .collect()
     }
 
-    /// `FolderRenameInput`: the tile's name in a field, selected.
+    /// Starts renaming the subfolder tile with node id `node`
+    /// (`FolderRenameInput` in production). The tile shows a text field in
+    /// place of its name. The field holds `name` with all of it selected, and
+    /// takes the keyboard focus. Enter, or moving the focus out of the field,
+    /// commits the new name. Escape cancels.
     pub fn rename_subfolder(
         &mut self,
         node: String,
@@ -562,7 +685,10 @@ impl GridView {
                 let Some(open) = header.renaming.take() else {
                     return;
                 };
-                // An empty name cancels; an unchanged one writes nothing.
+                // Rename the folder in the library only when the rename was
+                // committed, the new name is not empty, and the new name
+                // differs from the old one. An empty name is treated like a
+                // cancel.
                 if let Renamed::Commit(value) = event
                     && !value.is_empty()
                     && *value != open.original
@@ -594,7 +720,8 @@ impl GridView {
         cx.notify();
     }
 
-    /// The header, drawn at the top of the grid's content.
+    /// Builds the element for the subfolder header. The element is placed at
+    /// the top of the grid's scrolled content, above the item tiles.
     pub(super) fn subfolder_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let card = if theme.is_light() {
@@ -605,8 +732,10 @@ impl GridView {
         let header = &self.subfolders;
         let geometry = header.geometry.clone();
         let total = self.session.read(cx).total;
-        // A rubber band selects the tiles it covers when it is let go, as
-        // the reference's does; until then they show no ring.
+        // The subfolder tiles that are selected. A rubber band adds the tiles
+        // it covers to this selection only when the mouse button is released,
+        // as in production. While the band is being dragged, those tiles are
+        // drawn without the selection ring.
         let selected = self.session.read(cx).folder_selection.clone();
         let expanded = header.expanded;
         let padding = geometry.padding;
@@ -617,7 +746,10 @@ impl GridView {
             .w_full()
             .h(px(geometry.height))
             .font_family(theme::FONT_UI);
-        // `.sectionLabel`: the disclosure, brighter under the pointer.
+        // The "Folders (n)" label with its chevron (`.sectionLabel`). A click
+        // on it collapses or expands the list of tiles. Its text changes from
+        // the secondary text colour to the primary text colour while the
+        // pointer is over it.
         root = root.child(
             div()
                 .id("subfolders-label")
@@ -679,16 +811,30 @@ impl GridView {
         if !expanded {
             return root;
         }
-        // Only what is in view is drawn.
+        // Build elements only for the subfolder tiles that are inside the
+        // viewport or within 8px of it. Tiles further away are skipped to save
+        // work.
         let raw = self.raw_scroll();
         let viewport = f32::from(self.bounds.size.height);
-        let width = geometry.tile_width;
-        let card_h = card_height(width);
+        // During a zoom animation each subfolder tile is drawn at its
+        // position and size for this moment, like the item tiles below.
+        let now = self.clock.elapsed().as_secs_f64() * 1000.;
         let mut tiles = Vec::new();
         for (index, child) in header.children.iter().enumerate() {
             let Some(&(x, y, height)) = geometry.tiles.get(index) else {
                 continue;
             };
+            let mut place = super::layout::Tile {
+                x,
+                y,
+                w: geometry.tile_width,
+                h: height,
+            };
+            if let Some(animation) = &self.zoom_animation {
+                place = animation.subfolder_tile_at(index, place, now);
+            }
+            let (x, y, width, height) = (place.x, place.y, place.w, place.h);
+            let card_h = card_height(width);
             if y + height < raw - 8. || y > raw + viewport + 8. {
                 continue;
             }
@@ -728,7 +874,9 @@ impl GridView {
     ) -> AnyElement {
         let theme = theme::theme(cx);
         let tint = child.tint.map(rgb);
-        // `.pic1`: the card, 10px below the tile's top, with a 4px inset.
+        // The front card of the tile (`.pic1`). Its top is 10px below the top
+        // of the tile. Production gives it 4px of padding, which keeps the
+        // cover picture 4px away from its edges.
         let card_top = 10.;
         let face_h = card_h - card_top;
         let mut face = div()
@@ -747,7 +895,11 @@ impl GridView {
             .border_l_1()
             .border_r_1()
             .border_color(rgba(card.side))
-            // The top edge is brighter than the sides.
+            // A 1px line along the top of the card in the colour `card.top`.
+            // That colour is more opaque than the colour of the card's border,
+            // `card.side`: 15% against 5% white in the dark themes, and 20%
+            // against 10% black in the light themes. The line starts and ends
+            // 10px from the card's left and right edges.
             .child(
                 div()
                     .absolute()
@@ -766,8 +918,10 @@ impl GridView {
             .and_then(|resource| self.thumbnails.read(cx).size(resource));
         match (cover.as_ref(), resource, size) {
             (Some(cover), Some(_), Some((natural_w, natural_h))) => {
-                // `.coverImage`: at most the card less 8px, never larger
-                // than the thumbnail, centred.
+                // The cover picture (`.coverImage`). It is scaled down to fit
+                // inside the card with 4px free on every side, it is never
+                // drawn larger than the thumbnail's own size, and it is
+                // centred in the card.
                 let (room_w, room_h) = (width - 2. - 8., face_h - 1. - 8.);
                 let scale = (room_w / natural_w).min(room_h / natural_h).min(1.);
                 let (w, h) = (natural_w * scale, natural_h * scale);
@@ -784,8 +938,12 @@ impl GridView {
             }
             (Some(_), _, _) => {}
             (None, _, _) => {
-                // `.folderPlaceholder`: the folder glyph at a fifth of its
-                // colour, a quarter of the tile wide.
+                // A folder with no cover (`.folderPlaceholder`): draw the
+                // folder icon in the centre of the card. The icon is a quarter
+                // as wide as the tile, with the tile's width taken as no less
+                // than 150px and no more than 400px. It is drawn at 20%
+                // opacity in the folder's tint colour, or in the primary text
+                // colour when the folder has no tint.
                 let size = (width.clamp(150., 400.) * 0.25).round().max(24.);
                 let color = tint.unwrap_or(theme.text());
                 face = face.child(
@@ -806,7 +964,11 @@ impl GridView {
                 );
             }
         }
-        // `.pic2` and `.pic3`: the edges of the cards stacked behind.
+        // Builds one of the two bars, each 2px high, that are drawn above the
+        // front card (`.pic2` and `.pic3`). They look like the top edges of
+        // two more cards stacked behind it. `top` is the bar's distance from
+        // the top of the tile, and `inset` is its distance from the tile's
+        // left and right edges.
         let stack = |top: f32, inset: f32, color: u32| {
             div()
                 .absolute()
@@ -830,13 +992,17 @@ impl GridView {
         let name_room = (width - NAME_ICON - NAME_GAP).max(0.);
         let name: AnyElement = match renaming {
             Some(input) => div()
-                // `width: min(180px, 100%)`, which the row's own sizing
-                // makes the input's default width (measured in the
-                // reference).
+                // Production's CSS gives the rename field
+                // `width: min(180px, 100%)`. The row the field is in is sized
+                // by its content, so the field ends up at an input's default
+                // width, which was measured in production as 161.6px
+                // (`RENAME_WIDTH`). Here the field is that wide, or as wide as
+                // the room the name has when that is less.
                 .w(px(RENAME_WIDTH.min(name_room)))
                 .min_w_0()
-                // A press in the field edits the name; it is not a click
-                // on the tile.
+                // A mouse press inside the rename field is for editing the
+                // name. Stop it here so that the tile does not also handle it
+                // as a press on the tile.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(ui::field::field(
                     ElementId::Name(format!("subfolder-rename-{}", child.node).into()),
@@ -866,7 +1032,9 @@ impl GridView {
         );
         let node = child.node.clone();
         let (menu_node, open_index) = (child.node.clone(), child.index);
-        // A subfolder tile: a button named by its folder and count.
+        // The tile itself. To assistive technology it is a button whose label
+        // is the folder's name followed by its item count, for example
+        // "Art 12 items".
         let mut tile = div()
             .id(ElementId::Name(format!("subfolder-{}", child.node).into()))
             .role(Role::Button)
@@ -880,7 +1048,9 @@ impl GridView {
             .flex_col()
             .items_center();
         if ringed {
-            // `.tileSelected::after`: a 2px ring 3px outside the card.
+            // The ring drawn around a tile that is selected or is the drop
+            // target (`.tileSelected::after`): a border 2px thick in the
+            // theme's primary colour, with 3px between it and the card.
             tile = tile.child(
                 div()
                     .absolute()
@@ -940,7 +1110,9 @@ impl GridView {
             let menu_node = menu_node.clone();
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                // A secondary click (Control on macOS) is a right-click.
+                // On macOS a left press with Control held is a secondary
+                // click. Open the folder's context menu for it, as a
+                // right-click does.
                 if Press::here(event.modifiers) == Press::Menu {
                     this.folder_menu(&menu_node, event.position, window, cx);
                 }
@@ -953,12 +1125,17 @@ impl GridView {
                 return;
             }
             if event.click_count() == 2 {
-                // `onOpenFolder`: the folder's own grid.
+                // A double-click opens the folder: the grid navigates to it
+                // (`onOpenFolder` in production).
                 this.session
                     .update(cx, |session, cx| session.navigate(open_index, cx));
                 return;
             }
-            // `onSelectFolder`: the platform's selection key toggles.
+            // A single click selects the tile (`onSelectFolder` in
+            // production). With the platform's selection key held (Command on
+            // macOS, Control on Windows and Linux), the click adds the tile to
+            // the selected tiles, or removes it if it was already selected.
+            // Without that key the tile becomes the only selected tile.
             let toggle = matches!(press, Press::Toggle | Press::Range { keep: true });
             this.session.update(cx, |session, cx| {
                 session.select_folders(vec![node.clone()], toggle, cx)
@@ -975,8 +1152,10 @@ impl GridView {
         .into_any_element()
     }
 
-    /// A subfolder tile's menu, at a window position. The tile joins the
-    /// selection first unless it is in it.
+    /// Asks for the context menu of the subfolder tile with node id `node` to
+    /// be opened at `position`, which is a position in the window, by emitting
+    /// [`FolderMenuRequested`]. If the tile is not selected, it first becomes
+    /// the only selected tile.
     fn folder_menu(
         &mut self,
         node: &str,
@@ -1060,9 +1239,12 @@ mod tests {
 
     #[test]
     fn tiles_fill_columns_of_at_least_the_clamped_zoom() {
-        // 569px of list at a 260px zoom and 8px gaps: two 280.5px columns.
+        // A list 569px wide, at a zoom of 260px with 8px gaps, has two columns
+        // that are each 280.5px wide.
         assert_eq!(columns(569., 260., 8.), (2, 280.5));
-        // The zoom is clamped to 150–400px.
+        // The zoom's tile size is clamped to between 150px and 400px. 80px is
+        // treated as 150px, which gives three columns, and 900px is treated as
+        // 400px, which gives one column.
         assert_eq!(columns(569., 80., 8.).0, 3);
         assert_eq!(columns(569., 900., 8.).0, 1);
         assert_eq!(columns(100., 260., 16.), (1, 100.));
@@ -1070,8 +1252,10 @@ mod tests {
 
     #[test]
     fn the_header_matches_the_reference_layout() {
-        // The reference, 585px wide with tight spacing: four tiles in two
-        // rows, then "Content (15)"; the items start 636.2px down.
+        // These numbers were measured in production with the grid 585px wide
+        // and 8px spacing: four subfolder tiles in two rows, then the
+        // "Content (15)" label, and the item tiles start 636.2px below the top
+        // of the header.
         let laid = geometry(585., 260., 8., 4, true, true, |_| false);
         assert_eq!(laid.padding, 8.);
         assert_eq!(laid.tiles.len(), 4);
@@ -1082,7 +1266,8 @@ mod tests {
         assert!(close(laid.tiles[1].0, 8. + 280.5 + 8.));
         assert!(close(laid.content.unwrap(), 611.6));
         assert!(close(laid.height, 636.2));
-        // Closed: the two labels alone.
+        // With the list of tiles collapsed, the header holds only the two
+        // labels.
         let closed = geometry(585., 260., 8., 4, false, true, |_| false);
         assert!(closed.tiles.is_empty());
         assert!(close(closed.content.unwrap(), 32.6));

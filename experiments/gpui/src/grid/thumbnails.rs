@@ -1,7 +1,16 @@
-//! The decoded thumbnails, kept across frames. The grid says which it wants,
-//! most wanted first, as `thumbnailPlan.ts` orders them; this loads those a
-//! few at a time, drops loads the grid has scrolled away from, and keeps the
-//! rest for scrolling back until they take more memory than the budget.
+//! The cache of decoded thumbnails that the grid and other views draw from. It
+//! keeps the thumbnails from one frame to the next.
+//!
+//! On every frame the grid gives [`Thumbnails::plan`] the list of thumbnails
+//! its tiles need, with the most important first, in the order
+//! `thumbnailPlan.ts` gives them in production ([`load_order`]). The cache
+//! starts reading and decoding thumbnails from the front of that list, at most
+//! six at a time (`CONCURRENCY`). It cancels a load that has not finished when
+//! the grid no longer needs that thumbnail, which happens when the user
+//! scrolls past it. A decoded thumbnail that the grid no longer needs stays in
+//! the cache, so that scrolling back to it needs no new load. When the decoded
+//! thumbnails take more memory than the budget allows ([`budget`]), the ones
+//! used longest ago are removed.
 use crate::i18n::{en, t};
 use gpui::*;
 use std::{
@@ -11,66 +20,96 @@ use std::{
 };
 
 pub struct Thumbnails {
-    /// Each thumbnail, and when it was last used (`clock`), for letting go
-    /// of the least recently used first. A use only stamps its entry: a
-    /// resource is a path, and comparing paths walks their components, so
-    /// nothing is searched for in a list on the way.
+    /// Every thumbnail the cache holds, whether it is still loading, has
+    /// loaded or has failed to load, keyed by its file. Each entry records
+    /// when it was last used, as a value of `clock`, so that the least
+    /// recently used entries can be removed first when the cache is over its
+    /// budget. A use only writes that number into the entry. The cache keeps
+    /// no list ordered by use, because moving an entry within such a list
+    /// would mean searching for it by comparing paths, and comparing two paths
+    /// compares them one component at a time.
     entries: HashMap<Resource, Entry>,
     clock: u64,
-    /// Images a view outside the grid is showing, which stay decoded. Such a
-    /// view does not repaint as the grid scrolls, so if its image were
-    /// evicted it would go on drawing whatever took the freed texture.
+    /// The thumbnails that views outside the grid are showing, each keyed by a
+    /// name for the view that shows it (for example `"inspector-preview"`). A
+    /// pinned thumbnail is never removed from the cache. A view outside the
+    /// grid is not drawn again when the grid scrolls. If its thumbnail were
+    /// removed and the thumbnail's place in the sprite atlas were given to
+    /// another picture, the view would go on drawing that other picture.
     pins: HashMap<&'static str, Resource>,
-    /// What the grid's visible band wants.
+    /// The thumbnails given to the most recent call to [`Thumbnails::plan`]:
+    /// the ones the calling view needs for the tiles in and near its viewport.
     wanted: HashSet<Resource>,
-    /// The view that planned `wanted` (the grid), whose thumbnails wait
-    /// their turn in the plan.
+    /// The view that made the most recent call to [`Thumbnails::plan`]. That
+    /// is the grid, or the viewer's collection editor, which uses the cache in
+    /// the same way. When this view asks for a thumbnail that is in `wanted`
+    /// and has not started loading, the load is not started at once. `plan`
+    /// starts it when its turn comes.
     planner: Option<EntityId>,
-    /// Missing thumbnails being made.
+    /// The state of the work that makes missing thumbnails
+    /// ([`Thumbnails::make_missing`]).
     renders: Renders,
 }
 
-/// Where a tile's thumbnail is.
+/// How far the loading of a tile's thumbnail has got.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Thumb {
     Pending,
     Loaded,
-    /// It could not be read or decoded: the tile shows the broken page.
+    /// The thumbnail could not be read or decoded. The tile shows the picture
+    /// of a torn page instead.
     Failed,
 }
 
-/// A file a tile shows whose thumbnail could not be read.
+/// A file whose tile is on screen and whose thumbnail could not be read or
+/// decoded. It is given to [`Thumbnails::make_missing`] to have the thumbnail
+/// made. `hash` is the file's content hash and `mime` is its type.
 pub struct Missing {
     pub hash: String,
     pub mime: String,
-    /// The `.jpg` the tile reads.
+    /// The path of the `.jpg` thumbnail the tile tries to read.
     pub jpeg: PathBuf,
 }
 
-/// The missing thumbnails being made, a couple at a time, of the tiles that
-/// still show them.
+/// The work of making missing thumbnails. At most two are made at the same
+/// time (`RENDERS`), and only for tiles that are still on screen.
 #[derive(Default)]
 struct Renders {
-    /// The tiles on screen whose thumbnail is missing, waiting their turn.
+    /// The files whose tiles are on screen, whose thumbnail is missing, and
+    /// whose thumbnail has not started being made, in the order they will be
+    /// started.
     waiting: Vec<Missing>,
-    /// Being made now, each by its file.
+    /// The thumbnails being made now: the task that makes each one, keyed by
+    /// the file's content hash.
     running: HashMap<String, Task<()>>,
-    /// Each file is tried once: one that could not be made stays broken.
+    /// The content hashes of the files whose thumbnail has already started
+    /// being made. Each file is tried only once. A file whose thumbnail could
+    /// not be made keeps showing the picture of a torn page and is not tried
+    /// again.
     tried: HashSet<String>,
 }
 
 struct Entry {
     item: ImageCacheItem,
-    /// When it was last used, by `Thumbnails::clock`.
+    /// The value `Thumbnails::clock` had when this thumbnail was last used.
     used: u64,
-    /// It was painted at least once.
+    /// Whether the decoded picture was given to a view to draw at least once.
+    /// The statistics use it to count the thumbnails that were removed from
+    /// the cache without ever having been drawn (`stats::thumbnail_evicted`).
     drawn: bool,
 }
 
 impl Renders {
-    /// The tiles on screen whose thumbnail is missing now: those not tried
-    /// yet wait their turn in this order, any that left the screen are
-    /// dropped, and as many as there is room for start, which are returned.
+    /// Takes `missing`, the files whose tiles are on screen now and whose
+    /// thumbnail could not be read, and returns the files whose thumbnails are
+    /// to start being made now.
+    ///
+    /// The waiting list is replaced by the files of `missing` that have not
+    /// been tried and are not being made, in the order given. A file whose
+    /// tile left the screen before its turn is therefore no longer waiting.
+    /// Files are then taken from the front of the waiting list until two are
+    /// being made (`RENDERS`). They are marked as tried and returned. The
+    /// caller starts them and adds them to `running`.
     fn admit(&mut self, missing: Vec<Missing>) -> Vec<Missing> {
         self.waiting = missing
             .into_iter()
@@ -89,33 +128,55 @@ impl Renders {
     }
 }
 
-/// What a decoded thumbnail usually takes: 512 × 384 pixels (a 4:3 picture
-/// at the long edge thumbnails are stored at), four bytes each.
+/// The number of bytes one decoded thumbnail is assumed to take when the
+/// budget is computed: 512 × 384 pixels at four bytes a pixel, which is
+/// 786,432 bytes. That is a 4:3 picture whose long edge is the 512 pixels
+/// thumbnails are stored at (`THUMBNAIL_LONG_EDGE`).
 const TYPICAL_BYTES: usize = (crate::grid::originals::THUMBNAIL_LONG_EDGE
     * crate::grid::originals::THUMBNAIL_LONG_EDGE
     * 0.75) as usize
     * 4;
-/// The least an entry is counted at, so thumbnails that could not be read
-/// are let go too.
+/// The smallest number of bytes an entry is counted as. An entry whose
+/// thumbnail failed to load, or is still loading, holds no decoded picture.
+/// Counting it as 4096 bytes makes such entries add to the total too, so that
+/// they are also removed when the cache is over its budget and do not
+/// accumulate without limit.
 const ENTRY_BYTES: usize = 4096;
 
-/// How many bytes of decoded thumbnails are kept, wanted ones included: a
-/// window full of the smallest tiles, and a window's worth either side.
+/// Returns the number of bytes of decoded thumbnails the cache may hold,
+/// counting the thumbnails the grid needs now. `window` is the window's width
+/// and height in pixels. The budget is the memory of three windows full of
+/// tiles at the smallest tile size (150px, `SMALLEST_TILE`), with each
+/// thumbnail counted as `TYPICAL_BYTES`: one windowful for the tiles on
+/// screen, one for the tiles above them and one for the tiles below them.
 pub fn budget(window: (f32, f32)) -> usize {
-    let across = (window.0 / crate::grid::nav::SMALLEST_TILE).ceil().max(1.);
-    let down = (window.1 / crate::grid::nav::SMALLEST_TILE).ceil().max(1.);
+    let across = (window.0 / crate::grid::layout::SMALLEST_TILE)
+        .ceil()
+        .max(1.);
+    let down = (window.1 / crate::grid::layout::SMALLEST_TILE)
+        .ceil()
+        .max(1.);
     3 * (across * down) as usize * TYPICAL_BYTES
 }
 
-/// `thumbnailDecodeWorker.ts` runs six loads at once.
+/// The number of thumbnails that are read and decoded at the same time.
+/// `thumbnailDecodeWorker.ts` in production also runs six.
 const CONCURRENCY: usize = 6;
-/// Missing thumbnails made at once: a Flash movie plays for seconds to give
-/// its picture, and a paged document is opened and drawn.
+/// The number of missing thumbnails that are made at the same time. It is only
+/// two because making one is slow: a Flash movie is played for five seconds
+/// before its picture is taken, and a paged document has to be opened and its
+/// first page drawn.
 const RENDERS: usize = 2;
 
-/// The order to load a band of tiles in: those in the viewport before those
-/// in the margin around it, and nearest the viewport's middle first. Each
-/// tile is its top and height; the answer is positions in `tiles`.
+/// Returns the order in which to load the thumbnails of `tiles`. Tiles that
+/// are at least partly inside the viewport come before tiles that are outside
+/// it, in the margin above or below. Within each of the two groups, the tile
+/// whose centre is nearest to the vertical middle of the viewport comes first.
+/// A tile that only touches the edge of the viewport counts as outside it.
+///
+/// Each entry of `tiles` is a tile's top and its height. `view_top` is the top
+/// of the viewport in the same coordinates, and `view_height` is its height.
+/// The result is a list of indexes into `tiles`.
 pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<usize> {
     let middle = view_top + view_height / 2.;
     let mut order = (0..tiles.len()).collect::<Vec<_>>();
@@ -131,44 +192,62 @@ pub fn load_order(tiles: &[(f32, f32)], view_top: f32, view_height: f32) -> Vec<
     order
 }
 
-/// `find_thumbnail_path`, the media protocol's rule: a thumbnail is the
-/// `.jpg` the library writes, else the `.png` written for audio waveforms,
-/// captured frames and by older libraries. This is the `.png` to try.
+/// Returns the `.png` path to try when the `.jpg` thumbnail at `jpeg` cannot
+/// be read: the same path with the extension `.png`. This follows
+/// `find_thumbnail_path`, the rule of production's media protocol. A thumbnail
+/// is normally the `.jpg` the library writes. When there is no `.jpg`, it is
+/// the `.png` that is written for audio waveforms, for captured frames, and by
+/// older libraries.
 pub fn png_for(jpeg: &Path) -> PathBuf {
     jpeg.with_extension("png")
 }
 
-/// The thumbnail file that exists, checked on the file system, for a view
-/// that resolves one item at a time. The grid does not check: its cache
-/// tries the `.png` when the `.jpg` cannot be read.
+/// Returns the thumbnail file that exists on disk for the `.jpg` path `jpeg`:
+/// the `.jpg` if it exists, otherwise the `.png` if that exists, otherwise
+/// `jpeg` unchanged. It checks the file system, so it is meant for a view that
+/// shows one item at a time. The grid does not call it for its tiles. The
+/// cache tries the `.png` itself when the `.jpg` cannot be read.
 pub fn existing(jpeg: PathBuf) -> PathBuf {
     present(&jpeg).unwrap_or(jpeg)
 }
 
-/// The thumbnail file there is for this `.jpg` path, if any: the `.jpg`,
-/// else the `.png`.
+/// Returns the thumbnail file that exists on disk for the `.jpg` path `jpeg`:
+/// the `.jpg` if it exists, otherwise the `.png` if that exists, otherwise
+/// `None`.
 pub fn present(jpeg: &Path) -> Option<PathBuf> {
     [jpeg.to_path_buf(), png_for(jpeg)]
         .into_iter()
         .find(|path| path.exists())
 }
 
-/// Where `regenerateThumbnail` keeps a thumbnail aside while it is made
-/// again: beside it, named for this process and the moment.
+/// Returns the path a thumbnail file is renamed to while the thumbnail is
+/// being made again, as `regenerateThumbnail` does in production. It is the
+/// thumbnail's own path with `.<process>.<stamp>.regenerate-backup` added to
+/// the end, so the backup is in the same folder. The caller passes this
+/// process's id as `process` and the current time in milliseconds as `stamp`,
+/// which keeps the name different from the name of any other backup.
 pub fn backup_for(thumbnail: &Path, process: u32, stamp: u128) -> PathBuf {
     let mut name = thumbnail.as_os_str().to_owned();
     name.push(format!(".{process}.{stamp}.regenerate-backup"));
     PathBuf::from(name)
 }
 
-/// `scheduleThumbnailAfterMiss`: asks the application to render a file's
-/// thumbnail (`media.render_thumbnail_now`), as the media protocol does on a
-/// miss, and draws one it cannot make (Flash, PDF and the other paged
-/// documents) as the Electron main process does
-/// (`renderExternalThumbnail`), off the main thread, only into the library
-/// open in the window (`libraries::writable`) and only inside its folder
-/// (`libraries::confine`), as every write here. Resolves to whether there
-/// is a thumbnail now.
+/// Makes the thumbnail of one file, as `scheduleThumbnailAfterMiss` does in
+/// production. Returns whether a thumbnail file exists afterwards.
+///
+/// First it sends the application the command `media.render_thumbnail_now` for
+/// the file and waits for the answer. Production's media protocol does the
+/// same when a thumbnail is missing. If there is still no thumbnail file, and
+/// the file is of a type the application cannot make a thumbnail of but this
+/// app draws itself (Flash, PDF and the other paged documents, see
+/// `rendered::draws`), it draws the thumbnail to the `.png` beside `jpeg`. The
+/// Electron main process does this in `renderExternalThumbnail`. The drawing
+/// runs on a background thread.
+///
+/// The thumbnail is drawn only when the session's library is the one open in
+/// the window (`libraries::writable`), and only to a path inside that
+/// library's folder (`libraries::confine`). Every file write in this module is
+/// limited in the same two ways.
 async fn make(
     session: &gpui::Entity<crate::session::Session>,
     hash: &str,
@@ -206,28 +285,43 @@ async fn make(
         .await
 }
 
-/// Where a thumbnail this app draws goes: the `.png` beside the `.jpg`
-/// the library names, if that lies inside the library at `root`.
+/// Returns the path this app writes a thumbnail to when it draws the thumbnail
+/// itself: the `.png` with the same name and in the same folder as the
+/// library's `.jpg` thumbnail path `jpeg`. Returns an error message when that
+/// path is not inside the library at `root`.
 pub fn rendered_target(root: &Path, jpeg: &Path) -> Result<PathBuf, String> {
     crate::libraries::confine(root, &png_for(jpeg))
 }
 
-/// The thumbnail `previous` set aside at `backup` while it is made again,
-/// both inside the library at `root`, or why not.
+/// Renames the thumbnail file `previous` to `backup`, which moves it out of
+/// the way while the thumbnail is made again. `regenerate_one` also calls it
+/// with the two paths swapped, to put the old thumbnail back. Both paths must
+/// be inside the library at `root`. Returns an error message when either is
+/// not, or when the rename fails.
 pub fn set_aside(root: &Path, previous: &Path, backup: &Path) -> Result<(), String> {
     let previous = crate::libraries::confine(root, previous)?;
     let backup = crate::libraries::confine(root, backup)?;
     std::fs::rename(previous, backup).map_err(|error| error.to_string())
 }
 
-/// `media.regenerate_thumbnails` as the Electron main process performs it
-/// (`regenerateThumbnail`), one file after another: the thumbnail is kept
-/// aside, made again by the application (or drawn here for Flash and paged
-/// documents), and the old one restored if no new one could be made. Every
-/// view showing it reads it again. The first failure stops the rest and is
-/// shown as production's menu shows it. Only the library open in the
-/// window is written to, and only inside its folder. `files` are content
-/// hashes and types.
+/// Makes the thumbnails of `files` again, one file after another. This is the
+/// command `media.regenerate_thumbnails` as the Electron main process carries
+/// it out in `regenerateThumbnail`. Each entry of `files` is a file's content
+/// hash and its type.
+///
+/// For each file, the existing thumbnail is renamed to a backup name. A new
+/// thumbnail is then made by the application, or drawn by this app for Flash
+/// and paged documents ([`make`]), and the backup is deleted. If no new
+/// thumbnail could be made, the backup is renamed back. After each file the
+/// session emits `Event::Thumbnail` for it, so every view that shows the
+/// thumbnail reads it again.
+///
+/// The first file that fails stops the files after it. Its error is shown in
+/// an error notification titled "Menu action failed", as production's menu
+/// shows it. Files are written only when the session's library is the one open
+/// in the window, and only inside that library's folder. When that library is
+/// not the one open, nothing is done and the notification says
+/// "No library is open."
 pub fn regenerate(
     session: &gpui::Entity<crate::session::Session>,
     files: Vec<(String, String)>,
@@ -261,7 +355,11 @@ pub fn regenerate(
     .detach();
 }
 
-/// One file of [`regenerate`].
+/// Makes the thumbnail of one file again, for [`regenerate`]. It renames the
+/// existing thumbnail file to a backup name, makes a new thumbnail with
+/// [`make`], and deletes the backup. If no thumbnail could be made, it renames
+/// the backup back and returns the error message
+/// "No thumbnail renderer supports this file."
 async fn regenerate_one(
     session: &gpui::Entity<crate::session::Session>,
     root: &Path,
@@ -293,7 +391,9 @@ async fn regenerate_one(
     }
 }
 
-/// The bytes a decoded picture takes, all its frames.
+/// Returns the number of bytes a decoded picture takes in memory: its width
+/// times its height times four bytes, added up over all of its frames. An
+/// animated picture has more than one frame.
 fn decoded_bytes(image: &RenderImage) -> usize {
     (0..image.frame_count())
         .map(|frame| {
@@ -303,7 +403,9 @@ fn decoded_bytes(image: &RenderImage) -> usize {
         .sum()
 }
 
-/// The `.png` a `.jpg` thumbnail resource falls back to.
+/// Returns the `.png` resource to load when the `.jpg` thumbnail `resource`
+/// cannot be read or decoded. Returns `None` when `resource` is not a path
+/// that ends in `.jpg`.
 fn fallback(resource: &Resource) -> Option<Resource> {
     match resource {
         Resource::Path(path) if path.extension().is_some_and(|ext| ext == "jpg") => {
@@ -313,7 +415,9 @@ fn fallback(resource: &Resource) -> Option<Resource> {
     }
 }
 
-/// The `.jpg` a `.png` thumbnail stands in for.
+/// Returns the `.jpg` resource that the `.png` thumbnail `resource` is loaded
+/// in place of. Returns `None` when `resource` is not a path that ends in
+/// `.png`.
 fn primary(resource: &Resource) -> Option<Resource> {
     match resource {
         Resource::Path(path) if path.extension().is_some_and(|ext| ext == "png") => {
@@ -343,9 +447,15 @@ impl Thumbnails {
         }
     }
 
-    /// Where a tile's thumbnail is: decoded (it, or the `.png` it falls
-    /// back to), failed (both), or on its way. A font draws its card and
-    /// has nothing to load.
+    /// Returns how far the loading of the thumbnail `resource` has got, for a
+    /// file of type `mime`. It is `Loaded` when the `.jpg` is decoded, and
+    /// when the `.jpg` failed and the `.png` tried in its place is decoded. It
+    /// is `Failed` when the `.jpg` failed and the `.png` failed too, or there
+    /// is no `.png` to try. Otherwise it is `Pending`: a load has not started
+    /// or has not finished.
+    ///
+    /// A font file always gives `Loaded`. A font has no thumbnail: its tile
+    /// draws the picture that stands for all fonts and loads nothing.
     pub fn thumb(&self, resource: &Resource, mime: &str) -> Thumb {
         if mime.starts_with("font/") {
             return Thumb::Loaded;
@@ -358,12 +468,19 @@ impl Thumbnails {
         }
     }
 
-    /// Has the thumbnails of the tiles on screen that could not be read
-    /// made (`scheduleThumbnailAfterMiss`), a couple at a time, each file
-    /// once; a tile that left the screen before its turn is not made. A
-    /// thumbnail that was made is read again, and the views that observe
-    /// this cache are told. One whose file is there but did not decode
-    /// stays broken.
+    /// Makes the thumbnails that could not be read, for the tiles on screen
+    /// (`scheduleThumbnailAfterMiss` in production). `missing` lists the files
+    /// of those tiles, and the caller passes the current list on every frame.
+    /// At most two thumbnails are made at the same time (`RENDERS`), each file
+    /// is tried only once, and a file whose tile leaves the screen before its
+    /// turn is not made.
+    ///
+    /// When a thumbnail has been made, its failed entry is removed from the
+    /// cache, so that the next frame reads the new file. When the attempt for
+    /// a file ends, whether a thumbnail was made or not, the views that
+    /// observe this cache are notified and draw again. If a thumbnail file
+    /// already exists on disk, nothing is made: the file is there but could
+    /// not be decoded, and the tile keeps showing the picture of a torn page.
     pub fn make_missing(
         &mut self,
         session: &gpui::Entity<crate::session::Session>,
@@ -393,8 +510,10 @@ impl Thumbnails {
         }
     }
 
-    /// Keeps the image a view shows from being evicted, replacing the one
-    /// it kept before. `None` releases it.
+    /// Pins the thumbnail `resource` for the view named `holder`, so that the
+    /// thumbnail is not removed from the cache while that view shows it. Each
+    /// holder has one pinned thumbnail at a time: pinning another one replaces
+    /// the earlier one, and `None` removes the pin.
     pub fn pin(&mut self, holder: &'static str, resource: Option<Resource>) {
         match resource {
             Some(resource) => self.pins.insert(holder, resource),
@@ -409,8 +528,8 @@ impl Thumbnails {
         }
     }
 
-    /// Whether this thumbnail was tried and could not be read or decoded,
-    /// nor its `.png`.
+    /// Returns whether loading this thumbnail failed: the `.jpg` could not be
+    /// read or decoded, and neither could the `.png` tried in its place.
     pub fn is_failed(&self, resource: &Resource) -> bool {
         self.thumb(resource, "") == Thumb::Failed
     }
@@ -422,12 +541,15 @@ impl Thumbnails {
         is(resource) || primary(resource).is_some_and(|jpg| is(&jpg))
     }
 
-    /// The decoded thumbnail, once it is ready.
+    /// Returns the decoded picture of this thumbnail. Returns `None` when the
+    /// thumbnail is not in the cache, is still loading, or failed to load.
     pub fn image(&self, resource: &Resource) -> Option<Arc<RenderImage>> {
         self.entries.get(resource)?.item.get()?.ok()
     }
 
-    /// The decoded size of a thumbnail, in its pixels, once it is ready.
+    /// Returns the width and height of the decoded thumbnail, in the
+    /// thumbnail's own pixels. Returns `None` when the thumbnail is not in the
+    /// cache, is still loading, or failed to load.
     pub fn size(&self, resource: &Resource) -> Option<(f32, f32)> {
         match self.entries.get(resource)?.item.get()? {
             Ok(image) => {
@@ -438,10 +560,13 @@ impl Thumbnails {
         }
     }
 
-    /// Lets go of a thumbnail (its `.jpg` and its `.png`) that was written
-    /// again or for the first time (`picto:thumbnail-changed`), so the next
-    /// frame that wants it reads the new file, as the Electron grid's
-    /// pipeline invalidates it.
+    /// Removes a thumbnail from the cache, both its `.jpg` entry and its
+    /// `.png` entry, and releases their decoded pictures from the sprite
+    /// atlas. It is called when the thumbnail file has been written again or
+    /// written for the first time (`picto:thumbnail-changed` in production),
+    /// so that the next frame that needs the thumbnail reads the new file. The
+    /// Electron grid's thumbnail pipeline invalidates its copy in the same
+    /// case.
     pub fn forget(&mut self, jpeg: &Path, cx: &mut App) {
         for resource in [
             Resource::Path(jpeg.into()),
@@ -455,7 +580,8 @@ impl Thumbnails {
         }
     }
 
-    /// A tick of the clock that orders uses.
+    /// Adds one to `clock` and returns the new value. Every use of an entry is
+    /// recorded as such a value, so a larger value means a more recent use.
     fn tick(&mut self) -> u64 {
         self.clock += 1;
         self.clock
@@ -464,7 +590,9 @@ impl Thumbnails {
     fn start(&mut self, resource: &Resource, window: &mut Window, cx: &mut App) {
         crate::stats::thumbnail_read();
         let item = ImageCacheItem::new(resource, cx);
-        // The view that asked is told when it is ready.
+        // `use_image` subscribes the view that is being drawn now to this
+        // load. GPUI notifies that view when the load finishes, and the view
+        // then draws again with the thumbnail.
         item.use_image(window);
         let used = self.tick();
         self.entries.insert(
@@ -477,14 +605,32 @@ impl Thumbnails {
         );
     }
 
-    /// The grid's thumbnails for this frame, most wanted first. A load that
-    /// is no longer wanted is abandoned, the most wanted that are missing
-    /// start, and decoded thumbnails beyond the window's [`budget`] are let
-    /// go, oldest first, never one that is wanted or pinned.
+    /// Tells the cache which thumbnails the calling view needs for this frame.
+    /// The caller is the grid, or the viewer's collection editor, which uses
+    /// the cache in the same way. `wanted` lists the thumbnails in the order
+    /// they are to load, with the most important first. The cache then does
+    /// three things:
+    ///
+    /// 1. It removes every entry whose load has not finished and whose
+    ///    thumbnail is neither in `wanted` nor pinned. Removing the entry
+    ///    cancels the load.
+    ///
+    /// 2. It starts loading the thumbnails of `wanted` that have no entry yet,
+    ///    in order, until six loads are in progress (`CONCURRENCY`).
+    ///
+    /// 3. If the entries together take more bytes than the window's
+    ///    [`budget`], it removes entries, the least recently used first, until
+    ///    they fit. It never removes a thumbnail that is in `wanted` or
+    ///    pinned.
+    ///
+    /// A `.png` that is loaded in place of a `.jpg` counts as wanted or pinned
+    /// when its `.jpg` is.
     pub fn plan(&mut self, wanted: Vec<Resource>, window: &mut Window, cx: &mut App) {
         self.wanted = wanted.iter().cloned().collect();
         self.planner = Some(window.current_view());
-        // Dropping an unfinished entry cancels its read and decode.
+        // Remove the entries that are still loading and that are neither
+        // wanted nor pinned. Dropping such an entry cancels its read and
+        // decode.
         let abandoned = self
             .entries
             .iter()
@@ -566,12 +712,17 @@ impl ImageCache for Thumbnails {
             }
             return image;
         }
-        // A grid thumbnail waits for its turn in the plan. Anything else,
-        // such as the inspector's preview, loads as soon as it is asked for,
-        // even when the grid wants it too: only the view that starts a load
-        // is told when it is ready, so another view left waiting on the
-        // grid's turn would show its placeholder until something else
-        // repainted it.
+        // There is no entry for this thumbnail, so no load of it has started.
+        // When the view asking is the one that called `plan` (normally the
+        // grid) and the thumbnail is in `wanted`, nothing is started here:
+        // `plan` starts the load when its turn comes. In every other case the
+        // load starts now. That includes a view outside the grid, such as the
+        // inspector's preview, asking for a thumbnail that is also in
+        // `wanted`. GPUI notifies a view that a load has finished only if the
+        // view asked for the thumbnail when the load had already started. If
+        // the other view waited here for `plan` to start the load, it would
+        // not be notified, and it would show its placeholder until something
+        // else made it draw again.
         if !self.wanted.contains(resource) || self.planner != Some(window.current_view()) {
             self.start(resource, window, cx);
         }
@@ -590,8 +741,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    /// A band of the grid: its thumbnails, planned and drawn as the grid
-    /// does.
+    /// A test view that stands in for the grid. Every time it is rendered it
+    /// gives the thumbnails in `shown` to `Thumbnails::plan` and draws each of
+    /// them as an image 20px wide and 15px high, which is how the grid uses
+    /// the cache.
     struct Band {
         thumbnails: Entity<Thumbnails>,
         shown: Vec<PathBuf>,
@@ -615,10 +768,11 @@ mod tests {
         }
     }
 
-    /// Scrolling through several thousand tiles, a band at a time: every
-    /// thumbnail is decoded and drawn, and the sprite atlas ends holding no
-    /// more than the window's budget (and the band on screen), not every
-    /// thumbnail ever shown.
+    /// Shows 3000 thumbnails, 40 at a time, as scrolling through a large grid
+    /// does. Checks that all 3000 were decoded, and that at the end the
+    /// window's sprite atlas holds more than the 40 on screen but no more
+    /// bytes than the window's budget plus those 40. Without the budget it
+    /// would hold every thumbnail that was ever shown.
     #[test]
     fn scrolling_through_thousands_of_tiles_keeps_the_atlas_bounded() {
         const TILES: usize = 3000;
@@ -658,7 +812,9 @@ mod tests {
             window
                 .update(&mut cx, |view, _, _| view.shown = band.to_vec())
                 .unwrap();
-            // Six load at a time: the band is drawn until all have come.
+            // Only six thumbnails load at a time, so the 40 thumbnails are
+            // drawn again and again, at most 40 times, until all of them are
+            // decoded.
             for _ in 0..BAND {
                 draw(&mut cx);
                 let loaded = window
@@ -691,9 +847,12 @@ mod tests {
         );
     }
 
-    /// The grid and, in a view of its own, the first of its covers that
-    /// waits for its turn in the grid's plan (as the inspector's collage
-    /// shows the first covers of a destination just opened).
+    /// A test view that stands in for a view outside the grid, such as the
+    /// inspector's collage, which shows the first covers of a destination that
+    /// was just opened. It draws one thumbnail from the same cache as
+    /// [`Band`]. In the test below, that thumbnail is one the grid has asked
+    /// for but whose load `plan` has not started. `renders` counts how many
+    /// times the view was rendered.
     struct Cover {
         thumbnails: Entity<Thumbnails>,
         shown: PathBuf,
@@ -713,14 +872,17 @@ mod tests {
     struct Shell {
         band: Entity<Band>,
         cover: Entity<Cover>,
-        /// The cover is shown once the grid has planned.
+        /// Whether the `Cover` view is drawn. The test sets it after `Band`
+        /// has been drawn once and has called `plan`.
         cover_shown: bool,
     }
 
     impl Render for Shell {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            // Cached, as the shell holds its grid and inspector: a view
-            // draws again only when it is told to.
+            // Both views are drawn through `cached`, which is how the app's
+            // shell holds its grid and inspector. A cached view is rendered
+            // again only when it has been notified. Otherwise GPUI reuses what
+            // the view drew before.
             let fill = || gpui::StyleRefinement::default().size_full();
             div()
                 .size_full()
@@ -731,10 +893,12 @@ mod tests {
         }
     }
 
-    /// A view outside the grid asking for a thumbnail the grid wants but
-    /// has not started yet has it loaded and is told when it is ready: a
-    /// real window draws only when told, so otherwise it would show its
-    /// placeholder until something else repainted it.
+    /// Checks what happens when a view outside the grid asks for a thumbnail
+    /// that is in the grid's `wanted` list but has not started loading. The
+    /// load must start at once, and that view must be notified when the load
+    /// finishes. A real window draws a view again only when the view has been
+    /// notified, so without this the view would show its placeholder until
+    /// something else made it draw again.
     #[test]
     fn another_view_is_not_left_waiting_on_the_grids_turn() {
         let folder = tempfile::tempdir().unwrap();
@@ -775,8 +939,9 @@ mod tests {
             })
             .unwrap();
         };
-        // The grid draws and plans first; the cover then asks for the
-        // thumbnail the grid has not started.
+        // The window has been drawn once, so `Band` has called `plan`, which
+        // started loading six of the seven thumbnails. Now show `Cover`, which
+        // asks for the seventh.
         window
             .update(&mut cx, |shell, _, cx| {
                 shell.cover_shown = true;
@@ -784,8 +949,8 @@ mod tests {
             })
             .unwrap();
         draw_if_told(&mut cx);
-        // Every load finishes and the window draws each frame it is told to,
-        // as a real one does.
+        // Let every load finish. After each round, draw the window only if a
+        // view has been notified, which is what a real window does.
         for _ in 0..4 {
             cx.run_until_parked();
             draw_if_told(&mut cx);
@@ -824,11 +989,15 @@ mod tests {
         for file in started {
             renders.running.insert(file.hash, gpui::Task::ready(()));
         }
-        // Scrolled on: c left the screen before its turn; e came.
+        // The grid has scrolled. The tile of file c left the screen before
+        // its thumbnail was started, and the tile of file e came onto the
+        // screen. Files a and b are still being made, so nothing new starts,
+        // and files d and e wait.
         assert!(renders.admit(["b", "d", "e"].map(file).into()).is_empty());
         assert_eq!(hashes(&renders.waiting), ["d", "e"]);
-        // One finished: the next in view starts; a finished file is not
-        // made again.
+        // File a has finished, so one more can start, and it is file d, the
+        // first one waiting. The tile of file a is on screen again, but its
+        // thumbnail is not made again, because each file is tried only once.
         renders.running.remove("a");
         let started = renders.admit(["a", "d", "e"].map(file).into());
         assert_eq!(hashes(&started), ["d"]);
@@ -837,9 +1006,10 @@ mod tests {
 
     #[test]
     fn the_budget_keeps_three_windows_of_the_smallest_tiles() {
-        // 1213 × 865: 9 × 6 tiles of 150 a window, 3 windows of 786 kB.
+        // A window of 1213 × 865px holds 9 × 6 = 54 tiles of 150px. The budget
+        // is three such windows of tiles, at 786,432 bytes a thumbnail.
         assert_eq!(budget((1213., 865.)), 3 * 54 * 786_432);
-        // Never less than one tile a window.
+        // A window with no width and no height is counted as holding one tile.
         assert_eq!(budget((0., 0.)), 3 * 786_432);
     }
 
@@ -862,13 +1032,14 @@ mod tests {
 
     #[test]
     fn tiles_load_from_the_middle_of_the_viewport_outward() {
-        // A viewport from 1000 to 1600; tiles of height 200.
+        // The viewport reaches from 1000 to 1600 on the y axis, so its middle
+        // is at 1300. Each tile is 200px high.
         let tiles = [
-            (500., 200.),  // in the margin above
-            (1000., 200.), // top of the viewport
-            (1200., 200.), // its middle
-            (1400., 200.), // bottom of the viewport
-            (1700., 200.), // in the margin below
+            (500., 200.),  // This tile is above the viewport.
+            (1000., 200.), // This tile is at the top of the viewport.
+            (1200., 200.), // This tile is in the middle of the viewport.
+            (1400., 200.), // This tile is at the bottom of the viewport.
+            (1700., 200.), // This tile is below the viewport.
         ];
         assert_eq!(load_order(&tiles, 1000., 600.), vec![2, 1, 3, 4, 0]);
     }
