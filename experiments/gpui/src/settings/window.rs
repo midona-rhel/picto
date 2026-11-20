@@ -1,7 +1,11 @@
-//! The Settings window (`Settings.tsx`, `openSettingsWindow`): a separate
-//! 900×650 window, at least that size, whose own close button replaces the
-//! traffic lights. A navigation of sections on the left, the chosen section
-//! in a raised panel on the right, and Save & Close and Apply below it.
+//! The Settings window. It corresponds to production's `Settings.tsx` and to
+//! the window that production's `openSettingsWindow` opens. It is a separate
+//! window that opens at 900×650 and cannot be made smaller than that. It
+//! draws its own close button, and on macOS it hides the traffic lights. On
+//! the left is the list of sections. On the right is a panel with a border
+//! and a shadow. The panel holds a header with the section's name and the
+//! close button, the chosen section below the header, and the Save & Close
+//! and Apply buttons below the section.
 use super::SettingsModel;
 use super::panels::{self, PANELS};
 use super::registry::Slot;
@@ -21,28 +25,45 @@ use std::collections::HashMap;
 
 pub struct SettingsWindow {
     pub(super) model: Entity<SettingsModel>,
-    /// The chosen section, by its place in `PANELS`.
+    /// The chosen section. It is stored as its index in `PANELS`.
     selected: usize,
     search: Entity<TextInput>,
     pub(super) shortcut_search: Entity<TextInput>,
     nav_scroll: ScrollHandle,
     body_scroll: ScrollHandle,
-    /// What the two scrollers hold, so Tab can scroll what it reaches into
-    /// view.
+    /// The focus handles that the two scrolling elements track. `nav_focus`
+    /// belongs to the list of sections and `body_focus` to the body of the
+    /// chosen section. When the Tab key moves keyboard focus to a control
+    /// inside one of the two, `ui::focus::follow` uses the handle to find
+    /// which one, and scrolls it so that the control is in view.
     nav_focus: FocusHandle,
     body_focus: FocusHandle,
     pub(super) shortcuts_scroll: ScrollHandle,
     pub(super) statistics: Option<LibraryStatistics>,
-    /// The library's cloud sync state, and the Cloud section's own.
+    /// `cloud` is the cloud sync state of the library, which the session
+    /// holds. `cloud_panel` is the state of the Cloud section itself: the
+    /// restore points, whether an operation is under way, and the restore
+    /// that the user is asked to confirm.
     pub(super) cloud: Option<Entity<crate::cloud::Cloud>>,
     pub(super) cloud_panel: super::panels::CloudPanel,
-    /// The AI Tagging section's runtime status and operations.
+    /// The state of the AI Models section, whose id is `aitagging`: the
+    /// status of the AI model runtime, and the downloads and optimizations
+    /// that are under way.
     pub(super) ai: super::panels::AiState,
-    /// Shortcuts whose new keys another shortcut has: the other's label, and
-    /// which conflict this was.
+    /// The shortcuts that the user tried to bind to keys that another
+    /// shortcut already has. The key is the shortcut's id. The value is the
+    /// label of the other shortcut, and the value that `conflict_generation`
+    /// had when the conflict was recorded. For a conflict of a shortcut's
+    /// first binding, a timer removes the entry after 1.5 s. The timer
+    /// compares that number first, so that it does not remove a newer
+    /// conflict of the same shortcut.
     pub(super) conflicts: HashMap<&'static str, (&'static str, u64)>,
     pub(super) conflict_generation: u64,
-    /// The binding field listening for keys, and what it captured.
+    /// The binding field that is waiting for the user to press keys, or
+    /// `None` when no field is. It holds the shortcut's id, which of the
+    /// shortcut's two bindings the field is, and the keys that the field
+    /// has captured, as the text it shows. The keys are `None` until the
+    /// user has pressed some.
     pub(super) capturing: Option<(&'static str, Slot, Option<String>)>,
     pub(super) capture_focus: FocusHandle,
     focus: FocusHandle,
@@ -58,8 +79,9 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(900.), px(650.))),
-                // The section list's title and the panel's header move the
-                // window; the controls in them do not.
+                // The user moves the window by dragging the title above the
+                // list of sections or the header of the panel. Pressing a
+                // control inside either of them does not move the window.
                 // i18n: the window's title, English as settings.html's <title>
                 ..ui::window_chrome::frameless("Settings", None)
             },
@@ -67,7 +89,9 @@ pub fn open(model: Entity<SettingsModel>, cx: &mut App) -> Option<WindowHandle<S
         )
         .ok()?;
     let _ = handle.update(cx, |_, window, _| {
-        // Settings draws its own close button (`setWindowButtonVisibility(false)`).
+        // The Settings window draws its own close button, so on macOS the
+        // traffic lights are hidden, as production hides them with
+        // `setWindowButtonVisibility(false)`.
         ui::window_chrome::hide_window_buttons(window);
         ui::window_chrome::activate(window);
     });
@@ -87,9 +111,11 @@ impl SettingsWindow {
             cx.observe(&model, |_, _, cx| cx.notify()),
             cx.observe(&search, |_, _, cx| cx.notify()),
             cx.observe(&shortcut_search, |_, _, cx| cx.notify()),
-            // The update panel follows the check and the download.
+            // The Updates section is drawn again when the state of the check
+            // for updates or of the download changes.
             cx.observe(&updates, |_, _, cx| cx.notify()),
-            // A binding field stops listening when the keyboard leaves it.
+            // A binding field stops waiting for keys when it loses keyboard
+            // focus.
             cx.on_blur(&capture_focus, window, |this, _, cx| {
                 this.capturing = None;
                 cx.notify();
@@ -110,9 +136,11 @@ impl SettingsWindow {
             }
         })
         .detach();
-        // The cloud state is the shell's, read as it changes; the restore
-        // points are read here, again whenever the core says the sync's
-        // state changed (`cloud`).
+        // The cloud sync state is the entity that the shell created and the
+        // session holds. The window observes it and draws again when it
+        // changes. The restore points are read by this window: once when it
+        // opens, and again each time the library reports a change that
+        // names the resource `cloud`.
         let cloud = session.read(cx).cloud.clone();
         let mut subscriptions = subscriptions;
         if let Some(cloud) = &cloud {
@@ -129,7 +157,9 @@ impl SettingsWindow {
             ));
         }
         cx.defer_in(window, |this, _, cx| this.refresh_restore_points(cx));
-        // The AI model runtime's status reads the models' folder only.
+        // The status of the AI model runtime is read when the window opens
+        // too. Reading it does not load a model: it checks which models'
+        // files are in the models' folder.
         cx.defer_in(window, |this, _, cx| this.refresh_ai(cx));
         Self {
             model,
@@ -157,28 +187,39 @@ impl SettingsWindow {
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected = index;
         self.search.update(cx, |search, cx| search.clear(cx));
-        // The panel keeps the scroll offset it had, as production's one
-        // scrolling body does; the next section is shown at most as far down
-        // as it reaches.
+        // The scroll offset of the body is not reset, because production
+        // has one scrolling body for all the sections and keeps its offset
+        // too. If the new section is shorter than the offset, it is shown
+        // scrolled to its end.
         cx.notify();
     }
 
-    /// Shows the section with this id (`picto:settings:navigate`).
+    /// Shows the section with the id `id`, or does nothing when no section
+    /// has that id. Production's Settings window does this when it receives
+    /// the message `picto:settings:navigate`.
     pub(super) fn show_panel(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(index) = PANELS.iter().position(|panel| panel.id == id) {
             self.choose(index, cx);
         }
     }
 
-    /// Discards the draft and closes the window (`handleClose`).
+    /// Discards the draft and closes the window. Closing also puts back the
+    /// saved theme and the saved choice for the frosted material of the
+    /// sidebar and the inspector, because a change to either of them is
+    /// shown at once while the window is open, before it is saved. It
+    /// corresponds to production's `handleClose`.
     pub(super) fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.update(cx, |model, _| model.begin());
-        let saved = self.model.read(cx).saved.app.color_scheme.clone();
-        theme::show(&saved, cx);
+        let saved = &self.model.read(cx).saved.app;
+        let (scheme, rail_material) = (saved.color_scheme.clone(), saved.rail_material());
+        theme::show(&scheme, cx);
+        ui::window_chrome::want_rail_material(rail_material, cx);
         window.remove_window();
     }
 
-    /// Saves the draft, then closes the window if asked (`handleSave`).
+    /// Saves the draft and then, if `close` is `true` and the save
+    /// succeeded, closes the window. It corresponds to production's
+    /// `handleSave`.
     fn save(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         let saved = self.model.update(cx, |model, cx| model.save(cx));
         cx.spawn_in(window, async move |this, cx| {
@@ -189,8 +230,13 @@ impl SettingsWindow {
         .detach();
     }
 
-    /// A section in the navigation (`.navItem`): its highlight fades in over
-    /// 100 ms under the pointer, and the chosen one is solid.
+    /// Draws the row of one section in the list of sections. `index` is the
+    /// section's index in `PANELS`, and `active` is whether it is the chosen
+    /// section. The row corresponds to production's `.navItem`. When the
+    /// pointer moves onto the row, the hover colour fades in behind it over
+    /// 100 ms, and it fades out when the pointer leaves. The row of the
+    /// chosen section has the active colour behind it instead, with no
+    /// fade.
     fn nav_item(
         &self,
         index: usize,
@@ -218,7 +264,8 @@ impl SettingsWindow {
         };
         let id = ElementId::from(("settings-nav", index));
         let focus = ui::focus::control(&id, window, cx);
-        // The sections are tabs: the one shown is selected.
+        // Assistive technology is told that each section's row is a tab
+        // and that the row of the chosen section is the selected tab.
         let item = div()
             .id(id)
             .role(Role::Tab)
@@ -240,7 +287,9 @@ impl SettingsWindow {
             .child(t(panel.label))
             .on_hover(set_hover)
             .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx)));
-        // A `<button>`: Enter and Space choose it. It draws no ring.
+        // In production the row is a `<button>`, so Enter and Space choose
+        // the section while the row has keyboard focus. The row draws no
+        // focus ring.
         focus.attach(
             item,
             ui::focus::Kind::Button,
@@ -248,7 +297,11 @@ impl SettingsWindow {
         )
     }
 
-    /// A section found by the search (`.searchResult`).
+    /// Draws one section that the search found, as a card with the
+    /// section's icon, label and description. Clicking the card chooses the
+    /// section. `first` is whether the card is the first in the list; every
+    /// other card has 8px of space above it. The card corresponds to
+    /// production's `.searchResult`.
     fn result(
         &self,
         index: usize,
@@ -260,7 +313,9 @@ impl SettingsWindow {
         let panel = &PANELS[index];
         let id = ElementId::from(("settings-result", index));
         let focus = ui::focus::control(&id, window, cx);
-        // `.searchResult:focus-visible`: 1px of `--color-primary-60`, 2px out.
+        // The focus ring is that of production's
+        // `.searchResult:focus-visible`. It is a line 1px thick in
+        // `--color-primary-60`, 2px outside the card's edge.
         let ring = focus.ring(
             ui::focus::Ring {
                 width: 1.,
@@ -321,7 +376,10 @@ impl SettingsWindow {
     }
 }
 
-/// The navigation's glyphs, drawn at stroke 1.8.
+/// Returns the name of the icon that the list of sections draws for a
+/// section whose `PanelDef::icon` is `name`. These icons are drawn with a
+/// stroke width of 1.8. Any name that is not listed, which includes
+/// `info-circle`, gives `settings-nav-info-circle`.
 fn nav_icon(name: &str) -> &'static str {
     match name {
         "settings-2" => "settings-nav-settings-2",
@@ -341,7 +399,10 @@ fn nav_icon(name: &str) -> &'static str {
     }
 }
 
-/// The search results' glyphs, at Tabler's own stroke of 2.
+/// Returns the name of the icon that a search result draws for a section
+/// whose `PanelDef::icon` is `name`. These icons are drawn with Tabler's
+/// own stroke width of 2. Any name that is not listed, which includes
+/// `info-circle`, gives `settings-panel-info-circle`.
 fn result_icon(name: &str) -> &'static str {
     match name {
         "settings-2" => "settings-panel-settings-2",
@@ -373,7 +434,8 @@ impl Render for SettingsWindow {
             (model.saving, model.error.clone())
         };
 
-        // ── The section list ──
+        // The list of sections on the left of the window. While the user is
+        // searching, it lists only the sections that the search found.
         let mut items = div().flex().flex_col().gap(px(2.));
         let listed: Vec<usize> = if searching {
             matched.clone()
@@ -395,7 +457,9 @@ impl Render for SettingsWindow {
         }
         let sidebar = div()
             .relative()
-            // 12px of padding, 200px of content less the scrollbar's gutter.
+            // The width is 12px of padding on the left and 200px for the
+            // content. The scrollbar's gutter on the right is part of the
+            // 200px.
             .w(px(212.))
             .flex_none()
             .h_full()
@@ -450,7 +514,9 @@ impl Render for SettingsWindow {
         ui::focus::follow(&self.nav_scroll, &self.nav_focus, window, cx);
         ui::focus::follow(&self.body_scroll, &self.body_focus, window, cx);
 
-        // ── The chosen section, or what the search found ──
+        // The panel on the right of the window. It shows the chosen section
+        // or, while the user is searching, the sections that the search
+        // found.
         let panel = &PANELS[self.selected];
         let heading: SharedString = if searching {
             crate::tf!("Search results for \"{value0}\"", typed).into()
@@ -504,11 +570,13 @@ impl Render for SettingsWindow {
                     div()
                         .mb(px(8.))
                         .text(theme::TEXT_SM)
-                        // Mantine's body `line-height: 1.55`.
+                        // The line height is 1.55 times the font size, which
+                        // is the `line-height` of Mantine's body text.
                         .line_height(px(theme::TEXT_SM * 1.55))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary())
-                        // `text-transform: uppercase`
+                        // Production shows this heading in capital letters
+                        // with `text-transform: uppercase`.
                         .child(t("Categories").to_uppercase()),
                 );
                 for (at, index) in matched.iter().enumerate() {
@@ -595,7 +663,9 @@ impl Render for SettingsWindow {
             .rounded(px(theme::RADIUS_LG))
             .border_1()
             .border_color(theme.contrast(5.))
-            // `--settings-content-bg` over the shell.
+            // The fill is production's `--settings-content-bg` laid over
+            // the window's background (`--settings-shell-bg`), as one opaque
+            // colour.
             .bg(theme.rail_raised())
             .shadow(vec![
                 BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_15).into()).spread_radius(px(1.)),
@@ -605,8 +675,9 @@ impl Render for SettingsWindow {
             .child(body)
             .child(footer);
 
-        // Tab and Shift-Tab go round the window's controls, as the browser
-        // takes them through the page.
+        // Tab and Shift-Tab move keyboard focus through the window's
+        // controls, from the last one on to the first and from the first
+        // back to the last, as a browser moves it through a page.
         let root = ui::focus::scope(div(), &self.focus)
             .relative()
             .size_full()
@@ -614,7 +685,9 @@ impl Render for SettingsWindow {
             .gap(px(12.))
             .pr(px(8.))
             .overflow_hidden()
-            // `--settings-shell-bg`: 3% contrast over the background.
+            // The window's background is production's
+            // `--settings-shell-bg`: the theme's background colour mixed
+            // with 3% of its contrast colour.
             .bg(theme.rail())
             .text_color(theme.text())
             .font_family(theme::FONT_UI)

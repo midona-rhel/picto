@@ -14,8 +14,9 @@
 use serde_json::{Map, Value, json};
 
 /// The application settings, with the same fields and defaults as
-/// production's `AppSettings` type and `APP_SETTINGS_DEFAULTS`, and one more
-/// field, `grid_zoom_animation`, which production does not have. A setting
+/// production's `AppSettings` type and `APP_SETTINGS_DEFAULTS`, and three
+/// more fields, `frosted_glass_rails`, `acrylic_rails` and
+/// `grid_zoom_animation`, which production does not have. A setting
 /// with a fixed list of choices is kept as the string production stores for
 /// the chosen value, for example `"scroll"` or `"zoom"` for
 /// `grid_wheel_action`.
@@ -23,6 +24,18 @@ use serde_json::{Map, Value, json};
 pub struct AppSettings {
     pub grid_spacing: &'static str,
     pub color_scheme: String,
+    /// Whether the main window's sidebar and inspector show the system's
+    /// frosted material: what is behind the window, blurred, under the
+    /// theme's rail colour. There is one setting for each system that has
+    /// such a material, and each is off until the user turns it on:
+    /// `frosted_glass_rails` is followed on macOS, where the material is an
+    /// `NSVisualEffectView`, and `acrylic_rails` on Windows, where it is
+    /// Acrylic. A library that is used on both systems therefore keeps a
+    /// choice for each. Linux has no such setting. Production has neither
+    /// setting, so the keys `frostedGlassRails` and `acrylicRails` exist
+    /// only in libraries this app has saved settings to.
+    pub frosted_glass_rails: bool,
+    pub acrylic_rails: bool,
     pub zoom_factor: Option<f64>,
     pub show_tree_guides: bool,
     pub show_sidebar_counts: bool,
@@ -91,6 +104,8 @@ impl Default for AppSettings {
         Self {
             grid_spacing: "wide",
             color_scheme: "dark".into(),
+            frosted_glass_rails: false,
+            acrylic_rails: false,
             zoom_factor: None,
             show_tree_guides: true,
             show_sidebar_counts: true,
@@ -216,6 +231,8 @@ impl AppSettings {
                 .get("colorScheme")
                 .and_then(Value::as_str)
                 .map_or(d.color_scheme, str::to_owned),
+            frosted_glass_rails: read.flag("frostedGlassRails", d.frosted_glass_rails),
+            acrylic_rails: read.flag("acrylicRails", d.acrylic_rails),
             zoom_factor: match read.0.get("zoomFactor") {
                 Some(value) => value.as_f64().filter(|value| value.is_finite()),
                 None => d.zoom_factor,
@@ -382,6 +399,8 @@ impl AppSettings {
         };
         put("gridSpacing", json!(self.grid_spacing));
         put("colorScheme", json!(self.color_scheme));
+        put("frostedGlassRails", json!(self.frosted_glass_rails));
+        put("acrylicRails", json!(self.acrylic_rails));
         put("zoomFactor", json!(self.zoom_factor));
         put("showTreeGuides", json!(self.show_tree_guides));
         put("showSidebarCounts", json!(self.show_sidebar_counts));
@@ -494,6 +513,29 @@ impl AppSettings {
         put("aiThresholdSpecies", json!(self.ai_threshold_species));
         put("aiThresholdRating", json!(self.ai_threshold_rating));
         Value::Object(map)
+    }
+
+    /// Whether the user has turned on the frosted material of the system
+    /// this build runs on: `frosted_glass_rails` on macOS and `acrylic_rails`
+    /// on Windows. It is always `false` on Linux, which has no such setting.
+    pub fn rail_material(&self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.frosted_glass_rails
+        } else if cfg!(target_os = "windows") {
+            self.acrylic_rails
+        } else {
+            false
+        }
+    }
+
+    /// Turns the frosted material of the system this build runs on off when
+    /// it is on, and on when it is off. On Linux the call changes nothing.
+    pub fn toggle_rail_material(&mut self) {
+        if cfg!(target_os = "macos") {
+            self.frosted_glass_rails = !self.frosted_glass_rails;
+        } else if cfg!(target_os = "windows") {
+            self.acrylic_rails = !self.acrylic_rails;
+        }
     }
 
     /// Returns the setting that decides whether the sidebar shows one system

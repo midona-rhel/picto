@@ -1,5 +1,6 @@
-//! The sidebar's drawing: the library switcher, the system rows, Quick
-//! Access, the Folders and Smart Folders sections and their rows.
+//! This file draws the sidebar: the library switcher, the system rows, the
+//! Quick Access section, and the Folders and Smart Folders sections with
+//! their rows.
 use super::{
     DoubleClick, Preferences, QUICK_ACCESS, RETURN_TO_TOP_AFTER, SECTIONS, Section, Sidebar,
     Switcher, keyboard, section_of,
@@ -9,14 +10,19 @@ use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::{self, field::Look, sidebar_row::Branch};
 use crate::{motion, theme};
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 impl Sidebar {
-    /// The library switcher (`LibrarySwitcherButton`): the cover, the
-    /// library's name and a selector glyph, over a highlight shaped as the
-    /// cover's circle joined to a bar. A click opens the library popover;
-    /// while it is open the highlight takes the active surface and the
-    /// glyph stays lit.
+    /// Draws the library switcher, which corresponds to production's
+    /// `LibrarySwitcherButton`. It shows the library's cover, the library's
+    /// name and a selector glyph. Behind them is a highlight in the shape of
+    /// a circle around the cover joined to a bar. The highlight is shown
+    /// while the pointer is over the switcher or the library popover is
+    /// open. A click opens the library popover, or closes it when it is
+    /// open. While the popover is open, the highlight has the theme's
+    /// `surface_active` colour instead of `surface_hover`, and the selector
+    /// glyph keeps the colour it has while the pointer is over the switcher.
     fn library(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
         let (cover, name, copy) = {
@@ -45,11 +51,14 @@ impl Sidebar {
         {
             window.request_animation_frame();
         }
-        // The cover stays decoded however far the grid scrolls.
+        // The cover is pinned in the thumbnail cache, so that the cache keeps
+        // the cover's decoded image however far the grid scrolls.
         let pinned = cover.clone().map(|path| Resource::Path(path.into()));
         self.thumbnails
             .update(cx, |thumbnails, _| thumbnails.pin("library-cover", pinned));
-        // A canvas takes no opacity of its own, so the fade is in the colour.
+        // The highlight is painted in a canvas, and a canvas cannot be given
+        // an opacity. The highlight therefore fades in and out by blending
+        // its fill colour with transparent black.
         let fill = theme::blend(
             gpui::transparent_black().into(),
             theme::blend(theme.surface_hover(), theme.surface_active(), active),
@@ -57,12 +66,18 @@ impl Sidebar {
         );
         let bounds = self.switcher.clone();
         let highlight = canvas(
-            // The popover opens under the button's box, which this fills.
+            // The canvas fills the switcher, so its bounds are the switcher's
+            // bounds. They are stored in `self.switcher`, and the library
+            // popover opens under them.
             move |button, _, _| bounds.set(button),
             move |bounds, _, window, _| {
-                // A 24px-radius circle about the cover, and a 30px bar from
-                // the circle's centre to the right edge, drawn as one outline
-                // so the overlap is not painted twice.
+                // The highlight is two shapes joined: a circle of radius 24px
+                // centred on the cover, and a bar 30px tall that runs from
+                // the circle's centre to the switcher's right edge. The path
+                // is the outline of the two together, so that the area where
+                // they overlap is not painted twice. `meet` is the distance
+                // from the switcher's left edge to the points where the
+                // bar's top and bottom edges cross the circle.
                 let (left, top, right) = (bounds.left(), bounds.top(), bounds.right());
                 let meet = px(24. + (24f32 * 24. - 15. * 15.).sqrt());
                 let corner = point(px(6.), px(6.));
@@ -95,8 +110,9 @@ impl Sidebar {
         .absolute()
         .inset_0();
         let entered = (state, hint.clone());
-        // `LibrarySwitcherButton`: a button named by the library, expanded
-        // while its popover is open.
+        // As production's `LibrarySwitcherButton` is, the switcher is a
+        // button to assistive technology. Its label is the library's name,
+        // and it is reported as expanded while the library popover is open.
         let open = self.library_popover.read(cx).is_open();
         div()
             .id("library-switcher")
@@ -139,8 +155,9 @@ impl Sidebar {
                     .line_height(px(24.))
                     .child(name),
             )
-            // A disposable copy says so where the library is named, so it is
-            // never taken for the library it was copied from.
+            // When the open library is a disposable copy, a "Library copy"
+            // badge is shown after the library's name, so that the user does
+            // not mistake the copy for the library it was copied from.
             .children(copy.then(|| {
                 div()
                     .relative()
@@ -172,8 +189,10 @@ impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let prefs = Preferences::current(cx);
         crate::stats::rendered(crate::stats::View::Sidebar);
-        // The grid's drags are followed from the first frame on, and the
-        // folder picker's Move.
+        // On the first draw the sidebar subscribes to the folder picker,
+        // whose `MoveTo` event moves the folders chosen with "Move to..."
+        // into the picked folder, and to the grid's drag model, so that
+        // `grid_drag` follows every drag of items from the grid.
         if self._drags.is_none() {
             self._subscriptions.push(cx.subscribe_in(
                 &self.folder_picker,
@@ -195,7 +214,8 @@ impl Render for Sidebar {
         }
         self.bounds.clear();
         self.shown_rows.clear();
-        // The focus look goes when the rows lose the keyboard.
+        // When keyboard focus leaves the rows, `keyboard_row` is cleared, so
+        // that no row is drawn as focused.
         if self._rows_focus.is_none() {
             self._rows_focus = Some(cx.on_focus_out(&self.rows_focus, window, |this, _, _, cx| {
                 this.keyboard_row = None;
@@ -218,8 +238,11 @@ impl Render for Sidebar {
                 .filter(|index| section(*index) == Some(wanted))
                 .count()
         };
-        // The tree filter keeps each matching folder and its ancestors, and
-        // opens every branch (`treeFilter.ts`). System rows are not filtered.
+        // While the filter field has text, `kept` marks each folder and smart
+        // folder whose name contains the text, ignoring case, and each of
+        // its ancestors. Only those rows are drawn, and every branch is
+        // drawn expanded. This corresponds to production's `treeFilter.ts`.
+        // System rows are not filtered.
         let mut kept = vec![!filtering; entries.len()];
         if filtering {
             for index in 0..entries.len() {
@@ -250,7 +273,8 @@ impl Render for Sidebar {
             }
             true
         };
-        // Whether a row has a sibling below it among the rows that show.
+        // Returns whether the row at `index` has a sibling below it, in the
+        // same section, that the filter keeps.
         let has_next_sibling = |index: usize| {
             (index + 1..entries.len()).any(|other| {
                 entries[other].parent == entries[index].parent
@@ -259,7 +283,8 @@ impl Render for Sidebar {
             })
         };
 
-        // The destinations as a tree: each row an item at its level.
+        // To assistive technology the list of destinations is a tree, and
+        // each row is a tree item at its depth.
         let mut list = div()
             .id("navigation")
             .role(Role::Tree)
@@ -283,10 +308,14 @@ impl Render for Sidebar {
             .pr(px(ui::scrollbar::GUTTER + theme::SIDEBAR_LIST_PADDING))
             .pb(px(16.));
 
-        // The Subscriptions row's button while subscriptions run or are
-        // held: it holds or releases every subscription.
+        // `activity` is the state of the subscriptions. While a subscription
+        // is running or all subscriptions are paused, the Subscriptions row
+        // shows a button that pauses all subscriptions, or resumes them when
+        // they are paused.
         let activity = self.session.read(cx).subscriptions;
-        // System rows, those the visibility menu leaves on.
+        // This loop adds the system rows (All, Inbox, Trash and the others in
+        // `SYSTEM_ROWS`). It leaves out the rows that the user has switched
+        // off in the visibility menu.
         for (index, entry) in entries.iter().enumerate() {
             if section(index).is_some() || !prefs.visible_system.contains(ids[index].as_str()) {
                 continue;
@@ -338,8 +367,9 @@ impl Render for Sidebar {
             );
         }
 
-        // Quick Access, the folders and smart folders pinned to it, in
-        // their order, when there are any.
+        // The Quick Access section lists the folders and smart folders that
+        // the user added to Quick Access, in the order the setting stores
+        // them. It is drawn only when it has at least one row.
         let quick = self
             .quick_access(cx)
             .iter()
@@ -406,7 +436,9 @@ impl Render for Sidebar {
                         cx.listener(
                             move |this, bounds: &Bounds<Pixels>, window, cx| match which {
                                 Section::Folders => this.create_folder(None, window, cx),
-                                // A menu below the button, at its left edge.
+                                // The add button of the Smart Folders section
+                                // opens the section's menu at the point 4px
+                                // below the button's bottom left corner.
                                 Section::SmartFolders => this.section_menu(
                                     which,
                                     point(bounds.left(), bounds.bottom() + px(4.)),
@@ -495,18 +527,26 @@ impl Render for Sidebar {
             window.focus(&self.home, cx);
         }
         let smart_editor = self.smart_editor.as_ref().map(|(editor, _)| editor.clone());
-        // The rail's edge is drawn over the app background, as the shell's
-        // border is in the Electron layout, with the rail surface inside it.
+        // The sidebar's 1px right border is drawn over the app background,
+        // and the rail colour fills the area inside the border, as in the
+        // Electron app's layout. While the main window shows the system's
+        // frosted material (`ui::window_chrome::rails_translucent`), the
+        // sidebar has no background of its own: the shell (`Shell::render`)
+        // draws the app background under the border, and the area inside the
+        // border is filled with the partly transparent rail colour
+        // (`ui::window_chrome::rail_fill`).
+        let translucent = ui::window_chrome::rails_translucent(cx);
+        let rail_fill = ui::window_chrome::rail_fill(cx);
         div()
             .id("sidebar")
             .size_full()
-            .bg(theme.background())
+            .when(!translucent, |sidebar| sidebar.bg(theme.background()))
             .border_r_1()
             .border_color(theme.border_secondary())
             .child(
                 div()
                     .size_full()
-                    .bg(theme.rail())
+                    .bg(rail_fill)
                     .font_family(theme::FONT_INSPECTOR)
                     .flex()
                     .flex_col()
@@ -517,11 +557,8 @@ impl Render for Sidebar {
                             .is_open()
                             .then(|| self.library_popover.clone()),
                     )
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
+                    .child({
+                        let scroller = div()
                             .child(list)
                             .child(self.bounds.list_recorder())
                             .child(ui::scrollbar("sidebar-scrollbar", &self.scroll, window, cx))
@@ -529,13 +566,44 @@ impl Render for Sidebar {
                                 "sidebar-return-to-top",
                                 &self.scroll,
                                 RETURN_TO_TOP_AFTER,
-                                // 48px above the sidebar's foot, 38 of which
-                                // is the filter below this list.
+                                // The button's bottom edge is 48px above the
+                                // bottom of the sidebar. While the tree
+                                // filter is shown, 38px of that distance is
+                                // the filter's footer below this list, and
+                                // the remaining 10px is inside the list.
                                 if tree_filter { 10. } else { 48. },
                                 window,
                                 cx,
-                            )),
-                    )
+                            ));
+                        if translucent && tree_filter {
+                            // The last 10px of the list are not shown (see the
+                            // footer below). An opaque strip cannot hide them
+                            // while the frosted material is shown, because the
+                            // strip would stand out against the translucent
+                            // rail. So the list is clipped 10px above the
+                            // bottom of its area, and laid out in the whole
+                            // area as before.
+                            div().relative().flex_1().min_h_0().child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom(px(10.))
+                                    .overflow_hidden()
+                                    .child(
+                                        scroller
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom(px(-10.)),
+                                    ),
+                            )
+                        } else {
+                            scroller.relative().flex_1().min_h_0()
+                        }
+                    })
                     .children(tree_filter.then(|| {
                         div()
                             .relative()
@@ -543,16 +611,19 @@ impl Render for Sidebar {
                             .px(px(10.))
                             .pb(px(10.))
                             .flex_none()
-                            // The footer covers the last 10px of the list.
-                            .child(
+                            // The footer covers the last 10px of the list with
+                            // a strip in the rail colour. While the frosted
+                            // material is shown, the list is clipped there
+                            // instead (see above).
+                            .children((!translucent).then(|| {
                                 div()
                                     .absolute()
                                     .top(px(-10.))
                                     .left_0()
                                     .right_0()
                                     .h(px(10.))
-                                    .bg(theme.rail()),
-                            )
+                                    .bg(theme.rail())
+                            }))
                             .child(
                                 div()
                                     .key_context("SidebarFilter")
@@ -584,8 +655,12 @@ impl Render for Sidebar {
 }
 
 impl Sidebar {
-    /// A Quick Access row: the node's glyph, name and count, without its
-    /// tree, opening it and offering its menu as the tree's row does.
+    /// Builds the row of a folder or smart folder in the Quick Access
+    /// section. The row shows the node's glyph, name and count. It is not
+    /// indented and has no tree guides or disclosure triangle. A click
+    /// selects and opens the node (`click_node`), and a right-button press
+    /// opens the node's context menu (`node_menu`). The node's row in the
+    /// Folders or Smart Folders section uses the same two functions.
     fn quick_row(
         &self,
         index: usize,
@@ -622,7 +697,10 @@ impl Sidebar {
         )
     }
 
-    /// One folder or smart-folder row.
+    /// Builds the row of one folder or smart folder in the Folders or Smart
+    /// Folders section. `has_children` says whether the node has a child
+    /// that the filter keeps, `filtering` says whether the filter field has
+    /// text, and `branch` says which tree guides the row draws.
     #[allow(clippy::too_many_arguments)]
     fn node_row(
         &self,
@@ -639,9 +717,12 @@ impl Sidebar {
         let expanded = filtering || !self.collapsed.contains(id);
         let group = entry.group;
         let in_section = section_of(&entry.scope, false).is_some();
-        // `NodeIcon`: the glyph the user chose, else the group's grid, else
-        // a folder that opens with its branch. A name the icon picker no
-        // longer has falls back to the folder.
+        // The glyph is chosen as production's `NodeIcon` chooses it. It is
+        // the icon the user chose for the node. A node without one shows the
+        // grid icon when it is a smart folder group, and otherwise a folder
+        // icon, which is the open folder while the node has children and its
+        // branch is expanded. When the icon picker no longer has the name
+        // the user chose, the row shows the closed folder icon.
         let icon = match &entry.icon {
             Some(name) if !in_section || crate::assets::has_icon(name) => name.as_str(),
             Some(_) => "IconFolder",
@@ -652,7 +733,8 @@ impl Sidebar {
         .to_owned();
         let node = id.to_owned();
         let double_click = prefs.double_click;
-        // Keyed by id, so a row keeps its state when the list is rebuilt.
+        // The row's element id is the node's id, so the row keeps its state
+        // (its highlight and disclosure animations) when the list is rebuilt.
         let mut row = ui::sidebar_row(
             ElementId::Name(id.to_owned().into()),
             icon,
@@ -689,11 +771,13 @@ impl Sidebar {
             })
         })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-            // The release that ends a drag opens nothing.
+            // When this click is the release of the mouse button that ended
+            // a drag of a row, it opens nothing.
             if std::mem::take(&mut this.swallow_click) {
                 return;
             }
-            // A group is not a destination: a click folds or opens it.
+            // A smart folder group cannot be opened. A click on it collapses
+            // or expands its branch instead.
             if group {
                 if has_children && !filtering {
                     this.toggle_collapsed(&node, cx);
@@ -701,8 +785,9 @@ impl Sidebar {
             } else {
                 this.click_node(index, node.clone(), event.modifiers(), cx);
             }
-            // The second press of a double-click also does what the
-            // setting says: rename, or fold the branch.
+            // The second click of a double-click also does what the
+            // double-click setting says: it starts renaming the row, or it
+            // collapses or expands the row's branch.
             if event.click_count() == 2 {
                 match double_click {
                     DoubleClick::Rename => {
@@ -721,7 +806,8 @@ impl Sidebar {
                 this.node_menu(index, event.position, window, cx)
             }),
         );
-        // The filter holds every branch open.
+        // While the filter field has text, every branch is drawn expanded,
+        // so the row's disclosure triangle does nothing.
         if !filtering {
             let node = id.to_owned();
             row =

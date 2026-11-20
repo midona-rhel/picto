@@ -1931,6 +1931,20 @@ impl PlatformWindow for MacWindow {
         self.0.as_ref().lock().background_appearance
     }
 
+    fn is_background_blur_supported(&self) -> bool {
+        // With Reduce Transparency turned on (System Settings > Accessibility >
+        // Display), AppKit does not blur what is behind an `NSVisualEffectView`.
+        // It fills the view with a solid colour, and `blurred_view_update_layer`
+        // removes that fill, so the window would show what is behind it without
+        // any blur.
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let reduce_transparency: Bool =
+                msg_send![workspace, accessibilityDisplayShouldReduceTransparency];
+            !reduce_transparency.as_bool()
+        }
+    }
+
     fn is_subpixel_rendering_supported(&self) -> bool {
         false
     }

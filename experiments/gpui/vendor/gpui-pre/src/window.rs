@@ -3379,6 +3379,22 @@ impl Window {
             .set_background_appearance(background_appearance);
     }
 
+    /// Whether [`WindowBackgroundAppearance::Blurred`] makes the system blur
+    /// what is behind this window, as the system is set up now. Where this is
+    /// `false`, a window with that appearance shows what is behind it without
+    /// blur, or shows nothing behind it at all, so an application that wants
+    /// the blur should keep the window opaque.
+    ///
+    /// - macOS: `true` unless the user has turned on Reduce Transparency.
+    /// - Windows: `true` on Windows 10 version 1809 (build 17763) and later,
+    ///   in a window that is drawn through DirectComposition.
+    /// - Linux: always `false`. The Linux windows do not answer the question
+    ///   yet, although a Wayland compositor with a blur protocol does blur
+    ///   behind a `Blurred` window.
+    pub fn is_background_blur_supported(&self) -> bool {
+        self.platform_window.is_background_blur_supported()
+    }
+
     /// Mark the window as dirty at the platform level.
     pub fn set_window_edited(&mut self, edited: bool) {
         self.platform_window.set_edited(edited);

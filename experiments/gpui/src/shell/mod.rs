@@ -7,6 +7,12 @@
 //! this code. The user can hide either one, and it then slides out of the
 //! window. Each part is a separate cached view, so this root view only
 //! positions them.
+//!
+//! The user can turn on the system's frosted material for the two rails
+//! (`ui::window_chrome::show_rail_material`). The rails are then filled with
+//! a partly transparent colour, through which the blurred picture of what is
+//! behind the window is seen, and this view draws the app background only in
+//! the rest of the window.
 mod batch_rename;
 mod delete;
 mod export;
@@ -249,6 +255,23 @@ impl Shell {
             cx.observe_window_appearance(window, |_, _, cx| {
                 let scheme = crate::settings::current(cx).color_scheme.clone();
                 crate::theme::show(&scheme, cx);
+            }),
+            // The user turned the frosted material behind the sidebar and the
+            // inspector on or off (Settings > General > Appearance), or a
+            // library with another choice was opened. Make this window show
+            // or stop showing the material.
+            cx.observe_global_in::<ui::window_chrome::RailMaterial>(window, |_, window, cx| {
+                ui::window_chrome::show_rail_material(window, cx)
+            }),
+            // Whether the system can blur what is behind the window can
+            // change while the app runs: on macOS the user can turn Reduce
+            // Transparency on or off in System Settings. The user has to leave
+            // this window to do that, so check again each time the window
+            // becomes the active one.
+            cx.observe_window_activation(window, |_, window, cx| {
+                if window.is_window_active() {
+                    ui::window_chrome::show_rail_material(window, cx);
+                }
             }),
             cx.subscribe(&quick_look, |_, _, _: &quick_look::Toggled, cx| cx.notify()),
             cx.subscribe_in(
@@ -590,7 +613,10 @@ impl Shell {
     /// over the same 100 ms, so when they are hidden together they move in
     /// step (in production the sidebar takes 50 ms). The content between the
     /// rails gets its new width immediately and is laid out for that width
-    /// once; the rails are drawn over it while they slide.
+    /// once; the rails are drawn over it while they slide. While the window
+    /// shows the system's frosted material, the content is not drawn under a
+    /// sliding rail (see `Shell::render`), so it is drawn again in each frame
+    /// of the slide, at the same width.
     fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
         let shown = (
             !(self.sidebar_collapsed ^ sidebar),
@@ -789,6 +815,8 @@ impl Shell {
     /// window buttons (the traffic lights).
     fn titlebar_left(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
+        let translucent = ui::window_chrome::rails_translucent(cx);
+        let rail_fill = ui::window_chrome::rail_fill(cx);
         ui::drag_region("titlebar-left", window, cx)
             .w(px(self.sidebar_width))
             .flex_none()
@@ -804,17 +832,18 @@ impl Shell {
             // While the sidebar is shown, the rail colour fills the area
             // inside the border. The border is therefore drawn over the app
             // background and not over the rail colour. Production's CSS does
-            // this with `background-clip: padding-box`.
-            .bg(theme.background())
+            // this with `background-clip: padding-box`. While the window shows
+            // the frosted material, the block has no background of its own:
+            // `Shell::render` draws the app background under the border and,
+            // while the sidebar is hidden, under the whole block.
+            .when(!translucent, |block| block.bg(theme.background()))
             .border_r_1()
             .border_color(if self.sidebar_collapsed {
                 gpui::transparent_black().into()
             } else {
                 theme.border_secondary()
             })
-            .children(
-                (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
-            )
+            .children((!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(rail_fill)))
             // Where the application menu is shown inside the window (Windows
             // and Linux), it is a button at the left of this block
             // (`ApplicationMenuButton` in production). A flexible spacer after
@@ -936,13 +965,36 @@ impl Render for Shell {
         self.place_task_bar(left, if inspector_available { right } else { 0. }, cx);
         self.cloud_rails = (left, if inspector_available { right } else { 0. });
         let drop_overlay = self.drop_overlay(cx);
+        // While the window shows the system's frosted material
+        // (`ui::window_chrome::show_rail_material`), the sidebar and the
+        // inspector are filled with a partly transparent colour, and the
+        // material is seen through them. Everything else in the window has to
+        // be opaque, and nothing may be drawn under a rail, because it would
+        // be seen through the rail. `sidebar_visible` and `inspector_visible`
+        // are the widths of the parts of the two rails that are inside the
+        // window in this frame; they change while a rail slides.
+        let translucent = ui::window_chrome::rails_translucent(cx);
+        let rail_fill = ui::window_chrome::rail_fill(cx);
+        let sidebar_visible = if translucent {
+            sidebar_width - sidebar_width * sidebar_hidden
+        } else {
+            0.
+        };
+        // The inspector shows the material only while it is fully present.
+        // While it fades in or out because the user opened or left a screen,
+        // it is drawn with the opaque rail colour over the centre, as it is
+        // without the material.
+        let inspector_translucent = translucent && inspector_available && inspector_shown >= 1.;
+        let inspector_visible = if inspector_translucent {
+            self.inspector_width - self.inspector_width * inspector_hidden
+        } else {
+            0.
+        };
 
         let center = div()
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px(left))
-            .right(px(right))
             .child(match screen {
                 _ if viewer_open => self.viewer.clone().cached(fill()).into_any_element(),
                 // The viewer was closed by navigating to another destination.
@@ -996,6 +1048,58 @@ impl Render for Shell {
                 None => self.grid.clone().cached(fill()).into_any_element(),
             })
             .children(drop_overlay);
+        // When a rail is hidden, the centre is laid out for its new width at
+        // once and the rail slides out over it. With the material shown, the
+        // part of the centre that is still under the sliding rail is not
+        // drawn: the centre is clipped to the area between the two rails'
+        // visible parts.
+        let center = if translucent {
+            let (clip_left, clip_right) = (left.max(sidebar_visible), right.max(inspector_visible));
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(clip_left))
+                .right(px(clip_right))
+                .overflow_hidden()
+                .child(
+                    center
+                        .left(px(left - clip_left))
+                        .right(px(right - clip_right)),
+                )
+        } else {
+            center.left(px(left)).right(px(right))
+        };
+        // With the material shown, the root has no background, so the app
+        // background is drawn here as two rectangles: one for the titlebar
+        // row and one for the body. Each starts 1px inside the sidebar, under
+        // the sidebar's right border, and ends where the visible part of the
+        // inspector starts. In the titlebar row the sidebar's part is the
+        // left block, which does not slide; while the sidebar is hidden the
+        // rectangle covers that block too.
+        let backgrounds = translucent.then(|| {
+            let titlebar_left = if self.sidebar_collapsed {
+                0.
+            } else {
+                sidebar_width - 1.
+            };
+            [
+                div()
+                    .absolute()
+                    .top_0()
+                    .h(px(theme::TITLEBAR_HEIGHT))
+                    .left(px(titlebar_left))
+                    .right(px(inspector_visible))
+                    .bg(theme.background()),
+                div()
+                    .absolute()
+                    .top(px(theme::TITLEBAR_HEIGHT))
+                    .bottom_0()
+                    .left(px((sidebar_visible - 1.).max(0.)))
+                    .right(px(inspector_visible))
+                    .bg(theme.background()),
+            ]
+        });
         let sidebar = (sidebar_hidden < 1.).then(|| {
             div()
                 .absolute()
@@ -1062,7 +1166,11 @@ impl Render for Shell {
                 .opacity(inspector_shown)
                 .flex()
                 .flex_col()
-                .bg(theme.rail())
+                .bg(if inspector_translucent {
+                    rail_fill
+                } else {
+                    theme.rail()
+                })
                 .child(
                     ui::drag_region("inspector-titlebar", window, cx)
                         .h(px(theme::TITLEBAR_HEIGHT))
@@ -1164,7 +1272,7 @@ impl Render for Shell {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.background())
+            .when(!translucent, |root| root.bg(theme.background()))
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
@@ -1210,6 +1318,7 @@ impl Render for Shell {
             // swallows the scroll events that the system keeps sending from a
             // trackpad flick that began on the previous item.
             .child(ui::momentum::watcher())
+            .children(backgrounds.into_iter().flatten())
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 this.move_selection(nav::Move::Right, window, cx)
             }))
