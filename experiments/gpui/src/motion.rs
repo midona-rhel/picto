@@ -103,8 +103,8 @@ impl CubicBezier {
 }
 
 /// `--duration-fast`: a sidebar row's highlight
-/// (`--sidebar-list-highlight-transition`), the library avatar's ring, the
-/// sidebar sliding in and out, and a form field's border on focus.
+/// (`--sidebar-list-highlight-transition`), the library avatar's ring, and
+/// a form field's border on focus.
 pub const FAST: Duration = Duration::from_millis(50);
 /// `iconButton.module.css`: an icon button's hover fade.
 pub const BUTTON_HOVER: Duration = Duration::from_millis(150);

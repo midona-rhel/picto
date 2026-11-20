@@ -519,8 +519,10 @@ impl Shell {
         self._view_panels = subscriptions;
     }
 
-    /// Hides or shows the rails. The sidebar slides out over 50 ms and the
-    /// inspector over 100 ms; the grid takes the freed width at once.
+    /// Hides or shows the rails. Both slide over the same 100 ms, so that
+    /// hidden together they leave as one movement (production's sidebar
+    /// takes 50 ms); what is between them takes the freed width at once and
+    /// is laid out for it once, the rails sliding away over it.
     fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
         let shown = (
             !(self.sidebar_collapsed ^ sidebar),
@@ -534,8 +536,11 @@ impl Shell {
         }
         if sidebar {
             self.sidebar_collapsed = !self.sidebar_collapsed;
-            self.rails
-                .set(("sidebar", 0), self.sidebar_collapsed, motion::FAST);
+            self.rails.set(
+                ("sidebar", 0),
+                self.sidebar_collapsed,
+                motion::INSPECTOR_SLIDE,
+            );
         }
         if inspector {
             self.inspector_collapsed = !self.inspector_collapsed;
