@@ -85,7 +85,7 @@ pub struct Shell {
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
     /// The screens' rails, each taking the inspector's place while its
-    /// screen says so (a subscription's page, Compare).
+    /// screen says so (a subscription's page).
     screen_rails: Vec<(Screen, ScreenRail)>,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
     focus: FocusHandle,
@@ -343,7 +343,6 @@ impl Shell {
             )
         });
         let subscription_rail = screens::subscriptions::rail(&subscriptions_screen, cx);
-        let duplicates_rail = screens::duplicates::rail(&duplicates, cx);
         let subscription_controls = screens::subscriptions::controls(&subscriptions_screen, cx);
         let subscription_note = screens::subscriptions::note(&subscriptions_screen, cx);
         let toolbar = cx.new(|cx| Toolbar::new(session.clone(), &viewer, cx));
@@ -424,10 +423,7 @@ impl Shell {
             quick_look,
             tags,
             subscriptions: subscriptions_screen,
-            screen_rails: vec![
-                (Screen::Subscriptions, subscription_rail),
-                (Screen::Duplicates, duplicates_rail),
-            ],
+            screen_rails: vec![(Screen::Subscriptions, subscription_rail)],
             duplicates,
             grid,
             session,
@@ -795,10 +791,10 @@ impl Render for Shell {
         // The inspector belongs to the grid and the viewer. A screen has the
         // window's full width, titlebar included (`inspectorAvailable`),
         // except where a screen shows a rail of its own (a subscription's
-        // page, Compare), which takes the inspector's place, width and
-        // toggle. A screen keeps what it shows while it fades out, so
-        // between such a view and the grid or the viewer the rail stays in
-        // place and only what is in it changes.
+        // page), which takes the inspector's place, width and toggle. A
+        // screen keeps what it shows while it fades out, so between such a
+        // view and the grid or the viewer the rail stays in place and only
+        // what is in it changes.
         let screen_rail = screen
             .filter(|_| !viewer_open)
             .and_then(|screen| self.screen_rails.iter().find(|(owner, _)| *owner == screen))

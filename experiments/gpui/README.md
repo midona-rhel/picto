@@ -357,25 +357,25 @@ lays its subscriptions out as grid tiles (`grid::layout`), and a
 subscription's page puts its counters, schedule and destination in a rail
 the shell shows in the inspector's place, with the inspector's width,
 toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
-may give the shell such a rail (`shell::ScreenRail`). Duplicates
-is one desk for deciding sets from the keyboard: the core's matching pairs
-gathered into sets of files that match one another (`duplicates/sets.rs`),
-most alike first in Identical and Similar tabs, one set at a time with its
-place in the tab over the picture (↑ ↓ go to the set before and after).
-The set's files flip in place with ← → at one zoom, so what differs
-blinks; under the picture, centred, each file with its size, format and
-bytes, bright where the files differ, and the library's suggestion, on
-which a set opens. Z accepts and X rejects, as in the Inbox: Z (or S) is
-Smart merge, keeping the suggested file whichever is shown, and X (or N)
-says the files are not duplicates. Enter keeps the file shown instead;
-Space skips. The pixel
-difference shows while D is held or the pointer rests on Show Difference,
-beside what comparing the pixels measured, in words; the wheel moves about
-in the picture and never changes the file. In the inspector's place, the
-files' facts side by side and what the item left after the merge will
-hold, worked out with the library's own rules. The next set's pictures are
-decoded ahead, and each decision is one undoable step
-(`Library::resolve_duplicates`).
+may give the shell such a rail (`shell::ScreenRail`). Duplicates is the
+Electron screen's review, one pair of matching files at a time, in this
+app's own dress (`screens/duplicates/`): the two pictures side by side at
+one shared zoom, with no frame around them, leaning toward each other and
+resting on their names; under each picture one line with the file's name
+and its keep action (Z keeps the left file, X the right), then its facts
+as the inspector writes them, the rows in which the two files differ in the
+primary colour and the rest faint. The footer has Not duplicates (N), Keep
+both (B), Smart merge (S) and Show Difference, then how alike the scan
+found the files and, under it, what comparing the originals' pixels
+counted: a measurement, never a verdict of sameness. The titlebar has the
+place in the queue, the zoom and the pair before and after (← →). Smart
+merge under the pointer or with the keyboard lights the keep action it
+would take and dims the other file. The pixel difference shows while Show
+Difference is under the pointer or has the keyboard, or while D is held.
+The wheel zooms and never changes the pair, and the pictures of the pair
+after the one on screen are decoded ahead, so a decision lands on them
+sharp. Every part is laid out in the frame that draws it; a picture is
+placed from its pane's size in that same frame (`ui::sized`).
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
@@ -713,6 +713,16 @@ reading production's code, seen in this app).
   with the `zip` format, which production's dialog does not list).
 - A picture's original is read once it has been on screen for 200 ms, in
   the viewers and the grid alike (production: 100 ms and 250 ms).
+- The Duplicates screen keeps production's workflow, facts and keys, not
+  its look: the pictures have no bordered card or dark pane around them and
+  stand together in the middle; a file's name and keep action share one
+  line; the facts are in the inspector's words and formats (Dimensions,
+  Type as PNG, Date Imported), a collection's row shows for both files, and
+  rows that differ stand out; the footer is the app's, with the keys in its
+  tooltips. Beyond production: D held down shows the difference, and the
+  footer says what comparing the pixels counted. Production's one-column
+  layout under 620 points and its icon-only keep buttons under 900 are left
+  out: the footer wraps, nothing else changes with the width.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge

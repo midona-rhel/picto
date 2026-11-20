@@ -227,25 +227,19 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
         .about("Reset playback speed to 1x"),
     def("video.fullscreen", "Toggle Fullscreen", VIDEO, "F")
         .about("Enter or leave fullscreen playback"),
-    def("dup.merge", "Keep and Merge", DUPLICATES, "Enter")
-        .about("Keep the file shown and merge the rest of the set into it"),
-    def("dup.smartMerge", "Smart Merge", DUPLICATES, "Z")
-        .or("S")
+    def("dup.smartMerge", "Smart Merge", DUPLICATES, "S")
         .about("Auto-merge keeping the better file"),
+    def("dup.keepLeft", "Keep Left", DUPLICATES, "Z").about("Keep the left file, delete right"),
+    def("dup.keepRight", "Keep Right", DUPLICATES, "X").about("Keep the right file, delete left"),
+    def("dup.keepBoth", "Keep Both", DUPLICATES, "B").about("Keep both files and dismiss the pair"),
+    def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "N").about("Mark pair as not duplicate"),
     def("dup.difference", "Show Difference", DUPLICATES, "D")
         .about("Show the pixel difference while the key is held"),
-    def("dup.skip", "Skip Set", DUPLICATES, "Space").about("Leave this set for later"),
-    def("dup.notDuplicate", "Not Duplicate", DUPLICATES, "X")
-        .or("N")
-        .about("Mark the set as not duplicates"),
-    def("dup.previous", "Previous File", DUPLICATES, "ArrowLeft")
-        .about("Show the set's previous file in place"),
-    def("dup.next", "Next File", DUPLICATES, "ArrowRight")
-        .about("Show the set's next file in place"),
-    def("dup.previousSet", "Previous Set", DUPLICATES, "ArrowUp"),
-    def("dup.nextSet", "Next Set", DUPLICATES, "ArrowDown"),
     def("dup.fitToWindow", "Fit to Window", DUPLICATES, "F")
         .about("Reset zoom to fit images in view"),
+    def("dup.prevPair", "Previous Pair", DUPLICATES, "ArrowLeft")
+        .about("Go to previous duplicate pair"),
+    def("dup.nextPair", "Next Pair", DUPLICATES, "ArrowRight").about("Go to next duplicate pair"),
 ];
 
 /// The groups in the order Settings lists them (`getShortcutGroups`).

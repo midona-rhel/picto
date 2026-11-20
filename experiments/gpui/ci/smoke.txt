@@ -10,8 +10,10 @@
 # titlebar actions clear of the window's buttons: the home, a subscription's
 # page with its rail, the page with the rail hidden, and the page at 150%,
 # where the actions show their glyphs alone. Then the Duplicates screen
-# after a scan, at 125% (the window about 970 points wide, near the
-# smallest it may be): the desk on its first set, and on the next.
+# after a scan: its first pair; the same at 125% (the window about 970
+# points wide, near the smallest it may be), where the footer's two lines
+# wrap under its buttons; the next pair; and the pixel difference while its
+# key is down.
 reload
 size 1213 865
 wait 800
@@ -154,6 +156,7 @@ move 73 338
 down 73 338
 up 73 338
 wait 3000
+shot 17-duplicates-pair
 key secondary-=
 wait 100
 key secondary-=
@@ -164,7 +167,10 @@ key secondary-=
 wait 100
 key secondary-=
 wait 1200
-shot 17-duplicates-desk
-key down
+shot 18-duplicates-pair-zoom-125
+key right
 wait 2500
-shot 18-duplicates-next
+shot 19-duplicates-next
+key d
+wait 800
+shot 20-duplicates-difference

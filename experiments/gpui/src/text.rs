@@ -126,7 +126,8 @@ pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
 
 // ── Byte sizes ──────────────────────────────────────────────────
 //
-// Production writes sizes three ways in three places; each keeps its own.
+// Production writes sizes its own way in each place; the two this app
+// shows keep theirs.
 
 /// The inspector's Size row: bytes, then KB and MB to one decimal and GB to
 /// two, in binary units.
@@ -140,19 +141,6 @@ pub fn size_to_gigabytes(bytes: u64) -> String {
         format!("{:.1} MB", bytes / 1048576.)
     } else {
         format!("{:.2} GB", bytes / 1073741824.)
-    }
-}
-
-/// `formatBytes` in the duplicates compare view: bytes, then KB and MB to
-/// one decimal, in binary units, never larger than MB.
-pub fn size_to_megabytes(bytes: i64) -> String {
-    let value = bytes as f64;
-    if value < 1024. {
-        format!("{bytes} B")
-    } else if value < 1024. * 1024. {
-        format!("{:.1} KB", value / 1024.)
-    } else {
-        format!("{:.1} MB", value / (1024. * 1024.))
     }
 }
 
@@ -382,7 +370,6 @@ mod tests {
         assert_eq!(size_to_gigabytes(1536), "1.5 KB");
         assert_eq!(size_to_gigabytes(5 * 1048576), "5.0 MB");
         assert_eq!(size_to_gigabytes(3 * 1073741824 / 2), "1.50 GB");
-        assert_eq!(size_to_megabytes(3 * 1073741824 / 2), "1536.0 MB");
         assert_eq!(size_to_terabytes(1536), "1.50 KB");
         assert_eq!(size_to_terabytes(20 * 1048576), "20.0 MB");
     }

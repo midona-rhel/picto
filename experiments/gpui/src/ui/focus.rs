@@ -224,6 +224,11 @@ pub fn control(id: &ElementId, window: &mut Window, cx: &mut App) -> Control {
 }
 
 impl Control {
+    /// Whether the control has the keyboard, ring or no ring.
+    pub fn focused(&self, window: &Window) -> bool {
+        self.handle.is_focused(window)
+    }
+
     /// The ring, while the control shows it, for a control with corners of
     /// `radius` and a border `border` thick. Add it as a child of the
     /// control's (relative) element.

@@ -62,6 +62,7 @@ pub struct ActionButton {
     tip: Option<Tip>,
     on_click: Option<ClickHandler>,
     on_hover: Option<HoverHandler>,
+    on_focus: Option<HoverHandler>,
 }
 
 pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
@@ -87,6 +88,7 @@ pub fn action_button(id: impl Into<ElementId>, look: Look) -> ActionButton {
         tip: None,
         on_click: None,
         on_hover: None,
+        on_focus: None,
     }
 }
 
@@ -150,6 +152,14 @@ impl ActionButton {
     /// Told when the pointer enters or leaves the button.
     pub fn on_hover(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_hover = Some(Box::new(handler));
+        self
+    }
+    /// Told when the keyboard comes to the button or leaves it (`onFocus`
+    /// and `onBlur`), and that it has left when the button is disabled. The
+    /// button learns of it as it is drawn, so a handler that changes what a
+    /// view shows also asks for the next frame.
+    pub fn on_focus(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_focus = Some(Box::new(handler));
         self
     }
 }
@@ -283,6 +293,19 @@ impl RenderOnce for ActionButton {
             (Some(label), None) => button = button.child(label),
             (None, _) => {}
         }
+        let focus = super::focus::control(&self.id, window, cx);
+        if let Some(handler) = &self.on_focus {
+            let focused = !self.disabled && focus.focused(window);
+            let told = window.use_keyed_state(
+                ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "focused".into()),
+                cx,
+                |_, _| false,
+            );
+            if *told.read(cx) != focused {
+                told.update(cx, |told, _| *told = focused);
+                handler(focused, window, cx);
+            }
+        }
         if self.disabled {
             // CSS fades the button as one layer; GPUI fades its border and
             // fill apart, and a border drawn over its own fill would show
@@ -296,7 +319,6 @@ impl RenderOnce for ActionButton {
             button = button.children(hint.read(cx).layer(tip, self.height, cx));
         }
         // `.btn:focus-visible`; the Settings buttons draw no ring.
-        let focus = super::focus::control(&self.id, window, cx);
         if !self.look.settings() {
             button = button.children(focus.ring(
                 super::focus::Ring::button(&theme),

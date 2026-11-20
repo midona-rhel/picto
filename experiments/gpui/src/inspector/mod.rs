@@ -91,7 +91,7 @@ const PREVIEW: f32 = 200.;
 
 /// A tag's chip in its namespace's colour (`TagChip`). With the
 /// `showTagPrefixes` setting off, it shows the tag without its group.
-pub(crate) fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
+fn tag_chip(tag: &picto_library::TagRecord, cx: &App) -> ui::Chip {
     let show_prefixes = crate::settings::current(cx).show_tag_prefixes;
     ui::chip(
         ("inspector-tag", tag.tag_id.0 as usize),
@@ -118,7 +118,7 @@ fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
 }
 
 /// `YYYY/MM/DD HH:MM` in local time.
-fn format_date(milliseconds: i64) -> Option<String> {
+pub(crate) fn format_date(milliseconds: i64) -> Option<String> {
     use chrono::TimeZone;
     let date = chrono::Local.timestamp_millis_opt(milliseconds).single()?;
     Some(date.format(crate::text::date_format::INSPECTOR).to_string())

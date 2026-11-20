@@ -3,6 +3,9 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::time::{Duration, Instant};
 
+/// How strong a quiet row's text is, in percent of the primary text colour.
+const QUIET: f32 = 40.;
+
 /// `property-spinner`: one turn of the loading spinner.
 const SPIN: Duration = Duration::from_millis(650);
 
@@ -17,6 +20,22 @@ pub struct PropertyRow {
     mono: &'static str,
     /// Loading since then: the spinner shows instead of the value.
     loading: Option<Instant>,
+    emphasis: Emphasis,
+}
+
+/// How much a row asks for the eye among its neighbours.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Emphasis {
+    /// The inspector's row: the label in the colour around it, the value
+    /// at 80%.
+    #[default]
+    Plain,
+    /// A row that says what the row compared with it says too: label and
+    /// value both faint.
+    Quiet,
+    /// A row that says something its counterpart does not: label and value
+    /// in the primary text colour.
+    Strong,
 }
 
 /// The value is set in `--inspector-mono-font-family` (Fira Mono), as it is
@@ -27,6 +46,7 @@ pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedStrin
         value: value.into(),
         mono: theme::FONT_INSPECTOR_MONO,
         loading: None,
+        emphasis: Emphasis::Plain,
     }
 }
 
@@ -49,10 +69,21 @@ impl PropertyRow {
         self.loading = Some(since);
         self
     }
+
+    pub fn emphasis(mut self, emphasis: Emphasis) -> Self {
+        self.emphasis = emphasis;
+        self
+    }
 }
 
 impl RenderOnce for PropertyRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = theme::theme(cx);
+        let (label_color, value_color) = match self.emphasis {
+            Emphasis::Plain => (None, theme.contrast(80.)),
+            Emphasis::Quiet => (Some(theme.text_at(QUIET)), theme.text_at(QUIET)),
+            Emphasis::Strong => (Some(theme.text()), theme.text()),
+        };
         let value = match self.loading {
             Some(since) => div()
                 .flex_1()
@@ -67,9 +98,14 @@ impl RenderOnce for PropertyRow {
                 .truncate()
                 .font_family(self.mono)
                 .font_features(theme::tabular_figures())
-                .text_color(theme::theme(cx).contrast(80.))
+                .text_color(value_color)
                 .child(self.value.clone()),
         };
+        let mut label = div().min_w(px(88.)).flex_none();
+        if let Some(color) = label_color {
+            label = label.text_color(color);
+        }
+        let label = label.child(self.label.clone());
         // Read as one line of text, its label then its value; while the
         // value loads, `Loading …` as the spinner's `aria-label` says.
         let read = match self.loading {
@@ -87,7 +123,7 @@ impl RenderOnce for PropertyRow {
         .gap(px(12.))
         .whitespace_nowrap()
         .text(theme::TEXT_CAPTION)
-        .child(div().min_w(px(88.)).flex_none().child(self.label))
+        .child(label)
         .child(value)
     }
 }

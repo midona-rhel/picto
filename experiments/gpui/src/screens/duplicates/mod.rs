@@ -1,19 +1,16 @@
-//! The Duplicates screen: one desk for deciding on the library's matching
-//! files. The core reports matching pairs; files that match one another are
-//! reviewed together as a set (`sets`). Down the left, the queue of sets,
-//! most alike first, in Identical and Similar tabs (`queue`). In the middle,
-//! the stage: one file of the set at a time, flipping in place at the same
-//! place and scale, its difference from the other file while the
-//! difference button is held, and what was measured between them, in words
-//! (`stage`). In the inspector's place, the rail: the files side by side,
-//! and what the one item left after the merge will hold (`rail`). The file
-//! shown is the one kept: the user flips to the file to keep and merges
-//! the rest into it, or says they are not duplicates, or skips.
+//! The Duplicates screen (`DuplicatesScreen.tsx`): the review queue of
+//! perceptually similar pairs, one pair at a time, side by side with linked
+//! zoom and pan, each file's facts beneath it, and the decisions in a footer.
+//! Its counter, zoom and pair controls sit in the titlebar
+//! ([`DuplicatesToolbar`]).
+//!
+//! Beyond the Electron screen: the pixel difference also shows while its key
+//! is held; what comparing the two originals' pixels counted is written
+//! beside the similarity; and the pictures of the pair after the one on
+//! screen are decoded ahead, so that a decision lands on them sharp.
 mod compare;
+mod decisions;
 mod difference;
-mod rail;
-mod sets;
-mod stage;
 mod view;
 
 use crate::application::Event as BackendEvent;
@@ -21,108 +18,240 @@ use crate::backend::Screen;
 use crate::grid::thumbnails::Thumbnails;
 use crate::i18n::{en, t};
 use crate::motion;
-use crate::session::{Change, Report, Reread, Session};
+use crate::session::{Change, Session};
 use crate::ui;
-use compare::LinkedZoom;
+use compare::{Extent, LinkedZoom, PairKey, pair_key};
 use gpui::*;
-use picto_library::{DuplicateResolutionChoice, FileId, RootDetails};
-use sets::Set;
+use picto_library::{
+    DuplicateCandidate, DuplicateCandidateSide, DuplicateFile, FileId, MediaRecord, RootDetails,
+};
 use std::collections::HashMap;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
-// The desk's actions. Their keys come from the shortcut registry
+// The review's actions. Their keys come from the shortcut registry
 // (`crate::keymap`) and win over the grid's while the screen has the
-// keyboard.
+// keyboard, as its `useShortcutScope` does.
 actions!(
     duplicates,
     [
-        PreviousFile,
-        NextFile,
-        PreviousSet,
-        NextSet,
-        Merge,
-        SmartMerge,
-        ShowDifference,
-        Skip,
-        NotDuplicate,
+        PreviousPair,
+        NextPair,
         FitPair,
-        ActualPixels
+        ActualPixels,
+        KeepBoth,
+        NotDuplicate,
+        KeepLeft,
+        KeepRight,
+        SmartMerge,
+        ShowDifference
     ]
 );
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-/// The library hands at most this many pairs at a time.
+
+/// Tab and Shift-Tab go through the screen's buttons, as they go through
+/// the page's in the Electron app.
+pub fn bind(cx: &mut App) {
+    let context = crate::keymap::Scope::Duplicates.predicate();
+    cx.bind_keys([
+        KeyBinding::new("tab", ui::focus::Next, context.as_deref()),
+        KeyBinding::new("shift-tab", ui::focus::Previous, context.as_deref()),
+    ]);
+}
+
+/// `getDuplicatePairs`: the queue is read 500 pairs at a time.
 const QUEUE_LIMIT: usize = 500;
 /// `scanDuplicates(distanceThreshold = 16)`.
 const SCAN_DISTANCE: u32 = 16;
 
-/// A file of a set, with its item's details once read.
-#[derive(Clone)]
-pub struct Facts {
-    pub details: Option<RootDetails>,
+/// One side of the pair on screen.
+struct Side {
+    file: DuplicateFile,
+    occurrences: usize,
+    /// The item holding this file; `None` if its details could not be read.
+    details: Option<RootDetails>,
+    /// That item's media record for this file (`mediaForFile`).
+    media: Option<MediaRecord>,
+    /// When the original arrived while this side was on screen, for its
+    /// fade over the thumbnail. An original already decoded when the pair
+    /// was put on screen shows at once.
+    sharp_since: Option<Instant>,
 }
 
-impl Facts {
-    /// The item's name, or the file's hash while it is not known.
-    fn name(&self, set: &Set, index: usize) -> String {
-        let hash = &set.files[index].file.file_hash;
-        self.media(hash)
-            .map(|media| media.media_name.clone())
-            .filter(|name| !name.is_empty())
-            .or_else(|| {
-                self.details
-                    .as_ref()
-                    .map(|details| details.root.name.clone())
-            })
-            .unwrap_or_else(|| hash.chars().take(12).collect())
+impl Side {
+    fn new(side: &DuplicateCandidateSide, details: Option<RootDetails>) -> Self {
+        let media = details.as_ref().and_then(|details| {
+            details
+                .media
+                .iter()
+                .find(|media| media.facts.content_hash == side.file.file_hash)
+                .or(details.media.first())
+                .cloned()
+        });
+        Self {
+            file: side.file.clone(),
+            occurrences: side.occurrences.len(),
+            details,
+            media,
+            sharp_since: None,
+        }
     }
 
-    fn media(&self, hash: &str) -> Option<&picto_library::MediaRecord> {
-        let details = self.details.as_ref()?;
-        details
-            .media
-            .iter()
-            .find(|media| media.facts.content_hash == hash)
-            .or(details.media.first())
+    /// The original to load: this very file, when it is a still image.
+    fn original(&self) -> Option<PathBuf> {
+        let media = self.media.as_ref()?;
+        (self.file.mime_type.starts_with("image/")
+            && media.facts.content_hash == self.file.file_hash)
+            .then(|| PathBuf::from(&media.file_path))
+    }
+
+    fn image(&self) -> Extent {
+        Extent::new(
+            self.file.pixel_width.unwrap_or(0) as f32,
+            self.file.pixel_height.unwrap_or(0) as f32,
+        )
+    }
+
+    /// How far the original has faded in over the thumbnail.
+    fn sharp_opacity(&self) -> f32 {
+        self.sharp_since.map_or(1., |since| {
+            motion::EASE_OUT.ease(motion::progress(since.elapsed(), motion::FULL_IMAGE_FADE))
+        })
     }
 }
 
-/// A set as the screen holds it: the set and its files' facts.
-pub struct Entry {
-    pub set: Set,
-    pub facts: Vec<Facts>,
-}
-
-/// The queue's two tabs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tab {
-    Identical,
-    Similar,
-}
-
-/// The stage's pictures and pointer state.
+/// A file's decoded pictures, kept while its pair is on screen, about to
+/// be, or next in the queue.
 #[derive(Default)]
-struct StageState {
-    zoom: LinkedZoom,
-    /// Each file's original, by file, once decoded.
-    originals: HashMap<u32, Arc<RenderImage>>,
-    loads: HashMap<u32, Task<()>>,
-    /// The difference of the shown file from its partner, what it measured,
-    /// and the two files it was made from.
-    difference: Option<((u32, u32), Arc<RenderImage>, difference::Measure)>,
-    difference_task: Option<Task<()>>,
-    /// The pointer rests on the difference button.
-    difference_hovered: bool,
-    /// The difference's key is held down.
-    difference_held: bool,
-    pane: Bounds<Pixels>,
-    drag: Option<(Point<Pixels>, (f32, f32))>,
+struct Pictures {
+    thumbnail: Option<Arc<RenderImage>>,
+    /// The thumbnail was read, or could not be.
+    thumbnail_settled: bool,
+    thumbnail_task: Option<Task<()>>,
+    original: Option<Arc<RenderImage>>,
+    /// The original is being decoded.
+    original_pending: bool,
+    original_task: Option<Task<()>>,
+}
+
+/// The pair on screen.
+struct Shown {
+    key: PairKey,
+    files: (FileId, FileId),
+    distance: u32,
+    sides: [Side; 2],
+    /// The difference picture, once computed, and whether each side of it
+    /// was its original.
+    difference: Option<(Arc<RenderImage>, [bool; 2])>,
+    /// What comparing the two originals counted. It is taken once and
+    /// stays for as long as the pair does.
+    measure: Option<difference::Measure>,
+}
+
+impl Shown {
+    fn new(pair: &DuplicateCandidate, [left, right]: [Option<RootDetails>; 2]) -> Self {
+        Self {
+            key: pair_key(pair.file_id_a, pair.file_id_b),
+            files: (pair.file_id_a, pair.file_id_b),
+            distance: pair.distance,
+            sides: [Side::new(&pair.left, left), Side::new(&pair.right, right)],
+            difference: None,
+            measure: None,
+        }
+    }
+
+    fn hashes(&self) -> impl Iterator<Item = &String> {
+        self.sides.iter().map(|side| &side.file.file_hash)
+    }
+
+    /// Both files are still images whose originals can be compared.
+    fn measurable(&self) -> bool {
+        self.sides.iter().all(|side| side.original().is_some())
+    }
+}
+
+/// A decision on the pair on screen (`DuplicateAction`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Decision {
+    /// "Not duplicates" and "Keep both": two different files; neither
+    /// file is touched.
+    KeepBoth,
+    /// Keep this file and merge the other's item into it. The other file
+    /// is freed and the application deletes it from the library's blobs.
+    Keep(FileId),
+    /// Keep whichever file the library judges better, if it can tell.
+    Smart,
+}
+
+/// What "Duplicate scan complete" says after a scan that found `found` new
+/// pairs.
+fn scan_message(found: u64) -> String {
+    if found > 0 {
+        format!("Found {found} new review pairs")
+    } else {
+        en("Scan complete - no new review pairs").into()
+    }
+}
+
+/// What a fetch is for.
+#[derive(Clone, Copy)]
+enum Fetch {
+    /// Read the queue again; `reset` starts the progress count afresh.
+    Queue { reset: bool },
+    /// Read the queue after this pair was settled: the one after it takes
+    /// its place.
+    Settled(PairKey),
+    /// Show another pair of the queue already read.
+    Pair(PairKey),
+}
+
+/// A pair with its two items' details.
+type Detailed = (DuplicateCandidate, [Option<RootDetails>; 2]);
+
+/// What came back from the library's thread.
+struct Fetched {
+    /// The queue, when it was read.
+    pairs: Option<Vec<DuplicateCandidate>>,
+    /// The pair to show.
+    key: Option<PairKey>,
+    /// The two items' details, when the pair to show is not the one shown.
+    details: Option<[Option<RootDetails>; 2]>,
+    /// The pair after the one to show, whose pictures are decoded ahead.
+    ahead: Option<Detailed>,
+    /// The sidebar's duplicate count.
+    count: Option<u64>,
+}
+
+/// A pair read and waiting for both its thumbnails before it goes on
+/// screen, so the screen never shows a half-loaded pair.
+struct Pending {
+    pairs: Option<Vec<DuplicateCandidate>>,
+    reset: bool,
+    shown: Shown,
+    ahead: Option<Shown>,
+}
+
+/// A drag of one preview: where it started and the centre then.
+struct Drag {
+    side: usize,
+    from: Point<Pixels>,
+    center: (f32, f32),
+}
+
+/// The titlebar controls' model (`DuplicateToolbarModel`).
+struct ToolbarModel {
+    index: usize,
+    total: usize,
+    can_previous: bool,
+    can_next: bool,
+    disabled: bool,
+    fit: bool,
+    actual: bool,
 }
 
 pub struct DuplicatesScreen {
     session: Entity<Session>,
-    thumbnails: Entity<Thumbnails>,
     focus: FocusHandle,
     /// Whatever had the keyboard before this screen took it.
     return_focus: Option<FocusHandle>,
@@ -131,34 +260,61 @@ pub struct DuplicatesScreen {
     visible: bool,
     /// The keyboard was taken for this visit.
     focused_once: bool,
-    entries: Vec<Entry>,
-    /// When the library had more pairs than it hands at once (500 of each
-    /// kind), how many were read and how many there are.
-    capped: Option<(usize, u64)>,
-    tab: Tab,
-    /// The tab's sets, most alike first, as indices of `entries`.
-    order: Vec<usize>,
-    /// The set on the stage, by its key, and the file shown of it.
-    current: Option<u32>,
-    shown: usize,
-    /// The pairs are being read for the first time.
+    pairs: Vec<DuplicateCandidate>,
+    total: usize,
+    /// The queue's length when it was last read afresh, for the count of
+    /// decisions made since.
+    initial_total: usize,
+    shown: Option<Shown>,
+    /// The pair about to go on screen.
+    pending: Option<Pending>,
+    /// The pair after the one on screen, whose pictures are decoded ahead.
+    ahead: Option<Shown>,
+    /// The decoded pictures of those pairs' files, by file hash.
+    pictures: HashMap<String, Pictures>,
+    /// The queue is being read for the first time.
     loading: bool,
     /// The loading message, which waits 200 ms.
     loading_message: bool,
-    /// A decision is being written.
-    busy: bool,
+    resolving: bool,
+    /// Another pair is being prepared.
+    navigating: bool,
     error: Option<String>,
-    /// Counts reads, so a late answer to an earlier one is dropped.
+    /// Counts fetches, so a late answer to an earlier one is dropped.
     generation: u64,
+    /// The library's revision after this screen's last decision: a change
+    /// reported up to it is the decision's own, whose queue is already read.
+    own_revision: u64,
+    zoom: LinkedZoom,
+    drag: Option<Drag>,
+    /// Show Difference is under the pointer, has the keyboard, was pressed
+    /// (which gives a button the keyboard in the Electron app, until a
+    /// press elsewhere), or its key is held down.
+    difference_hovered: bool,
+    difference_focused: bool,
+    difference_pressed: bool,
+    difference_held: bool,
+    /// The two previews as last painted, for the pointer.
+    panes: [Bounds<Pixels>; 2],
     fetch_task: Option<Task<()>>,
+    difference_task: Option<Task<()>>,
     message_task: Option<Task<()>>,
+    /// A scan of the library is running.
     scanning: bool,
-    /// The scan's progress bar, which waits 200 ms.
+    /// Its progress bar, which waits 200 ms (`useDelayedFlag`).
     scan_progress: bool,
     scan_task: Option<Task<()>>,
-    art: Option<crate::grid::art::Art>,
-    stage: StageState,
-    /// A file's menu.
+    /// The read of the queue that ends the scan.
+    scan_fetch: Option<u64>,
+    /// Smart merge is under the pointer or has the keyboard, which shows
+    /// the file it would keep.
+    smart_hovered: bool,
+    smart_focused: bool,
+    /// How far the preview of Smart merge has faded in, and the side it
+    /// last showed as kept, which the fade out still needs.
+    survivor: motion::Fade,
+    preview_side: Option<usize>,
+    /// A card's menu (`MediaCard`'s `contextMenu`).
     menu: ui::menu::Host,
     _session: Vec<Subscription>,
 }
@@ -166,65 +322,82 @@ pub struct DuplicatesScreen {
 impl DuplicatesScreen {
     pub fn new(
         session: Entity<Session>,
-        thumbnails: Entity<Thumbnails>,
+        _thumbnails: Entity<Thumbnails>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let screen = cx.weak_entity();
-        let controls = cx.new(|_| DuplicatesToolbar { screen, width: 0. });
+        let controls = cx.new(|_| DuplicatesToolbar { screen });
         let subscriptions = vec![
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 if *change == Change::Navigation {
                     this.navigated(window, cx);
                 }
             }),
-            // A scan made elsewhere, or an undo, changes the pairs; a
-            // decision of this screen reads them itself.
+            // A scan made elsewhere (the media worker scans new images by
+            // itself) or an undo changes the queue; a decision of this
+            // screen reads the queue itself and is not read twice.
             cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
                 if let BackendEvent::Changed(changed) = event
                     && crate::application::touches(changed, "duplicates")
+                    && changed.revision > this.own_revision
                     && this.visible
                     && !this.loading
-                    && !this.busy
+                    && !this.resolving
                     && !this.scanning
                 {
-                    this.fetch(cx);
+                    this.fetch(Fetch::Queue { reset: true }, cx);
                 }
             }),
-            cx.observe(&thumbnails, |this, _, cx| {
-                if this.visible {
-                    cx.notify();
+            // A key let go while another application has the keyboard is
+            // never heard of: the difference's key counts as let go.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.hold_difference(false, cx);
                 }
             }),
         ];
         let focus = cx.focus_handle();
         Self {
             session,
-            thumbnails,
             menu: ui::menu::Host::deferred(ui::layer::MENU, ui::menu::Return::To(focus.clone())),
             focus,
             return_focus: None,
             controls,
             visible: false,
             focused_once: false,
-            entries: Vec::new(),
-            capped: None,
-            tab: Tab::Identical,
-            order: Vec::new(),
-            current: None,
-            shown: 0,
+            pairs: Vec::new(),
+            total: 0,
+            initial_total: 0,
+            shown: None,
+            pending: None,
+            ahead: None,
+            pictures: HashMap::new(),
             loading: true,
             loading_message: false,
-            busy: false,
+            resolving: false,
+            navigating: false,
             error: None,
             generation: 0,
+            own_revision: 0,
+            zoom: LinkedZoom::default(),
+            drag: None,
+            difference_hovered: false,
+            difference_focused: false,
+            difference_pressed: false,
+            difference_held: false,
+            panes: [Bounds::default(); 2],
             fetch_task: None,
+            difference_task: None,
             message_task: None,
             scanning: false,
             scan_progress: false,
             scan_task: None,
-            art: None,
-            stage: StageState::default(),
+            scan_fetch: None,
+            smart_hovered: false,
+            smart_focused: false,
+            survivor: motion::Fade::default(),
+            preview_side: None,
             _session: subscriptions,
         }
     }
@@ -242,7 +415,7 @@ impl DuplicatesScreen {
 
     // ── Visits ──────────────────────────────────────────────────
 
-    /// Follows the session: reads the pairs when the screen is chosen,
+    /// Follows the session: reads the queue when the screen is chosen,
     /// takes the keyboard once it shows, and gives both back when left.
     fn navigated(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (chosen, displayed) = {
@@ -275,7 +448,7 @@ impl DuplicatesScreen {
     }
 
     fn opened(&mut self, cx: &mut Context<Self>) {
-        if self.entries.is_empty() {
+        if self.shown.is_none() {
             self.loading = true;
             self.loading_message = false;
             self.message_task = Some(cx.spawn(async move |this, cx| {
@@ -290,19 +463,29 @@ impl DuplicatesScreen {
                 });
             }));
         } else {
-            self.load_compared(cx);
+            // The pair left on screen shows at once; its originals, let go
+            // once the screen had faded out, load again.
+            self.load_pictures(cx);
+            self.refresh_difference(cx);
         }
-        self.fetch(cx);
+        self.fetch(Fetch::Queue { reset: true }, cx);
     }
 
     fn left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Nothing still on its way applies any more; what is on screen
-        // stays while the screen fades out.
+        // Nothing still on its way applies any more. What is on screen
+        // stays as it is while the screen fades out.
         self.generation += 1;
         self.fetch_task = None;
-        self.stage.drag = None;
-        self.stage.difference_hovered = false;
-        self.stage.difference_held = false;
+        self.pending = None;
+        self.resolving = false;
+        self.navigating = false;
+        self.drag = None;
+        self.difference_hovered = false;
+        self.difference_focused = false;
+        self.difference_pressed = false;
+        self.difference_held = false;
+        self.smart_hovered = false;
+        self.smart_focused = false;
         self.focused_once = false;
         if self.focus.contains_focused(window, cx) {
             match self.return_focus.take() {
@@ -313,190 +496,53 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Lets the originals and the difference picture go once the screen is
-    /// no longer painted.
+    /// Lets the originals and the difference picture go once the screen
+    /// is no longer painted. They are the large part; the thumbnails stay,
+    /// so the pair shows at once when the screen is chosen again.
     fn release_originals(&mut self, cx: &mut Context<Self>) {
-        let stage = &mut self.stage;
-        stage.loads.clear();
-        stage.difference_task = None;
-        let images = stage
-            .originals
-            .drain()
-            .map(|(_, image)| image)
-            .chain(stage.difference.take().map(|(_, image, _)| image))
-            .collect::<Vec<_>>();
-        for image in images {
+        self.difference_task = None;
+        let mut released = Vec::new();
+        if let Some(shown) = &mut self.shown {
+            released.extend(shown.difference.take().map(|(image, _)| image));
+            for side in &mut shown.sides {
+                side.sharp_since = None;
+            }
+        }
+        for pictures in self.pictures.values_mut() {
+            released.extend(pictures.original.take());
+            pictures.original_pending = false;
+            pictures.original_task = None;
+        }
+        for image in released {
             crate::atlas::release(image, cx);
         }
     }
 
-    // ── Reading ─────────────────────────────────────────────────
+    // ── Fetching ────────────────────────────────────────────────
 
-    /// Reads the pairs, builds the sets and reads each file's item.
-    fn fetch(&mut self, cx: &mut Context<Self>) {
-        self.generation += 1;
-        let generation = self.generation;
-        let receiver = self.session.read(cx).run(move |library| {
-            let error = |error: picto_library::LibraryError| error.to_string();
-            // The library hands its pairs least apart first, so the similar
-            // ones are read in a window of their own, past the identical.
-            let mut pairs = library.duplicate_candidates(QUEUE_LIMIT).map_err(error)?;
-            let similar = library
-                .duplicate_candidates_from(1, QUEUE_LIMIT)
-                .map_err(error)?;
-            let capped = pairs.len() >= QUEUE_LIMIT || similar.len() >= QUEUE_LIMIT;
-            let known = pairs
-                .iter()
-                .map(|pair| (pair.file_id_a, pair.file_id_b))
-                .collect::<std::collections::HashSet<_>>();
-            pairs.extend(
-                similar
-                    .into_iter()
-                    .filter(|pair| !known.contains(&(pair.file_id_a, pair.file_id_b))),
-            );
-            let shown = pairs.len();
-            let entries = sets::build(&pairs)
-                .into_iter()
-                .map(|set| {
-                    let facts = set
-                        .files
-                        .iter()
-                        .map(|side| Facts {
-                            details: side.occurrences.first().and_then(|occurrence| {
-                                library.details(occurrence.root_item_id).ok()
-                            }),
-                        })
-                        .collect();
-                    Entry { set, facts }
-                })
-                .collect::<Vec<_>>();
-            let count = library.sidebar_counts().map_err(error)?.duplicates;
-            Ok::<_, String>((entries, capped.then_some(shown), count))
-        });
-        self.fetch_task = Some(cx.spawn(async move |this, cx| {
-            let Ok(reply) = receiver.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| this.received(generation, reply, cx));
-        }));
-        self.changed(cx);
+    fn pair(&self, key: PairKey) -> Option<&DuplicateCandidate> {
+        self.pairs
+            .iter()
+            .find(|pair| pair_key(pair.file_id_a, pair.file_id_b) == key)
     }
 
-    fn received(
-        &mut self,
-        generation: u64,
-        reply: Result<(Vec<Entry>, Option<usize>, u64), String>,
-        cx: &mut Context<Self>,
-    ) {
-        if generation != self.generation {
-            return;
-        }
+    /// No fetch is under way any more.
+    fn settle(&mut self) {
         self.loading = false;
         self.loading_message = false;
         self.message_task = None;
-        if self.scanning {
+        self.resolving = false;
+        self.navigating = false;
+        if self.scan_fetch == Some(self.generation) {
             self.end_scan();
         }
-        let (entries, capped, count) = match reply {
-            Ok(reply) => reply,
-            Err(error) => {
-                ui::notify::error(t("Unable to load duplicate review"), error.clone(), cx);
-                self.error = Some(error);
-                self.changed(cx);
-                return;
-            }
-        };
-        self.error = None;
-        self.session.update(cx, |session, cx| {
-            if let Some(entry) = session
-                .nav
-                .iter_mut()
-                .find(|entry| entry.screen == Some(Screen::Duplicates))
-                && entry.count != Some(count)
-            {
-                entry.count = Some(count);
-                cx.emit(Change::Navigation);
-            }
-        });
-        let shown_file = self.shown_file();
-        self.entries = entries;
-        self.capped = capped.map(|shown| (shown, count));
-        // A tab with nothing in it gives way to the other.
-        let has = |tab: Tab| {
-            self.entries
-                .iter()
-                .any(|entry| (tab == Tab::Identical) == entry.set.identical())
-        };
-        if !has(self.tab) && has(other(self.tab)) {
-            self.tab = other(self.tab);
-        }
-        self.reorder();
-        // The set on the stage stays, showing the same file, if it is still
-        // there; else the first of the queue.
-        let still = self
-            .current
-            .and_then(|key| self.entry_index(key))
-            .filter(|index| self.order.contains(index));
-        match still {
-            Some(index) => {
-                self.shown = shown_file
-                    .and_then(|file| self.entries[index].set.index_of(file))
-                    .unwrap_or(0);
-            }
-            None => self.show_set(self.order.first().copied(), cx),
-        }
-        self.load_compared(cx);
-        self.changed(cx);
-    }
-
-    /// The tab's sets, most alike first: the queue's order is how alike
-    /// the files are, nothing else, so the surest sets come first.
-    fn reorder(&mut self) {
-        let identical = self.tab == Tab::Identical;
-        let mut order = (0..self.entries.len())
-            .filter(|&index| self.entries[index].set.identical() == identical)
-            .collect::<Vec<_>>();
-        order.sort_by_key(|&index| self.entries[index].set.distance());
-        self.order = order;
-    }
-
-    fn entry_index(&self, key: u32) -> Option<usize> {
-        self.entries.iter().position(|entry| entry.set.key == key)
-    }
-
-    /// The set on the stage, as an index of `entries`.
-    fn current_index(&self) -> Option<usize> {
-        self.current.and_then(|key| self.entry_index(key))
-    }
-
-    /// The file shown, which is the one a merge keeps.
-    fn shown_file(&self) -> Option<FileId> {
-        let index = self.current_index()?;
-        Some(self.entries[index].set.files.get(self.shown)?.file.file_id)
-    }
-
-    /// The file the shown one is compared with: the next of the set.
-    fn partner(&self) -> Option<usize> {
-        let index = self.current_index()?;
-        let count = self.entries[index].set.files.len();
-        (count > 1).then(|| (self.shown + 1) % count)
-    }
-
-    /// How many sets each tab holds.
-    fn tab_counts(&self) -> (usize, usize) {
-        let identical = self
-            .entries
-            .iter()
-            .filter(|entry| entry.set.identical())
-            .count();
-        (identical, self.entries.len() - identical)
     }
 
     // ── Scanning ────────────────────────────────────────────────
 
-    /// "Scan library": the application compares every image's perceptual
-    /// hash (`duplicates.scan`), then the pairs are read again. The
-    /// progress bar shows if it takes longer than 200 ms.
+    /// "Scan library" and "Retry": the application compares every image's
+    /// perceptual hash (`duplicates.scan`), then the queue is read again.
+    /// The progress bar shows if it takes longer than 200 ms.
     fn scan(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
             return;
@@ -529,7 +575,8 @@ impl DuplicatesScreen {
                 Ok(Ok(summary)) => {
                     let found = summary["candidate_count"].as_u64().unwrap_or(0);
                     ui::notify::info(t("Duplicate scan complete"), scan_message(found), cx);
-                    this.fetch(cx);
+                    this.fetch(Fetch::Queue { reset: true }, cx);
+                    this.scan_fetch = Some(this.generation);
                 }
                 Ok(Err(error)) => {
                     ui::notify::error(t("Unable to scan for duplicates"), error.clone(), cx);
@@ -549,530 +596,506 @@ impl DuplicatesScreen {
     fn end_scan(&mut self) {
         self.scanning = false;
         self.scan_progress = false;
+        self.scan_fetch = None;
     }
 
-    // ── Decisions ───────────────────────────────────────────────
-
-    /// Settles `steps` as one undoable step, moves to the next set, then
-    /// reads the pairs again. A merge says what it did, with Undo.
-    fn resolve(
-        &mut self,
-        steps: Vec<(FileId, FileId, DuplicateResolutionChoice)>,
-        merged: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if self.busy || steps.is_empty() {
-            return;
-        }
-        self.busy = true;
-        self.stage.difference_hovered = false;
-        self.advance(cx);
-        let label = if merged {
-            "Merge duplicates"
-        } else {
-            "Keep duplicates apart"
+    /// Asks the library for what `fetch` needs, then prepares the pair to
+    /// show. The pair on screen stays until the next one's details and both
+    /// its thumbnails are ready.
+    fn fetch(&mut self, fetch: Fetch, cx: &mut Context<Self>) {
+        self.generation += 1;
+        let generation = self.generation;
+        self.pending = None;
+        self.navigating = matches!(fetch, Fetch::Pair(_));
+        let previous = self
+            .pairs
+            .iter()
+            .map(|pair| pair_key(pair.file_id_a, pair.file_id_b))
+            .collect::<Vec<_>>();
+        let shown = self.shown.as_ref().map(|shown| shown.key);
+        // Another pair of the queue as it is known, and the one after it.
+        let known = match fetch {
+            Fetch::Pair(key) => previous.iter().position(|each| *each == key).map(|at| {
+                (
+                    self.pairs[at].clone(),
+                    self.pairs.get(at + 1).cloned(),
+                )
+            }),
+            _ => None,
         };
-        crate::session::edit_then(
-            &self.session,
-            Report::failure(t("Unable to resolve duplicate pair")),
-            Reread::NOTHING,
-            move |library| library.resolve_duplicates(&steps, label, crate::now_ms()),
-            cx,
-            move |this: &mut Self, result, cx| {
-                this.busy = false;
-                if result.is_ok() && merged {
-                    let session = this.session.clone();
-                    ui::notify::show(
-                        ui::notify::Tone::Success,
-                        ui::notify::Options::new(en("Merged"), "")
-                            .action(t("Undo"), move |_, cx| {
-                                session.update(cx, |session, cx| session.undo(cx))
-                            }),
-                        cx,
+        let receiver = self.session.read(cx).run(move |library| {
+            let error = |error: picto_library::LibraryError| error.to_string();
+            let mut fetched = Fetched {
+                pairs: None,
+                key: None,
+                details: None,
+                ahead: None,
+                count: None,
+            };
+            let (pair, after) = match fetch {
+                Fetch::Pair(_) => known.map_or((None, None), |(pair, after)| (Some(pair), after)),
+                Fetch::Queue { .. } | Fetch::Settled(_) => {
+                    // A settled pair is gone from the queue: the next one
+                    // after it takes its place.
+                    let active = match fetch {
+                        Fetch::Settled(key) => Some(key),
+                        _ => shown,
+                    };
+                    let pairs = library.duplicate_candidates(QUEUE_LIMIT).map_err(error)?;
+                    let keys = pairs
+                        .iter()
+                        .map(|pair| pair_key(pair.file_id_a, pair.file_id_b))
+                        .collect::<Vec<_>>();
+                    let at = compare::select_stable(&previous, active, &keys)
+                        .and_then(|key| keys.iter().position(|each| *each == key));
+                    let found = (
+                        at.map(|at| pairs[at].clone()),
+                        at.and_then(|at| pairs.get(at + 1).cloned()),
                     );
+                    fetched.pairs = Some(pairs);
+                    fetched.count = Some(library.sidebar_counts().map_err(error)?.duplicates);
+                    found
                 }
-                this.fetch(cx);
-            },
-        );
+            };
+            let details = |pair: &DuplicateCandidate| {
+                [&pair.left, &pair.right].map(|side| {
+                    side.occurrences
+                        .first()
+                        .and_then(|occurrence| library.details(occurrence.root_item_id).ok())
+                })
+            };
+            if let Some(pair) = pair {
+                let key = pair_key(pair.file_id_a, pair.file_id_b);
+                fetched.key = Some(key);
+                if Some(key) != shown {
+                    fetched.details = Some(details(&pair));
+                }
+                fetched.ahead = after.map(|after| {
+                    let details = details(&after);
+                    (after, details)
+                });
+            }
+            Ok::<_, String>(fetched)
+        });
+        self.fetch_task = Some(cx.spawn(async move |this, cx| {
+            let Ok(reply) = receiver.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| this.received(generation, fetch, reply, cx));
+        }));
         self.changed(cx);
     }
 
-    /// Enter: keeps the file shown and merges the rest of its set into it.
-    fn merge(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
+    fn received(
+        &mut self,
+        generation: u64,
+        fetch: Fetch,
+        reply: Result<Fetched, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.generation {
+            return;
+        }
+        let fetched = match reply {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                let title = match fetch {
+                    Fetch::Pair(_) => t("Unable to load duplicate media"),
+                    Fetch::Queue { .. } | Fetch::Settled(_) => {
+                        t("Unable to load duplicate review")
+                    }
+                };
+                ui::notify::error(title, error.clone(), cx);
+                self.error = Some(error);
+                self.settle();
+                self.changed(cx);
+                return;
+            }
+        };
+        if let Some(count) = fetched.count {
+            self.session.update(cx, |session, cx| {
+                if let Some(entry) = session
+                    .nav
+                    .iter_mut()
+                    .find(|entry| entry.screen == Some(Screen::Duplicates))
+                    && entry.count != Some(count)
+                {
+                    entry.count = Some(count);
+                    cx.emit(Change::Navigation);
+                }
+            });
+        }
+        let reset = matches!(fetch, Fetch::Queue { reset: true });
+        let ahead = fetched
+            .ahead
+            .map(|(pair, details)| Shown::new(&pair, details));
+        let pair = fetched.key.and_then(|key| {
+            fetched
+                .pairs
+                .as_ref()
+                .unwrap_or(&self.pairs)
+                .iter()
+                .find(|pair| pair_key(pair.file_id_a, pair.file_id_b) == key)
+                .cloned()
+        });
+        let (Some(pair), Some(details)) = (pair, fetched.details) else {
+            // The pair on screen stays, or the queue is empty.
+            if let Some(pairs) = fetched.pairs {
+                self.set_pairs(pairs, reset);
+            }
+            if fetched.key.is_none() && !matches!(fetch, Fetch::Pair(_)) {
+                self.release(cx);
+            }
+            self.set_ahead(ahead, cx);
+            self.error = None;
+            self.settle();
+            self.changed(cx);
             return;
         };
-        let steps = self.entries[index].set.merge_steps(self.shown);
-        self.resolve(steps, true, cx);
+        self.pending = Some(Pending {
+            pairs: fetched.pairs,
+            reset,
+            shown: Shown::new(&pair, details),
+            ahead,
+        });
+        self.load_pictures(cx);
+        self.commit_when_ready(cx);
     }
 
-    /// Z or S (`dup.smartMerge`), the accept beside X's reject as in the
-    /// Inbox: keeps the file the library suggests and merges
-    /// the rest into it, whichever file is shown. A set it cannot settle
-    /// says so and is left for the user to choose.
-    fn smart_merge(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
+    fn set_pairs(&mut self, pairs: Vec<DuplicateCandidate>, reset: bool) {
+        self.total = pairs.len();
+        if reset {
+            self.initial_total = self.total;
+        }
+        self.pairs = pairs;
+    }
+
+    /// Puts the prepared pair on screen once both its thumbnails are read
+    /// (or cannot be), both at once.
+    fn commit_when_ready(&mut self, cx: &mut Context<Self>) {
+        let ready = self.pending.as_ref().is_some_and(|pending| {
+            pending.shown.hashes().all(|hash| {
+                self.pictures
+                    .get(hash)
+                    .is_some_and(|pictures| pictures.thumbnail_settled)
+            })
+        });
+        if !ready {
+            return;
+        }
+        let Some(pending) = self.pending.take() else {
             return;
         };
-        match self.entries[index].set.suggested {
-            Some(keeper) => {
-                let steps = self.entries[index].set.merge_steps(keeper);
-                self.resolve(steps, true, cx);
+        if let Some(pairs) = pending.pairs {
+            self.set_pairs(pairs, pending.reset);
+        }
+        if self.shown.as_ref().map(|old| old.key) != Some(pending.shown.key) {
+            self.zoom.fit();
+        }
+        self.drag = None;
+        self.difference_task = None;
+        if let Some((image, _)) = self.shown.take().and_then(|old| old.difference) {
+            crate::atlas::release(image, cx);
+        }
+        self.shown = Some(pending.shown);
+        self.error = None;
+        self.settle();
+        self.set_ahead(pending.ahead, cx);
+        self.refresh_difference(cx);
+        self.changed(cx);
+    }
+
+    /// Takes the pair off screen and gives its pictures back.
+    fn release(&mut self, cx: &mut Context<Self>) {
+        self.difference_task = None;
+        self.drag = None;
+        self.pending = None;
+        if let Some((image, _)) = self.shown.take().and_then(|shown| shown.difference) {
+            crate::atlas::release(image, cx);
+        }
+        self.keep_pictures(cx);
+    }
+
+    // ── Pictures ────────────────────────────────────────────────
+
+    /// The pair whose pictures are decoded ahead: the one after the pair
+    /// on screen.
+    fn set_ahead(&mut self, ahead: Option<Shown>, cx: &mut Context<Self>) {
+        self.ahead = ahead;
+        self.keep_pictures(cx);
+        self.load_pictures(cx);
+    }
+
+    /// Lets go of the pictures of files that are neither on screen, about
+    /// to be, nor next.
+    fn keep_pictures(&mut self, cx: &mut Context<Self>) {
+        let kept = [
+            self.shown.as_ref(),
+            self.pending.as_ref().map(|pending| &pending.shown),
+            self.ahead.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(Shown::hashes)
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+        let gone = self
+            .pictures
+            .keys()
+            .filter(|hash| !kept.contains(*hash))
+            .cloned()
+            .collect::<Vec<_>>();
+        for hash in gone {
+            if let Some(pictures) = self.pictures.remove(&hash) {
+                for image in pictures.thumbnail.into_iter().chain(pictures.original) {
+                    crate::atlas::release(image, cx);
+                }
             }
-            None => ui::notify::warning(
-                t("Smart merge needs a choice"),
-                en("No clear quality winner. Choose the file to keep, or mark the set as not duplicates."),
-                cx,
-            ),
         }
     }
 
-    /// The difference shows while the pointer rests on its button or its
-    /// key is held.
-    fn difference_shown(&self) -> bool {
-        self.stage.difference_hovered || self.stage.difference_held
+    /// Starts reading what is missing of the thumbnails and originals of
+    /// the pair on screen, the one about to be and the one after, each
+    /// once. An original shown fades in over its thumbnail on arrival.
+    fn load_pictures(&mut self, cx: &mut Context<Self>) {
+        let wanted = [
+            self.shown.as_ref(),
+            self.pending.as_ref().map(|pending| &pending.shown),
+            self.ahead.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .flat_map(|pair| &pair.sides)
+        .map(|side| {
+            (
+                side.file.file_hash.clone(),
+                side.file.mime_type.clone(),
+                side.original(),
+            )
+        })
+        .collect::<Vec<_>>();
+        for (hash, mime, original) in wanted {
+            let thumbnail = self.session.read(cx).thumbnail(&hash);
+            let pictures = self.pictures.entry(hash.clone()).or_default();
+            if !pictures.thumbnail_settled && pictures.thumbnail_task.is_none() {
+                let load = load_image(thumbnail, "", cx);
+                let hash = hash.clone();
+                pictures.thumbnail_task = Some(cx.spawn(async move |this, cx| {
+                    let image = load.await;
+                    let _ = this.update(cx, |this, cx| {
+                        match this.pictures.get_mut(&hash) {
+                            Some(pictures) => {
+                                pictures.thumbnail = image;
+                                pictures.thumbnail_settled = true;
+                            }
+                            None => {
+                                if let Some(image) = image {
+                                    crate::atlas::release(image, cx);
+                                }
+                                return;
+                            }
+                        }
+                        this.commit_when_ready(cx);
+                    });
+                }));
+            }
+            let pictures = self.pictures.entry(hash.clone()).or_default();
+            if let Some(path) = original
+                && pictures.original.is_none()
+                && !pictures.original_pending
+            {
+                pictures.original_pending = true;
+                let load = load_image(path, &mime, cx);
+                pictures.original_task = Some(cx.spawn(async move |this, cx| {
+                    let image = load.await;
+                    let _ = this.update(cx, |this, cx| this.original_arrived(hash, image, cx));
+                }));
+            }
+        }
     }
 
-    /// D down and up (`dup.difference`).
-    fn hold_difference(&mut self, held: bool, cx: &mut Context<Self>) {
-        if self.stage.difference_held != held {
-            self.stage.difference_held = held;
+    fn original_arrived(
+        &mut self,
+        hash: String,
+        image: Option<Arc<RenderImage>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pictures) = self.pictures.get_mut(&hash) else {
+            if let Some(image) = image {
+                crate::atlas::release(image, cx);
+            }
+            return;
+        };
+        pictures.original_pending = false;
+        let Some(image) = image else {
+            return;
+        };
+        if let Some(old) = pictures.original.replace(image) {
+            crate::atlas::release(old, cx);
+        }
+        let Some(shown) = &mut self.shown else {
+            return;
+        };
+        let mut on_screen = false;
+        for side in &mut shown.sides {
+            if side.file.file_hash == hash {
+                side.sharp_since = Some(Instant::now());
+                on_screen = true;
+            }
+        }
+        if on_screen {
+            self.refresh_difference(cx);
             cx.notify();
         }
     }
 
-    /// Whether Enter on the shown file is what Smart merge would do.
-    fn shown_is_suggested(&self) -> bool {
-        self.current_index()
-            .is_some_and(|index| self.entries[index].set.suggested == Some(self.shown))
+    /// A side's thumbnail and original, as far as they are decoded.
+    fn pictures_of(&self, side: &Side) -> (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>) {
+        self.pictures
+            .get(&side.file.file_hash)
+            .map_or((None, None), |pictures| {
+                (pictures.thumbnail.clone(), pictures.original.clone())
+            })
     }
 
-    /// X or N: the set's files are different pictures; none is touched, and a
-    /// later scan does not bring the pairs back.
-    fn not_duplicates(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        let steps = self.entries[index].set.apart_steps();
-        self.resolve(steps, false, cx);
-    }
-
-    /// Takes one file out of the set on the stage.
-    fn remove_file(&mut self, file: usize, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        let steps = self.entries[index].set.without_steps(file);
-        if self.busy || steps.is_empty() {
-            return;
-        }
-        self.busy = true;
-        crate::session::edit_then(
-            &self.session,
-            Report::failure(t("Unable to resolve duplicate pair")),
-            Reread::NOTHING,
-            move |library| {
-                library.resolve_duplicates(&steps, "Keep duplicates apart", crate::now_ms())
-            },
-            cx,
-            move |this: &mut Self, _, cx| {
-                this.busy = false;
-                this.fetch(cx);
-            },
-        );
-        self.changed(cx);
-    }
-
-    /// Puts the next set of the queue on the stage, or the one before it
-    /// when this was the last.
-    fn advance(&mut self, cx: &mut Context<Self>) {
-        let Some(at) = self
-            .current_index()
-            .and_then(|index| self.order.iter().position(|&each| each == index))
-        else {
-            return;
-        };
-        let next = self
-            .order
-            .get(at + 1)
-            .or_else(|| at.checked_sub(1).and_then(|before| self.order.get(before)))
-            .copied();
-        self.show_set(next, cx);
-    }
-
-    /// Space: the next set, this one left for later.
-    fn skip(&mut self, cx: &mut Context<Self>) {
-        self.step_set(1, cx);
-    }
-
-    /// ↑ and ↓: the set before or after in the queue.
-    fn step_set(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let at = self
-            .current_index()
-            .and_then(|index| self.order.iter().position(|&each| each == index));
-        let target = match at {
-            Some(at) => at.checked_add_signed(delta),
-            None => Some(0),
-        };
-        if let Some(index) = target.and_then(|target| self.order.get(target)).copied() {
-            self.show_set(Some(index), cx);
-            self.changed(cx);
-        }
-    }
-
-    /// Puts a set on the stage at the fitted zoom, showing the file the
-    /// library suggests keeping, or the first when it suggests none.
-    fn show_set(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
-        let key = index.map(|index| self.entries[index].set.key);
-        if key == self.current {
-            return;
-        }
-        self.current = key;
-        self.shown = index
-            .and_then(|index| self.entries[index].set.suggested)
-            .unwrap_or(0);
-        self.stage.zoom.fit();
-        self.stage.drag = None;
-        self.stage.difference_held = false;
-        self.prune_originals(cx);
-        self.load_compared(cx);
-        self.changed(cx);
-    }
-
-    fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        if self.tab != tab {
-            self.tab = tab;
-            self.reorder();
-            self.show_set(self.order.first().copied(), cx);
-            self.changed(cx);
-        }
-    }
-
-    /// ← and →, a click on the strip: another file of the set, at the same
-    /// place and scale.
-    fn show_file(&mut self, file: usize, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        if file >= self.entries[index].set.files.len() || file == self.shown {
-            return;
-        }
-        self.shown = file;
-        self.load_compared(cx);
-        self.changed(cx);
-    }
-
-    fn flip(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        let count = self.entries[index].set.files.len() as isize;
-        let next = (self.shown as isize + delta).rem_euclid(count.max(1)) as usize;
-        self.show_file(next, cx);
-    }
-
-    // ── The stage's pictures ───────────────────────────────────
-
-    /// The set after the one on the desk, in the tab's order.
-    fn next_index(&self) -> Option<usize> {
-        let index = self.current_index()?;
-        let at = self.order.iter().position(|&each| each == index)?;
-        self.order.get(at + 1).copied()
-    }
-
-    /// Lets go of the originals of sets that are neither on the desk nor
-    /// next, and of the difference picture, which was the last pair's.
-    fn prune_originals(&mut self, cx: &mut Context<Self>) {
-        let keep = [self.current_index(), self.next_index()]
-            .into_iter()
-            .flatten()
-            .flat_map(|index| self.entries[index].set.files.iter())
-            .map(|side| side.file.file_id.0)
-            .collect::<std::collections::HashSet<_>>();
-        let stage = &mut self.stage;
-        stage.loads.retain(|id, _| keep.contains(id));
-        stage.difference_task = None;
-        let gone = stage
-            .originals
-            .keys()
-            .filter(|id| !keep.contains(id))
-            .copied()
-            .collect::<Vec<_>>();
-        let images = gone
-            .into_iter()
-            .filter_map(|id| stage.originals.remove(&id))
-            .chain(stage.difference.take().map(|(_, image, _)| image))
-            .collect::<Vec<_>>();
-        for image in images {
-            crate::atlas::release(image, cx);
-        }
-    }
-
-    /// Loads the originals the desk needs, each once: the shown file, its
-    /// partner and the file after, and the two files the next set opens
-    /// on, so that a decision lands on pictures already decoded.
-    fn load_compared(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.current_index() else {
-            return;
-        };
-        let count = self.entries[index].set.files.len();
-        let mut wanted = vec![
-            (index, self.shown),
-            (index, (self.shown + 1) % count),
-            (index, (self.shown + 2) % count),
-        ];
-        if let Some(next) = self.next_index() {
-            let set = &self.entries[next].set;
-            let first = set.suggested.unwrap_or(0);
-            wanted.push((next, first));
-            wanted.push((next, (first + 1) % set.files.len()));
-        }
-        let mut paths = Vec::new();
-        for (index, file) in wanted {
-            let entry = &self.entries[index];
-            let side = &entry.set.files[file];
-            let id = side.file.file_id.0;
-            if self.stage.originals.contains_key(&id)
-                || self.stage.loads.contains_key(&id)
-                || paths.iter().any(|(wanted, _)| *wanted == id)
-            {
-                continue;
-            }
-            if let Some(path) = original(entry, file) {
-                paths.push((id, path));
-            }
-        }
-        for (id, path) in paths {
-            let load = load_image(path, cx);
-            self.stage.loads.insert(
-                id,
-                cx.spawn(async move |this, cx| {
-                    let image = load.await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.stage.loads.remove(&id);
-                        if let Some(image) = image {
-                            if let Some(old) = this.stage.originals.insert(id, image) {
-                                crate::atlas::release(old, cx);
-                            }
-                            this.refresh_difference(cx);
-                            this.changed(cx);
-                        }
-                    });
-                }),
-            );
-        }
-        self.refresh_difference(cx);
-    }
-
-    /// The shown file and its partner, by file id.
-    fn compared_pair(&self) -> Option<(u32, u32)> {
-        let index = self.current_index()?;
-        let files = &self.entries[index].set.files;
-        Some((
-            files[self.shown].file.file_id.0,
-            files[self.partner()?].file.file_id.0,
-        ))
-    }
-
-    /// Makes the difference of the shown file from its partner, and what it
-    /// measures, from their originals once both are decoded.
+    /// Computes the difference picture from the best pictures there are,
+    /// and what comparing the two originals counts.
     fn refresh_difference(&mut self, cx: &mut Context<Self>) {
-        let Some((shown, partner)) = self.compared_pair() else {
+        let Some(shown) = &self.shown else {
             return;
         };
-        if self
-            .stage
+        // An original still on its way would only have the picture made
+        // twice.
+        let waiting = shown.hashes().any(|hash| {
+            self.pictures
+                .get(hash)
+                .is_some_and(|pictures| pictures.original_pending)
+        });
+        let [left, right] = shown.sides.each_ref().map(|side| self.pictures_of(side));
+        let sharp = [left.1.is_some(), right.1.is_some()];
+        if shown
             .difference
             .as_ref()
-            .is_some_and(|(pair, _, _)| *pair == (shown, partner))
+            .is_some_and(|(_, made)| *made == sharp || waiting)
         {
             return;
         }
-        let (Some(left), Some(right)) = (
-            self.stage.originals.get(&shown).cloned(),
-            self.stage.originals.get(&partner).cloned(),
-        ) else {
+        let (Some(left), Some(right)) = (left.1.or(left.0), right.1.or(right.0)) else {
             return;
         };
-        // The same two files the other way round, at one size: their
-        // difference is the same picture and measures the same.
-        if left.size(0) == right.size(0)
-            && let Some((pair, _, _)) = self.stage.difference.as_mut()
-            && *pair == (partner, shown)
-        {
-            *pair = (shown, partner);
-            return;
-        }
+        let key = shown.key;
         let work = cx
             .background_executor()
             .spawn(async move { difference::compute(&left, &right) });
-        self.stage.difference_task = Some(cx.spawn(async move |this, cx| {
+        self.difference_task = Some(cx.spawn(async move |this, cx| {
             let made = work.await;
             let _ = this.update(cx, |this, cx| {
-                if this.compared_pair() != Some((shown, partner)) {
-                    if let Some((image, _)) = made {
-                        crate::atlas::release(image, cx);
-                    }
+                let Some((image, measure)) = made else {
                     return;
-                }
-                if let Some((image, measure)) = made
-                    && let Some((_, old, _)) =
-                        this.stage
-                            .difference
-                            .replace(((shown, partner), image, measure))
-                {
+                };
+                let Some(shown) = this.shown.as_mut().filter(|shown| shown.key == key) else {
+                    crate::atlas::release(image, cx);
+                    return;
+                };
+                if let Some((old, _)) = shown.difference.replace((image, sharp)) {
                     crate::atlas::release(old, cx);
+                }
+                if sharp == [true, true] && shown.measure.is_none() {
+                    shown.measure = Some(measure);
                 }
                 cx.notify();
             });
         }));
     }
 
-    /// What comparing the shown file with its partner measured, once it
-    /// has.
-    fn measure(&self) -> Option<difference::Measure> {
-        let (shown, partner) = self.compared_pair()?;
-        // Flipping a pair asks about the same two files, so what was
-        // measured stays while the difference is made the other way round.
-        self.stage
-            .difference
+    // ── Pointer on the previews ─────────────────────────────────
+
+    fn pane_extent(&self, side: usize) -> Extent {
+        extent(self.panes[side])
+    }
+
+    fn image(&self, side: usize) -> Extent {
+        self.shown
             .as_ref()
-            .filter(|(made, _, _)| *made == (shown, partner) || *made == (partner, shown))
-            .map(|(_, _, measure)| *measure)
+            .map_or_else(Extent::default, |shown| shown.sides[side].image())
     }
 
-    fn fit(&mut self, cx: &mut Context<Self>) {
-        self.stage.zoom.fit();
+    /// The wheel zooms both previews about the pointer; it never changes
+    /// the pair.
+    fn wheel(&mut self, side: usize, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
+        let bounds = self.panes[side];
+        let delta = event.delta.pixel_delta(window.line_height());
+        let offset = event.position - bounds.center();
+        // GPUI's delta is the content's movement; the DOM's is the wheel's.
+        self.zoom.wheel(
+            self.pane_extent(side),
+            self.image(side),
+            lean(side),
+            (f32::from(offset.x), f32::from(offset.y)),
+            -f32::from(delta.y),
+        );
         self.changed(cx);
     }
 
-    fn actual(&mut self, cx: &mut Context<Self>) {
-        self.stage.zoom.actual();
-        self.changed(cx);
-    }
-
-    /// The wheel over the picture moves about in it and never changes the
-    /// file: it zooms about the pointer, or, with the viewer's trackpad
-    /// gestures on, pans, and zooms with Command (Control elsewhere).
-    fn wheel(&mut self, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
-        let Some(image) = self.shown_extent() else {
+    fn dragged(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = &self.drag else {
             return;
         };
-        let delta = event.delta.pixel_delta(window.line_height());
-        let pane = pane_extent(self.stage.pane);
-        let pans = crate::settings::current(cx).viewer_trackpad_gestures;
-        if pans && !event.modifiers.secondary(cx) {
-            let center = self.stage.zoom.center();
-            self.stage.zoom.pan(
-                pane,
-                image,
-                center,
-                (f32::from(delta.x), f32::from(delta.y)),
-            );
-        } else {
-            let offset = event.position - self.stage.pane.center();
-            self.stage.zoom.wheel(
-                pane,
-                image,
-                (f32::from(offset.x), f32::from(offset.y)),
-                -f32::from(delta.y),
-            );
-        }
-        self.changed(cx);
-    }
-
-    /// The shown file's size in pixels.
-    fn shown_extent(&self) -> Option<compare::Extent> {
-        let index = self.current_index()?;
-        let file = &self.entries[index].set.files[self.shown].file;
-        Some(compare::Extent::new(
-            file.pixel_width? as f32,
-            file.pixel_height? as f32,
-        ))
+        let moved = position - drag.from;
+        let (side, center) = (drag.side, drag.center);
+        self.zoom.pan(
+            self.pane_extent(side),
+            self.image(side),
+            center,
+            (f32::from(moved.x), f32::from(moved.y)),
+        );
+        cx.notify();
     }
 }
 
-/// Where the library keeps a file's original, when it is a still image.
-fn original(entry: &Entry, file: usize) -> Option<PathBuf> {
-    let side = &entry.set.files[file];
-    side.file
-        .mime_type
-        .starts_with("image/")
-        .then(|| entry.facts[file].media(&side.file.file_hash))
-        .flatten()
-        .filter(|media| media.facts.content_hash == side.file.file_hash)
-        .map(|media| PathBuf::from(&media.file_path))
-}
-
-fn other(tab: Tab) -> Tab {
-    match tab {
-        Tab::Identical => Tab::Similar,
-        Tab::Similar => Tab::Identical,
-    }
-}
-
-fn pane_extent(bounds: Bounds<Pixels>) -> compare::Extent {
-    compare::Extent::new(f32::from(bounds.size.width), f32::from(bounds.size.height))
-}
-
-/// What "Duplicate scan complete" says after a scan that found `found`
-/// pairs.
-fn scan_message(found: u64) -> String {
-    if found > 0 {
-        format!("Found {found} new review pairs")
+/// The left preview's picture rests against the right one's, and the
+/// right one's against the left's.
+fn lean(side: usize) -> compare::Lean {
+    if side == 0 {
+        compare::Lean::Right
     } else {
-        en("Scan complete - no new review pairs").into()
+        compare::Lean::Left
     }
 }
 
-/// Starts decoding an image file off the drawing thread.
-fn load_image(path: PathBuf, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
+fn extent(bounds: Bounds<Pixels>) -> Extent {
+    Extent::new(f32::from(bounds.size.width), f32::from(bounds.size.height))
+}
+
+/// Starts decoding an image file off the drawing thread: JPEG XL with the
+/// viewer's decoder, the rest with GPUI's.
+fn load_image(path: PathBuf, mime: &str, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
+    use crate::viewer::document;
+    if document::kind::renderer_kind(mime) == document::kind::RendererKind::JpegXl {
+        return cx.background_executor().spawn(async move {
+            document::pages::decode_jpeg_xl(&path)
+                .map(document::render_image)
+                .ok()
+        });
+    }
     let load = ImageAssetLoader::load(Resource::Path(path.into()), cx);
     cx.background_executor()
         .spawn(async move { load.await.ok() })
 }
 
-/// The desk's rail, for the shell to show in the inspector's place while a
-/// set is on the stage: between the desk and the grid or the viewer it
-/// stays in place, and only what is in it changes.
-pub fn rail(screen: &Entity<DuplicatesScreen>, cx: &mut App) -> crate::shell::ScreenRail {
-    let view = cx
-        .new(|cx| DuplicatesRail {
-            screen: screen.downgrade(),
-            _observing: cx.observe(screen, |_, _, cx| cx.notify()),
-        })
-        .into();
-    let screen = screen.downgrade();
-    crate::shell::ScreenRail {
-        view,
-        shows: Box::new(move |cx| {
-            screen
-                .upgrade()
-                .is_some_and(|screen| screen.read(cx).current_index().is_some())
-        }),
-    }
-}
-
-/// The desk's rail; it follows the screen.
-pub struct DuplicatesRail {
-    screen: WeakEntity<DuplicatesScreen>,
-    _observing: Subscription,
-}
-
-impl Render for DuplicatesRail {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(screen) = self.screen.upgrade() else {
-            return div().into_any_element();
-        };
-        screen.update(cx, |screen, cx| screen.rail(window, cx))
-    }
-}
-
-/// The screen's titlebar controls: the stage's zoom and the scan.
+/// The screen's titlebar controls (`DuplicatesToolbar`): the pair counter in
+/// the middle, then fit, actual pixels, and previous and next pair.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
-    /// The row's width as last laid out: on Windows and Linux the window's
-    /// own buttons take part of the titlebar, so the screen's width does
-    /// not tell how much room the controls have.
-    width: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_message;
+
+    #[test]
+    fn the_scan_says_how_many_pairs_it_found() {
+        assert_eq!(scan_message(3), "Found 3 new review pairs");
+        assert_eq!(scan_message(0), "Scan complete - no new review pairs");
+    }
 }

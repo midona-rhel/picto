@@ -119,6 +119,9 @@ pub const CONDITION_BUTTON: Duration = Duration::from_millis(120);
 /// `.tagAddBtn`: the "+" after a row of chips brightening, on
 /// `--ease-default`.
 pub const TAG_ADD_BUTTON: Duration = Duration::from_millis(200);
+/// The Duplicates screen's preview of Smart merge: the file it would not
+/// keep dimming and coming back (`.mediaCard::after`'s 140 ms).
+pub const MERGE_PREVIEW: Duration = Duration::from_millis(140);
 /// `subscriptionStatusPulse`: one breath of a syncing badge, on `ease-in-out`.
 const STATUS_PULSE: Duration = Duration::from_millis(2400);
 

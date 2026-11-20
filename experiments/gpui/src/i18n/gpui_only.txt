@@ -139,39 +139,15 @@ Syncing library changes
 Estimating time remaining…
 The library is still in use; nothing was restored.
 The dropped files did not arrive.
-Keep the shown file and merge the others into it
-Skip to the next set
-You have no identical items.
-Enjoy your day
-Remove from This Set
-Links
-You have no duplicated items.
-Identical
-Similar
-of
-Showing
-pairs; settle these to see the rest.
-Keep this
 ZIP Archive
-Merged
-You have no similar items.
-larger picture
-lossless format
-more data
-Kept
-drops
-After merge
-Not measured: only still images are compared pixel by pixel.
-Comparing the pixels…
-Against file
-is in a collection: it leaves it and hands nothing over.
-Pixels identical
-of pixels differ slightly
-differs visibly
 differ at all
 sizes differ,
 compared stretched
-equal quality, the older file
-No clear quality winner. Choose the file to keep, or mark the set as not duplicates.
-Previous set
-Next set
+No clear quality winner. Choose left or right, or keep both.
+No duplicate pairs
+Review complete
+Scan the library to find similar images.
+of pixels differ visibly
+of pixels differ, none visibly
+of pixels differ
+Pixels are compared in still images only

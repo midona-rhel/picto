@@ -3,7 +3,9 @@
 //! difference` on black; GPUI has no blend modes, so the same picture is
 //! computed once per pair, off the drawing thread, from the decoded
 //! originals, and counted: how many pixels differ at all, and how many by
-//! enough to see.
+//! enough to see. The count is written out as a measurement
+//! ([`Measure::sentence`]); it never says the pictures are the same.
+use crate::i18n::{en, t};
 use gpui::RenderImage;
 use image::{ImageBuffer, Rgba, imageops};
 use std::sync::Arc;
@@ -28,6 +30,52 @@ pub struct Measure {
     pub changed: f32,
     /// The share of pixels that differ by enough to see, 0 to 1.
     pub visible: f32,
+}
+
+/// A share of the picture's pixels, as the sentence writes it.
+fn share(value: f32) -> String {
+    let percent = value * 100.;
+    if percent <= 0. {
+        "0%".to_owned()
+    } else if percent < 0.1 {
+        "<0.1%".to_owned()
+    } else if percent >= 99.95 {
+        "100%".to_owned()
+    } else {
+        format!("{percent:.1}%")
+    }
+}
+
+impl Measure {
+    /// What was counted, in words: first how much of the picture differs,
+    /// then, if there is more to say, how much differs at all and that the
+    /// pictures were of different sizes.
+    pub fn sentence(&self) -> (String, Option<String>) {
+        let counted = if self.visible > 0. {
+            format!("{} {}", share(self.visible), en("of pixels differ visibly"))
+        } else if self.changed > 0. {
+            format!(
+                "{} {}",
+                share(self.changed),
+                en("of pixels differ, none visibly")
+            )
+        } else {
+            format!("{} {}", share(0.), en("of pixels differ"))
+        };
+        let mut detail = Vec::new();
+        if self.visible > 0. && self.changed > self.visible {
+            detail.push(format!("{} {}", share(self.changed), en("differ at all")));
+        }
+        if let Some(((aw, ah), (bw, bh))) = self.sizes {
+            detail.push(format!(
+                "{} {aw} × {ah} {} {bw} × {bh}, {}",
+                en("sizes differ,"),
+                t("and"),
+                en("compared stretched")
+            ));
+        }
+        (counted, (!detail.is_empty()).then(|| detail.join(" · ")))
+    }
 }
 
 /// The difference of two decoded images, at the left image's proportions
