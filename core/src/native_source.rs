@@ -1,4 +1,6 @@
-//! Production bridge from native source adapters into the durable subscription worker.
+//! Runs a native source adapter for one subscription query. Each post the
+//! adapter finds, each file downloaded for it and each saved position is sent
+//! to the durable subscription worker as an event.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -118,7 +120,7 @@ impl NativeSourceRunner {
             (!refresh_from_newest)
                 .then_some(query.resume_cursor.as_deref())
                 .flatten(),
-        )?;
+        );
         let mut session = PartitionedSourceSession::new(
             adapter,
             credentials.clone(),
@@ -535,37 +537,48 @@ struct PostRevisitPlan {
     preserved_media: BTreeMap<String, PathBuf>,
 }
 
+/// Splits a query's saved position into one position per partition.
+///
+/// A provider with one partition saves its position as it is. A provider
+/// with several partitions saves a JSON object that maps each partition name
+/// to that partition's position.
+///
+/// A saved position can be older than the provider's current partitions: the
+/// Twitter / X provider had one partition, `media`, before it had `photos`
+/// and `videos`. Such a position is not an error. Every partition that it
+/// does not name starts again from the newest post. No post is lost by this:
+/// posts that are already in the library are recognised by their ids and are
+/// not downloaded again, and the posts after them are reached as before.
 fn decode_runtime_cursor(
     partitions: &[SourcePartition],
     raw: Option<&str>,
-) -> Result<BTreeMap<SourcePartition, Option<String>>, RunnerFailure> {
+) -> BTreeMap<SourcePartition, Option<String>> {
     let raw = raw.filter(|value| !value.is_empty());
     if partitions.len() == 1 {
-        return Ok([(partitions[0].clone(), raw.map(ToOwned::to_owned))]
+        return [(partitions[0].clone(), raw.map(ToOwned::to_owned))]
             .into_iter()
-            .collect());
+            .collect();
     }
-    let Some(raw) = raw else {
-        return Ok(partitions
-            .iter()
-            .cloned()
-            .map(|partition| (partition, None))
-            .collect());
-    };
-    let decoded = serde_json::from_str::<BTreeMap<String, Option<String>>>(raw).map_err(|_| {
-        RunnerFailure::terminal(
-            RunnerFailureKind::InvalidQuery,
-            "Invalid native source partition cursor",
-        )
-    })?;
-    Ok(partitions
+    let decoded = raw
+        .map(|raw| {
+            serde_json::from_str::<BTreeMap<String, Option<String>>>(raw).unwrap_or_else(|_| {
+                tracing::warn!(
+                    target: "picto_core::native_source",
+                    "The saved source position was written before the provider had its current \
+                     partitions; every partition starts again from the newest post"
+                );
+                BTreeMap::new()
+            })
+        })
+        .unwrap_or_default();
+    partitions
         .iter()
         .cloned()
         .map(|partition| {
             let cursor = decoded.get(&partition.0).cloned().flatten();
             (partition, cursor)
         })
-        .collect())
+        .collect()
 }
 
 fn encode_runtime_cursor(
@@ -1448,7 +1461,7 @@ mod tests {
     fn partition_cursor_codec_keeps_single_streams_plain_and_multi_streams_independent() {
         let feed = SourcePartition::new("feed");
         let single = [feed.clone()];
-        let decoded = decode_runtime_cursor(&single, Some("after-1")).unwrap();
+        let decoded = decode_runtime_cursor(&single, Some("after-1"));
         assert_eq!(decoded[&feed].as_deref(), Some("after-1"));
         assert_eq!(encode_runtime_cursor(&single, &decoded).unwrap(), "after-1");
 
@@ -1461,9 +1474,36 @@ mod tests {
             (feed.clone(), None),
         ]);
         let encoded = encode_runtime_cursor(&partitions, &cursors).unwrap();
+        assert_eq!(decode_runtime_cursor(&partitions, Some(&encoded)), cursors);
+    }
+
+    #[test]
+    fn a_position_saved_before_the_provider_had_several_partitions_starts_them_again() {
+        let photos = SourcePartition::new("photos");
+        let videos = SourcePartition::new("videos");
+        let partitions = [photos.clone(), videos.clone()];
+        let restarted = BTreeMap::from([(photos.clone(), None), (videos.clone(), None)]);
+        // The position the Twitter / X provider saved while it had one
+        // partition.
+        let single_partition_position =
+            r#"{"user_id":"783214","timeline_cursor":"DAABCgAB","page_index":3}"#;
         assert_eq!(
-            decode_runtime_cursor(&partitions, Some(&encoded)).unwrap(),
-            cursors
+            decode_runtime_cursor(&partitions, Some(single_partition_position)),
+            restarted
+        );
+        assert_eq!(
+            decode_runtime_cursor(&partitions, Some("not a partition map")),
+            restarted
+        );
+        // A position that names only other partitions restarts these two.
+        assert_eq!(
+            decode_runtime_cursor(&partitions, Some(r#"{"media":"DAABCgAB"}"#)),
+            restarted
+        );
+        // A position that names one of them keeps it and restarts the other.
+        assert_eq!(
+            decode_runtime_cursor(&partitions, Some(r#"{"videos":"DAABCgAC"}"#)),
+            BTreeMap::from([(photos, None), (videos, Some("DAABCgAC".into()))])
         );
     }
 
