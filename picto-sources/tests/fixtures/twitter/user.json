@@ -4,7 +4,7 @@
       "result": {
         "__typename": "User",
         "rest_id": "783214",
-        "legacy": { "screen_name": "OpenAI" }
+        "core": { "screen_name": "OpenAI" }
       }
     }
   }

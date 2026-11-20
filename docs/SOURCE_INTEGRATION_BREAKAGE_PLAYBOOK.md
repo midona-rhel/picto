@@ -100,16 +100,19 @@ after that release. The comparison started from commit `d05a77933a89a31ff9d57a2c
 the revision that Picto ran before the native providers replaced it. Start the next comparison from
 `552cb84a` and replace the SHAs in this paragraph when it is done.
 
-Two differences from that revision are known and were left in place:
+One difference from that revision is known and was left in place:
 
-- Twitter / X. gallery-dl reads a user's media from the `UserPhotoTimeline` operation and then from
-  `UserVideoTimeline`, and uses a newer query id for `UserByScreenName`. Picto still uses the older
-  `UserMedia` operation and the older `UserByScreenName` id. Nothing shows that X has stopped
-  serving them, and the change cannot be checked without a signed-in session. The `TODO` at the top
-  of `picto-sources/src/providers/twitter.rs` describes what the move needs.
 - Hentai Foundry. The site answers a browser user agent with an Anubis challenge (401). gallery-dl
   has no handling for it. Picto sends its own user agent to this site, which the site serves
   directly.
+
+Twitter / X reads a user's media the way that revision does: the posts with photos from the
+`UserPhotoTimeline` operation and then the posts with videos from `UserVideoTimeline`. gallery-dl
+stopped using the single `UserMedia` timeline in commit `48f2e94599cf5a3899b6c7395f85eefb1206aea3`.
+The provider has one partition for each timeline, `photos` and `videos`. A position that was saved while the provider had the single `media`
+partition cannot be used with them. `decode_runtime_cursor` in `core/src/native_source.rs` then
+starts both partitions again from the newest post; posts that are already in the library are
+recognised by their ids and are not downloaded again.
 
 Never paste session cookies, authorization headers, OAuth secrets, signed URLs, or private response
 payloads into an issue, fixture, test output, or commit. Reduce a captured response to the smallest

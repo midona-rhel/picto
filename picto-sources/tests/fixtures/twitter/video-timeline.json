@@ -1,0 +1,77 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "timeline": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "profile-grid-0",
+                    "content": {
+                      "items": [
+                        {
+                          "entryId": "profile-grid-0-tweet-1960123456789012300",
+                          "item": {
+                            "itemContent": {
+                              "tweet_results": {
+                                "result": {
+                                  "__typename": "Tweet",
+                                  "rest_id": "1960123456789012300",
+                                  "core": {
+                                    "user_results": {
+                                      "result": {
+                                        "core": { "screen_name": "OpenAI" }
+                                      }
+                                    }
+                                  },
+                                  "legacy": {
+                                    "id_str": "1960123456789012300",
+                                    "created_at": "Fri Aug 29 00:00:00 +0000 2026",
+                                    "full_text": "A video",
+                                    "extended_entities": {
+                                      "media": [
+                                        {
+                                          "id_str": "1960123000000000003",
+                                          "media_key": "7_1960123000000000003",
+                                          "type": "video",
+                                          "media_url_https": "https://pbs.twimg.com/ext_tw_video_thumb/Clip/pu/img/preview.jpg",
+                                          "video_info": {
+                                            "variants": [
+                                              {
+                                                "bitrate": 832000,
+                                                "content_type": "video/mp4",
+                                                "url": "https://video.twimg.com/ext_tw_video/Clip/pu/vid/640x360/clip.mp4"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "entryId": "cursor-bottom-2",
+                    "content": {
+                      "cursorType": "Bottom",
+                      "value": "DAABCgAC"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

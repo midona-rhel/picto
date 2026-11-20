@@ -20,21 +20,22 @@ const CURSOR: OpaqueCursor = OpaqueCursor::new(2_048);
 const MAX_EMPTY_TIMELINE_PAGES: usize = 8;
 const TRANSACTION_CACHE_TTL: Duration = Duration::from_secs(10_800);
 const PUBLIC_BEARER: &str = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
-const USER_LOOKUP_OPERATION: &str = "ck5KkZ8t5cOmoLssopN99Q/UserByScreenName";
-const USER_MEDIA_OPERATION: &str = "jCRhbOzdgOHp6u9H4g2tEg/UserMedia";
-
-// The handling of timeline cursors and the page that the transaction keys are
-// read from follow gallery-dl's Twitter extractor at Codeberg commit
+// The operations, their query ids, variables, feature flags and field toggles,
+// the handling of timeline cursors, and the page that the transaction keys are
+// read from all follow gallery-dl's Twitter extractor at Codeberg commit
 // 552cb84a08c4f0a4c071a466573fe749269573a3 (2026-11-20).
 //
-// TODO: that revision no longer uses the UserMedia operation. It reads a
-// user's photo posts from UserPhotoTimeline and then the video posts from
-// UserVideoTimeline, and it uses a newer query id for UserByScreenName. Picto
-// still uses UserMedia and the older UserByScreenName id. Moving to the two
-// timelines needs either two partitions or one cursor that merges both
-// timelines by post id, so that a refresh sees both the newest photo posts
-// and the newest video posts, and it has to be checked with a signed-in
-// session.
+// A user's media is read as gallery-dl reads it: the posts with photos from
+// UserPhotoTimeline, then the posts with videos from UserVideoTimeline.
+// gallery-dl stopped using the single UserMedia timeline in commit
+// 48f2e94599cf5a3899b6c7395f85eefb1206aea3. Each timeline is one partition
+// with its own saved position. A post that has both a photo and a video can
+// appear in both timelines; it has the same id in both, so it is stored once.
+const USER_LOOKUP_OPERATION: &str = "AMIBMjtxEEATh4z8V9GtRg/UserByScreenName";
+const PHOTO_TIMELINE_OPERATION: &str = "9SiNhJMRCvjdE957jGo3aQ/UserPhotoTimeline";
+const VIDEO_TIMELINE_OPERATION: &str = "pPxk1XFyAcJJ28hNFCLjTA/UserVideoTimeline";
+const PHOTOS_PARTITION: &str = "photos";
+const VIDEOS_PARTITION: &str = "videos";
 
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     TwitterSource::default()
@@ -126,7 +127,7 @@ impl NativeSourceAdapter for TwitterSource {
             id: "twitter",
             display_name: "Twitter / X",
             domain: DOMAIN,
-            partitions: &["media"],
+            partitions: &[PHOTOS_PARTITION, VIDEOS_PARTITION],
             anonymous: false,
         }
     }
@@ -144,6 +145,7 @@ impl NativeSourceAdapter for TwitterSource {
     ) -> AdapterFuture<'a> {
         Box::pin(async move {
             let username = normalize_username(&request.query)?;
+            let operation = timeline_operation(&request.partition)?;
             let mut state = request
                 .cursor
                 .as_deref()
@@ -175,6 +177,7 @@ impl NativeSourceAdapter for TwitterSource {
             };
             for _ in 0..MAX_EMPTY_TIMELINE_PAGES {
                 let url = user_timeline_url(
+                    operation,
                     &user_id,
                     state
                         .as_ref()
@@ -373,12 +376,24 @@ fn generate_csrf_token() -> String {
         .collect()
 }
 
+/// The timeline operation that a partition reads.
+fn timeline_operation(partition: &crate::SourcePartition) -> Result<&'static str, SourceError> {
+    match partition.0.as_str() {
+        PHOTOS_PARTITION => Ok(PHOTO_TIMELINE_OPERATION),
+        VIDEOS_PARTITION => Ok(VIDEO_TIMELINE_OPERATION),
+        _ => Err(invalid_query("Twitter / X has no such timeline")),
+    }
+}
+
 fn user_lookup_url(username: &str) -> Url {
     let variables = json!({
         "screen_name": username,
         "withGrokTranslatedBio": false
     });
-    let field_toggles = json!({"withAuxiliaryUserLabels": true});
+    let field_toggles = json!({
+        "withPayments": false,
+        "withAuxiliaryUserLabels": true
+    });
     graphql_url(
         USER_LOOKUP_OPERATION,
         variables,
@@ -387,12 +402,12 @@ fn user_lookup_url(username: &str) -> Url {
     )
 }
 
-fn user_timeline_url(user_id: &str, cursor: Option<&str>) -> Url {
+fn user_timeline_url(operation: &str, user_id: &str, cursor: Option<&str>) -> Url {
     let mut variables = json!({
         "userId": user_id,
-        // X returns at least 20 posts for a smaller count. Picto still hands
-        // out one post at a time: the cursor stores the index of the next
-        // post within the page.
+        // X returns at least 20 posts for a smaller count, and gallery-dl
+        // asks for 50. Picto asks for 20 and still hands out one post at a
+        // time: the cursor stores the index of the next post within the page.
         "count": 20,
         "includePromotedContent": false,
         "withClientEventToken": false,
@@ -403,10 +418,13 @@ fn user_timeline_url(user_id: &str, cursor: Option<&str>) -> Url {
         variables["cursor"] = Value::String(cursor.to_string());
     }
     graphql_url(
-        USER_MEDIA_OPERATION,
+        operation,
         variables,
         timeline_features(),
-        Some(json!({"withArticlePlainText": false})),
+        Some(json!({
+            "withPayments": false,
+            "withArticlePlainText": false
+        })),
     )
 }
 
@@ -434,58 +452,88 @@ fn graphql_url(
 fn user_features() -> Value {
     json!({
         "hidden_profile_subscriptions_enabled": true,
-        "payments_enabled": false,
-        "rweb_xchat_enabled": false,
         "profile_label_improvements_pcf_label_in_post_enabled": true,
-        "rweb_tipjar_consumption_enabled": true,
+        "responsive_web_profile_redirect_enabled": true,
+        "rweb_tipjar_consumption_enabled": false,
         "verified_phone_label_enabled": false,
         "highlights_tweets_tab_ui_enabled": true,
         "responsive_web_twitter_article_notes_tab_enabled": true,
-        "subscriptions_feature_can_gift_premium": true,
+        "subscriptions_feature_can_gift_premium": false,
         "creator_subscriptions_tweet_preview_api_enabled": true,
         "responsive_web_graphql_timeline_navigation_enabled": true,
-        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false
+        "subscriptions_verification_info_is_identity_verified_enabled": true,
+        "subscriptions_verification_info_verified_since_enabled": true
     })
 }
 
+/// The feature flags that X's web client sends with a timeline request. X
+/// rejects a request that leaves out a flag it expects.
 fn timeline_features() -> Value {
-    json!({
-        "rweb_video_screen_enabled": false,
-        "payments_enabled": false,
-        "rweb_xchat_enabled": false,
-        "profile_label_improvements_pcf_label_in_post_enabled": true,
-        "rweb_tipjar_consumption_enabled": true,
-        "verified_phone_label_enabled": false,
-        "creator_subscriptions_tweet_preview_api_enabled": true,
-        "responsive_web_graphql_timeline_navigation_enabled": true,
-        "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
-        "premium_content_api_read_enabled": false,
-        "communities_web_enable_tweet_community_results_fetch": true,
-        "c9s_tweet_anatomy_moderator_badge_enabled": true,
-        "responsive_web_grok_analyze_button_fetch_trends_enabled": false,
-        "responsive_web_grok_analyze_post_followups_enabled": true,
-        "responsive_web_jetfuel_frame": true,
-        "responsive_web_grok_share_attachment_enabled": true,
-        "articles_preview_enabled": true,
-        "responsive_web_edit_tweet_api_enabled": true,
-        "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
-        "view_counts_everywhere_api_enabled": true,
-        "longform_notetweets_consumption_enabled": true,
-        "responsive_web_twitter_article_tweet_consumption_enabled": true,
-        "tweet_awards_web_tipping_enabled": false,
-        "responsive_web_grok_show_grok_translated_post": false,
-        "responsive_web_grok_analysis_button_from_backend": true,
-        "creator_subscriptions_quote_tweet_preview_enabled": false,
-        "freedom_of_speech_not_reach_fetch_enabled": true,
-        "standardized_nudges_misinfo": true,
-        "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
-        "longform_notetweets_rich_text_read_enabled": true,
-        "longform_notetweets_inline_media_enabled": true,
-        "responsive_web_grok_image_annotation_enabled": true,
-        "responsive_web_grok_imagine_annotation_enabled": true,
-        "responsive_web_grok_community_note_auto_translation_is_enabled": false,
-        "responsive_web_enhance_cards_enabled": false
-    })
+    const FEATURES: &[(&str, bool)] = &[
+        ("rweb_video_screen_enabled", false),
+        ("rweb_cashtags_enabled", true),
+        ("profile_label_improvements_pcf_label_in_post_enabled", true),
+        ("responsive_web_profile_redirect_enabled", true),
+        ("rweb_tipjar_consumption_enabled", false),
+        ("verified_phone_label_enabled", false),
+        ("creator_subscriptions_tweet_preview_api_enabled", true),
+        ("responsive_web_graphql_timeline_navigation_enabled", true),
+        ("premium_content_api_read_enabled", false),
+        ("communities_web_enable_tweet_community_results_fetch", true),
+        ("c9s_tweet_anatomy_moderator_badge_enabled", true),
+        (
+            "responsive_web_grok_analyze_button_fetch_trends_enabled",
+            false,
+        ),
+        ("responsive_web_grok_analyze_post_followups_enabled", true),
+        ("rweb_cashtags_composer_attachment_enabled", true),
+        ("responsive_web_jetfuel_frame", true),
+        ("rweb_sports_post_context_enabled", true),
+        ("x_elections_post_context_enabled", true),
+        ("responsive_web_grok_share_attachment_enabled", true),
+        ("responsive_web_grok_annotations_enabled", true),
+        ("articles_preview_enabled", true),
+        ("responsive_web_edit_tweet_api_enabled", true),
+        ("rweb_conversational_replies_downvote_enabled", false),
+        (
+            "graphql_is_translatable_rweb_tweet_is_translatable_enabled",
+            true,
+        ),
+        ("view_counts_everywhere_api_enabled", true),
+        ("longform_notetweets_consumption_enabled", true),
+        (
+            "responsive_web_twitter_article_tweet_consumption_enabled",
+            true,
+        ),
+        ("content_disclosure_indicator_enabled", true),
+        ("content_disclosure_ai_generated_indicator_enabled", true),
+        ("responsive_web_grok_show_grok_translated_post", true),
+        ("responsive_web_grok_analysis_button_from_backend", true),
+        ("post_ctas_fetch_enabled", false),
+        ("freedom_of_speech_not_reach_fetch_enabled", true),
+        ("standardized_nudges_misinfo", true),
+        (
+            "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled",
+            true,
+        ),
+        ("longform_notetweets_rich_text_read_enabled", true),
+        ("longform_notetweets_inline_media_enabled", false),
+        ("responsive_web_nested_quote_preview_enabled", true),
+        ("responsive_web_grok_image_annotation_enabled", true),
+        ("responsive_web_grok_imagine_annotation_enabled", true),
+        ("responsive_web_made_on_x_label_enabled", false),
+        (
+            "responsive_web_grok_community_note_auto_translation_is_enabled",
+            true,
+        ),
+        ("responsive_web_enhance_cards_enabled", false),
+    ];
+    Value::Object(
+        FEATURES
+            .iter()
+            .map(|(name, enabled)| ((*name).to_string(), Value::Bool(*enabled)))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -589,7 +637,7 @@ struct TimelinePage {
 fn parse_timeline(response: &Value) -> Result<TimelinePage, SourceError> {
     reject_api_errors(response)?;
     let instructions = find_instructions(response).ok_or_else(|| {
-        invalid_response("Twitter / X media response is missing timeline instructions")
+        invalid_response("Twitter / X timeline response is missing its instructions")
     })?;
     let mut entries = Vec::new();
     for instruction in instructions {
@@ -1102,7 +1150,7 @@ mod tests {
         }}}});
         let req = DiscoveryRequest {
             query: "artist".into(),
-            partition: crate::SourcePartition::new("media"),
+            partition: crate::SourcePartition::new(PHOTOS_PARTITION),
             cursor: None,
             page_size: 1,
         };
@@ -1116,12 +1164,17 @@ mod tests {
     use crate::{CanonicalTag, SourcePartition};
 
     const USER: &str = include_str!("../../tests/fixtures/twitter/user.json");
-    const MEDIA: &str = include_str!("../../tests/fixtures/twitter/media.json");
+    const PHOTOS: &str = include_str!("../../tests/fixtures/twitter/photo-timeline.json");
+    const VIDEOS: &str = include_str!("../../tests/fixtures/twitter/video-timeline.json");
+    /// Where the photo timeline fixture keeps its posts: the items of the
+    /// `profile-photo-grid-0` entry.
+    const PHOTO_ITEMS: &str =
+        "/data/user/result/timeline/timeline/instructions/0/entries/0/content/items";
 
     fn request(cursor: Option<String>) -> DiscoveryRequest {
         DiscoveryRequest {
             query: "OpenAI".to_string(),
-            partition: SourcePartition::new("media"),
+            partition: SourcePartition::new(PHOTOS_PARTITION),
             cursor,
             page_size: 1,
         }
@@ -1215,7 +1268,7 @@ mod tests {
         let user: Value = serde_json::from_str(USER).unwrap();
         assert_eq!(parse_user_id(&user).unwrap(), "783214");
 
-        let media: Value = serde_json::from_str(MEDIA).unwrap();
+        let media: Value = serde_json::from_str(PHOTOS).unwrap();
         let batch = normalize_timeline(&request(None), "OpenAI", "783214", None, &media).unwrap();
         assert_eq!(batch.posts.len(), 1);
         let post = &batch.posts[0];
@@ -1228,6 +1281,64 @@ mod tests {
             .url
             .ends_with("?format=jpg&name=4096x4096"));
         assert_eq!(post.media[1].mime_hint.as_deref(), Some("video/mp4"));
+    }
+
+    #[test]
+    fn reads_photo_posts_and_then_video_posts_from_their_own_timelines() {
+        assert_eq!(
+            adapter()
+                .partition_order()
+                .iter()
+                .map(|partition| partition.0.as_str())
+                .collect::<Vec<_>>(),
+            ["photos", "videos"]
+        );
+        let photos = user_timeline_url(
+            timeline_operation(&SourcePartition::new("photos")).unwrap(),
+            "783214",
+            None,
+        );
+        assert_eq!(
+            photos.path(),
+            "/i/api/graphql/9SiNhJMRCvjdE957jGo3aQ/UserPhotoTimeline"
+        );
+        let videos = user_timeline_url(
+            timeline_operation(&SourcePartition::new("videos")).unwrap(),
+            "783214",
+            Some("DAABCgAC"),
+        );
+        assert_eq!(
+            videos.path(),
+            "/i/api/graphql/pPxk1XFyAcJJ28hNFCLjTA/UserVideoTimeline"
+        );
+        let variables = videos
+            .query_pairs()
+            .find_map(|(name, value)| (name == "variables").then(|| value.into_owned()))
+            .unwrap();
+        let variables: Value = serde_json::from_str(&variables).unwrap();
+        assert_eq!(variables["userId"], "783214");
+        assert_eq!(variables["cursor"], "DAABCgAC");
+        // The single media timeline that X had before is not a partition.
+        assert!(timeline_operation(&SourcePartition::new("media")).is_err());
+
+        let mut request = request(None);
+        request.partition = SourcePartition::new(VIDEOS_PARTITION);
+        let response: Value = serde_json::from_str(VIDEOS).unwrap();
+        let batch = normalize_timeline(&request, "OpenAI", "783214", None, &response).unwrap();
+        let post = &batch.posts[0];
+        assert_eq!(post.partition, SourcePartition::new("videos"));
+        assert_eq!(post.stable_id, "1960123456789012300");
+        assert_eq!(post.creator.as_deref(), Some("OpenAI"));
+        assert_eq!(post.media.len(), 1);
+        assert_eq!(
+            post.media[0].url,
+            "https://video.twimg.com/ext_tw_video/Clip/pu/vid/640x360/clip.mp4"
+        );
+        // After the only post of the page, the saved position is the page's
+        // Bottom cursor.
+        let state = decode_cursor(post.resume_cursor_after.as_deref().unwrap()).unwrap();
+        assert_eq!(state.timeline_cursor.as_deref(), Some("DAABCgAC"));
+        assert_eq!(state.page_index, 0);
     }
 
     #[test]
@@ -1249,16 +1360,16 @@ mod tests {
 
     #[test]
     fn bounded_page_exposes_only_one_post_and_persists_the_next_index() {
-        let mut response: Value = serde_json::from_str(MEDIA).unwrap();
+        let mut response: Value = serde_json::from_str(PHOTOS).unwrap();
         let entries = response
-            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions/0/entries")
+            .pointer_mut(PHOTO_ITEMS)
             .unwrap()
             .as_array_mut()
             .unwrap();
         let mut second = entries[0].clone();
-        second["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+        second["item"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
             Value::String("1960123456789012344".into());
-        second["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+        second["item"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
             Value::String("1960123456789012344".into());
         entries.insert(1, second);
         let batch =
@@ -1272,17 +1383,17 @@ mod tests {
 
     #[test]
     fn stable_cursor_survives_timeline_entries_moving_between_requests() {
-        let mut response: Value = serde_json::from_str(MEDIA).unwrap();
+        let mut response: Value = serde_json::from_str(PHOTOS).unwrap();
         let entries = response
-            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions/0/entries")
+            .pointer_mut(PHOTO_ITEMS)
             .unwrap()
             .as_array_mut()
             .unwrap();
         let original_first = entries[0].clone();
         let mut original_second = original_first.clone();
-        original_second["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+        original_second["item"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
             Value::String("1960123456789012344".into());
-        original_second["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+        original_second["item"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
             Value::String("1960123456789012344".into());
         entries.insert(1, original_second);
 
@@ -1291,14 +1402,14 @@ mod tests {
         let state = decode_cursor(first.posts[0].resume_cursor_after.as_deref().unwrap()).unwrap();
 
         let entries = response
-            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions/0/entries")
+            .pointer_mut(PHOTO_ITEMS)
             .unwrap()
             .as_array_mut()
             .unwrap();
         let mut newly_inserted = original_first;
-        newly_inserted["content"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
+        newly_inserted["item"]["itemContent"]["tweet_results"]["result"]["rest_id"] =
             Value::String("1960123456789012346".into());
-        newly_inserted["content"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
+        newly_inserted["item"]["itemContent"]["tweet_results"]["result"]["legacy"]["id_str"] =
             Value::String("1960123456789012346".into());
         entries.insert(0, newly_inserted);
 
@@ -1310,14 +1421,14 @@ mod tests {
 
     #[test]
     fn flattens_every_tweet_from_add_entries_and_module_instructions() {
-        let mut response: Value = serde_json::from_str(MEDIA).unwrap();
+        let mut response: Value = serde_json::from_str(PHOTOS).unwrap();
         let instructions = response
-            .pointer_mut("/data/user/result/timeline_v2/timeline/instructions")
+            .pointer_mut("/data/user/result/timeline/timeline/instructions")
             .unwrap()
             .as_array_mut()
             .unwrap();
         let result = instructions[0]
-            .pointer("/entries/0/content/itemContent/tweet_results/result")
+            .pointer("/entries/0/content/items/0/item/itemContent/tweet_results/result")
             .unwrap()
             .clone();
         let mut second = result.clone();
