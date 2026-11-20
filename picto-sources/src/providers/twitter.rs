@@ -23,6 +23,19 @@ const PUBLIC_BEARER: &str = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOu
 const USER_LOOKUP_OPERATION: &str = "ck5KkZ8t5cOmoLssopN99Q/UserByScreenName";
 const USER_MEDIA_OPERATION: &str = "jCRhbOzdgOHp6u9H4g2tEg/UserMedia";
 
+// The handling of timeline cursors and the page that the transaction keys are
+// read from follow gallery-dl's Twitter extractor at Codeberg commit
+// 552cb84a08c4f0a4c071a466573fe749269573a3 (2026-11-20).
+//
+// TODO: that revision no longer uses the UserMedia operation. It reads a
+// user's photo posts from UserPhotoTimeline and then the video posts from
+// UserVideoTimeline, and it uses a newer query id for UserByScreenName. Picto
+// still uses UserMedia and the older UserByScreenName id. Moving to the two
+// timelines needs either two partitions or one cursor that merges both
+// timelines by post id, so that a refresh sees both the newest photo posts
+// and the newest video posts, and it has to be checked with a signed-in
+// session.
+
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     TwitterSource::default()
 }
@@ -46,16 +59,19 @@ impl TwitterSource {
         url: &Url,
         cancel: &CancellationToken,
     ) -> Result<RequestCredentials, SourceError> {
-        // Match the website flow: bootstrap transaction keys with the normal
-        // cookie session, then attach GraphQL headers only to the API call.
+        // The website loads a page with the session's cookies and reads the
+        // transaction keys from it before it calls the API. The same order is
+        // used here: the page is requested with the cookies only, and the
+        // GraphQL headers are added to the API request alone.
         api_credentials(credentials, http)?;
         let path = transaction_path(url);
         let transaction_id = self
             .transaction_id(http, credentials, &path, cancel)
             .await?;
 
-        // Bootstrap responses can rotate ct0. Re-read the runtime jar before
-        // binding CSRF and transaction headers to the actual API request.
+        // The page request above can set a new `ct0` cookie. The cookie is
+        // read again here so that the CSRF header of the API request carries
+        // the current value.
         let mut api = api_credentials(credentials, http)?;
         api.headers
             .insert("x-client-transaction-id".to_string(), transaction_id);
@@ -75,7 +91,7 @@ impl TwitterSource {
             .is_none_or(|cached| cached.expires_at <= Instant::now())
         {
             let home = http
-                .get_browser_text(twitter_home_url(), credentials, cancel)
+                .get_browser_text(transaction_bootstrap_url(), credentials, cancel)
                 .await?;
             let script_url = transaction_script_url(&home)?;
             let script_url = Url::parse(&script_url).map_err(|error| {
@@ -179,14 +195,19 @@ impl NativeSourceAdapter for TwitterSource {
                         http.get_browser_json::<Value>(url.clone(), &api_credentials, cancel),
                     )
                     .await?;
-                let page = parse_timeline(&response)?;
-                if page.tweets.is_empty() && page.continue_on_empty {
-                    if let Some(cursor) = page.bottom_cursor.as_ref().filter(|cursor| {
-                        state
+                let mut page = parse_timeline(&response)?;
+                // A page that returns the cursor it was requested with has no
+                // page after it.
+                if page.bottom_cursor.is_some()
+                    && page.bottom_cursor.as_ref()
+                        == state
                             .as_ref()
                             .and_then(|state| state.timeline_cursor.as_ref())
-                            != Some(*cursor)
-                    }) {
+                {
+                    page.bottom_cursor = None;
+                }
+                if page.tweets.is_empty() && page.continue_on_empty {
+                    if let Some(cursor) = page.bottom_cursor.as_ref() {
                         state = Some(CursorState {
                             user_id: user_id.clone(),
                             timeline_cursor: Some(cursor.clone()),
@@ -264,6 +285,13 @@ fn api_credentials_with_csrf(
 
 fn twitter_home_url() -> Url {
     Url::parse("https://x.com/").expect("static Twitter home URL")
+}
+
+/// The page that the transaction keys are read from. The home page can name
+/// a request script that X no longer serves (404); `/i/jf/` names the
+/// current one.
+fn transaction_bootstrap_url() -> Url {
+    Url::parse("https://x.com/i/jf/").expect("static Twitter bootstrap URL")
 }
 
 fn transaction_path(url: &Url) -> String {
@@ -362,8 +390,9 @@ fn user_lookup_url(username: &str) -> Url {
 fn user_timeline_url(user_id: &str, cursor: Option<&str>) -> Url {
     let mut variables = json!({
         "userId": user_id,
-        // X enforces a server-side minimum. A persisted page index still
-        // exposes exactly one source post between settlements.
+        // X returns at least 20 posts for a smaller count. Picto still hands
+        // out one post at a time: the cursor stores the index of the next
+        // post within the page.
         "count": 20,
         "includePromotedContent": false,
         "withClientEventToken": false,
@@ -585,16 +614,19 @@ fn parse_timeline(response: &Value) -> Result<TimelinePage, SourceError> {
     }
 
     let mut tweets = Vec::new();
-    let mut bottom = None;
+    let mut bottom_cursor = None;
+    let mut continue_on_empty = false;
+    // When a page has more than one continuation cursor, the last one in the
+    // page is the one to follow. A page without posts is followed by another
+    // request only if one of its cursors says so with
+    // `stopOnEmptyResponse: false`.
     for entry in entries {
-        if let Some(cursor) = bottom_cursor(entry) {
-            bottom = Some(cursor);
+        if let Some(cursor) = continuation_cursor(entry) {
+            continue_on_empty |= !cursor.stop_on_empty;
+            bottom_cursor = Some(cursor.value);
         }
         tweet_results(entry, &mut tweets);
     }
-    let (bottom_cursor, continue_on_empty) = bottom
-        .map(|cursor: TimelineCursor| (Some(cursor.value), !cursor.stop_on_empty))
-        .unwrap_or((None, false));
     Ok(TimelinePage {
         tweets,
         bottom_cursor,
@@ -620,7 +652,8 @@ fn normalize_tweet(
         .ok_or_else(|| invalid_response("Twitter / X post has an invalid ID"))?
         .to_string();
     let creator = tweet
-        .pointer("/core/user_results/result/legacy/screen_name")
+        .pointer("/core/user_results/result/core/screen_name")
+        .or_else(|| tweet.pointer("/core/user_results/result/legacy/screen_name"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -890,18 +923,25 @@ struct TimelineCursor {
     stop_on_empty: bool,
 }
 
-fn bottom_cursor(entry: &Value) -> Option<TimelineCursor> {
+/// Reads the cursor for the next page from a timeline entry. Two kinds of
+/// entry carry one: the "Bottom" cursor at the end of a page
+/// (`cursor-bottom-…`), and the "Show more" entry that X puts where it has
+/// held back part of a timeline (`cursor-showmorethreads-…`).
+fn continuation_cursor(entry: &Value) -> Option<TimelineCursor> {
     let content = entry.get("content").or_else(|| entry.get("item"))?;
     let content = content.get("itemContent").unwrap_or(content);
     let cursor_type = content
         .get("cursorType")
         .or_else(|| content.get("cursor_type"))
         .and_then(Value::as_str);
-    let entry_is_bottom = entry
+    let entry_id = entry
         .get("entryId")
         .and_then(Value::as_str)
-        .is_some_and(|id| id.starts_with("cursor-bottom-"));
-    if cursor_type != Some("Bottom") && !entry_is_bottom {
+        .unwrap_or_default();
+    if cursor_type != Some("Bottom")
+        && !entry_id.starts_with("cursor-bottom-")
+        && !entry_id.starts_with("cursor-showmorethreads-")
+    {
         return None;
     }
     let value = content
@@ -1334,6 +1374,39 @@ mod tests {
             normalize_timeline(&request(None), "OpenAI", "783214", None, &response).unwrap();
         assert!(batch.posts.is_empty());
         assert!(!batch.exhausted);
+    }
+
+    #[test]
+    fn follows_a_show_more_cursor_that_comes_after_the_bottom_cursor() {
+        let response: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/twitter/show-more.json"))
+                .unwrap();
+        let page = parse_timeline(&response).unwrap();
+        assert!(page.tweets.is_empty());
+        assert_eq!(page.bottom_cursor.as_deref(), Some("SHOW-MORE-CURSOR"));
+        assert!(page.continue_on_empty);
+
+        // A "Show more" cursor alone does not ask for another request after
+        // a page without posts.
+        let alone = json!({
+            "data": {"timeline": {"instructions": [{
+                "type": "TimelineAddEntries",
+                "entries": [{
+                    "entryId": "cursor-showmorethreads-1",
+                    "content": {"value": "MORE"}
+                }]
+            }]}}
+        });
+        let page = parse_timeline(&alone).unwrap();
+        assert_eq!(page.bottom_cursor.as_deref(), Some("MORE"));
+        assert!(!page.continue_on_empty);
+
+        // A "Show replies" entry inside a conversation is not a page cursor.
+        assert!(continuation_cursor(&json!({
+            "entryId": "tweet-1900000000000000003",
+            "content": {"itemContent": {"cursorType": "ShowMore", "value": "REPLIES"}}
+        }))
+        .is_none());
     }
 
     #[test]
