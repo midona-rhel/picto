@@ -22,6 +22,9 @@ const RATINGS: RatingMap = RatingMap::new(&[
     ("a", "explicit"),
 ]);
 
+// Post page handling follows gallery-dl's Newgrounds extractor at Codeberg
+// commit 552cb84a08c4f0a4c071a466573fe749269573a3 (2026-11-20).
+
 pub(crate) fn adapter() -> impl NativeSourceAdapter {
     NewgroundsSource::default()
 }
@@ -105,12 +108,122 @@ impl NativeSourceAdapter for NewgroundsSource {
                 .ok_or_else(|| invalid_response("Newgrounds post is missing its canonical URL"))?;
             let url = validate_post_url(canonical_url)?;
             let credentials = site_credentials(credentials);
-            let Some(html) = http.get_optional_text(url, &credentials, cancel).await? else {
-                return Ok(post);
+            let (status, _, html) = http
+                .get_text_with_inaccessible_status(url.clone(), &credentials, cancel)
+                .await?;
+            let html = match classify_post_page(status, &html) {
+                PostPage::Art => html,
+                PostPage::Inaccessible => return Ok(post),
+                PostPage::BrowserCheck => return Err(browser_check_required()),
+                PostPage::ContentFiltered { csrf_token } => {
+                    // Newgrounds shows this page to a session that has not
+                    // chosen to see filtered content. The page's own form
+                    // records that choice for the session, after which the
+                    // same URL returns the art page.
+                    let mut form_credentials = credentials.clone();
+                    form_credentials
+                        .headers
+                        .insert("X-CSRF-TOKEN".into(), csrf_token);
+                    let form = BTreeMap::from([("url".to_string(), url.to_string())]);
+                    let submitted = http
+                        .post_form_text(ignore_filter_url(), &form_credentials, &form, cancel)
+                        .await;
+                    if let Err(error) = submitted {
+                        // If Newgrounds refuses the form, the post stays
+                        // filtered and the second request below shows that.
+                        // A network failure, a rate limit or a cancellation
+                        // is returned so that the post is tried again later.
+                        if !matches!(
+                            error.kind,
+                            SourceErrorKind::Authentication
+                                | SourceErrorKind::AccessDenied
+                                | SourceErrorKind::InvalidResponse
+                        ) {
+                            return Err(error);
+                        }
+                    }
+                    let (status, final_url, html) = http
+                        .get_text_with_inaccessible_status(url, &credentials, cancel)
+                        .await?;
+                    // The second request is made once. A post that is still
+                    // not shown, or that now redirects to the login page, is
+                    // kept without media, the same as any other post the
+                    // session may not see.
+                    if is_login_page(&final_url) {
+                        return Ok(post);
+                    }
+                    match classify_post_page(status, &html) {
+                        PostPage::Art => html,
+                        PostPage::BrowserCheck => return Err(browser_check_required()),
+                        PostPage::Inaccessible | PostPage::ContentFiltered { .. } => {
+                            return Ok(post)
+                        }
+                    }
+                }
             };
             resolve_html(post, &html)
         })
     }
+}
+
+/// What Newgrounds sent for an art post URL.
+#[derive(Debug, PartialEq, Eq)]
+enum PostPage {
+    /// The art page itself.
+    Art,
+    /// A 403 or 404 page for a post that is deleted or that this session may
+    /// not see.
+    Inaccessible,
+    /// The "Content Filtered" page, with the CSRF token its form needs.
+    ContentFiltered { csrf_token: String },
+    /// The "NG Guard" page. Newgrounds sends this JavaScript puzzle for every
+    /// URL when it does not recognise the client as a browser.
+    BrowserCheck,
+}
+
+fn classify_post_page(status: u16, html: &str) -> PostPage {
+    if !matches!(status, 403 | 404) {
+        return PostPage::Art;
+    }
+    if status == 403 && html.contains("<title>NG Guard</title>") {
+        return PostPage::BrowserCheck;
+    }
+    if !html.contains("<title>Content Filtered</title>") {
+        return PostPage::Inaccessible;
+    }
+    match capture(
+        regex(
+            &CSRF_TOKEN,
+            r#"(?is)<meta\s[^>]*name="csrf-token"\s[^>]*content="([^"]+)""#,
+        ),
+        html,
+    ) {
+        Some(csrf_token) if csrf_token.len() <= 512 => PostPage::ContentFiltered { csrf_token },
+        // Without the token the form cannot be submitted.
+        _ => PostPage::Inaccessible,
+    }
+}
+
+fn ignore_filter_url() -> Url {
+    Url::parse("https://www.newgrounds.com/age-verification/ignore-filter")
+        .expect("static Newgrounds filter form URL")
+}
+
+fn is_login_page(url: &Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| host == "newgrounds.com" || host.ends_with(".newgrounds.com"))
+        && url.path().starts_with("/login")
+}
+
+/// The error for the "NG Guard" page. Skipping the post would be wrong here:
+/// the page is sent for every post, so every post would be recorded as
+/// having no media.
+fn browser_check_required() -> SourceError {
+    SourceError::new(
+        SourceErrorKind::Authentication,
+        "Newgrounds answered with its NG Guard browser check, which Picto cannot pass",
+        false,
+    )
 }
 
 fn site_credentials(credentials: &RequestCredentials) -> RequestCredentials {
@@ -661,6 +774,7 @@ fn regex<'a>(slot: &'a OnceLock<Regex>, pattern: &str) -> &'a Regex {
     slot.get_or_init(|| Regex::new(pattern).expect("valid Newgrounds parser regex"))
 }
 
+static CSRF_TOKEN: OnceLock<Regex> = OnceLock::new();
 static PROFILE_LINK: OnceLock<Regex> = OnceLock::new();
 static PROFILE_HREF: OnceLock<Regex> = OnceLock::new();
 static PROFILE_TITLE: OnceLock<Regex> = OnceLock::new();
@@ -819,6 +933,44 @@ mod tests {
         };
         let resolved = resolve_html(post, "<html><div id=\"adults_only\"></div></html>").unwrap();
         assert!(resolved.media.is_empty());
+    }
+
+    #[test]
+    fn tells_apart_the_pages_newgrounds_sends_for_a_post_it_does_not_show() {
+        let filtered = include_str!("../../tests/fixtures/newgrounds/content_filtered.html");
+        assert_eq!(
+            classify_post_page(403, filtered),
+            PostPage::ContentFiltered {
+                csrf_token: "fixture-csrf-token".into()
+            }
+        );
+        // The form cannot be submitted without its token.
+        assert_eq!(
+            classify_post_page(403, "<title>Content Filtered</title>"),
+            PostPage::Inaccessible
+        );
+        assert_eq!(
+            classify_post_page(403, "<html><title>NG Guard</title></html>"),
+            PostPage::BrowserCheck
+        );
+        assert_eq!(
+            classify_post_page(403, "<title>Forbidden</title>"),
+            PostPage::Inaccessible
+        );
+        assert_eq!(classify_post_page(404, ""), PostPage::Inaccessible);
+        assert_eq!(
+            classify_post_page(
+                200,
+                include_str!("../../tests/fixtures/newgrounds/post.html")
+            ),
+            PostPage::Art
+        );
+        assert!(is_login_page(
+            &Url::parse("https://www.newgrounds.com/login/required").unwrap()
+        ));
+        assert!(!is_login_page(
+            &Url::parse("https://www.newgrounds.com/art/view/artist/login").unwrap()
+        ));
     }
 
     #[test]
