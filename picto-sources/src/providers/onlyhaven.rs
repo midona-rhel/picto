@@ -231,11 +231,9 @@ impl NativeSourceAdapter for OnlyHaven {
                     Ok(creator)
                 })
                 .await?;
-            let mut offset = cursor.as_ref().map_or(0, |c| c.offset);
-            let mut seek = cursor.as_ref();
-            // A saved post ID locates the next item even when new posts shift a page.
-            // If both anchors disappear, replay from the start rather than lose posts.
+            let mut walk = Walk::new(cursor.as_ref());
             loop {
+                let offset = walk.offset;
                 let mut url = api_url(service, &creator.id, "posts");
                 url.query_pairs_mut()
                     .append_pair("o", &offset.to_string())
@@ -245,7 +243,7 @@ impl NativeSourceAdapter for OnlyHaven {
                     .get_or_fetch(
                         url.as_str(),
                         &credentials,
-                        cursor.is_some(),
+                        walk.may_use_saved_page,
                         http.get_json::<PostPage>(url.clone(), &credentials, cancel),
                     )
                     .await?;
@@ -255,47 +253,149 @@ impl NativeSourceAdapter for OnlyHaven {
                 {
                     return Err(invalid("The API returned an incomplete page before the end of the creator listing."));
                 }
-                let index = match seek {
-                    Some(saved) => saved
-                        .next
-                        .as_ref()
-                        .and_then(|id| page.posts.iter().position(|p| &p.id == id))
-                        .or_else(|| {
-                            page.posts
-                                .iter()
-                                .position(|p| p.id == saved.after)
-                                .map(|i| i + 1)
-                        }),
-                    None => Some(0),
-                };
-                if let Some(index) = index {
-                    if index < page.posts.len() {
+                match walk.step(&page)? {
+                    Some(Found::Post(index)) => {
                         return make_batch(request, &query, &creator, offset, index, &page);
                     }
-                    if page.posts.is_empty()
-                        || u64::from(offset) + page.posts.len() as u64 >= page.total
-                    {
+                    Some(Found::End) => {
                         return Ok(DiscoveryBatch {
                             posts: vec![],
                             exhausted: true,
                         });
                     }
-                    offset = offset
-                        .checked_add(PAGE_SIZE)
-                        .ok_or_else(|| invalid("The page offset is too large."))?;
-                    seek = None;
-                } else if offset > 0
-                    && cursor
-                        .as_ref()
-                        .is_some_and(|c| c.offset - offset < PAGE_SIZE * 4)
-                {
-                    offset = offset.saturating_sub(PAGE_SIZE);
-                } else {
-                    offset = 0;
-                    seek = None;
+                    None => {}
                 }
             }
         })
+    }
+}
+
+/// What a search for the next post found on a page.
+#[derive(Debug, PartialEq, Eq)]
+enum Found {
+    /// The next post is at this index of the page that was just read.
+    Post(usize),
+    /// The creator has no more posts.
+    End,
+}
+
+/// The search for the post that follows the saved position.
+///
+/// A run reads one post per call. The saved position names the last post
+/// that was handled (`after`) and, when it was known, the post that came
+/// next (`next`). The listing can change between calls: a new post moves
+/// every older post one place down, and a deleted post moves every later
+/// post one place up. A page offset alone therefore does not say where the
+/// next post is, so the search always looks for the saved posts by their
+/// IDs, and it never takes a page's first post as the next one unless it has
+/// just read, in a new request, that the last handled post is the last post
+/// of the page before.
+struct Walk<'a> {
+    /// The offset of the page to read next.
+    offset: u32,
+    /// The saved position, or `None` to take the first post of the page.
+    saved: Option<&'a Cursor>,
+    /// The page offset of the saved position.
+    home: u32,
+    /// Whether the next read may return the page kept from an earlier call.
+    /// A kept page can be up to five minutes old.
+    may_use_saved_page: bool,
+    /// A new request has shown that the last handled post is the last post
+    /// of the page before `offset`.
+    ended_page_before: bool,
+    /// The page after `home` has been searched for the saved posts.
+    looked_ahead: bool,
+}
+
+impl<'a> Walk<'a> {
+    fn new(saved: Option<&'a Cursor>) -> Self {
+        let home = saved.map_or(0, |cursor| cursor.offset);
+        Self {
+            offset: home,
+            saved,
+            home,
+            may_use_saved_page: saved.is_some(),
+            ended_page_before: false,
+            looked_ahead: false,
+        }
+    }
+
+    /// Looks at the page that was read at `self.offset`. Returns what was
+    /// found, or `None` after choosing another page to read (or the same
+    /// page again, in a new request).
+    fn step(&mut self, page: &PostPage) -> Result<Option<Found>, SourceError> {
+        let read_from_saved_page = std::mem::replace(&mut self.may_use_saved_page, false);
+        let Some(saved) = self.saved else {
+            return Ok(Some(if page.posts.is_empty() {
+                Found::End
+            } else {
+                Found::Post(0)
+            }));
+        };
+        let index = saved
+            .next
+            .as_ref()
+            .and_then(|id| page.posts.iter().position(|post| &post.id == id))
+            .or_else(|| {
+                page.posts
+                    .iter()
+                    .position(|post| post.id == saved.after)
+                    .map(|index| index + 1)
+            });
+        let last_page = u64::from(self.offset) + page.posts.len() as u64 >= page.total;
+        match index {
+            Some(index) if index < page.posts.len() => Ok(Some(Found::Post(index))),
+            // The last handled post is the last post of this page.
+            Some(_) => {
+                if page.posts.is_empty() || last_page {
+                    return Ok(Some(Found::End));
+                }
+                if read_from_saved_page {
+                    // The page may be old. Read it again before relying on
+                    // where it ends: a post deleted since then has moved
+                    // the next post onto this page.
+                    return Ok(None);
+                }
+                self.ended_page_before = true;
+                self.offset = self.next_offset()?;
+                Ok(None)
+            }
+            // The saved posts are not on this page, and a new request has
+            // just shown that the last handled post ends the page before.
+            // The first post here is the next one.
+            None if self.ended_page_before => Ok(Some(if page.posts.is_empty() {
+                Found::End
+            } else {
+                Found::Post(0)
+            })),
+            None => {
+                // New posts move the saved posts toward later pages, so the
+                // page after the saved one is searched once.
+                if !self.looked_ahead && self.offset == self.home && !last_page {
+                    self.looked_ahead = true;
+                    self.offset = self.next_offset()?;
+                    return Ok(None);
+                }
+                // Otherwise the pages before the saved one are searched, up
+                // to four of them. If the saved posts are on none of them,
+                // the run starts again from the newest post, which repeats
+                // posts and loses none.
+                let from = self.offset.min(self.home);
+                if from > 0 && self.home - from < PAGE_SIZE * 4 {
+                    self.offset = from - PAGE_SIZE;
+                } else {
+                    self.offset = 0;
+                    self.saved = None;
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    fn next_offset(&self) -> Result<u32, SourceError> {
+        self.offset
+            .checked_add(PAGE_SIZE)
+            .ok_or_else(|| invalid("The page offset is too large."))
     }
 }
 
@@ -631,6 +731,64 @@ mod tests {
         assert_eq!(cursor.after, "49");
         assert!(cursor.next.is_none());
         assert!(!last.exhausted);
+    }
+
+    fn page(ids: std::ops::Range<usize>, total: u64) -> PostPage {
+        PostPage {
+            total,
+            posts: ids.map(post).collect(),
+        }
+    }
+
+    fn saved_after(id: usize, offset: u32) -> Cursor {
+        Cursor {
+            query: "onlyfans:example".into(),
+            creator_id: "42".into(),
+            offset,
+            after: id.to_string(),
+            next: None,
+        }
+    }
+
+    #[test]
+    fn a_post_deleted_while_a_page_was_kept_does_not_hide_the_next_post() {
+        // Posts 0 to 49 were read as one page and post 49 was the last one
+        // handled. Since then post 0 was deleted, so post 50 is now the
+        // last post of the first page.
+        let cursor = saved_after(49, 0);
+        let mut walk = Walk::new(Some(&cursor));
+        // The kept page still ends with post 49: read the page again.
+        assert_eq!(walk.step(&page(0..50, 120)).unwrap(), None);
+        assert_eq!((walk.offset, walk.may_use_saved_page), (0, false));
+        // The new copy holds posts 1 to 50, and post 50 is the next one.
+        assert_eq!(walk.step(&page(1..51, 119)).unwrap(), Some(Found::Post(49)));
+    }
+
+    #[test]
+    fn an_unchanged_listing_continues_with_the_first_post_of_the_next_page() {
+        let cursor = saved_after(49, 0);
+        let mut walk = Walk::new(Some(&cursor));
+        assert_eq!(walk.step(&page(0..50, 120)).unwrap(), None);
+        assert_eq!(walk.step(&page(0..50, 120)).unwrap(), None);
+        assert_eq!(walk.offset, 50);
+        assert_eq!(
+            walk.step(&page(50..100, 120)).unwrap(),
+            Some(Found::Post(0))
+        );
+    }
+
+    #[test]
+    fn a_new_post_that_moves_the_saved_post_to_the_next_page_is_followed() {
+        // One new post arrived, so the first page now holds the new post
+        // and posts 0 to 48, and post 49 starts the second page.
+        let cursor = saved_after(49, 0);
+        let mut walk = Walk::new(Some(&cursor));
+        assert_eq!(walk.step(&page(0..50, 120)).unwrap(), None);
+        let mut first = page(0..49, 121);
+        first.posts.insert(0, post(1000));
+        assert_eq!(walk.step(&first).unwrap(), None);
+        assert_eq!(walk.offset, 50);
+        assert_eq!(walk.step(&page(49..99, 121)).unwrap(), Some(Found::Post(1)));
     }
 
     #[test]
