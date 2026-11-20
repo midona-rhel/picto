@@ -483,11 +483,14 @@ instance per library (a lock plus a Unix socket or named pipe).
 `authSessions.mjs`: the service's own login page in a sign-in window on the
 system's web view (WKWebView, WebView2, WebKitGTK through `wry`), each on a
 private data store; per-service completion rules in `adapters/`; the session
-as a pure state machine (`machine.rs`). The core would file a login's secret
-in the system keychain under the service's name alone, shared with the
-user's Picto, so `main` sets `PICTO_EPHEMERAL_CREDENTIALS=1`
-(`logins::keep_credentials_in_process`): logins live in the process and go
-when it quits. Rule: platform calls stay in `platform/login_window/`.
+as a pure state machine (`machine.rs`). Where logins are kept depends on the
+build (`logins::uses_keychain`). A release build keeps them in the system
+keychain, where the core files each login under the site's name alone, so
+this app and the Electron app share one login per site. A debug or test
+build sets `PICTO_EPHEMERAL_CREDENTIALS=1` in `main`
+(`logins::keep_credentials_in_process`) and keeps logins in memory, where
+they are lost when the app quits; agents, tests and CI only run those
+builds, so they never touch the keychain. Rule: platform calls stay in `platform/login_window/`.
 
 **Libraries** (`libraries/`). Admission (section 2), this app's list and
 consents, the main window's content (`host/`: open, switch, close, rename,
@@ -769,9 +772,11 @@ reading production's code, seen in this app).
   library is refused, never migrated; New Library only makes a new folder;
   a `.library` the system hands over is refused; libraries, consents and
   the last library live in this app's `state.json`.
-- Logins last only as long as the app (process-local store); a disposable
-  copy may connect to a cloud folder under its own identity and is
-  disconnected at its next launch.
+- In a debug or test build, logins are kept in memory and are lost when the
+  app quits. A release build keeps them in the system keychain, as
+  production does.
+- A disposable copy may connect to a cloud folder under its own identity and
+  is disconnected at its next launch.
 - Commands the application menu and the keys share follow the menu's rule:
   Restore and its key work wherever the selection is in the Trash, Accept
   and Reject wherever it is in the Inbox (production's keys look at the
@@ -908,8 +913,6 @@ Not verified:
 
 - Whether Picto adopts the core's `.picto-library.lock`; until it does only
   the process probe keeps the two apps apart.
-- Whether this app should ever write the system keychain, or keep its
-  process-local logins also for libraries the user keeps.
 - AI model download, and this app's own update feed and packages (the feed
   now names production Picto's installer).
 - Whether a disposable copy may connect to a cloud folder at all.

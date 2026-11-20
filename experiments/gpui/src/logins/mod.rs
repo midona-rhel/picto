@@ -37,28 +37,49 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-/// Keeps every site login of this process in the application core's
-/// process-local store (`PICTO_EPHEMERAL_CREDENTIALS`) instead of the
-/// system's keychain. The core files a login under the service's name alone
-/// (`picto` / `<site>`), not under a library, so a login saved, removed or
-/// settled here would replace or delete the one the user's Picto keeps for
-/// that service, which the user's Picto shares; until the owner decides
-/// otherwise, this app's logins go with the process. Called first in `main`, before any thread starts.
+/// Whether this build keeps site logins in the system keychain.
+///
+/// A release build does. That is the build a user runs, and the owner
+/// decided that its logins are kept the way the Electron app keeps them.
+/// The application core files a login under the site's name alone (the
+/// keychain service `picto`, the account `<site>`), not under a library, so
+/// this app and the Electron app share one login per site: signing in or
+/// out in one of them changes it for the other.
+///
+/// A debug or test build does not. Agents, scripts, tests and CI only ever
+/// run those builds, and they must never read, write or prompt for the
+/// user's keychain.
+pub fn uses_keychain() -> bool {
+    !cfg!(debug_assertions)
+}
+
+/// Makes this process keep every site login in memory instead of the
+/// system keychain, by setting `PICTO_EPHEMERAL_CREDENTIALS`, which the
+/// application core reads the first time it touches a login. Logins kept
+/// this way are lost when the app quits. `main` calls this first, before
+/// any thread starts, in every build for which [`uses_keychain`] is false.
 pub fn keep_credentials_in_process() {
     // SAFETY: nothing else runs yet, so no thread reads the environment
     // while it changes.
     unsafe { std::env::set_var("PICTO_EPHEMERAL_CREDENTIALS", "1") };
 }
 
-/// Whether [`keep_credentials_in_process`] holds, checked again before any
-/// login is saved or removed (a test harness that did not call it never
-/// reaches the keychain through a login).
+/// Whether [`keep_credentials_in_process`] is in effect.
 pub fn credentials_in_process() -> bool {
     std::env::var("PICTO_EPHEMERAL_CREDENTIALS").as_deref() == Ok("1")
 }
 
-/// Why a login is not saved or removed when [`credentials_in_process`] does
-/// not hold.
+/// Whether a login may be saved or removed. It may when logins are kept in
+/// memory, or when this build is allowed to use the keychain. This is
+/// checked before every save and every removal, so a debug or test build
+/// that somehow did not call [`keep_credentials_in_process`] still never
+/// reaches the keychain.
+pub fn may_change_logins() -> bool {
+    credentials_in_process() || uses_keychain()
+}
+
+/// The message shown when a login is not saved or removed because
+/// [`may_change_logins`] is false.
 pub const KEYCHAIN_REFUSED: &str =
     "Logins are kept only for this session here; the system keychain is not used.";
 
@@ -464,7 +485,7 @@ impl Logins {
     }
 
     fn persist(&mut self, credential: Credential, session: u64, cx: &mut Context<Self>) {
-        if !credentials_in_process() {
+        if !may_change_logins() {
             let effects = self
                 .machine
                 .persisted(session, Err(KEYCHAIN_REFUSED.to_owned()));
@@ -634,7 +655,7 @@ impl Services for AppServices {
         // past `Effect::Persist`: the same guard as a saved login, and no
         // exchange with the real site while logins are kept local.
         if command == "pixiv_oauth_exchange" {
-            if !credentials_in_process() {
+            if !may_change_logins() {
                 return Err(KEYCHAIN_REFUSED.to_owned());
             }
             if crate::seams::login_origin().is_some() {

@@ -198,7 +198,11 @@ fn remember_window(window: &Window, cx: &mut App) {
 }
 
 fn main() {
-    logins::keep_credentials_in_process();
+    // Only a release build keeps logins in the system keychain; every other
+    // build keeps them in memory (`logins::uses_keychain`).
+    if !logins::uses_keychain() {
+        logins::keep_credentials_in_process();
+    }
     diagnostics::install_logger();
     #[cfg(target_os = "macos")]
     match_chromium_text_weight();

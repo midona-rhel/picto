@@ -366,13 +366,13 @@ impl Accounts {
             self.refresh(
                 |this, cx| {
                     this.logins.update(cx, |logins, cx| logins.cancel(cx));
-                    // Production keeps logins in the system's credential
-                    // store; this app keeps them for the session only
-                    // (`logins::keep_credentials_in_process`).
-                    this.message = Some(
+                    // A build that keeps logins in memory says that the
+                    // login will be gone when the app quits. A build that
+                    // keeps them in the system keychain has nothing to say.
+                    this.message = crate::logins::credentials_in_process().then(|| {
                         en("Login saved for this session; it is not kept after the app quits.")
-                            .into(),
-                    );
+                            .into()
+                    });
                     this.finishing = false;
                 },
                 cx,
@@ -407,7 +407,7 @@ impl Accounts {
             return;
         };
         let owner = account.site.credential_owner_site_id;
-        if !crate::logins::credentials_in_process() {
+        if !crate::logins::may_change_logins() {
             self.message = Some(crate::logins::KEYCHAIN_REFUSED.to_owned());
             cx.notify();
             return;
