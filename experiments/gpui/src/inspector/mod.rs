@@ -118,7 +118,7 @@ fn fitted(dimensions: Option<(u32, u32)>) -> (f32, f32) {
 }
 
 /// `YYYY/MM/DD HH:MM` in local time.
-pub(crate) fn format_date(milliseconds: i64) -> Option<String> {
+fn format_date(milliseconds: i64) -> Option<String> {
     use chrono::TimeZone;
     let date = chrono::Local.timestamp_millis_opt(milliseconds).single()?;
     Some(date.format(crate::text::date_format::INSPECTOR).to_string())

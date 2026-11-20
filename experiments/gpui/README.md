@@ -364,18 +364,24 @@ one shared zoom, with no frame around them, leaning toward each other and
 resting on their names; under each picture one line with the file's name
 and its keep action (Z keeps the left file, X the right), then its facts
 as the inspector writes them, the rows in which the two files differ in the
-primary colour and the rest faint. The footer has Not duplicates (N), Keep
-both (B), Smart merge (S) and Show Difference, then how alike the scan
-found the files and, under it, what comparing the originals' pixels
-counted: a measurement, never a verdict of sameness. The titlebar has the
-place in the queue, the zoom and the pair before and after (← →). Smart
-merge under the pointer or with the keyboard lights the keep action it
-would take and dims the other file. The pixel difference shows while Show
-Difference is under the pointer or has the keyboard, or while D is held.
-The wheel zooms and never changes the pair, and the pictures of the pair
-after the one on screen are decoded ahead, so a decision lands on them
-sharp. Every part is laid out in the frame that draws it; a picture is
-placed from its pane's size in that same frame (`ui::sized`).
+primary colour and the rest faint. The screen has no footer: like every
+main screen its controls are in the titlebar, built as a subscription
+page's are (`ui::titlebar_button`). After the title, the place in the
+queue between the pair before and after (← →) and, quietly beside it, how
+alike the scan found the files and what comparing the originals' pixels
+counted (a measurement, never a verdict of sameness); at the right end
+Smart merge (S), Not duplicates (N), Keep both (B) and Show Difference,
+then the zoom. A titlebar too short for all of it gives way in one order:
+what was counted shortens, the four decisions show their glyphs together,
+the similarity goes, then the place's figures, the zoom and the arrows.
+Smart merge under the pointer lights the keep action it would take and
+dims the other file. The pixel difference shows while Show Difference is
+under the pointer, after a press on it until a press elsewhere, or while D
+is held. The wheel zooms and never changes the pair, and the pictures of
+the pair after the one on screen are decoded ahead, so a decision lands on
+them sharp. Every part is laid out for its size in the frame that gives it
+that size (`ui::sized`): a picture from its pane, the titlebar's row from
+its own width.
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
@@ -722,11 +728,13 @@ reading production's code, seen in this app).
   stand together in the middle; a file's name and keep action share one
   line; the facts are in the inspector's words and formats (Dimensions,
   Type as PNG, Date Imported), a collection's row shows for both files, and
-  rows that differ stand out; the footer is the app's, with the keys in its
-  tooltips. Beyond production: D held down shows the difference, and the
-  footer says what comparing the pixels counted. Production's one-column
-  layout under 620 points and its icon-only keep buttons under 900 are left
-  out: the footer wraps, nothing else changes with the width.
+  rows that differ stand out; production's footer of decisions is in the
+  titlebar, where every main screen of this app has its actions, with the
+  keys in the tooltips. Beyond production: D held down shows the
+  difference, and the titlebar says what comparing the pixels counted.
+  Production's one-column layout under 620 points and its icon-only keep
+  buttons under 900 are left out. Tab stays Toggle Panels there, as in
+  production, so a button gets the keyboard only from assistive technology.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge

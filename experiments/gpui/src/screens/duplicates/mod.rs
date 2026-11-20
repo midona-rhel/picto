@@ -1,8 +1,9 @@
 //! The Duplicates screen (`DuplicatesScreen.tsx`): the review queue of
 //! perceptually similar pairs, one pair at a time, side by side with linked
-//! zoom and pan, each file's facts beneath it, and the decisions in a footer.
-//! Its counter, zoom and pair controls sit in the titlebar
-//! ([`DuplicatesToolbar`]).
+//! zoom and pan, each file's name, keep action and facts beneath it. Its
+//! place in the queue, the decisions on the pair and the zoom sit in the
+//! titlebar ([`DuplicatesToolbar`]), where this app's main screens have
+//! their actions; the Electron screen has the decisions in a footer.
 //!
 //! Beyond the Electron screen: the pixel difference also shows while its key
 //! is held; what comparing the two originals' pixels counted is written
@@ -49,16 +50,6 @@ actions!(
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-
-/// Tab and Shift-Tab go through the screen's buttons, as they go through
-/// the page's in the Electron app.
-pub fn bind(cx: &mut App) {
-    let context = crate::keymap::Scope::Duplicates.predicate();
-    cx.bind_keys([
-        KeyBinding::new("tab", ui::focus::Next, context.as_deref()),
-        KeyBinding::new("shift-tab", ui::focus::Previous, context.as_deref()),
-    ]);
-}
 
 /// `getDuplicatePairs`: the queue is read 500 pairs at a time.
 const QUEUE_LIMIT: usize = 500;
@@ -287,9 +278,10 @@ pub struct DuplicatesScreen {
     own_revision: u64,
     zoom: LinkedZoom,
     drag: Option<Drag>,
-    /// Show Difference is under the pointer, has the keyboard, was pressed
-    /// (which gives a button the keyboard in the Electron app, until a
-    /// press elsewhere), or its key is held down.
+    /// Show Difference is under the pointer, has the keyboard (from
+    /// assistive technology; Tab is Toggle Panels here as in production),
+    /// was pressed (which gives a button the keyboard in the Electron app,
+    /// until a press elsewhere), or its key is held down.
     difference_hovered: bool,
     difference_focused: bool,
     difference_pressed: bool,
@@ -1083,8 +1075,8 @@ fn load_image(path: PathBuf, mime: &str, cx: &mut App) -> Task<Option<Arc<Render
         .spawn(async move { load.await.ok() })
 }
 
-/// The screen's titlebar controls (`DuplicatesToolbar`): the pair counter in
-/// the middle, then fit, actual pixels, and previous and next pair.
+/// The screen's titlebar controls: the place in the queue, what was
+/// measured, the decisions on the pair and the zoom.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
 }

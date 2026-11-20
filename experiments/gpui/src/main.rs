@@ -109,7 +109,6 @@ fn prepare(cx: &mut App) {
     ui::overlay_shell::bind(cx);
     ui::selection_modal::bind(cx);
     screens::subscriptions::bind(cx);
-    screens::duplicates::bind(cx);
     ui::popover::bind(cx);
     ui::focus::bind(cx);
     if let Some(keys) = app_menu::Platform::CURRENT.quit_keys() {

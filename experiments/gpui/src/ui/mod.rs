@@ -50,6 +50,7 @@ mod small_button;
 pub mod status_badge;
 pub mod tag_token_input;
 pub mod text_input;
+pub mod titlebar_button;
 mod toggle;
 pub mod tooltip;
 pub mod window_chrome;
@@ -78,6 +79,7 @@ pub use sized::sized;
 pub use slider::slider;
 pub use small_button::small_button;
 pub use status_badge::status_badge;
+pub use titlebar_button::titlebar_button;
 pub use toggle::toggle;
 pub use tooltip::tip;
 

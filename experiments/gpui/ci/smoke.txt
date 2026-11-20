@@ -11,9 +11,9 @@
 # page with its rail, the page with the rail hidden, and the page at 150%,
 # where the actions show their glyphs alone. Then the Duplicates screen
 # after a scan: its first pair; the same at 125% (the window about 970
-# points wide, near the smallest it may be), where the footer's two lines
-# wrap under its buttons; the next pair; and the pixel difference while its
-# key is down.
+# points wide, near the smallest it may be), where the titlebar's decisions
+# show their glyphs clear of the window's buttons; the next pair; and the
+# pixel difference while its key is down.
 reload
 size 1213 865
 wait 800

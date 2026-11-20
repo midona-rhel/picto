@@ -1,7 +1,8 @@
 //! The Duplicates screen's drawing: the loading and empty states, the two
 //! files side by side (each its picture, then one line with its name and
-//! its keep action, then its facts as the inspector writes them), the
-//! footer of decisions, and the titlebar controls.
+//! its keep action, then its facts as the inspector writes them), and the
+//! titlebar's row: the place in the queue, what was measured, the decisions
+//! on the pair and the zoom.
 //!
 //! Everything is laid out by flex in the frame that draws it, and each
 //! picture is placed from its pane's size in that same frame (`ui::sized`),
@@ -35,10 +36,17 @@ const ROWS: f32 = 9.;
 /// How far the file Smart merge would not keep dims while Smart merge is
 /// under the pointer or has the keyboard.
 const MERGED_AWAY: f32 = 0.35;
-/// The width kept for the footer's two lines of what the scan and the
-/// comparison found, whatever they say, so the buttons never move while a
-/// pair is on screen.
-const MEASURED: f32 = 248.;
+/// Where the scope title starts in the titlebar's row of controls (it is
+/// drawn 80px into the toolbar, the row starting after the toolbar's 8px
+/// and the two history buttons), and the room kept clear after it.
+const TITLE_START: f32 = 80. - 8. - 2. * theme::ICON_BUTTON;
+const TITLE_CLEAR: f32 = 16.;
+/// The room between the titlebar's groups: the place, what was measured,
+/// the decisions and the zoom.
+const GROUP_GAP: f32 = 12.;
+/// Between the similarity and what was counted, and the most the two take.
+const MEASURED_BETWEEN: f32 = 5.;
+const MEASURED_MOST: f32 = 420.;
 
 /// One fact of the two files, as the inspector would write each.
 struct Fact {
@@ -55,13 +63,17 @@ fn rating_text(rating: Rating) -> String {
 }
 
 /// The facts the Electron screen lists of each file, in its order, in the
-/// inspector's words and formats. Both files have the same rows, so a row
+/// inspector's words and formats (the dates as days). Both files have the same rows, so a row
 /// of one is beside the same row of the other.
 fn facts(shown: &Shown) -> Vec<Fact> {
     let each = |value: &dyn Fn(&super::Side) -> String| shown.sides.each_ref().map(value);
+    // The day alone, as the Electron screen writes it (`toLocaleDateString`):
+    // two files brought in on one day say the same.
     let date = |at: Option<i64>| {
+        use chrono::TimeZone;
         at.filter(|at| *at != 0)
-            .and_then(crate::inspector::format_date)
+            .and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
+            .map(|at| crate::i18n::format::date(at.date_naive()))
             .unwrap_or_else(|| t("Unknown").to_owned())
     };
     let mut facts = vec![
@@ -534,96 +546,64 @@ impl DuplicatesScreen {
         inside.into_any_element()
     }
 
-    /// The decisions, then how alike the scan found the files and, under
-    /// it, what comparing their pixels counted. Those two lines keep one
-    /// width whatever they say, so nothing in the footer moves while a
-    /// pair is on screen; where the window is too narrow for them beside
-    /// the buttons they wrap under them, as the Electron footer's row
-    /// wraps.
-    fn footer(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    /// The screen's titlebar, built for the titlebar's own width in the
+    /// frame that gives it that width, as a subscription's page builds its
+    /// actions: after the screen's title the place in the queue between the
+    /// buttons for the pair before and after, and quietly beside it how
+    /// alike the scan found the files and what comparing their pixels
+    /// counted; at the right end the decisions on the pair, Smart merge
+    /// first, then the zoom.
+    ///
+    /// A titlebar too short for all of it gives way in one order: what was
+    /// counted shortens to an ellipsis, down to the similarity alone; the
+    /// four decisions show their glyphs, all together, each named with its
+    /// key by its tooltip; the similarity goes; then the place's figures,
+    /// the zoom and last the two arrows. Nothing moves to another row.
+    pub(super) fn titlebar(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(model) = self.toolbar_model() else {
+            return div().into_any_element();
+        };
         let theme = theme::theme(cx);
-        let shown = self.shown.as_ref().expect("a pair is on screen");
-        let button =
-            |id: &'static str, look: Look| ui::action_button(id, look).disabled(self.resolving);
-        let not_duplicates = button("duplicates-not", Look::Standard)
-            .icon("action-x", 15.)
-            .label(t("Not duplicates"))
-            .tip(ui::tip(t("These are different media")).shortcut("dup.notDuplicate", cx))
-            .on_click(cx.listener(|this, _, window, cx| this.keep_both(window, cx)));
-        let keep_both = button("duplicates-keep-both", Look::Standard)
-            .icon("action-copy", 15.)
-            .label(t("Keep both"))
-            .tip(ui::tip(t("Keep both files")).shortcut("dup.keepBoth", cx))
-            .on_click(cx.listener(|this, _, window, cx| this.keep_both(window, cx)));
-        // Keeps the better file of the two and merges the other into it.
-        // Under the pointer or with the keyboard, it shows which.
-        let (hover, focus) = (cx.weak_entity(), cx.weak_entity());
-        let smart_merge = button("duplicates-smart-merge", Look::Primary)
-            .icon("action-arrows-join", 16.)
-            .label(t("Smart merge"))
-            .tip(
-                ui::tip(t("Keep the stronger file and preserve item metadata"))
-                    .shortcut("dup.smartMerge", cx),
+        let width_of = |text: &str, window: &Window| {
+            f32::from(
+                ui::shape_line(
+                    text.to_owned(),
+                    font(theme::FONT_UI),
+                    theme::TEXT_SM,
+                    theme.text(),
+                    window,
+                )
+                .width,
             )
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.decide(Decision::Smart, window, cx)
-            }))
-            .on_hover(move |hovered, _, cx| {
-                let _ = hover.update(cx, |this, cx| {
-                    this.smart_hovered = hovered;
-                    cx.notify();
-                });
-            })
-            .on_focus(move |focused, window, cx| {
-                let _ = focus.update(cx, |this, cx| {
-                    this.smart_focused = focused;
-                    cx.notify();
-                });
-                window.request_animation_frame();
-            });
-        let (hover, focus) = (cx.weak_entity(), cx.weak_entity());
-        let difference = button("duplicates-difference", Look::Standard)
-            .icon("toolbar-difference", 16.)
-            .label(t("Show Difference"))
-            .tip(ui::tip(t("Show differences while held")).shortcut("dup.difference", cx))
-            // A press gives the button the keyboard in the Electron app, so
-            // the difference stays until a press elsewhere.
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.difference_pressed = true;
-                cx.notify();
-            }))
-            .on_hover(move |hovered, _, cx| {
-                let _ = hover.update(cx, |this, cx| {
-                    this.difference_hovered = hovered;
-                    cx.notify();
-                });
-            })
-            .on_focus(move |focused, window, cx| {
-                let _ = focus.update(cx, |this, cx| {
-                    this.difference_focused = focused;
-                    cx.notify();
-                });
-                window.request_animation_frame();
-            });
-        let similarity = ui::tooltip::attach(
-            div()
-                .id("duplicates-similarity")
-                .h(px(16.))
-                .flex()
-                .items_center()
-                .truncate()
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_secondary())
-                .child(compare::similarity_label(shown.distance)),
-            "duplicates-similarity-tip",
-            ui::tip(t("Perceptual similarity is not pixel equality")),
-            16.,
-            window,
-            cx,
-        );
+            .ceil()
+        };
+        // The scope title is drawn over the start of this row.
+        let title = f32::from(
+            ui::shape_line(
+                t("Duplicates").to_owned(),
+                font(theme::FONT_UI),
+                theme::TEXT_MD,
+                theme.text(),
+                window,
+            )
+            .width,
+        )
+        .ceil();
+        let lead = TITLE_START + title + TITLE_CLEAR;
+        // The place keeps the width of its widest figures, so the arrows
+        // stay put from pair to pair.
+        let place = format!("{} / {}", model.index + 1, model.total);
+        let place_width = width_of(&format!("{0} / {0}", model.total), window) + 12.;
+        let shown = self.shown.as_ref();
+        let similarity = shown.map(|shown| compare::similarity_label(shown.distance));
         // What was counted is written once it has been, and stays as it is
         // for as long as the pair does.
-        let counted = match shown.measure {
+        let counted = shown.and_then(|shown| match shown.measure {
             Some(measure) => {
                 let (counted, more) = measure.sentence();
                 Some(match more {
@@ -635,72 +615,257 @@ impl DuplicatesScreen {
                 Some(en("Pixels are compared in still images only").to_owned())
             }
             None => None,
+        });
+        let similarity_width = similarity
+            .as_deref()
+            .map_or(0., |text| width_of(text, window));
+        let measured_width = (similarity_width
+            + counted
+                .as_deref()
+                .map_or(0., |text| MEASURED_BETWEEN + width_of(&format!("· {text}"), window)))
+        .min(MEASURED_MOST);
+        // How wide the four decisions are with their words, in this
+        // language: laid out once to be measured, as a list measures a row.
+        let labelled = f32::from(
+            self.decisions(true, cx)
+                .into_any_element()
+                .layout_as_root(
+                    size(AvailableSpace::MaxContent, bounds.size.height.into()),
+                    window,
+                    cx,
+                )
+                .width,
+        );
+        let fit = fit(
+            f32::from(bounds.size.width) - lead,
+            Widths {
+                arrows: 2. * theme::ICON_BUTTON,
+                place: place_width,
+                similarity: similarity_width,
+                labelled,
+                glyphs: 4. * ui::titlebar_button::HEIGHT + 3. * ui::titlebar_button::BETWEEN,
+                zoom: 2. * theme::ICON_BUTTON + ui::titlebar_button::BETWEEN,
+            },
+        );
+        let step = |id: &'static str,
+                    icon: &'static str,
+                    label: &'static str,
+                    key: &'static str,
+                    delta: isize,
+                    enabled: bool| {
+            ui::icon_button(id, icon)
+                .disabled(!enabled || model.disabled)
+                .tip(ui::tip(label).shortcut(key, cx))
+                .on_click(cx.listener(move |this, _, _, cx| this.step(delta, cx)))
         };
-        let line = div()
-            .id("duplicates-counted")
-            .h(px(14.))
-            .truncate()
-            .text(theme::TEXT_CAPTION)
-            .line_height(px(14.))
-            .text_color(theme.text_tertiary());
-        let counted = match counted {
-            Some(counted) => ui::tooltip::attach(
-                line.child(counted.clone()),
-                "duplicates-counted-tip",
-                ui::tip(counted),
-                14.,
-                window,
-                cx,
-            ),
-            None => line,
-        };
-        let measured = div()
-            .w(px(MEASURED))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .child(similarity)
-            .child(counted);
-        // The buttons and the line are one group in the middle of the
-        // footer. Where they do not fit on one row the group takes the
-        // footer's width and wraps, each row starting at its left edge.
-        let group = div()
-            .min_w_0()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(8.))
-            .child(not_duplicates)
-            .child(keep_both)
-            .child(smart_merge)
-            .child(difference)
-            .child(measured);
-        div()
-            .min_h(px(52.))
-            .flex_none()
+        let mut row = div()
+            .size_full()
             .flex()
             .items_center()
-            .justify_center()
-            .py(px(11.))
-            .px(px(16.))
-            .border_t_1()
-            .border_color(theme.border_secondary())
-            .bg(theme.footer_surface())
-            .child(group)
+            .overflow_hidden()
+            .child(div().w(px(lead)).flex_none());
+        if fit.arrows {
+            row = row.child(step(
+                "duplicates-previous",
+                "toolbar-chevron-left",
+                t("Previous pair"),
+                "dup.prevPair",
+                -1,
+                model.can_previous,
+            ));
+        }
+        if fit.place {
+            row = row.child(
+                div()
+                    .w(px(place_width))
+                    .flex_none()
+                    .text_center()
+                    .whitespace_nowrap()
+                    .text(theme::TEXT_SM)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary())
+                    .child(place),
+            );
+        }
+        if fit.arrows {
+            row = row.child(step(
+                "duplicates-next",
+                "toolbar-chevron-right",
+                t("Next pair"),
+                "dup.nextPair",
+                1,
+                model.can_next,
+            ));
+        }
+        if let (Some(room), Some(similarity)) = (fit.measured, similarity) {
+            let line = div()
+                .w(px(room.min(measured_width)))
+                .ml(px(GROUP_GAP))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(MEASURED_BETWEEN))
+                .text(theme::TEXT_SM)
+                .child(ui::tooltip::attach(
+                    div()
+                        .id("duplicates-similarity")
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .text_color(theme.text_secondary())
+                        .child(similarity),
+                    "duplicates-similarity-tip",
+                    ui::tip(t("Perceptual similarity is not pixel equality")),
+                    20.,
+                    window,
+                    cx,
+                ));
+            row = row.child(match counted {
+                Some(counted) => line.child(ui::tooltip::attach(
+                    div()
+                        .id("duplicates-counted")
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.text_tertiary())
+                        .child(format!("· {counted}")),
+                    "duplicates-counted-tip",
+                    ui::tip(counted),
+                    20.,
+                    window,
+                    cx,
+                )),
+                None => line,
+            });
+        }
+        row = row
+            .child(div().flex_1().min_w(px(GROUP_GAP)))
+            .child(self.decisions(fit.words, cx));
+        if fit.zoom {
+            row = row.child(
+                div()
+                    .ml(px(GROUP_GAP))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(ui::titlebar_button::BETWEEN))
+                    .child(
+                        ui::icon_button("duplicates-fit", "toolbar-fit")
+                            .toggled(model.fit)
+                            .tip(ui::tip(t("Zoom to fit")).shortcut("dup.fitToWindow", cx))
+                            .on_click(cx.listener(|this, _, _, cx| this.fit(cx))),
+                    )
+                    .child(
+                        ui::icon_button("duplicates-actual", "toolbar-actual-size")
+                            .toggled(model.actual)
+                            .tip(ui::tip(t("Actual pixels")).shortcut("view.actualSize", cx))
+                            .on_click(cx.listener(|this, _, _, cx| this.actual(cx))),
+                    ),
+            );
+        }
+        row.into_any_element()
     }
 
-    /// Tab and Shift-Tab: the next or previous button of the screen. The
-    /// keyboard leaving Show Difference ends the difference a press began.
-    fn tab(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.difference_pressed = false;
-        ui::focus::step(&self.focus, forward, window, cx);
-        cx.notify();
+    /// The four decisions on the pair, Smart merge first: with their words
+    /// or, where the titlebar is short, as glyphs named by their tooltips.
+    fn decisions(&self, words: bool, cx: &mut Context<Self>) -> Div {
+        let button = |id: &'static str,
+                      look: Look,
+                      icon: &'static str,
+                      label: &'static str,
+                      about: &'static str,
+                      shortcut: &'static str| {
+            ui::titlebar_button(id, look, icon, label, words)
+                .tip(ui::tip(if words { about } else { label }).shortcut(shortcut, cx))
+                .disabled(self.resolving)
+        };
+        // Keeps the better file of the two and merges the other into it.
+        // Under the pointer or with the keyboard, it shows which.
+        let (hover, focus) = (cx.weak_entity(), cx.weak_entity());
+        let smart_merge = button(
+            "duplicates-smart-merge",
+            Look::Primary,
+            "action-arrows-join",
+            t("Smart merge"),
+            t("Keep the stronger file and preserve item metadata"),
+            "dup.smartMerge",
+        )
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.decide(Decision::Smart, window, cx)
+        }))
+        .on_hover(move |hovered, _, cx| {
+            let _ = hover.update(cx, |this, cx| {
+                this.smart_hovered = hovered;
+                cx.notify();
+            });
+        })
+        .on_focus(move |focused, window, cx| {
+            let _ = focus.update(cx, |this, cx| {
+                this.smart_focused = focused;
+                cx.notify();
+            });
+            window.request_animation_frame();
+        });
+        let not_duplicates = button(
+            "duplicates-not",
+            Look::Standard,
+            "action-x",
+            t("Not duplicates"),
+            t("These are different media"),
+            "dup.notDuplicate",
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.keep_both(window, cx)));
+        let keep_both = button(
+            "duplicates-keep-both",
+            Look::Standard,
+            "action-copy",
+            t("Keep both"),
+            t("Keep both files"),
+            "dup.keepBoth",
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.keep_both(window, cx)));
+        let (hover, focus) = (cx.weak_entity(), cx.weak_entity());
+        let difference = button(
+            "duplicates-difference",
+            Look::Standard,
+            "toolbar-difference",
+            t("Show Difference"),
+            t("Show differences while held"),
+            "dup.difference",
+        )
+        // A press gives the button the keyboard in the Electron app, so the
+        // difference stays until a press elsewhere.
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.difference_pressed = true;
+            cx.notify();
+        }))
+        .on_hover(move |hovered, _, cx| {
+            let _ = hover.update(cx, |this, cx| {
+                this.difference_hovered = hovered;
+                cx.notify();
+            });
+        })
+        .on_focus(move |focused, window, cx| {
+            let _ = focus.update(cx, |this, cx| {
+                this.difference_focused = focused;
+                cx.notify();
+            });
+            window.request_animation_frame();
+        });
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(ui::titlebar_button::BETWEEN))
+            .child(smart_merge)
+            .child(not_duplicates)
+            .child(keep_both)
+            .child(difference)
     }
 
     /// A key came up: the difference's own ends the difference it held.
     fn key_released(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keys = window
-            .bindings_for_action(&ShowDifference)
+            .bindings_for_action_in(&ShowDifference, &self.focus)
             .iter()
             .filter_map(|binding| {
                 binding
@@ -734,12 +899,6 @@ impl Render for DuplicatesScreen {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)),
             )
-            .on_action(cx.listener(|this, _: &ui::focus::Next, window, cx| {
-                this.tab(true, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &ui::focus::Previous, window, cx| {
-                this.tab(false, window, cx)
-            }))
             .on_action(cx.listener(|this, _: &PreviousPair, _, cx| this.step(-1, cx)))
             .on_action(cx.listener(|this, _: &NextPair, _, cx| this.step(1, cx)))
             .on_action(cx.listener(|this, _: &FitPair, _, cx| this.fit(cx)))
@@ -825,15 +984,12 @@ impl Render for DuplicatesScreen {
             .min_h_0()
             .flex()
             .gap(px(MARGIN))
-            .px(px(MARGIN))
-            .pt(px(MARGIN))
-            .pb(px(8.))
+            .p(px(MARGIN))
+            .overflow_hidden()
             .child(self.side(0, &facts, window, cx))
             .child(self.side(1, &facts, window, cx));
-        let footer = self.footer(window, cx);
         let menu = self.menu.layer(window, cx);
         root.child(files)
-            .child(footer)
             .children(self.scan_progress.then(|| {
                 div()
                     .absolute()
@@ -848,76 +1004,92 @@ impl Render for DuplicatesScreen {
 
 impl Render for DuplicatesToolbar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme::theme(cx);
-        let bar = div().flex_1().min_w_0().h_full().flex().items_center();
-        let Some(model) = self
+        let bar = div().flex_1().min_w_0().h_full();
+        let shown = self
             .screen
             .upgrade()
-            .and_then(|screen| screen.read(cx).toolbar_model())
-        else {
+            .is_some_and(|screen| screen.read(cx).toolbar_model().is_some());
+        if !shown {
             return bar;
-        };
-        // The buttons call the screen directly: the screen repaints these
-        // controls itself, which it could not do while they were updating.
-        let act = |action: fn(&mut DuplicatesScreen, &mut Context<DuplicatesScreen>)| {
-            let screen = self.screen.clone();
-            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                let _ = screen.update(cx, action);
-            }
-        };
+        }
+        // The row is the screen's, built for this width as it is laid out.
+        let screen = self.screen.clone();
         bar.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .ml(px(4.))
-                        .text_color(theme.text_secondary())
-                        .text(theme::TEXT_SM)
-                        .font_weight(FontWeight::MEDIUM)
-                        .whitespace_nowrap()
-                        .child(format!("{} / {}", model.index + 1, model.total)),
-                ),
-        )
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .child(
-                    ui::icon_button("duplicates-fit", "toolbar-fit")
-                        .toggled(model.fit)
-                        .tip(ui::tip(t("Zoom to fit")).shortcut("dup.fitToWindow", cx))
-                        .on_click(act(DuplicatesScreen::fit)),
-                )
-                .child(
-                    ui::icon_button("duplicates-actual", "toolbar-actual-size")
-                        .toggled(model.actual)
-                        .tip(ui::tip(t("Actual pixels")).shortcut("view.actualSize", cx))
-                        .on_click(act(DuplicatesScreen::actual)),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .child(
-                            ui::icon_button("duplicates-previous", "toolbar-chevron-left")
-                                .disabled(!model.can_previous || model.disabled)
-                                .tip(ui::tip(t("Previous pair")).shortcut("dup.prevPair", cx))
-                                .on_click(act(|screen, cx| screen.step(-1, cx))),
-                        )
-                        .child(
-                            ui::icon_button("duplicates-next", "toolbar-chevron-right")
-                                .disabled(!model.can_next || model.disabled)
-                                .tip(ui::tip(t("Next pair")).shortcut("dup.nextPair", cx))
-                                .on_click(act(|screen, cx| screen.step(1, cx))),
-                        ),
-                ),
+            ui::sized(move |bounds, window, cx| {
+                screen
+                    .update(cx, |screen, cx| screen.titlebar(bounds, window, cx))
+                    .unwrap_or_else(|_| div().into_any_element())
+            })
+            .size_full(),
         )
     }
+}
+
+/// How wide each part of the titlebar's row is.
+struct Widths {
+    arrows: f32,
+    place: f32,
+    similarity: f32,
+    labelled: f32,
+    glyphs: f32,
+    zoom: f32,
+}
+
+/// What of the titlebar's row is shown in the room it has.
+struct Fit {
+    /// The decisions carry their words.
+    words: bool,
+    /// The room for the similarity and what was counted, when they show.
+    measured: Option<f32>,
+    place: bool,
+    zoom: bool,
+    arrows: bool,
+}
+
+/// What a titlebar with `room` after the title shows: everything, or as
+/// much as fits, given up in one order.
+fn fit(room: f32, widths: Widths) -> Fit {
+    let rest = |fit: &Fit| {
+        let mut left = if fit.arrows { widths.arrows } else { 0. };
+        if fit.place {
+            left += widths.place;
+        }
+        let mut right = if fit.words {
+            widths.labelled
+        } else {
+            widths.glyphs
+        };
+        if fit.zoom {
+            right += GROUP_GAP + widths.zoom;
+        }
+        room - left - GROUP_GAP - right
+    };
+    let mut fit = Fit {
+        words: true,
+        measured: None,
+        place: true,
+        zoom: true,
+        arrows: true,
+    };
+    // The similarity whole, with or without the decisions' words.
+    let needed = GROUP_GAP + widths.similarity;
+    if rest(&fit) < needed {
+        fit.words = false;
+    }
+    let left = rest(&fit);
+    if left >= needed {
+        fit.measured = Some(left - GROUP_GAP);
+        return fit;
+    }
+    for part in [
+        |fit: &mut Fit| fit.place = false,
+        |fit: &mut Fit| fit.zoom = false,
+        |fit: &mut Fit| fit.arrows = false,
+    ] {
+        if rest(&fit) >= 0. {
+            break;
+        }
+        part(&mut fit);
+    }
+    fit
 }

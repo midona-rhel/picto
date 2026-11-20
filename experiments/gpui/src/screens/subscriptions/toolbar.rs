@@ -5,15 +5,8 @@
 //! counters, schedule and destination in the inspector's rail.
 use super::{SubscriptionsScreen, format, measure, place_of};
 use crate::i18n::t;
-use crate::theme;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
-
-/// The titlebar's buttons: the titlebar's control height, with the padding
-/// a labelled button keeps there.
-const BUTTON_HEIGHT: f32 = theme::CONTROL_MD;
-const BUTTON_PADDING: f32 = 10.;
-const BUTTON_GAP: f32 = 6.;
 
 /// The labelled buttons of a subscription's page need this much of the
 /// titlebar's room for controls, which starts after the history buttons and
@@ -110,25 +103,6 @@ impl Render for SubscriptionRail {
 }
 
 impl SubscriptionsScreen {
-    /// A titlebar button: labelled, or its glyph alone with the label as its
-    /// tooltip.
-    fn titlebar_button(
-        id: &'static str,
-        look: Look,
-        icon: &'static str,
-        label: &'static str,
-        labelled: bool,
-    ) -> ui::action_button::ActionButton {
-        let button = ui::action_button(id, look)
-            .icon(icon, 14.)
-            .height(BUTTON_HEIGHT);
-        if labelled {
-            button.label(label).padding(BUTTON_PADDING).gap(BUTTON_GAP)
-        } else {
-            button.width(BUTTON_HEIGHT).padding(0.).tip(ui::tip(label))
-        }
-    }
-
     fn titlebar(&mut self, bar: Div, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let bar = bar
             .relative()
@@ -172,9 +146,9 @@ impl SubscriptionsScreen {
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(ui::titlebar_button::BETWEEN))
                 .child(
-                    Self::titlebar_button(
+                    ui::titlebar_button(
                         "subscription-add",
                         Look::Primary,
                         "plus",
@@ -186,7 +160,7 @@ impl SubscriptionsScreen {
                 // One gallery downloads at a time, so the button waits
                 // while one runs.
                 .child(
-                    Self::titlebar_button(
+                    ui::titlebar_button(
                         "subscription-add-gallery",
                         Look::Standard,
                         "library-plus",
@@ -197,7 +171,7 @@ impl SubscriptionsScreen {
                     .on_click(cx.listener(|this, _, _, cx| this.open_gallery(cx))),
                 )
                 .child(
-                    Self::titlebar_button(
+                    ui::titlebar_button(
                         "subscription-accounts",
                         Look::Standard,
                         "shield-lock",
@@ -243,9 +217,9 @@ impl SubscriptionsScreen {
                     if paused_run { t("Resume") } else { t("Retry") },
                 )
             };
-            Self::titlebar_button("subscription-run", look, icon, label, labelled).disabled(acting)
+            ui::titlebar_button("subscription-run", look, icon, label, labelled).disabled(acting)
         } else {
-            Self::titlebar_button(
+            ui::titlebar_button(
                 "subscription-run",
                 Look::Primary,
                 "player-play",
@@ -274,10 +248,10 @@ impl SubscriptionsScreen {
                 .flex_none()
                 .flex()
                 .items_center()
-                .gap(px(4.))
+                .gap(px(ui::titlebar_button::BETWEEN))
                 .child(primary)
                 .child(
-                    Self::titlebar_button(
+                    ui::titlebar_button(
                         "subscription-hold",
                         Look::Standard,
                         hold_icon,
