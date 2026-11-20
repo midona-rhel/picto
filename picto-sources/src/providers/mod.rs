@@ -10,6 +10,7 @@ pub mod hentaifoundry;
 mod moebooru;
 pub mod newgrounds;
 pub mod onlyfans;
+pub mod onlyhaven;
 pub mod patreon;
 pub mod pawchive;
 pub mod pixiv;
