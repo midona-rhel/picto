@@ -85,9 +85,9 @@ fn facts(shown: &Shown) -> Vec<Fact> {
         },
         Fact {
             label: t("Size"),
-            values: each(&|side| {
-                crate::text::size_to_gigabytes(side.file.size_bytes.max(0) as u64)
-            }),
+            values: each(
+                &|side| crate::text::size_to_gigabytes(side.file.size_bytes.max(0) as u64),
+            ),
         },
         Fact {
             label: t("Type"),
@@ -620,9 +620,9 @@ impl DuplicatesScreen {
             .as_deref()
             .map_or(0., |text| width_of(text, window));
         let measured_width = (similarity_width
-            + counted
-                .as_deref()
-                .map_or(0., |text| MEASURED_BETWEEN + width_of(&format!("· {text}"), window)))
+            + counted.as_deref().map_or(0., |text| {
+                MEASURED_BETWEEN + width_of(&format!("· {text}"), window)
+            }))
         .min(MEASURED_MOST);
         // How wide the four decisions are with their words, in this
         // language: laid out once to be measured, as a list measures a row.
@@ -789,9 +789,7 @@ impl DuplicatesScreen {
             t("Keep the stronger file and preserve item metadata"),
             "dup.smartMerge",
         )
-        .on_click(cx.listener(|this, _, window, cx| {
-            this.decide(Decision::Smart, window, cx)
-        }))
+        .on_click(cx.listener(|this, _, window, cx| this.decide(Decision::Smart, window, cx)))
         .on_hover(move |hovered, _, cx| {
             let _ = hover.update(cx, |this, cx| {
                 this.smart_hovered = hovered;
@@ -904,9 +902,7 @@ impl Render for DuplicatesScreen {
             .on_action(cx.listener(|this, _: &FitPair, _, cx| this.fit(cx)))
             .on_action(cx.listener(|this, _: &ActualPixels, _, cx| this.actual(cx)))
             .on_action(cx.listener(|this, _: &KeepBoth, window, cx| this.keep_both(window, cx)))
-            .on_action(cx.listener(|this, _: &NotDuplicate, window, cx| {
-                this.keep_both(window, cx)
-            }))
+            .on_action(cx.listener(|this, _: &NotDuplicate, window, cx| this.keep_both(window, cx)))
             .on_action(cx.listener(|this, _: &KeepLeft, window, cx| this.keep(0, window, cx)))
             .on_action(cx.listener(|this, _: &KeepRight, window, cx| this.keep(1, window, cx)))
             .on_action(cx.listener(|this, _: &SmartMerge, window, cx| {
@@ -914,9 +910,9 @@ impl Render for DuplicatesScreen {
             }))
             // The difference shows from its key going down until that key
             // comes up.
-            .on_action(cx.listener(|this, _: &ShowDifference, _, cx| {
-                this.hold_difference(true, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &ShowDifference, _, cx| this.hold_difference(true, cx)),
+            )
             .on_key_up(cx.listener(Self::key_released));
         if self.shown.is_none() {
             return root.child(if self.loading {

@@ -607,12 +607,10 @@ impl DuplicatesScreen {
         let shown = self.shown.as_ref().map(|shown| shown.key);
         // Another pair of the queue as it is known, and the one after it.
         let known = match fetch {
-            Fetch::Pair(key) => previous.iter().position(|each| *each == key).map(|at| {
-                (
-                    self.pairs[at].clone(),
-                    self.pairs.get(at + 1).cloned(),
-                )
-            }),
+            Fetch::Pair(key) => previous
+                .iter()
+                .position(|each| *each == key)
+                .map(|at| (self.pairs[at].clone(), self.pairs.get(at + 1).cloned())),
             _ => None,
         };
         let receiver = self.session.read(cx).run(move |library| {
@@ -693,9 +691,7 @@ impl DuplicatesScreen {
             Err(error) => {
                 let title = match fetch {
                     Fetch::Pair(_) => t("Unable to load duplicate media"),
-                    Fetch::Queue { .. } | Fetch::Settled(_) => {
-                        t("Unable to load duplicate review")
-                    }
+                    Fetch::Queue { .. } | Fetch::Settled(_) => t("Unable to load duplicate review"),
                 };
                 ui::notify::error(title, error.clone(), cx);
                 self.error = Some(error);
