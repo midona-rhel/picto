@@ -62,9 +62,9 @@ const GROUP_GAP: f32 = 12.;
 /// The height of the row under the titlebar that holds the four decision
 /// buttons.
 const DECISION_ROW: f32 = 44.;
-/// The width in pixels of the column between the two files, which shows
+/// The height in pixels of the row under the decision buttons, which shows
 /// the similarity and the pixel measurement.
-const BETWEEN_WIDTH: f32 = 104.;
+const SIMILARITY_ROW: f32 = 20.;
 /// The space in pixels between the border of a file's panel and what is
 /// inside it.
 const PANEL_PADDING: f32 = 12.;
@@ -620,15 +620,15 @@ impl DuplicatesScreen {
     /// (`ui::titlebar_button`).
     ///
     /// The row has three parts. At its left is empty space under the
-    /// screen's title, which the toolbar draws. Centred over the screen's
-    /// content are the Previous pair button, the position in the queue (for
-    /// example "1 / 500") and the Next pair button. At its right end are the
+    /// screen's title, which the toolbar draws. Centred in the row are the
+    /// Previous pair button, the position in the queue (for example
+    /// "1 / 500") and the Next pair button. At its right end are the
     /// Zoom to fit and Actual pixels buttons.
     ///
     /// The Smart merge, Not duplicates, Keep both and Show Difference
     /// buttons are in a row of their own under the titlebar
     /// ([`Self::decision_row`]). The similarity and the pixel measurement
-    /// are shown between the two pictures ([`Self::between`]).
+    /// are in the row under those buttons ([`Self::similarity_row`]).
     pub(super) fn titlebar(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -681,25 +681,22 @@ impl DuplicatesScreen {
         // removed first and the group after them.
         let zoom_shown = row_width - lead >= group_width + GROUP_GAP + zoom_width;
         let group_shown = row_width - lead >= group_width;
-        // The group is centred over the screen's content, which is where
-        // the row of decision buttons under the titlebar is centred too.
-        // The screen reaches the window's right edge, so the middle of its
-        // content is half the content's width from that edge. If the group
-        // would then cover the screen's title or the zoom buttons, it is
-        // placed directly after the title.
-        let viewport = f32::from(window.viewport_size().width);
-        let centred = (self.decision_row_width > 0.).then(|| {
-            viewport - self.decision_row_width / 2. - f32::from(bounds.origin.x) - group_width / 2.
-        });
+        // The group is centred in the titlebar's row. The row does not move
+        // or change width when the sidebar or the inspector is hidden or
+        // shown, so the group stays where it is. If the row is so narrow
+        // that the centred group would cover the screen's title or the zoom
+        // buttons, the group is placed directly after the title.
         let right_limit = row_width
             - if zoom_shown {
                 zoom_width + GROUP_GAP
             } else {
                 0.
             };
-        let group_left = match centred {
-            Some(left) if left >= lead && left + group_width <= right_limit => left,
-            _ => lead,
+        let centred = (row_width - group_width) / 2.;
+        let group_left = if centred >= lead && centred + group_width <= right_limit {
+            centred
+        } else {
+            lead
         };
         let mut row = div()
             .relative()
@@ -770,13 +767,14 @@ impl DuplicatesScreen {
         row.into_any_element()
     }
 
-    /// The narrow column between the two files. It shows, centred, how
-    /// similar the two pictures are (for example "100% similar") and, under
-    /// that in smaller text, what the comparison of their pixels found (for
-    /// example "0% of pixels differ"). The second text is shown once the
-    /// comparison has finished, and it does not change while the pair is on
-    /// screen.
-    fn between(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    /// The row under the decision buttons. It shows one centred line of
+    /// text: how similar the two pictures are (for example "100% similar")
+    /// and, after it in the secondary text colour, what the comparison of
+    /// their pixels found (for example "0% of pixels differ"). The second
+    /// part is shown once the comparison has finished, and it does not
+    /// change while the pair is on screen. The row has no line above or
+    /// below it.
+    fn similarity_row(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let shown = self.shown.as_ref().expect("a pair is on screen");
         let counted = match shown.counted {
@@ -790,19 +788,20 @@ impl DuplicatesScreen {
             Counted::Impossible | Counted::Waiting => None,
         };
         div()
-            .w(px(BETWEEN_WIDTH))
-            .h_full()
             .flex_none()
+            .h(px(SIMILARITY_ROW))
+            .px(px(EDGE))
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(4.))
-            .text_center()
+            .gap(px(6.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text(theme::TEXT_SM)
             .child(ui::tooltip::attach(
                 div()
                     .id("duplicates-similarity")
-                    .text(theme::TEXT_SM)
+                    .flex_none()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text())
                     .child(compare::similarity_label(shown.distance)),
@@ -814,22 +813,22 @@ impl DuplicatesScreen {
             ))
             .children(counted.map(|counted| {
                 div()
-                    .text(theme::TEXT_CAPTION)
+                    .min_w_0()
+                    .truncate()
                     .text_color(theme.text_secondary())
-                    .child(counted)
+                    .child(format!("· {counted}"))
             }))
     }
 
     /// The row under the titlebar that holds the four decision buttons,
     /// each with its icon and its full label, centred in the row. The row
-    /// is as wide as the screen and has a line under it.
+    /// is as wide as the screen and has no line under it.
     ///
     /// The buttons show their labels at every width at which the four
     /// labelled buttons fit in the row. Only when the row is narrower than
     /// that (a very narrow window, or a large interface zoom) do all four
     /// show their icons alone, so that none is cut off.
     fn decision_row(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let theme = theme::theme(cx);
         // The width of the four buttons with their labels depends on the
         // language. It is measured here by laying the four buttons out once
         // without drawing them.
@@ -872,8 +871,6 @@ impl DuplicatesScreen {
             .items_center()
             .justify_center()
             .overflow_hidden()
-            .border_b_1()
-            .border_color(theme.border_secondary())
             .child(measure)
             .child(self.decisions(labels, cx))
     }
@@ -1099,11 +1096,12 @@ impl Render for DuplicatesScreen {
             .p(px(EDGE))
             .overflow_hidden()
             .child(self.side(0, &facts, window, cx))
-            .child(self.between(window, cx))
             .child(self.side(1, &facts, window, cx));
         let menu = self.menu.layer(window, cx);
         let decisions = self.decision_row(window, cx);
+        let similarity = self.similarity_row(window, cx);
         root.child(decisions)
+            .child(similarity)
             .child(files)
             // The scan's progress bar is drawn over the top edge of the
             // screen, so it does not move the pictures.
