@@ -711,6 +711,10 @@ reading production's code, seen in this app).
 - The Export dialog's formats end with ZIP Archive: the original files in
   one archive, `Picto Export.zip`, in the chosen folder (`media.export`
   with the `zip` format, which production's dialog does not list).
+- The sidebar and the inspector slide over the same 100 ms (production's
+  sidebar takes 50 ms), and what is between them is laid out for its new
+  width once: a frame in which a view learns its size is drawn again before
+  it is shown (a change to the vendored GPUI, `vendor/README.md`).
 - A picture's original is read once it has been on screen for 200 ms, in
   the viewers and the grid alike (production: 100 ms and 250 ms).
 - The Duplicates screen keeps production's workflow, facts and keys, not

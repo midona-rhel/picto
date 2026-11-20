@@ -708,7 +708,13 @@ impl DetailWindow {
                 window,
                 cx,
             ));
-        ui::GlassPanel::new(ui::drag_region("detail-toolbar", window, cx), 0.)
+        // The toolbar lies over the picture: a press on it moves the window
+        // and must not reach the picture under it, which would pan as soon
+        // as the window can go no further (against the top of the screen).
+        ui::GlassPanel::new(
+            ui::drag_region("detail-toolbar", window, cx).occlude(),
+            0.,
+        )
             .backdrop_blur(theme::detail_toolbar_blur())
             .absolute()
             .top_0()

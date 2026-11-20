@@ -128,6 +128,9 @@ struct WindowInvalidatorInner {
     pub dirty: bool,
     pub draw_phase: DrawPhase,
     pub dirty_views: FxHashSet<EntityId>,
+    /// A view was invalidated while a frame was being drawn: what it drew
+    /// in that frame is already out of date.
+    pub invalidated_in_draw: bool,
     pub update_count: usize,
     #[cfg(feature = "profiler")]
     pub frame_dirty: FrameDirtyAccumulator,
@@ -160,6 +163,7 @@ impl WindowInvalidator {
                 dirty: true,
                 draw_phase: DrawPhase::None,
                 dirty_views: FxHashSet::default(),
+                invalidated_in_draw: false,
                 update_count: 0,
                 #[cfg(feature = "profiler")]
                 frame_dirty: FrameDirtyAccumulator::default(),
@@ -191,8 +195,15 @@ impl WindowInvalidator {
             }
             true
         } else {
+            inner.invalidated_in_draw = true;
             false
         }
+    }
+
+    /// Whether a view was invalidated during a draw since this was last
+    /// asked.
+    pub fn take_invalidated_in_draw(&self) -> bool {
+        mem::take(&mut self.inner.borrow_mut().invalidated_in_draw)
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -2073,7 +2084,19 @@ impl Window {
                                     // atlas tile references after a GPU device recovery.
                                     window.refresh();
                                 }
-                                let arena_clear_needed = window.draw(cx);
+                                window.invalidator.take_invalidated_in_draw();
+                                let mut arena_clear_needed = window.draw(cx);
+                                // A view that learned its size from this
+                                // frame's layout and asked to be drawn again
+                                // is drawn again now, so that no frame is
+                                // shown laid out for the size it had before
+                                // (a window being resized, a rail hidden).
+                                // Once: what the second pass invalidates
+                                // waits for the next frame, as before.
+                                if window.invalidator.take_invalidated_in_draw() {
+                                    arena_clear_needed.clear(cx);
+                                    arena_clear_needed = window.draw(cx);
+                                }
                                 window.present();
                                 arena_clear_needed.clear(cx);
                             })
