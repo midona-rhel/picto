@@ -62,11 +62,12 @@ const GROUP_GAP: f32 = 12.;
 /// The height of the row under the titlebar that holds the four decision
 /// buttons.
 const DECISION_ROW: f32 = 44.;
-/// The space in pixels between the similarity and the pixel measurement in
-/// the titlebar's line of text.
-const MEASURED_BETWEEN: f32 = 5.;
-/// The largest width in pixels of the titlebar's line of text.
-const MEASURED_MOST: f32 = 420.;
+/// The width in pixels of the column between the two files, which shows
+/// the similarity and the pixel measurement.
+const BETWEEN_WIDTH: f32 = 104.;
+/// The space in pixels between the border of a file's panel and what is
+/// inside it.
+const PANEL_PADDING: f32 = 12.;
 
 /// One fact about the two files: its label and its value for the left and
 /// for the right file.
@@ -343,10 +344,19 @@ impl DuplicatesScreen {
             .flex()
             .flex_col()
             .children(rows);
+        // Each file is in its own panel, drawn like the content panel of the
+        // Settings window: rounded corners, a faint border and a slightly
+        // lighter background than the screen. The two panels show which
+        // name, picture and facts belong to which file.
         let column = div()
             .flex_1()
             .min_w_0()
             .h_full()
+            .p(px(PANEL_PADDING))
+            .rounded(px(theme::RADIUS_LG))
+            .border_1()
+            .border_color(theme.contrast(5.))
+            .bg(theme.rail_raised())
             .flex()
             .flex_col()
             .gap(px(AROUND_PICTURE))
@@ -609,18 +619,16 @@ impl DuplicatesScreen {
     /// buttons are the kind that a subscription's page has in the titlebar
     /// (`ui::titlebar_button`).
     ///
-    /// From left to right the row has: empty space under the screen's
-    /// title, which the toolbar draws; the Previous pair button, the
-    /// position in the queue (for example "1 / 500") and the Next pair
-    /// button; one line of small text with the similarity and the pixel
-    /// measurement (for example "100% similar · 0% of pixels differ"); and,
-    /// at the right end of the row, the Zoom to fit and Actual pixels
-    /// buttons. The Smart merge, Not duplicates, Keep both and Show
-    /// Difference buttons are not in the titlebar: they are in a row of
-    /// their own under it ([`Self::decision_row`]).
+    /// The row has three parts. At its left is empty space under the
+    /// screen's title, which the toolbar draws. Centred over the screen's
+    /// content are the Previous pair button, the position in the queue (for
+    /// example "1 / 500") and the Next pair button. At its right end are the
+    /// Zoom to fit and Actual pixels buttons.
     ///
-    /// When the row is too narrow for all of this, parts are removed in the
-    /// order that [`fit`] describes.
+    /// The Smart merge, Not duplicates, Keep both and Show Difference
+    /// buttons are in a row of their own under the titlebar
+    /// ([`Self::decision_row`]). The similarity and the pixel measurement
+    /// are shown between the two pictures ([`Self::between`]).
     pub(super) fn titlebar(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -653,42 +661,6 @@ impl DuplicatesScreen {
         let place = format!("{} / {}", model.index + 1, model.total);
         let place_width =
             width_of(&format!("{0} / {0}", model.total), theme::TEXT_SM, window) + 12.;
-        let shown = self.shown.as_ref();
-        let similarity = shown.map(|shown| compare::similarity_label(shown.distance));
-        // The line of text is drawn only once the pixel comparison has
-        // finished or is known to be impossible. It is then complete, and
-        // it does not change while the pair is on screen.
-        let (line_shown, counted) = match shown.map(|shown| shown.counted) {
-            Some(Counted::Done(measure)) => {
-                let (counted, more) = measure.sentence();
-                (
-                    true,
-                    Some(match more {
-                        Some(more) => format!("{counted} · {more}"),
-                        None => counted,
-                    }),
-                )
-            }
-            Some(Counted::Impossible) => (true, None),
-            Some(Counted::Waiting) | None => (false, None),
-        };
-        let similarity_width = similarity
-            .as_deref()
-            .map_or(0., |text| width_of(text, theme::TEXT_SM, window));
-        let line_width = (similarity_width
-            + counted.as_deref().map_or(0., |text| {
-                MEASURED_BETWEEN + width_of(&format!("· {text}"), theme::TEXT_SM, window)
-            }))
-        .min(MEASURED_MOST);
-        let fit = fit(
-            f32::from(bounds.size.width) - lead,
-            Widths {
-                arrows: 2. * theme::ICON_BUTTON,
-                place: place_width,
-                similarity: similarity_width,
-                zoom: 2. * theme::ICON_BUTTON + ui::titlebar_button::BETWEEN,
-            },
-        );
         let step = |id: &'static str,
                     icon: &'static str,
                     label: &'static str,
@@ -700,89 +672,81 @@ impl DuplicatesScreen {
                 .tip(ui::tip(label).shortcut(key, cx))
                 .on_click(cx.listener(move |this, _, _, cx| this.step(delta, cx)))
         };
+        let row_width = f32::from(bounds.size.width);
+        let zoom_width = 2. * theme::ICON_BUTTON + ui::titlebar_button::BETWEEN;
+        // The Previous pair button, the position and the Next pair button
+        // are one group.
+        let group_width = 2. * theme::ICON_BUTTON + place_width;
+        // When the row is too narrow for everything, the zoom buttons are
+        // removed first and the group after them.
+        let zoom_shown = row_width - lead >= group_width + GROUP_GAP + zoom_width;
+        let group_shown = row_width - lead >= group_width;
+        // The group is centred over the screen's content, which is where
+        // the row of decision buttons under the titlebar is centred too.
+        // The screen reaches the window's right edge, so the middle of its
+        // content is half the content's width from that edge. If the group
+        // would then cover the screen's title or the zoom buttons, it is
+        // placed directly after the title.
+        let viewport = f32::from(window.viewport_size().width);
+        let centred = (self.decision_row_width > 0.).then(|| {
+            viewport - self.decision_row_width / 2. - f32::from(bounds.origin.x) - group_width / 2.
+        });
+        let right_limit = row_width
+            - if zoom_shown {
+                zoom_width + GROUP_GAP
+            } else {
+                0.
+            };
+        let group_left = match centred {
+            Some(left) if left >= lead && left + group_width <= right_limit => left,
+            _ => lead,
+        };
         let mut row = div()
+            .relative()
             .size_full()
             .flex()
             .items_center()
-            .overflow_hidden()
-            .child(div().w(px(lead)).flex_none());
-        if fit.arrows {
-            row = row.child(step(
-                "duplicates-previous",
-                "toolbar-chevron-left",
-                t("Previous pair"),
-                "dup.prevPair",
-                -1,
-                model.can_previous,
-            ));
-        }
-        if fit.place {
+            .overflow_hidden();
+        if group_shown {
             row = row.child(
                 div()
-                    .w(px(place_width))
-                    .flex_none()
-                    .text_center()
-                    .whitespace_nowrap()
-                    .text(theme::TEXT_SM)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_secondary())
-                    .child(place),
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(group_left))
+                    .flex()
+                    .items_center()
+                    .child(step(
+                        "duplicates-previous",
+                        "toolbar-chevron-left",
+                        t("Previous pair"),
+                        "dup.prevPair",
+                        -1,
+                        model.can_previous,
+                    ))
+                    .child(
+                        div()
+                            .w(px(place_width))
+                            .flex_none()
+                            .text_center()
+                            .whitespace_nowrap()
+                            .text(theme::TEXT_SM)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary())
+                            .child(place),
+                    )
+                    .child(step(
+                        "duplicates-next",
+                        "toolbar-chevron-right",
+                        t("Next pair"),
+                        "dup.nextPair",
+                        1,
+                        model.can_next,
+                    )),
             );
         }
-        if fit.arrows {
-            row = row.child(step(
-                "duplicates-next",
-                "toolbar-chevron-right",
-                t("Next pair"),
-                "dup.nextPair",
-                1,
-                model.can_next,
-            ));
-        }
-        if let (Some(room), Some(similarity), true) = (fit.line, similarity, line_shown) {
-            // The line is small text in the secondary text colour. When it
-            // does not fit in `room`, the pixel measurement is cut off with
-            // an ellipsis, and its tooltip shows it whole.
-            let line = div()
-                .w(px(room.min(line_width)))
-                .ml(px(GROUP_GAP))
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(MEASURED_BETWEEN))
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_secondary())
-                .child(ui::tooltip::attach(
-                    div()
-                        .id("duplicates-similarity")
-                        .flex_none()
-                        .whitespace_nowrap()
-                        .child(similarity),
-                    "duplicates-similarity-tip",
-                    ui::tip(t("Perceptual similarity is not pixel equality")),
-                    20.,
-                    window,
-                    cx,
-                ));
-            row = row.child(match counted {
-                Some(counted) => line.child(ui::tooltip::attach(
-                    div()
-                        .id("duplicates-counted")
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("· {counted}")),
-                    "duplicates-counted-tip",
-                    ui::tip(counted),
-                    20.,
-                    window,
-                    cx,
-                )),
-                None => line,
-            });
-        }
-        row = row.child(div().flex_1().min_w(px(GROUP_GAP)));
-        if fit.zoom {
+        row = row.child(div().flex_1());
+        if zoom_shown {
             row = row.child(
                 div()
                     .flex_none()
@@ -806,9 +770,59 @@ impl DuplicatesScreen {
         row.into_any_element()
     }
 
+    /// The narrow column between the two files. It shows, centred, how
+    /// similar the two pictures are (for example "100% similar") and, under
+    /// that in smaller text, what the comparison of their pixels found (for
+    /// example "0% of pixels differ"). The second text is shown once the
+    /// comparison has finished, and it does not change while the pair is on
+    /// screen.
+    fn between(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let theme = theme::theme(cx);
+        let shown = self.shown.as_ref().expect("a pair is on screen");
+        let counted = match shown.counted {
+            Counted::Done(measure) => {
+                let (counted, more) = measure.sentence();
+                Some(match more {
+                    Some(more) => format!("{counted} · {more}"),
+                    None => counted,
+                })
+            }
+            Counted::Impossible | Counted::Waiting => None,
+        };
+        div()
+            .w(px(BETWEEN_WIDTH))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(4.))
+            .text_center()
+            .child(ui::tooltip::attach(
+                div()
+                    .id("duplicates-similarity")
+                    .text(theme::TEXT_SM)
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text())
+                    .child(compare::similarity_label(shown.distance)),
+                "duplicates-similarity-tip",
+                ui::tip(t("Perceptual similarity is not pixel equality")),
+                20.,
+                window,
+                cx,
+            ))
+            .children(counted.map(|counted| {
+                div()
+                    .text(theme::TEXT_CAPTION)
+                    .text_color(theme.text_secondary())
+                    .child(counted)
+            }))
+    }
+
     /// The row under the titlebar that holds the four decision buttons,
-    /// each with its icon and its full label, at the left of the row. The
-    /// row is as wide as the screen and has a line under it.
+    /// each with its icon and its full label, centred in the row. The row
+    /// is as wide as the screen and has a line under it.
     ///
     /// The buttons show their labels at every width at which the four
     /// labelled buttons fit in the row. Only when the row is narrower than
@@ -856,6 +870,7 @@ impl DuplicatesScreen {
             .px(px(EDGE))
             .flex()
             .items_center()
+            .justify_center()
             .overflow_hidden()
             .border_b_1()
             .border_color(theme.border_secondary())
@@ -1084,6 +1099,7 @@ impl Render for DuplicatesScreen {
             .p(px(EDGE))
             .overflow_hidden()
             .child(self.side(0, &facts, window, cx))
+            .child(self.between(window, cx))
             .child(self.side(1, &facts, window, cx));
         let menu = self.menu.layer(window, cx);
         let decisions = self.decision_row(window, cx);
@@ -1126,83 +1142,4 @@ impl Render for DuplicatesToolbar {
             .size_full(),
         )
     }
-}
-
-/// The widths in pixels of the parts of the titlebar's row of controls.
-struct Widths {
-    /// The Previous pair and Next pair buttons together.
-    arrows: f32,
-    /// The position in the queue, for example "1 / 500".
-    place: f32,
-    /// The similarity, for example "100% similar".
-    similarity: f32,
-    /// The Zoom to fit and Actual pixels buttons together.
-    zoom: f32,
-}
-
-/// Which parts of the titlebar's row of controls are shown.
-struct Fit {
-    /// The width in pixels that the line of text may use. It is `None` when
-    /// there is no room for the line.
-    line: Option<f32>,
-    /// The position in the queue is shown.
-    place: bool,
-    /// The Zoom to fit and Actual pixels buttons are shown.
-    zoom: bool,
-    /// The Previous pair and Next pair buttons are shown.
-    arrows: bool,
-}
-
-/// Decides which parts of the titlebar's row of controls are shown in
-/// `room` pixels, which is the width of the row after the screen's title.
-///
-/// When everything fits, everything is shown. When it does not, parts are
-/// removed in this order until the rest fits:
-/// 1. The pixel measurement in the line of text is cut off with an
-///    ellipsis, until only the similarity is left.
-/// 2. The line of text is removed.
-/// 3. The position in the queue is removed.
-/// 4. The Zoom to fit and Actual pixels buttons are removed.
-/// 5. The Previous pair and Next pair buttons are removed.
-///
-/// The result depends only on the widths, never on what the line of text
-/// says, so the buttons do not move while a pair is on screen.
-fn fit(room: f32, widths: Widths) -> Fit {
-    // The width that is left for the line of text when the parts that
-    // `fit` names are shown.
-    let rest = |fit: &Fit| {
-        let mut used = if fit.arrows { widths.arrows } else { 0. };
-        if fit.place {
-            used += widths.place;
-        }
-        if fit.zoom {
-            used += GROUP_GAP + widths.zoom;
-        }
-        room - used
-    };
-    let mut fit = Fit {
-        line: None,
-        place: true,
-        zoom: true,
-        arrows: true,
-    };
-    // The line of text needs at least the width of the similarity and the
-    // gaps before and after it.
-    let needed = 2. * GROUP_GAP + widths.similarity;
-    let left = rest(&fit);
-    if left >= needed {
-        fit.line = Some(left - 2. * GROUP_GAP);
-        return fit;
-    }
-    for remove in [
-        |fit: &mut Fit| fit.place = false,
-        |fit: &mut Fit| fit.zoom = false,
-        |fit: &mut Fit| fit.arrows = false,
-    ] {
-        if rest(&fit) >= 0. {
-            break;
-        }
-        remove(&mut fit);
-    }
-    fit
 }

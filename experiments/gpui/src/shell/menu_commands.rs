@@ -734,7 +734,7 @@ impl Shell {
         let menu = cx.new(|cx| menu::Menu::new(entries, position, cx).search(false));
         self.menu
             .open(menu, window, cx, |this, _, action, _, cx| match action {
-                "all" => this.toggle_rails(true, true, cx),
+                "all" => this.toggle_all_rails(cx),
                 "sidebar" => this.toggle_rails(true, false, cx),
                 "inspector" => this.toggle_rails(false, true, cx),
                 _ => {}

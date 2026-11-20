@@ -590,6 +590,21 @@ impl Shell {
         self._view_panels = subscriptions;
     }
 
+    /// Toggle Panels: hides the sidebar and the inspector together, or
+    /// shows them together. When at least one of them is showing, every
+    /// one that is showing is hidden. When both are hidden, both are shown.
+    /// So the two never end up swapped, with one appearing as the other
+    /// disappears.
+    pub(super) fn toggle_all_rails(&mut self, cx: &mut Context<Self>) {
+        let (sidebar_shown, inspector_shown) =
+            (!self.sidebar_collapsed, !self.inspector_collapsed);
+        if sidebar_shown || inspector_shown {
+            self.toggle_rails(sidebar_shown, inspector_shown, cx);
+        } else {
+            self.toggle_rails(true, true, cx);
+        }
+    }
+
     /// Hides or shows the sidebar when `sidebar` is true, and the inspector
     /// when `inspector` is true, and saves the new state. Both rails slide
     /// over the same 100 ms, so when they are hidden together they move in
@@ -848,7 +863,7 @@ impl Shell {
                 ui::icon_button("toggle-panels", "toolbar-panel")
                     .glyph(14.)
                     .tip(ui::tip(t("Toggle Panels")).shortcut("view.toggleBothPanels", cx))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_rails(true, true, cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_all_rails(cx)))
                     .on_secondary(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                         this.open_panels_menu(event.position, window, cx)
                     })),
@@ -1289,7 +1304,7 @@ impl Render for Shell {
                 cx.listener(|this, _: &ToggleInspector, _, cx| this.toggle_rails(false, true, cx)),
             )
             .on_action(
-                cx.listener(|this, _: &TogglePanels, _, cx| this.toggle_rails(true, true, cx)),
+                cx.listener(|this, _: &TogglePanels, _, cx| this.toggle_all_rails(cx)),
             )
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
                 this.session.update(cx, |session, cx| session.undo(cx))
