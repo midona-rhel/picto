@@ -215,6 +215,20 @@ pub fn layout(shapes: &[Shape], width: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// The member that the top edge of the visible area falls on when the
+/// column is scrolled down by `offset`, and how far down that member the
+/// edge is, as a fraction of the member's height. When the edge is in the
+/// space above a member, the fraction is negative. `places` is the result
+/// of [`layout`]. Returns `None` when there are no members.
+pub fn top_member(places: &[(f32, f32)], offset: f32) -> Option<(usize, f32)> {
+    let index = places
+        .iter()
+        .position(|(top, height)| top + height > offset)
+        .or(places.len().checked_sub(1))?;
+    let (top, height) = places[index];
+    Some((index, (offset - top) / height.max(1.)))
+}
+
 /// The indices of the members that are at least partly visible when the
 /// column is scrolled down by `offset` and the visible area is `height`
 /// tall. `places` is the result of [`layout`].
@@ -408,6 +422,30 @@ impl GroupReader {
     fn places(&self) -> Vec<(f32, f32)> {
         let shapes: Vec<_> = self.members.iter().map(Self::shape).collect();
         layout(&shapes, self.column_width())
+    }
+
+    /// Records the scrolling area's new size. Members are as wide as the
+    /// column, so a change of width changes every member's height. To keep
+    /// the same part of the collection on screen, the member at the top of
+    /// the visible area is found before the change, together with how far
+    /// down it the top edge is (as a fraction of its height), and the scroll
+    /// offset is then set so that the same point of that member is at the
+    /// top edge again.
+    fn resize_viewport(&mut self, size: Size<Pixels>) {
+        let width_changed = self.viewport.width != size.width && self.viewport.width > px(0.);
+        let anchor = width_changed
+            .then(|| {
+                let offset = -f32::from(self.scroll.offset().y);
+                top_member(&self.places(), offset)
+            })
+            .flatten();
+        self.viewport = size;
+        if let Some((index, fraction)) = anchor
+            && let Some((top, height)) = self.places().get(index).copied()
+        {
+            let offset = (top + fraction * height).max(0.);
+            self.scroll.set_offset(point(px(0.), px(-offset)));
+        }
     }
 
     fn visible(&self) -> Vec<usize> {
@@ -677,7 +715,7 @@ impl Render for GroupReader {
             move |bounds, window, cx| {
                 let _ = entity.update(cx, |this, cx| {
                     if this.viewport != bounds.size {
-                        this.viewport = bounds.size;
+                        this.resize_viewport(bounds.size);
                         cx.notify();
                         // Ask for another frame as well, so that the members
                         // are loaded for the size just measured.
