@@ -299,6 +299,10 @@ pub struct DuplicatesScreen {
     /// screen gives focus back to it when the user leaves the screen.
     return_focus: Option<FocusHandle>,
     controls: Entity<DuplicatesToolbar>,
+    /// The width in pixels of the row of decision buttons under the
+    /// titlebar, as it was laid out in the last frame. It is 0 before the
+    /// first frame.
+    decision_row_width: f32,
     /// True while this screen is the session's destination.
     visible: bool,
     /// True once the screen took keyboard focus during this visit.
@@ -428,6 +432,7 @@ impl DuplicatesScreen {
             focus,
             return_focus: None,
             controls,
+            decision_row_width: 0.,
             visible: false,
             focused_once: false,
             pairs: Vec::new(),

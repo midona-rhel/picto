@@ -1,7 +1,15 @@
-//! The source address field (`InspectorSourceField`): the first address,
-//! its host and the rest dimmed, "+N" when there are more, and the link
-//! button that opens the list of addresses for editing, with a row each
-//! (open, Edit, Delete), an edit field and "Add URL".
+//! The inspector's field for an item's source addresses (URLs).
+//!
+//! The field shows the item's first address: the host in the normal text
+//! colour and the rest of the address in a dimmer colour. When the item has
+//! more addresses, the field also shows how many, for example "+3". A press
+//! on the address opens it in the browser.
+//!
+//! At the right end of the field is the link button. It opens a list over
+//! the field: a rounded rectangle as wide as the field, with "Add URL" as
+//! its first row and one row for each address under it. Each address row
+//! opens the address when pressed and has an Edit button and a Delete
+//! button.
 use super::Inspector;
 use crate::i18n::t;
 use crate::theme;
@@ -324,11 +332,17 @@ impl Inspector {
         slot
     }
 
-    /// `.urlDropdown`: over the field and what follows, leaving the link
-    /// button uncovered.
+    /// The list of addresses that opens when the link button is pressed. It
+    /// is one rectangle with rounded corners, as wide as the address field,
+    /// drawn over the field and over what follows it. Its first row is "Add
+    /// URL" (or the text field for a new address while one is being typed),
+    /// and under it there is one row for each address the item has. A press
+    /// outside the list closes it.
     fn source_list(&mut self, urls: &[String], cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let width = f32::from(self.sources.field.get().size.width) - 30.;
+        // The field's size is measured inside its 1 px border, so the list
+        // is 2 px wider than that measurement to cover the field exactly.
+        let width = f32::from(self.sources.field.get().size.width) + 2.;
         let separator = theme::blend(
             gpui::transparent_black().into(),
             theme.border_secondary(),
@@ -351,15 +365,43 @@ impl Inspector {
                 .child(self.sources.input.clone())
         };
         let mut list = div().w_full().flex().flex_col();
+        // The first row: the text field for a new address while one is
+        // being typed, and the "Add URL" button otherwise.
+        list = list.child(if editing == Some(urls.len()) {
+            div()
+                .id("source-new")
+                .min_h(px(32.))
+                .flex()
+                .items_center()
+                .child(input_row())
+        } else {
+            div()
+                .id("source-add")
+                .role(Role::Button)
+                .aria_label(t("Add URL"))
+                .w_full()
+                .h(px(32.))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .text(theme::TEXT_SM)
+                .text_color(theme.text_tertiary())
+                .cursor_pointer()
+                .hover(move |style| style.text_color(theme.text()))
+                .child(ui::icon("source-plus", 13., theme.text_tertiary()))
+                .child(t("Add URL"))
+                .on_click(cx.listener(|this, _, window, cx| this.add_source(window, cx)))
+        });
         for (index, url) in urls.iter().enumerate() {
             let mut row = div()
                 .id(("source-row", index))
                 .min_h(px(32.))
                 .flex()
                 .items_center();
-            if index > 0 {
-                row = row.border_t_1().border_color(separator);
-            }
+            // Every address row has a line above it, which separates it
+            // from the first row or from the address before it.
+            row = row.border_t_1().border_color(separator);
             row = if editing == Some(index) {
                 row.child(input_row())
             } else {
@@ -404,35 +446,6 @@ impl Inspector {
                 );
             list = list.child(row);
         }
-        if editing == Some(urls.len()) {
-            let mut row = div().id("source-new").min_h(px(32.)).flex().items_center();
-            if !urls.is_empty() {
-                row = row.border_t_1().border_color(separator);
-            }
-            list = list.child(row.child(input_row()));
-        }
-        // `.addUrlBtn`
-        list = list.child(
-            div()
-                .id("source-add")
-                .role(Role::Button)
-                .aria_label(t("Add URL"))
-                .w_full()
-                .h(px(32.))
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .border_t_1()
-                .border_color(theme.border_secondary())
-                .text(theme::TEXT_SM)
-                .text_color(theme.text_tertiary())
-                .cursor_pointer()
-                .hover(move |style| style.text_color(theme.text()))
-                .child(ui::icon("source-plus", 13., theme.text_tertiary()))
-                .child(t("Add URL"))
-                .on_click(cx.listener(|this, _, window, cx| this.add_source(window, cx))),
-        );
         let field = self.sources.field.get();
         let dropdown = div()
             .id("source-list")
@@ -441,7 +454,6 @@ impl Inspector {
             .max_h(px(240.))
             .overflow_y_scroll()
             .rounded(px(theme::RADIUS_MD))
-            .rounded_tr(px(0.))
             .border_1()
             .border_color(theme.primary())
             .bg(theme.rail())

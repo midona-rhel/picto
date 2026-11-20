@@ -784,16 +784,18 @@ impl Inspector {
 }
 
 impl Inspector {
-    /// `.scrollContent`: 16px all round, 48 below, with the scrollbar's
-    /// gutter reserved on the right.
+    /// The inspector's scrolling area. Its content is 16 px from the left
+    /// edge and 16 px from the right edge, 16 px from the top and 48 px
+    /// from the bottom. The scrollbar is 8 px wide and is drawn next to the
+    /// right edge, inside that 16 px, so the space beside the content is
+    /// the same on both sides and the scrollbar never covers the content.
     fn scroller(&self) -> Stateful<Div> {
         div()
             .id("inspector")
             .size_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            .pl(px(16.))
-            .pr(px(16. + ui::scrollbar::GUTTER))
+            .px(px(16.))
             .pt(px(16.))
             .pb(px(48.))
             .font_family(theme::FONT_INSPECTOR)

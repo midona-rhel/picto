@@ -271,6 +271,11 @@ impl Shell {
                         !session.viewer && matches!(session.transition, Transition::FadingOut(_));
                 }
                 if matches!(change, Change::Viewer | Change::Navigation) {
+                    // The view under the pointer has changed. After a
+                    // trackpad flick the system keeps sending scroll events
+                    // for a second or more; without this they would scroll
+                    // the view that has just appeared.
+                    ui::momentum::suppress();
                     cx.notify();
                 }
             }),

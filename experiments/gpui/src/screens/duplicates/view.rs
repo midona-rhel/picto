@@ -59,6 +59,9 @@ const TITLE_START: f32 = 80. - 8. - 2. * theme::ICON_BUTTON;
 const TITLE_CLEAR: f32 = 16.;
 /// The space in pixels between the groups of controls in the titlebar.
 const GROUP_GAP: f32 = 12.;
+/// The height of the row under the titlebar that holds the four decision
+/// buttons.
+const DECISION_ROW: f32 = 44.;
 /// The space in pixels between the similarity and the pixel measurement in
 /// the titlebar's line of text.
 const MEASURED_BETWEEN: f32 = 5.;
@@ -610,10 +613,11 @@ impl DuplicatesScreen {
     /// title, which the toolbar draws; the Previous pair button, the
     /// position in the queue (for example "1 / 500") and the Next pair
     /// button; one line of small text with the similarity and the pixel
-    /// measurement (for example "100% similar · 0% of pixels differ"); the
-    /// Smart merge, Not duplicates, Keep both and Show Difference buttons;
-    /// and the Zoom to fit and Actual pixels buttons. The buttons are at
-    /// the right end of the row.
+    /// measurement (for example "100% similar · 0% of pixels differ"); and,
+    /// at the right end of the row, the Zoom to fit and Actual pixels
+    /// buttons. The Smart merge, Not duplicates, Keep both and Show
+    /// Difference buttons are not in the titlebar: they are in a row of
+    /// their own under it ([`Self::decision_row`]).
     ///
     /// When the row is too narrow for all of this, parts are removed in the
     /// order that [`fit`] describes.
@@ -676,27 +680,12 @@ impl DuplicatesScreen {
                 MEASURED_BETWEEN + width_of(&format!("· {text}"), theme::TEXT_SM, window)
             }))
         .min(MEASURED_MOST);
-        // The width of the four buttons with their labels depends on the
-        // language. It is measured here by laying the four buttons out once
-        // without drawing them.
-        let labelled = f32::from(
-            self.decisions(true, cx)
-                .into_any_element()
-                .layout_as_root(
-                    size(AvailableSpace::MaxContent, bounds.size.height.into()),
-                    window,
-                    cx,
-                )
-                .width,
-        );
         let fit = fit(
             f32::from(bounds.size.width) - lead,
             Widths {
                 arrows: 2. * theme::ICON_BUTTON,
                 place: place_width,
                 similarity: similarity_width,
-                labelled,
-                icons: 4. * ui::titlebar_button::HEIGHT + 3. * ui::titlebar_button::BETWEEN,
                 zoom: 2. * theme::ICON_BUTTON + ui::titlebar_button::BETWEEN,
             },
         );
@@ -792,13 +781,10 @@ impl DuplicatesScreen {
                 None => line,
             });
         }
-        row = row
-            .child(div().flex_1().min_w(px(GROUP_GAP)))
-            .child(self.decisions(fit.labels, cx));
+        row = row.child(div().flex_1().min_w(px(GROUP_GAP)));
         if fit.zoom {
             row = row.child(
                 div()
-                    .ml(px(GROUP_GAP))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -818,6 +804,63 @@ impl DuplicatesScreen {
             );
         }
         row.into_any_element()
+    }
+
+    /// The row under the titlebar that holds the four decision buttons,
+    /// each with its icon and its full label, at the left of the row. The
+    /// row is as wide as the screen and has a line under it.
+    ///
+    /// The buttons show their labels at every width at which the four
+    /// labelled buttons fit in the row. Only when the row is narrower than
+    /// that (a very narrow window, or a large interface zoom) do all four
+    /// show their icons alone, so that none is cut off.
+    fn decision_row(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let theme = theme::theme(cx);
+        // The width of the four buttons with their labels depends on the
+        // language. It is measured here by laying the four buttons out once
+        // without drawing them.
+        let labelled = f32::from(
+            self.decisions(true, cx)
+                .into_any_element()
+                .layout_as_root(
+                    size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                    window,
+                    cx,
+                )
+                .width,
+        );
+        // The row's width is read while the frame is laid out. When it has
+        // changed, the screen is drawn again before the frame is shown, so
+        // the labels are right for the new width in the same frame.
+        let entity = cx.weak_entity();
+        let measure = canvas(
+            move |bounds, _, cx| {
+                let width = f32::from(bounds.size.width);
+                let _ = entity.update(cx, |this, cx| {
+                    if this.decision_row_width != width {
+                        this.decision_row_width = width;
+                        cx.notify();
+                    }
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full();
+        let room = self.decision_row_width - 2. * EDGE;
+        let labels = self.decision_row_width <= 0. || labelled <= room;
+        div()
+            .relative()
+            .flex_none()
+            .h(px(DECISION_ROW))
+            .px(px(EDGE))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .border_b_1()
+            .border_color(theme.border_secondary())
+            .child(measure)
+            .child(self.decisions(labels, cx))
     }
 
     /// The four buttons that make a decision on the pair or show the
@@ -1043,7 +1086,9 @@ impl Render for DuplicatesScreen {
             .child(self.side(0, &facts, window, cx))
             .child(self.side(1, &facts, window, cx));
         let menu = self.menu.layer(window, cx);
-        root.child(files)
+        let decisions = self.decision_row(window, cx);
+        root.child(decisions)
+            .child(files)
             // The scan's progress bar is drawn over the top edge of the
             // screen, so it does not move the pictures.
             .children(self.scan_progress.then(|| {
@@ -1091,18 +1136,12 @@ struct Widths {
     place: f32,
     /// The similarity, for example "100% similar".
     similarity: f32,
-    /// The four decision buttons with their labels.
-    labelled: f32,
-    /// The four decision buttons with only their icons.
-    icons: f32,
     /// The Zoom to fit and Actual pixels buttons together.
     zoom: f32,
 }
 
 /// Which parts of the titlebar's row of controls are shown.
 struct Fit {
-    /// The four decision buttons show their labels.
-    labels: bool,
     /// The width in pixels that the line of text may use. It is `None` when
     /// there is no room for the line.
     line: Option<f32>,
@@ -1121,13 +1160,10 @@ struct Fit {
 /// removed in this order until the rest fits:
 /// 1. The pixel measurement in the line of text is cut off with an
 ///    ellipsis, until only the similarity is left.
-/// 2. The four decision buttons lose their labels, all four at the same
-///    width, and show only their icons. The line of text then has room
-///    again.
-/// 3. The line of text is removed.
-/// 4. The position in the queue is removed.
-/// 5. The Zoom to fit and Actual pixels buttons are removed.
-/// 6. The Previous pair and Next pair buttons are removed.
+/// 2. The line of text is removed.
+/// 3. The position in the queue is removed.
+/// 4. The Zoom to fit and Actual pixels buttons are removed.
+/// 5. The Previous pair and Next pair buttons are removed.
 ///
 /// The result depends only on the widths, never on what the line of text
 /// says, so the buttons do not move while a pair is on screen.
@@ -1135,36 +1171,27 @@ fn fit(room: f32, widths: Widths) -> Fit {
     // The width that is left for the line of text when the parts that
     // `fit` names are shown.
     let rest = |fit: &Fit| {
-        let mut left = if fit.arrows { widths.arrows } else { 0. };
+        let mut used = if fit.arrows { widths.arrows } else { 0. };
         if fit.place {
-            left += widths.place;
+            used += widths.place;
         }
-        let mut right = if fit.labels {
-            widths.labelled
-        } else {
-            widths.icons
-        };
         if fit.zoom {
-            right += GROUP_GAP + widths.zoom;
+            used += GROUP_GAP + widths.zoom;
         }
-        room - left - GROUP_GAP - right
+        room - used
     };
     let mut fit = Fit {
-        labels: true,
         line: None,
         place: true,
         zoom: true,
         arrows: true,
     };
     // The line of text needs at least the width of the similarity and the
-    // gap before it.
-    let needed = GROUP_GAP + widths.similarity;
-    if rest(&fit) < needed {
-        fit.labels = false;
-    }
+    // gaps before and after it.
+    let needed = 2. * GROUP_GAP + widths.similarity;
     let left = rest(&fit);
     if left >= needed {
-        fit.line = Some(left - GROUP_GAP);
+        fit.line = Some(left - 2. * GROUP_GAP);
         return fit;
     }
     for remove in [

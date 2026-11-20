@@ -432,8 +432,9 @@ impl SubscriptionsScreen {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.rail_scroll)
-                    .pl(px(16.))
-                    .pr(px(16. + ui::scrollbar::GUTTER))
+                    // The same space on both sides as the inspector has
+                    // (`Inspector::scroller`).
+                    .px(px(16.))
                     .pt(px(16.))
                     .pb(px(48.))
                     .font_family(theme::FONT_INSPECTOR)

@@ -154,6 +154,9 @@ impl QuickLook {
         if self.open || !single {
             return;
         }
+        // A scroll still coasting in the grid must not go on to scroll
+        // what Quick Look shows.
+        crate::ui::momentum::suppress();
         self.open = true;
         self.return_focus = window.focused(cx);
         window.focus(&self.focus, cx);
@@ -193,6 +196,9 @@ impl QuickLook {
         if !self.open {
             return;
         }
+        // A scroll still coasting after a trackpad flick must not go on to
+        // scroll the grid that Quick Look was covering.
+        crate::ui::momentum::suppress();
         self.open = false;
         self.member = None;
         self.opened = None;
