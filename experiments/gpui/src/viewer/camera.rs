@@ -1,21 +1,31 @@
-//! Zoom and pan of an image in the viewer, as `useImageZoom.ts` keeps it: a
-//! scale, and an offset of the image's centre from the pane's centre. The
-//! image is drawn at its natural size times the scale, so 100% is one image
-//! pixel per point.
+//! The zoom and pan of an image in the viewer. [`Camera`] holds them the way
+//! production's `useImageZoom.ts` does: a scale, and the offset of the
+//! image's centre from the pane's centre. The pane is the area of the viewer
+//! that the image is shown in. The image is drawn at its natural size times
+//! the scale, so at 100% one image pixel takes one point on screen.
 use std::time::{Duration, Instant};
 
-/// `MIN_SCALE` and `MAX_SCALE`.
+/// `MIN_SCALE`: the smallest zoom the viewer allows, 5%.
 pub const MIN_SCALE: f32 = 0.05;
+/// `MAX_SCALE`: the largest zoom the viewer allows, 800%.
 pub const MAX_SCALE: f32 = 8.0;
-/// Keyboard and wheel-notch zoom multiply or divide by this.
+/// One zoom step. A zoom key or one notch of the mouse wheel multiplies the
+/// scale by this to zoom in, and divides the scale by it to zoom out.
 pub const STEP: f32 = 1.25;
-/// A pixel wheel delta at least this large is a wheel notch, not a trackpad.
+/// A wheel event whose pixel delta is at least this large is treated as one
+/// notch of a mouse wheel. A smaller one is treated as a trackpad scroll.
+/// When a scroll pans the image and its delta is given in lines, one line
+/// also counts as this many pixels.
 pub const NOTCH: f32 = 40.;
-/// Wheel notches within this time of each other zoom from where the last one
-/// was headed, not from where the glide has got to.
+/// When two wheel notches arrive within this time of each other, the second
+/// one zooms from the scale the first one was animating towards, not from
+/// the scale the animation has reached so far. Several quick notches
+/// therefore each add a full step.
 pub const NOTCH_RUN: Duration = Duration::from_millis(200);
-/// `FIT_ROUNDING_TOLERANCE_PX`: an image within this of fitting counts as
-/// fitted, so the navigator does not flicker while the window is resized.
+/// `FIT_ROUNDING_TOLERANCE_PX`: an image that is larger than the pane by no
+/// more than this many points still counts as fitting in it. Without this,
+/// rounding while the window is resized would make the navigator appear and
+/// disappear repeatedly.
 const FIT_TOLERANCE: f32 = 3.;
 
 pub type Size = (f32, f32);
@@ -23,7 +33,8 @@ pub type Size = (f32, f32);
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     pub scale: f32,
-    /// The image centre's offset from the pane's centre, in points.
+    /// The offset of the image's centre from the pane's centre, in points:
+    /// `tx` to the right and `ty` downward.
     pub tx: f32,
     pub ty: f32,
 }
@@ -38,8 +49,8 @@ fn clamp_scale(scale: f32) -> f32 {
     scale.clamp(MIN_SCALE, MAX_SCALE)
 }
 
-/// The scale at which the whole image fits the pane. An empty pane or image
-/// leaves it at 1.
+/// The largest scale at which the whole image fits in the pane. Returns 1
+/// when the image or the pane has no width or no height.
 pub fn fit_scale(image: Size, pane: Size) -> f32 {
     if pane.0 <= 0. || pane.1 <= 0. || image.0 <= 0. || image.1 <= 0. {
         return 1.;
@@ -47,9 +58,12 @@ pub fn fit_scale(image: Size, pane: Size) -> f32 {
     (pane.0 / image.0).min(pane.1 / image.1)
 }
 
-/// The image scaled to fit the pane whole, centred in it: `(left, top,
-/// width, height)`, or `None` for an empty image or pane. The viewer's fit,
-/// a paged document's page, Flash's stage and the navigator's thumbnail.
+/// The rectangle the image takes when it is scaled to fit in the pane whole
+/// and is centred in it, as `(left, top, width, height)` relative to the
+/// pane's top-left corner. Returns `None` when the image or the pane has no
+/// width or no height. It is used wherever a picture is fitted into a box:
+/// for example Flash's stage in the viewer, the image in the navigator, and
+/// a thumbnail in a grid tile.
 pub fn contain(image: Size, pane: Size) -> Option<(f32, f32, f32, f32)> {
     if pane.0 <= 0. || pane.1 <= 0. || image.0 <= 0. || image.1 <= 0. {
         return None;
@@ -60,7 +74,9 @@ pub fn contain(image: Size, pane: Size) -> Option<(f32, f32, f32, f32)> {
 }
 
 impl Camera {
-    /// `fitToWindow`: the whole image, centred. Not clamped, as in Electron.
+    /// `fitToWindow`: the camera that shows the whole image, centred in the
+    /// pane. The scale is not limited to the range from [`MIN_SCALE`] to
+    /// [`MAX_SCALE`] here, as in production.
     pub fn fit(image: Size, pane: Size) -> Self {
         Self {
             scale: fit_scale(image, pane),
@@ -69,7 +85,8 @@ impl Camera {
         }
     }
 
-    /// `fitActual`: one image pixel per point, centred.
+    /// `fitActual`: the camera that shows the image at 100%, which is one
+    /// image pixel per point, centred in the pane.
     pub fn actual() -> Self {
         Self {
             scale: 1.,
@@ -78,14 +95,16 @@ impl Camera {
         }
     }
 
-    /// The zoom as the toolbar shows it.
+    /// The scale as a percentage rounded to a whole number, which is how the
+    /// toolbar shows the zoom.
     pub fn percent(&self) -> f32 {
         (self.scale * 100.).round()
     }
 
-    /// `zoomTo`: a new scale. With a focal point (relative to the pane's
-    /// centre) that point of the image stays where it is; without one the
-    /// offset is kept as it is.
+    /// `zoomTo`: this camera at a new scale, which is limited to the range
+    /// from [`MIN_SCALE`] to [`MAX_SCALE`]. With a focal point (given
+    /// relative to the pane's centre), the part of the image under that
+    /// point stays under it. Without one, the offset is left unchanged.
     pub fn zoomed(self, scale: f32, focal: Option<(f32, f32)>) -> Self {
         let scale = clamp_scale(scale);
         match focal {
@@ -101,8 +120,9 @@ impl Camera {
         }
     }
 
-    /// The target of `animateZoomTo` without a focal point: the offset grows
-    /// with the scale, so the point at the pane's centre stays there.
+    /// The camera that `animateZoomTo` animates to when it has no focal
+    /// point. The offset is multiplied by the same ratio as the scale, so
+    /// the part of the image at the pane's centre stays there.
     pub fn zoomed_about_centre(self, scale: f32) -> Self {
         let scale = clamp_scale(scale);
         let ratio = scale / self.scale;
@@ -113,7 +133,10 @@ impl Camera {
         }
     }
 
-    /// The camera a drag that began at `self` has moved by `(dx, dy)`.
+    /// This camera with the image moved by `(dx, dy)` points: to the right
+    /// for a positive `dx` and downward for a positive `dy`. During a drag,
+    /// `self` is the camera the drag began with and `(dx, dy)` is how far
+    /// the pointer has moved since.
     pub fn panned(self, dx: f32, dy: f32) -> Self {
         Self {
             tx: self.tx + dx,
@@ -122,9 +145,13 @@ impl Camera {
         }
     }
 
-    /// The detail window's resize: the scale follows the fit scale's change
-    /// and the offset the pane's, so a fitted image stays fitted and a
-    /// zoomed one keeps its framing (`DetailWindow`'s `ResizeObserver`).
+    /// The camera after the pane changes size from `from` to `to`, as the
+    /// detail window does it (`DetailWindow`'s `ResizeObserver`). The scale
+    /// is multiplied by the ratio of the new fit scale to the old one, and
+    /// the offset by the ratio of the new pane size to the old one. An image
+    /// that was fitted therefore stays fitted, and a zoomed image keeps
+    /// showing the same part. Returns the camera unchanged when the old
+    /// pane has no width or no height.
     pub fn resized(self, image: Size, from: Size, to: Size) -> Self {
         let (old, new) = (fit_scale(image, from), fit_scale(image, to));
         if from.0 <= 0. || from.1 <= 0. || old <= 0. || new <= 0. {
@@ -149,8 +176,9 @@ impl Camera {
         )
     }
 
-    /// `panToNormalized`: centres the pane on a point of the image given as
-    /// fractions of its width and height.
+    /// `panToNormalized`: this camera moved so that one point of the image
+    /// is at the pane's centre. The point is given as fractions of the
+    /// image's width (`nx`) and height (`ny`).
     pub fn centred_on(self, nx: f32, ny: f32, image: Size) -> Self {
         Self {
             tx: (0.5 - nx) * image.0 * self.scale,
@@ -168,15 +196,18 @@ impl Camera {
     }
 }
 
-/// The zoom factor for one smooth (trackpad) wheel event; `delta` is the
-/// browser's `deltaY`, positive when scrolling down, which zooms out.
+/// The factor the scale is multiplied by for one trackpad scroll event.
+/// `delta` has the sign of a browser's `deltaY`: it is positive when
+/// scrolling down, which zooms out.
 pub fn wheel_factor(delta: f32) -> f32 {
     (-delta * 0.004).exp()
 }
 
-/// The part of the image the pane shows, as fractions of the image
-/// (`computeNavigatorRect`): `(x, y, width, height)`. `None` while the whole
-/// image fits, when there is no navigator.
+/// `computeNavigatorRect`: the part of the image that is visible in the
+/// pane, as `(x, y, width, height)` in fractions of the image's width and
+/// height. Returns `None` while the whole image fits in the pane, or is
+/// larger than it by no more than `FIT_TOLERANCE`. The navigator is not
+/// shown then.
 pub fn visible_part(camera: Camera, image: Size, pane: Size) -> Option<(f32, f32, f32, f32)> {
     let (left, top, width, height) = camera.image_rect(image, pane);
     if width <= pane.0 + FIT_TOLERANCE && height <= pane.1 + FIT_TOLERANCE {
@@ -195,14 +226,19 @@ pub fn visible_part(camera: Camera, image: Size, pane: Size) -> Option<(f32, f32
     ))
 }
 
-/// How the image sits in the square navigator: `(left, top, width, height)`,
-/// letterboxed to fit (`useNavigatorRenderer.ts`).
+/// Where the image is drawn inside the square navigator, whose sides are
+/// `side` long, as `(left, top, width, height)` (`useNavigatorRenderer.ts`).
+/// The image is scaled to fit in the square whole and is centred in it. That
+/// leaves empty bands above and below a wide image, or to the left and right
+/// of a tall one.
 pub fn navigator_image(image: Size, side: f32) -> (f32, f32, f32, f32) {
     contain(image, (side, side)).unwrap_or((0., 0., side, side))
 }
 
-/// The point of the image under a press in the navigator, as fractions of
-/// the image (`useNavigatorDrag.ts`). `local` is relative to the navigator.
+/// The point of the image that is under the pointer when the pointer is at
+/// `local` in the navigator (`useNavigatorDrag.ts`). `local` is relative to
+/// the navigator's top-left corner. The result is in fractions of the
+/// image's width and height, limited to the range from 0 to 1.
 pub fn navigator_point(local: (f32, f32), image: Size, side: f32) -> (f32, f32) {
     let (left, top, width, height) = navigator_image(image, side);
     (
@@ -211,12 +247,15 @@ pub fn navigator_point(local: (f32, f32), image: Size, side: f32) -> (f32, f32) 
     )
 }
 
-/// `LERP_SPEED`: while the navigator is dragged, the view moves this share
-/// of the remaining way each frame.
+/// `LERP_SPEED`: while the user drags in the navigator, the viewer does not
+/// jump to the point under the pointer. Each frame it moves this share of
+/// the remaining distance towards that point.
 pub const NAVIGATOR_FOLLOW: f32 = 0.3;
 
-/// One frame of the navigator's follow: the next point, or the target once
-/// within a thousandth of it.
+/// One frame of that movement: the point that is [`NAVIGATOR_FOLLOW`] of the
+/// way from `current` to `target`. Returns `target` itself once `current`
+/// is within 0.001 of it on both axes. The points are in fractions of the
+/// image's width and height.
 pub fn follow(current: (f32, f32), target: (f32, f32)) -> (f32, f32) {
     let (dx, dy) = (target.0 - current.0, target.1 - current.1);
     if dx.abs() < 0.001 && dy.abs() < 0.001 {
@@ -229,7 +268,9 @@ pub fn follow(current: (f32, f32), target: (f32, f32)) -> (f32, f32) {
     }
 }
 
-/// A camera move that glides over [`crate::motion::ZOOM_GLIDE`] on an ease-out cubic.
+/// An animated move of the camera from `from` to `to` that began at
+/// `started`. It lasts [`crate::motion::ZOOM_GLIDE`] and follows the curve
+/// of [`crate::motion::zoom_glide_progress`].
 #[derive(Clone, Copy, Debug)]
 pub struct Glide {
     pub from: Camera,
@@ -238,23 +279,30 @@ pub struct Glide {
 }
 
 impl Glide {
-    /// Where the glide is `elapsed` after it started, and whether it is over.
+    /// The camera `elapsed` after the animation started, and whether the
+    /// animation has finished.
     pub fn at(&self, elapsed: Duration) -> (Camera, bool) {
-        let t = (elapsed.as_secs_f32() / crate::motion::ZOOM_GLIDE.as_secs_f32()).clamp(0., 1.);
-        let eased = 1. - (1. - t).powi(3);
-        if t >= 1. {
+        if elapsed >= crate::motion::ZOOM_GLIDE {
             (self.to, true)
         } else {
+            let eased = crate::motion::zoom_glide_progress(elapsed);
             (self.from.lerp(self.to, eased), false)
         }
     }
 }
 
-/// `.transparencyGrid`'s squares: 8 image pixels wide, the one at the
-/// image's top left white and its neighbours grey. Given the image's
-/// on-screen rectangle (left, top, width, height), the visible part of the
-/// window and the side of one square on screen, the grey squares that show,
-/// each cut to the image, as (left, top, width, height).
+/// The grey squares of the checkerboard that is drawn behind an image with
+/// transparent parts (`.transparencyGrid` in production). The square at the
+/// image's top-left corner is white, and the squares alternate between
+/// white and grey from there.
+///
+/// `image` is the image's rectangle on screen and `visible` is the part of
+/// the window that is drawn, both as `(left, top, width, height)`. `side` is
+/// the width of one square on screen; the caller passes 8 image pixels
+/// times the scale. Returns the grey squares that are inside both
+/// rectangles, each cut off at the rectangles' edges, as
+/// `(left, top, width, height)`. The caller fills the area with white
+/// before it draws them.
 pub fn checker_squares(
     image: (f32, f32, f32, f32),
     visible: (f32, f32, f32, f32),
@@ -295,17 +343,20 @@ mod tests {
 
     #[test]
     fn checker_squares_alternate_from_a_white_corner_and_stay_visible() {
-        // A 32-pixel image at 100%: 4×4 squares of 8, half of them grey.
+        // A 32×32 image at 100% has 4 rows of 4 squares, each 8 wide. Half
+        // of the 16 squares are grey.
         let squares = checker_squares((0., 0., 32., 32.), (0., 0., 100., 100.), 8.);
         assert_eq!(squares.len(), 8);
         assert_eq!(squares[0], (8., 0., 8., 8.));
         assert!(squares.contains(&(0., 8., 8., 8.)));
         assert!(!squares.contains(&(0., 0., 8., 8.)));
-        // Only the visible part is drawn, cut at its edge.
+        // Only the squares inside the visible rectangle are returned, and a
+        // square that crosses its edge is cut off there.
         let squares = checker_squares((-100., 0., 132., 16.), (0., 0., 10., 100.), 8.);
         assert!(squares.iter().all(|s| s.0 >= 0. && s.0 + s.2 <= 10.));
         assert_eq!(squares.len(), 2);
-        // Nothing when the image is out of sight.
+        // No squares are returned when the image is outside the visible
+        // rectangle.
         assert!(checker_squares((200., 0., 8., 8.), (0., 0., 100., 100.), 8.).is_empty());
     }
 
@@ -321,8 +372,9 @@ mod tests {
         assert!(close(fit_scale(IMAGE, PANE), 0.4));
         assert!(close(fit_scale((300., 1200.), PANE), 0.5));
         assert_eq!(fit_scale(IMAGE, (0., 0.)), 1.);
-        // A pane with no height (a window collapsed to a line) fits nothing,
-        // so no later zoom divides by a zero scale.
+        // A pane with no height (a window resized down to a line) gives a
+        // fit scale of 1, not 0. A later zoom divides by the current scale,
+        // so a scale of 0 would give an offset that is not a finite number.
         assert_eq!(fit_scale(IMAGE, (800., 0.)), 1.);
         assert!(
             Camera::fit(IMAGE, (800., 0.))
@@ -343,14 +395,15 @@ mod tests {
 
     #[test]
     fn a_resized_pane_keeps_the_framing() {
-        // Fitted stays fitted.
+        // An image that was fitted in the old pane is fitted in the new one.
         let fitted = Camera::fit(IMAGE, PANE);
         let bigger = (1200., 900.);
         assert!(close(
             fitted.resized(IMAGE, PANE, bigger).scale,
             fit_scale(IMAGE, bigger)
         ));
-        // A zoomed, panned view scales with the pane.
+        // A zoomed and panned camera has its scale and its offset multiplied
+        // by 1.5, the ratio of the new pane's size to the old one's.
         let zoomed = Camera {
             scale: 0.8,
             tx: 40.,
@@ -360,7 +413,8 @@ mod tests {
         assert!(close(resized.scale, 1.2));
         assert!(close(resized.tx, 60.));
         assert!(close(resized.ty, -45.));
-        // Nothing measured yet: unchanged.
+        // The old pane has no size because it has not been measured yet, so
+        // the camera is returned unchanged.
         assert_eq!(zoomed.resized(IMAGE, (0., 0.), bigger), zoomed);
     }
 
@@ -372,7 +426,8 @@ mod tests {
             ty: -20.,
         };
         let focal = (120., 80.);
-        // The image point under the focal point, before and after.
+        // The point of the image that is under the focal point for a given
+        // camera, in image pixels from the image's centre.
         let under = |camera: Camera| {
             (
                 (focal.0 - camera.tx) / camera.scale,
@@ -415,7 +470,8 @@ mod tests {
     #[test]
     fn the_navigator_shows_nothing_while_the_image_fits() {
         assert_eq!(visible_part(Camera::fit(IMAGE, PANE), IMAGE, PANE), None);
-        // A few points over still counts as fitted.
+        // An image that is 2 points wider than the pane still counts as
+        // fitting in it.
         let nearly = Camera {
             scale: 0.4 + 2. / 2000.,
             tx: 0.,
@@ -430,7 +486,8 @@ mod tests {
         let part = visible_part(Camera::actual(), IMAGE, PANE).unwrap();
         assert!(close(part.0, 0.3) && close(part.1, 0.2));
         assert!(close(part.2, 0.4) && close(part.3, 0.6));
-        // Panned to the left edge.
+        // Panned 600 points to the right, which puts the image's left edge
+        // at the pane's left edge.
         let left = Camera::actual().panned(600., 0.);
         let part = visible_part(left, IMAGE, PANE).unwrap();
         assert!(close(part.0, 0.) && close(part.2, 0.4));
@@ -438,11 +495,13 @@ mod tests {
 
     #[test]
     fn navigator_points_map_back_to_the_image() {
-        // A wide image is letterboxed top and bottom in the 120px square.
+        // A 2:1 image in the 120px square is drawn 120 wide and 60 tall,
+        // with an empty band 30 tall above it and below it.
         assert_eq!(navigator_image(IMAGE, 120.), (0., 30., 120., 60.));
         assert_eq!(navigator_point((60., 60.), IMAGE, 120.), (0.5, 0.5));
         assert_eq!(navigator_point((0., 0.), IMAGE, 120.), (0., 0.));
-        // Centring on a point puts it in the middle of the pane.
+        // After `centred_on`, the point a quarter of the way across the
+        // image is at the horizontal middle of the pane.
         let camera = Camera::actual().centred_on(0.25, 0.5, IMAGE);
         let (left, _, width, _) = camera.image_rect(IMAGE, PANE);
         assert!(close(left + 0.25 * width, PANE.0 / 2.));
@@ -464,7 +523,8 @@ mod tests {
         };
         assert_eq!(glide.at(Duration::ZERO).0.scale, 1.);
         let (half, done) = glide.at(crate::motion::ZOOM_GLIDE / 2);
-        // Ease-out: past halfway at half time.
+        // The curve is an ease-out, so at half of the time the scale is
+        // already more than halfway from 1 to 2.
         assert!(!done && half.scale > 1.5);
         assert_eq!(glide.at(crate::motion::ZOOM_GLIDE), (glide.to, true));
     }

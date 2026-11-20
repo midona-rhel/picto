@@ -1,8 +1,17 @@
-//! The subscriptions as grid tiles (`SubscriptionsGrid.tsx`), laid out and
-//! drawn by the grid's own rules: the cover as the tile's picture, the name
-//! under it, and the state and counts as its details row; any gallery
-//! downloads in a bar above them. The count and the add actions are in the
-//! titlebar (`toolbar.rs`).
+//! The top of the Subscriptions screen (production's
+//! `SubscriptionsGrid.tsx`), which shows one tile for each subscription.
+//!
+//! The tiles are positioned by the grid's layout (`grid::layout`) and are
+//! drawn to look like the grid's tiles. A tile shows the subscription's
+//! cover as its picture. Under the picture it has two lines: the
+//! subscription's name, and then a details row with a status badge and the
+//! numbers of items and sources.
+//!
+//! Gallery downloads are not shown as tiles. The ones that have run at
+//! least once are listed in a bar above the tiles.
+//!
+//! The number of subscriptions and the buttons that add a subscription are
+//! in the titlebar. `toolbar.rs` in this folder draws them.
 use super::data::{self, Cover};
 use super::{SubscriptionsScreen, format, measure};
 use crate::grid::layout::{self, Layout, Tile, ViewMode};
@@ -12,11 +21,25 @@ use crate::theme::Text as _;
 use crate::{theme, ui};
 use gpui::{prelude::FluentBuilder as _, *};
 
-/// A tile's two text rows under its picture: the name, then the details.
+/// The height in pixels of the two lines of text under a tile's picture:
+/// the name, and then the details row. Each line is
+/// `layout::TEXT_ROW_HEIGHT` tall.
 const TEXT_ROWS: f32 = 2. * layout::TEXT_ROW_HEIGHT;
 
-/// A subscription's cover in a square box of `size` with a 1px border: the
-/// framed image, or the download glyph over a faint gradient.
+/// Draws a subscription's cover in a square `size` pixels wide and high,
+/// with corners rounded by `radius`. The image is inset by 1 px on every
+/// side, which leaves room for the 1 px border that the caller draws over
+/// the square's edge.
+///
+/// If the subscription has a cover image and the user has set a crop for
+/// it, the image is scaled and positioned so that the cropped square of it
+/// (`crate::cover::square`) fills the inset square. If the crop is the
+/// default one, or the size of the source image is not known, the image is
+/// scaled to cover the inset square around its centre.
+///
+/// If the subscription has no cover image, the square shows the
+/// "download-thin" icon at `glyph` pixels, centred on a gradient that goes
+/// from the theme's contrast colour at 5% opacity to fully transparent.
 pub(super) fn cover(
     id: impl Into<ElementId>,
     cover: Option<&Cover>,
@@ -87,8 +110,11 @@ pub(super) fn cover(
     frame
 }
 
-/// `EmptyState` with the screen's welcome: shown in place of a subscription
-/// the library no longer has.
+/// Draws the panel that the screen shows when the open subscription is no
+/// longer in the library, in the place where that subscription's page
+/// would be. It is production's `EmptyState` with the Subscriptions
+/// screen's welcome text: the heading "Subscribe to artists and tags" and
+/// one sentence that says what a subscription does.
 pub(super) fn empty_state(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -115,12 +141,16 @@ pub(super) fn empty_state(cx: &App) -> Div {
         )))
 }
 
-/// The space either side of a tile's details row.
+/// The space in pixels between each side of a tile and the tile's details
+/// row.
 const DETAILS_INSET: f32 = 4.;
+/// The space in pixels between the status badge in a details row and the
+/// text after it.
 const DETAILS_GAP: f32 = 6.;
 
-/// How wide a status badge with `label` is drawn: its caption text, its
-/// padding and its border.
+/// Returns the width in pixels that a status badge with the text `label`
+/// is drawn at: the width of the text at the caption size, plus 12 px for
+/// the badge's 5 px of padding and 1 px border on each side.
 pub(super) fn badge_width(label: &str, window: &Window) -> f32 {
     f32::from(
         ui::shape_line(
@@ -134,8 +164,11 @@ pub(super) fn badge_width(label: &str, window: &Window) -> f32 {
     ) + 12.
 }
 
-/// How wide a tile's details row is: the state badge, the gap, and the
-/// items and sources.
+/// Returns the width in pixels that the tile of `card` needs for its
+/// details row to show all of its text. That is the width of the status
+/// badge, the 6 px gap, the width of the text with the numbers of items
+/// and sources, and the 4 px inset on each side, rounded up to a whole
+/// pixel.
 fn details_width(card: &data::Subscription, window: &Window) -> f32 {
     let (_, label) = format::status(card);
     let badge = badge_width(label, window);
@@ -153,7 +186,10 @@ fn details_width(card: &data::Subscription, window: &Window) -> f32 {
 }
 
 impl SubscriptionsScreen {
-    /// The subscriptions the grid shows, gallery downloads aside, in its order.
+    /// Returns the subscriptions that are shown as tiles, in the order
+    /// their tiles are shown: sorted by name (`format::card_order`).
+    /// Gallery downloads are left out, because they are listed in the bar
+    /// above the tiles.
     pub(super) fn cards(&self) -> Vec<&data::Subscription> {
         let mut cards: Vec<&data::Subscription> = self
             .list
@@ -172,10 +208,11 @@ impl SubscriptionsScreen {
     pub(super) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let order = std::rc::Rc::new(self.card_order());
         let cards: Vec<data::Subscription> = self.cards().into_iter().cloned().collect();
-        // The grid's own layout at its default size and spacing, across the
-        // width the tiles have, with the size setting raised a step at a
-        // time, as the grid's slider raises it, until every tile's details
-        // fit on their line.
+        // The tiles are laid out with the grid's layout in grid mode, at the
+        // default tile size and spacing. If the widest details line under a
+        // tile does not fit the tile's width, one column is removed with a
+        // zoom step and the layout is computed again. This repeats until
+        // the line fits or one column is left.
         let prefs = ViewPrefs::default();
         let needed = cards
             .iter()
@@ -193,10 +230,11 @@ impl SubscriptionsScreen {
                 TEXT_ROWS,
             );
             let side = layout.tiles.first().map_or(f32::MAX, |tile| tile.w);
-            if side >= needed || target >= width {
-                break layout;
+            let larger = layout::zoom_step(width, target, prefs.gap, ViewMode::Grid, true);
+            match larger {
+                Some(larger) if side < needed => target = larger,
+                _ => break layout,
             }
-            target += 50.;
         };
         let mut grid = div()
             .id("subscription-cards")
@@ -205,7 +243,9 @@ impl SubscriptionsScreen {
             .w_full()
             .h(px(layout.total_height))
             .child(measure(self.home_width.clone(), window))
-            // A click between tiles clears the selection.
+            // A tile stops a click on it from reaching this handler. A
+            // click that arrives here was therefore on the empty space
+            // between tiles, and it clears the selection.
             .on_click(cx.listener(|this, _, _, cx| {
                 this.selected.clear();
                 cx.notify();
@@ -250,8 +290,11 @@ impl SubscriptionsScreen {
             )
     }
 
-    /// The gallery downloads that have run, as a bar over the tiles, as the
-    /// filter bar sits over the grid.
+    /// Draws the bar that lists the gallery downloads, with one row for
+    /// each. Only gallery downloads that have run at least once are listed.
+    /// Returns `None` when there are none, and then no bar is shown. The
+    /// bar is above the tiles, in the position the filter bar has above
+    /// the grid.
     fn gallery_jobs(&self, cx: &mut Context<Self>) -> Option<Div> {
         let jobs: Vec<data::Subscription> = self
             .list
@@ -280,8 +323,17 @@ impl SubscriptionsScreen {
         Some(bar)
     }
 
-    /// One gallery download (`.galleryJob`): its name, how far
-    /// it has got or why it stopped, a 2px progress line, and its controls.
+    /// Draws the row of one gallery download (production's `.galleryJob`).
+    /// From left to right the row has:
+    ///
+    /// - A download icon.
+    /// - The download's name with a status text to its right, and a 2 px
+    ///   tall progress bar under both. If the download is not running and
+    ///   a failure message is recorded for it, the status text describes
+    ///   that failure. Otherwise it is "N / M images downloaded", or
+    ///   "N images downloaded" while the total is not known.
+    /// - Two buttons. The first pauses, resumes or retries the download,
+    ///   and the second stops it.
     fn gallery_job(&self, job: &data::Subscription, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let running = format::running(job);
@@ -290,7 +342,10 @@ impl SubscriptionsScreen {
             .queries
             .iter()
             .find(|query| query.last_failure_message.is_some());
-        // `progressBySubscriptionId`: what the run in progress reports.
+        // The progress that the run in progress has reported for this
+        // download, if it has reported any: the number of images
+        // downloaded and, once the site has given it, the total number.
+        // Production keeps this in `progressBySubscriptionId`.
         let progress = self.gallery_progress.get(&job.id).copied();
         let downloaded = progress.map_or(0, |progress| progress.downloaded);
         let total = progress.and_then(|progress| progress.total);
@@ -352,8 +407,11 @@ impl SubscriptionsScreen {
                                     .child(status),
                             ),
                     )
-                    // Filled to the share downloaded once the site has
-                    // reported the gallery's size, swept until then.
+                    // Once the site has reported how many images the
+                    // gallery has, the bar is filled in proportion to the
+                    // number downloaded. Until then the bar shows the
+                    // moving segment of a progress bar whose total is not
+                    // known.
                     .child(match total {
                         Some(total) => ui::progress_bar().height(2.).filled(
                             ("gallery-progress", job.id as usize),
@@ -368,8 +426,10 @@ impl SubscriptionsScreen {
                     .flex()
                     .items_center()
                     .gap(px(2.))
-                    // Pause, resume or retry the download, and stop it, as a
-                    // subscription's run is.
+                    // The first button pauses a running download, resumes a
+                    // paused one, and retries any other. The second button
+                    // stops the download. They send the same commands as
+                    // the run controls of a subscription.
                     .child(
                         ui::small_button(("gallery-toggle", job.id as usize), icon)
                             .size(26.)
@@ -389,8 +449,17 @@ impl SubscriptionsScreen {
             )
     }
 
-    /// One tile: the cover in the tile's picture, ringed and selected as a
-    /// grid tile is, the name centred under it, then the state and counts.
+    /// Draws the tile of one subscription at the position and size that
+    /// `tile` gives. The cover fills the square picture area at the top of
+    /// the tile and has a 1 px border over its edge. Under the picture are
+    /// the name, centred, and then the details row with the status badge
+    /// and the numbers of items and sources.
+    ///
+    /// A selected tile is marked the way a selected grid tile is: an
+    /// outline in the selection colour around the picture, and the
+    /// selection colour behind the name. A click on the tile selects it, a
+    /// double-click opens the subscription, and a right-click opens the
+    /// tile's menu.
     fn card(
         &self,
         index: usize,
@@ -421,7 +490,8 @@ impl SubscriptionsScreen {
         .when(card.cover.is_some(), |picture| {
             picture.bg(theme.surface_2())
         })
-        // The hairline ring over the picture, as a grid tile has.
+        // A 1 px border in the theme's border colour is drawn over the
+        // edge of the picture, as a grid tile has.
         .child(
             div()
                 .absolute()
@@ -431,8 +501,9 @@ impl SubscriptionsScreen {
                 .border_color(theme.border()),
         );
         let (click_order, menu_order) = (order.clone(), order);
-        // A tile is a button named by its subscription; assistive
-        // technology's press opens it, as a double-click does.
+        // To assistive technology a tile is a button whose label is the
+        // subscription's name. When assistive technology presses the
+        // button, the subscription is opened, as a double-click opens it.
         div()
             .id(("subscription-card", id as usize))
             .role(Role::Button)
@@ -466,8 +537,12 @@ impl SubscriptionsScreen {
                 }),
             )
             .when(selected, |cell| {
-                // The grid's selection stroke outside the picture, with a
-                // hairline of the background between it and the picture.
+                // A selected tile has the grid's selection outline: a 2 px
+                // border in the selection colour whose outer edge is 3 px
+                // (`layout::SELECTION_EXTENT`) outside the picture on every
+                // side. Between that border and the picture there is a
+                // 1 px border in the background colour, which keeps the
+                // outline visually apart from the picture.
                 cell.child(
                     div()
                         .absolute()
@@ -493,9 +568,11 @@ impl SubscriptionsScreen {
             })
             .child(picture)
             .child(
-                // The name, as a grid tile's: centred, cut short to the tile
-                // less 8px, white on a pill of the selection colour when
-                // selected.
+                // The name is drawn as a grid tile's name is. It is centred
+                // under the picture. Its text can be as wide as the tile
+                // less 8 px, and a longer name is cut off with an ellipsis.
+                // On a selected tile the name is white on a rounded
+                // rectangle of the selection colour.
                 div()
                     .absolute()
                     .left_0()
@@ -519,7 +596,9 @@ impl SubscriptionsScreen {
                     ),
             )
             .child(
-                // The details row: the state, then the items and sources.
+                // The details row is the second line under the picture. It
+                // shows the status badge and then the numbers of items and
+                // sources, centred as a group.
                 div()
                     .absolute()
                     .left(px(DETAILS_INSET))

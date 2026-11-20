@@ -1,9 +1,14 @@
-//! A collection's editor (`GroupSurface.tsx` in its editor mode): the
-//! members as a grid of tiles (`CanvasGrid` at 180px, names under them, no
-//! extensions), to select, reorder by dragging, open, and act on through
-//! their menu. The tiles are the library grid's own ([`grid::tile_art`]);
-//! the editor keeps its own selection, which is of members, not of library
-//! items.
+//! A collection's editor (`GroupSurface.tsx` in its editor mode). It shows
+//! the collection's members as a grid of tiles, with each member's name
+//! under its tile and without the file extension (production's `CanvasGrid`
+//! with `targetSize={180}`). The user can select members, drag them to a new
+//! position in the collection, double-click one to open it, and right-click
+//! for a menu of actions.
+//!
+//! The tiles are drawn by the same code as the library grid's tiles
+//! (`grid::tile::tile_art`). The editor keeps its own selection, which is a
+//! set of members of the collection. It is separate from the library grid's
+//! selection of items.
 use super::group::{CollectionMenu, MemberOpened};
 use crate::grid::{
     self, art, drag, format, layout,
@@ -24,37 +29,50 @@ use std::time::Instant;
 actions!(
     group_editor,
     [
-        /// `group.removeMembers`: the selected members leave the collection.
+        /// `group.removeMembers`: removes the selected members from the
+        /// collection.
         RemoveMembers,
-        /// `view.quicklook`: Quick Look on the one selected member.
+        /// `view.quicklook`: opens Quick Look on the selected member, when
+        /// exactly one member is selected.
         QuickLookMember
     ]
 );
 
-/// The key context the editor's grid carries while it has the keyboard.
+/// The key context of the editor's root element. Key bindings in this
+/// context apply while the editor has keyboard focus.
 pub const CONTEXT: &str = "GroupEditor";
 
-/// `targetSize={180}`.
-const TARGET_SIZE: f32 = 180.;
-/// "Return to Top" appears once the grid has scrolled this far.
+/// The tile size of the collection editor's grid, in pixels. Production
+/// passes `targetSize={180}`, and its layout rounds that to 200 before it
+/// counts columns. The layout here does not round, so 200 is passed to get
+/// the same number of columns as production.
+const TARGET_SIZE: f32 = 200.;
+/// The "Return to Top" button appears once the grid has been scrolled down
+/// by at least this many pixels.
 const RETURN_TO_TOP_AFTER: f32 = 200.;
 
-/// Members were right-clicked at this window position: `members` are the
-/// ones the menu acts on (the selection when the tile is in it, else the
-/// tile), by their place in the collection.
+/// Emitted when a member's tile is right-clicked, so that the owner opens
+/// the members' menu. `position` is where the pointer was, in window
+/// coordinates. `members` are the members the menu acts on, as indexes into
+/// the collection's order: the whole selection when the right-clicked member
+/// is selected, and only that member otherwise.
 pub struct MemberMenu {
     pub position: Point<Pixels>,
     pub members: Vec<usize>,
 }
 
-/// Quick Look on the member at this place.
+/// Emitted to ask the owner to open Quick Look on one member. The number is
+/// the member's index in the collection's order.
 pub struct QuickLookRequested(pub usize);
 
-/// The selected members are to leave the collection.
+/// Emitted to ask the owner to remove members from the collection. The
+/// numbers are the selected members' indexes in the collection's order.
 pub struct RemoveRequested(pub Vec<usize>);
 
-/// A reorder by dragging has been answered: why it failed, or `None` when
-/// it went through (`saveOrder` sets and clears the view's inline error).
+/// Emitted when the library has answered a reorder that was made by
+/// dragging. It carries the error message when the reorder failed, and
+/// `None` when it succeeded. Production's `saveOrder` sets the view's inline
+/// error on a failure and clears it on a success.
 pub struct Reordered(pub Option<SharedString>);
 
 impl EventEmitter<MemberMenu> for GroupEditor {}
@@ -64,9 +82,14 @@ impl EventEmitter<MemberOpened> for GroupEditor {}
 impl EventEmitter<CollectionMenu> for GroupEditor {}
 impl EventEmitter<Reordered> for GroupEditor {}
 
-/// `groupSelectionForClick`: Shift selects from the anchor to the member
-/// (the anchor stays), Cmd or Ctrl toggles it, a plain click selects it
-/// alone. Members are named by id, `order` is the collection's order.
+/// `groupSelectionForClick`: the selection and the anchor after a click on
+/// `member`. With `range` (Shift is held) and an anchor, every member from
+/// the anchor to the clicked member is selected and the anchor stays the
+/// same. With `toggle` (Cmd or Ctrl is held), the clicked member is added to
+/// the selection, or removed from it when it was already selected, and it
+/// becomes the anchor. Otherwise the clicked member becomes the only
+/// selected member and the anchor. Members are identified by their media
+/// id, and `order` is the collection's order.
 pub fn selection_for_click(
     current: &BTreeSet<MediaId>,
     order: &[MediaId],
@@ -93,8 +116,9 @@ pub fn selection_for_click(
     (BTreeSet::from([member]), member)
 }
 
-/// `memberToGridItem`: a member as the grid draws a tile, with its media's
-/// id for the item's.
+/// `memberToGridItem`: makes the item summary that the grid's tile code
+/// needs from one member of a collection. A member is a media file and has
+/// no item id of its own, so its media id is used as the item id.
 fn member_item(details: &RootDetails, media: &picto_library::MediaRecord) -> RootSummary {
     RootSummary {
         root_id: RootId(media.media_id.0),
@@ -118,32 +142,40 @@ fn member_item(details: &RootDetails, media: &picto_library::MediaRecord) -> Roo
     }
 }
 
-/// Members being dragged to a new place.
+/// The state of a drag that moves members to a new position in the
+/// collection.
 struct Dragging {
-    /// By their place in the collection.
+    /// The dragged members, as indexes into the collection's order.
     members: Vec<usize>,
     ghost: drag::ItemDrag,
-    /// The member they would go beside, and on which side.
+    /// Where the dragged members would be put if the button were released
+    /// now: the index of the member they would go next to, and on which
+    /// side of it. `None` while the pointer is outside the editor or there
+    /// is no member to put them next to.
     target: Option<(usize, drag::Side)>,
 }
 
 pub struct GroupEditor {
     session: Entity<Session>,
-    /// The editor's own thumbnail cache, so the library grid's plan for its
-    /// frame is not replaced by this one's.
+    /// The editor's own thumbnail cache. Each frame, a view tells its cache
+    /// which thumbnails it wants (`Thumbnails::plan`). If the editor shared
+    /// the library grid's cache, the editor's list would replace the grid's.
     thumbnails: Entity<Thumbnails>,
     focus: FocusHandle,
     collection: Option<RootId>,
     members: Vec<RootSummary>,
-    /// Each member's thumbnail and original file.
+    /// The path of each member's thumbnail file, in the collection's order.
     thumbs: Vec<PathBuf>,
+    /// The path of each member's original file, in the collection's order.
     files: Vec<PathBuf>,
     selected: BTreeSet<MediaId>,
     anchor: Option<MediaId>,
     scroll: ScrollHandle,
     bounds: Bounds<Pixels>,
     layout: Layout,
-    /// The width, gap and member count the layout was made for.
+    /// The grid's width, the gap between tiles and the number of members
+    /// that `layout` was computed for. The layout is computed again when
+    /// any of the three changes.
     layout_key: Option<(u32, u32, usize)>,
     reveal: reveal::RevealTracker,
     clock: Instant,
@@ -157,7 +189,9 @@ pub struct GroupEditor {
     marquee: Option<marquee::Marquee>,
     marquee_keep: bool,
     swallow_click: bool,
-    /// A press on a tile that becomes a drag after 5px.
+    /// Set while the left button is held down after a press on a tile: the
+    /// member's index and where the press was. Once the pointer has moved
+    /// 5px from there, the press becomes a drag.
     press: Option<(usize, Point<Pixels>)>,
     dragging: Option<Dragging>,
     swallow_tile_click: bool,
@@ -165,8 +199,9 @@ pub struct GroupEditor {
 
 impl GroupEditor {
     pub fn new(session: Entity<Session>, cx: &mut Context<Self>) -> Self {
-        // A member's thumbnail written again (regenerated, or a captured
-        // frame) is read again.
+        // When a member's thumbnail file has been written again (it was
+        // regenerated, or a video frame was captured as the new thumbnail),
+        // the cached picture is dropped so that the new file is read.
         cx.subscribe(
             &session,
             |this, session, event: &crate::application::Event, cx| {
@@ -179,7 +214,8 @@ impl GroupEditor {
             },
         )
         .detach();
-        // A missing thumbnail that was made is drawn on the next frame.
+        // The editor is drawn again whenever its thumbnail cache changes,
+        // for example when a thumbnail that was missing has been made.
         let thumbnails = cx.new(Thumbnails::new);
         cx.observe(&thumbnails, |_, _, cx| cx.notify()).detach();
         Self {
@@ -218,13 +254,15 @@ impl GroupEditor {
         &self.focus
     }
 
-    /// The collection shown, if any.
+    /// The collection the editor shows, if it shows one.
     pub fn collection(&self) -> Option<RootId> {
         self.collection
     }
 
-    /// Shows `details`' members. The same collection read again keeps its
-    /// place, and the selected members that are still in it.
+    /// Shows the members in `details`. When `details` is for the collection
+    /// the editor already shows (it was read again after a change), the
+    /// scroll position is kept, and so is the selection, except for members
+    /// that are no longer in the collection.
     pub fn show(&mut self, details: &RootDetails, cx: &mut Context<Self>) {
         let root = details.root.root_id;
         if self.collection != Some(root) {
@@ -254,7 +292,9 @@ impl GroupEditor {
         if self.anchor.is_some_and(|anchor| !ids.contains(&anchor)) {
             self.anchor = None;
         }
-        // The pointer stays over whichever tile is now where it was.
+        // The hovered tile is kept by its index, so after the members change
+        // the hover is on whichever member is now at that index. It is
+        // dropped when the index is past the end of the new list.
         self.hovered = self.hovered.filter(|index| *index < members.len());
         self.members = members;
         self.layout_key = None;
@@ -262,7 +302,9 @@ impl GroupEditor {
         cx.notify();
     }
 
-    /// Lets go of the collection, its selection and its place.
+    /// Empties the editor: it shows no collection, nothing is selected, the
+    /// grid is scrolled back to the top, and a rubber band, a drag or a
+    /// hover preview that was under way is ended.
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.collection = None;
         self.members.clear();
@@ -288,7 +330,7 @@ impl GroupEditor {
             .collect()
     }
 
-    /// The selected members, in the collection's order.
+    /// The indexes of the selected members, in the collection's order.
     pub fn selected(&self) -> Vec<usize> {
         self.members
             .iter()
@@ -298,7 +340,9 @@ impl GroupEditor {
             .collect()
     }
 
-    /// Escape: a selection is cleared first; says whether there was one.
+    /// Clears the selection and returns whether anything was selected. The
+    /// viewer calls this for Escape: when it returns true, Escape has only
+    /// cleared the selection and does not close the viewer.
     pub fn deselect(&mut self, cx: &mut Context<Self>) -> bool {
         if self.selected.is_empty() {
             return false;
@@ -318,8 +362,9 @@ impl GroupEditor {
         cx.notify();
     }
 
-    /// `onSelectionChange`/`onMarqueeSelectionChange`: one member becomes
-    /// the anchor, several leave none.
+    /// `onSelectionChange` / `onMarqueeSelectionChange`: replaces the
+    /// selection. When exactly one member is selected, it becomes the
+    /// anchor for a later Shift-click. Otherwise there is no anchor.
     fn set_selection(&mut self, selected: BTreeSet<MediaId>, cx: &mut Context<Self>) {
         self.anchor = if selected.len() == 1 {
             selected.first().copied()
@@ -347,8 +392,9 @@ impl GroupEditor {
         cx.notify();
     }
 
-    /// `openMemberMenu` with the selection: a member outside the selection
-    /// becomes it, and the anchor.
+    /// `openMemberMenu`: handles a right-click on the member at `index`. If
+    /// that member is not selected, it becomes the only selected member and
+    /// the anchor. Then [`MemberMenu`] is emitted for the selected members.
     fn open_member_menu(&mut self, index: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(member) = self.members.get(index).map(|item| item.cover_media_id) else {
             return;
@@ -385,8 +431,11 @@ impl GroupEditor {
         layout::TEXT_ROW_HEIGHT
     }
 
-    /// The image under a window position: its member, and the position in
-    /// layout pixels.
+    /// The tile image under `position`, which is in window coordinates.
+    /// Returns the member's index and the same position in the layout's
+    /// coordinates: pixels from the grid's left edge and from the top of
+    /// its scrolled content. Returns `None` when the position is not on a
+    /// tile's image.
     fn image_at(&self, position: Point<Pixels>) -> Option<(usize, f32, f32)> {
         let (x, y) = self.local(position);
         let y = y + self.scroll_top();
@@ -396,8 +445,12 @@ impl GroupEditor {
         marquee::image_at(&self.layout, x, y, self.text_height()).map(|index| (index, x, y))
     }
 
-    /// The editor's tiles look: the grid mode, names without extensions,
-    /// nothing else (`CanvasGrid`'s defaults), at the library's spacing.
+    /// The view preferences the editor's tiles are drawn with. They are the
+    /// library grid's preferences, which keeps the library's gap between
+    /// tiles, with these values fixed: the grid layout, tiles of
+    /// [`TARGET_SIZE`], the name shown without its extension, no resolution,
+    /// no extension label, no item count, and `fit_cover` off (`CanvasGrid`'s
+    /// defaults in production).
     fn prefs(&self, cx: &App) -> grid::prefs::ViewPrefs {
         let mut prefs = self.session.read(cx).prefs.clone();
         prefs.mode = ViewMode::Grid;
@@ -454,8 +507,11 @@ impl GroupEditor {
         }
     }
 
-    /// A left press: on an image it may become a drag; on empty space it
-    /// starts a rubber band, which Shift or Cmd adds to the selection.
+    /// Handles a press of the left mouse button in the grid. A press on a
+    /// tile's image is remembered in `press`, and becomes a drag if the
+    /// pointer then moves 5px. A press anywhere else starts a rubber band
+    /// selection. With Shift, Cmd or Ctrl held, the rubber band adds to the
+    /// current selection. Otherwise it replaces the selection.
     fn pressed(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         self.swallow_click = false;
@@ -518,9 +574,13 @@ impl GroupEditor {
         cx.notify();
     }
 
-    /// Past 5px a press on a tile drags the selection, or that tile when it
-    /// is not selected; the ghost follows the pointer and the drop line
-    /// shows where they would go.
+    /// Handles a pointer move while the left button is held after a press
+    /// on a tile. Once the pointer is 5px from the press, a drag starts. It
+    /// drags all the selected members when the pressed member is selected,
+    /// and only the pressed member otherwise. During the drag, the ghost (a
+    /// small stack of the dragged members' thumbnails) follows the pointer,
+    /// and `target` is updated to where the members would be put, which the
+    /// drop line shows.
     fn drag_moved(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if self.dragging.is_none() {
             let Some((index, from)) = self.press else {
@@ -586,8 +646,9 @@ impl GroupEditor {
             && x < f32::from(self.bounds.size.width)
             && y - self.scroll_top() >= 0.
             && y - self.scroll_top() < f32::from(self.bounds.size.height);
-        // The image under the pointer keeps its hover, as the canvas grid
-        // goes on hit-testing while it drags.
+        // The tile under the pointer keeps its hover highlight during a
+        // drag. Production's `CanvasGrid` also goes on finding the tile under
+        // the pointer while it drags.
         self.hovered = self.image_at(position).map(|(index, _, _)| index);
         self.pointer = Some(position);
         if let Some(dragging) = &mut self.dragging {
@@ -600,16 +661,21 @@ impl GroupEditor {
         cx.notify();
     }
 
-    /// The button came up after a press on a tile: a drag over the grid puts
-    /// the dragged members where the line showed and keeps them selected;
-    /// the click it makes selects nothing.
+    /// Handles the release of the left button after a press on a tile. If a
+    /// drag was under way and it had a target, the dragged members are
+    /// moved to where the drop line showed and the new order is saved. The
+    /// dragged members then become the selection, whether or not they
+    /// moved. The release also produces a click event, which is ignored
+    /// (see the comment below).
     fn drag_released(&mut self, cx: &mut Context<Self>) {
         self.press = None;
         let Some(dragging) = self.dragging.take() else {
             return;
         };
-        // The click the release makes, on whatever is under the pointer,
-        // selects nothing.
+        // The mouse release that ends the drag also produces a click event
+        // on whatever is under the pointer: a tile, or the empty part of the
+        // grid. These two flags make both click handlers ignore that click,
+        // so that it does not change the selection.
         self.swallow_tile_click = true;
         self.swallow_click = true;
         for holder in ["group-ghost-0", "group-ghost-1", "group-ghost-2"] {
@@ -627,7 +693,8 @@ impl GroupEditor {
                         return;
                     };
                     let _ = this.update(cx, |this, cx| {
-                        // Only while the editor still shows that collection.
+                        // The result is reported only if the editor still
+                        // shows the collection that was reordered.
                         if this.collection == Some(collection) {
                             cx.emit(Reordered(
                                 result.err().map(|error| error.to_string().into()),
@@ -645,7 +712,9 @@ impl GroupEditor {
 impl Render for GroupEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        // A rubber band near an edge scrolls each frame.
+        // While the pointer of a rubber band is near the top or the bottom
+        // edge, the grid scrolls a little each frame. Another frame is
+        // requested for as long as it scrolls.
         if pointer::autoscroll(self.marquee.as_ref(), &self.scroll, self.scroll_top()) {
             window.request_animation_frame();
         }
@@ -653,8 +722,10 @@ impl Render for GroupEditor {
         let width = self.grid_width();
         let viewport = f32::from(self.bounds.size.height);
         let top = self.scroll_top();
-        // A scroll ends the hover and closes the preview; the hover comes
-        // back once the scrolling has settled.
+        // When the grid has scrolled since the last frame, the hover
+        // highlight is removed and the hover preview is closed. The hover is
+        // found again 80 ms (`MAGNIFIER_RESUME`) after the last scroll, from
+        // where the pointer is then.
         if top != self.last_top {
             self.last_top = top;
             self.hovered = None;
@@ -701,7 +772,9 @@ impl Render for GroupEditor {
         let visible = self
             .layout
             .visible(top - reveal::MARGIN, top + viewport + reveal::MARGIN);
-        // Thumbnails load from the middle of the viewport outward.
+        // The thumbnails to load are listed in the order they should load:
+        // those of the tiles nearest the vertical middle of the viewport
+        // first.
         let spans: Vec<(f32, f32)> = visible
             .iter()
             .map(|index| (self.layout.tiles[*index].y, self.layout.tiles[*index].h))
@@ -720,8 +793,9 @@ impl Render for GroupEditor {
                 .map(|index| {
                     let resource = Resource::Path(self.thumbs[*index].clone().into());
                     let thumb = thumbnails.thumb(&resource, &self.members[*index].mime);
-                    // A member with no thumbnail yet has one made, as the
-                    // library's grid asks for its tiles'.
+                    // A member whose thumbnail could not be loaded is
+                    // added to `missing`, and a thumbnail is made for it
+                    // below. The library grid does the same for its tiles.
                     if thumb == thumbnails::Thumb::Failed {
                         missing.push(thumbnails::Missing {
                             hash: self.members[*index].content_hash.clone(),
@@ -776,7 +850,9 @@ impl Render for GroupEditor {
                     original: None,
                     alphas,
                     magnifier,
-                    // The editor's grid has no Grayscale of its own.
+                    // The Grayscale view option applies to the library
+                    // grid only. The editor always shows its tiles in
+                    // colour.
                     grayscale: false,
                 },
                 &prefs,
@@ -788,7 +864,9 @@ impl Render for GroupEditor {
             let image_height = tile.h - text_height;
             content = content.child(
                 cell.child(
-                    // An option of the collection's list, as a grid tile is.
+                    // For assistive technology, each tile is one option
+                    // of the list box that the grid is, as a library grid
+                    // tile is.
                     div()
                         .id(("group-member-tile", index))
                         .role(Role::ListBoxOption)
@@ -823,8 +901,9 @@ impl Render for GroupEditor {
                 ),
             );
         }
-        // `CanvasGrid`'s drop indicator: a 2px line in the gap beside the
-        // target's image, with a triangle at its top.
+        // The drop line of a drag (`CanvasGrid`'s drop indicator): a 2px
+        // vertical line in the gap next to the target tile's image, on the
+        // side the members would go, with a triangle at its top.
         if let Some((target, side)) = self.dragging.as_ref().and_then(|d| d.target)
             && let Some(tile) = self.layout.tiles.get(target)
         {
@@ -870,7 +949,9 @@ impl Render for GroupEditor {
                     this.pressed(event, window, cx)
                 }),
             )
-            // A right-click no image took is the collection's own menu.
+            // A right-click that is not on a tile's image opens the
+            // collection's own menu. A right-click on an image is handled by
+            // the tile, which stops it from reaching this handler.
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -879,8 +960,10 @@ impl Render for GroupEditor {
                     cx.emit(CollectionMenu(event.position));
                 }),
             )
-            // A click no image took clears the selection, unless it ends a
-            // rubber band.
+            // A click that is not on a tile's image clears the selection.
+            // The exception is the click event that the mouse release at the
+            // end of a rubber band or of a drag produces: `swallow_click` is
+            // set then, and that click is ignored.
             .on_click(cx.listener(|this, _, window, cx| {
                 window.focus(&this.focus, cx);
                 if std::mem::take(&mut this.swallow_click) {
@@ -897,7 +980,8 @@ impl Render for GroupEditor {
             .relative()
             .size_full()
             .bg(theme.background())
-            // `edit.selectAll`, from its key or the Edit menu: every member.
+            // `edit.selectAll`, from its key or from the Edit menu, selects
+            // every member.
             .on_action(cx.listener(|this, _: &crate::shell::SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &RemoveMembers, _, cx| {
                 let members = this.selected();
@@ -905,8 +989,9 @@ impl Render for GroupEditor {
                     cx.emit(RemoveRequested(members));
                 }
             }))
-            // `edit.copy` (`GroupSurface`): the selected members' files, or
-            // every member's when none is selected.
+            // `edit.copy` (`GroupSurface` in production) puts the files of
+            // the selected members on the clipboard, or the files of all the
+            // members when none is selected.
             .on_action(cx.listener(|this, _: &crate::keymap::CopyFiles, _, cx| {
                 let selected = this.selected();
                 let files: Vec<PathBuf> = if selected.is_empty() {
@@ -947,8 +1032,10 @@ impl Render for GroupEditor {
                 window,
                 cx,
             ));
-        // A rubber band or a press on a tile is followed anywhere in the
-        // window until the button comes up, as pointer capture does.
+        // While a rubber band is out, or the button is held after a press on
+        // a tile, pointer moves and the button's release are handled
+        // wherever in the window they happen, not only over the grid. A
+        // browser's pointer capture does the same in production.
         if self.marquee.is_some() || self.press.is_some() || self.dragging.is_some() {
             let entity = cx.entity().downgrade();
             root = root.child(
@@ -1050,7 +1137,8 @@ mod tests {
         );
         assert_eq!(selected, ids(&[10, 20, 30]));
         assert_eq!(anchor, MediaId(30));
-        // Without an anchor, Shift is a plain click.
+        // With Shift held but no anchor, the click selects only the clicked
+        // member, as a plain click does.
         let (selected, anchor) =
             selection_for_click(&BTreeSet::new(), &ORDER, MediaId(20), None, false, true);
         assert_eq!(selected, ids(&[20]));

@@ -1,8 +1,15 @@
-//! The Controls section: the grid's default controls and how items are
-//! presented.
+//! The Controls section of the Settings window. It has three cards:
+//!
+//! - "Mouse": what the mouse wheel, a double-click and a middle-click do
+//!   in the grid, and on macOS which gestures the media view uses.
+//! - "Keyboard": what the Space key does.
+//! - "Grid Defaults": the layout, thumbnail size, spacing, sort order and
+//!   tile options (such as "Show name") that a view uses when it has no
+//!   saved choices of its own, and the "Reset all views" button, which
+//!   clears the saved choices of every view.
 use crate::grid::layout::ViewMode;
 use crate::grid::prefs;
-use crate::i18n::t;
+use crate::i18n::{en, t};
 use crate::settings::pieces::{
     block, card, control, edit, hint, label, number, pick, row, separator, title, two_columns,
     value_label,
@@ -21,8 +28,9 @@ impl SettingsWindow {
         let (app, grid) = (&state.draft.app, &state.draft.grid);
         let resetting = state.reset_views;
         const WIDTH: f32 = 220.;
-        // "Mouse wheel" is read by the grid's wheel handler on each turn:
-        // "Adjust thumbnail size" zooms the tiles (`grid::nav::wheel_zoom`).
+        // The grid reads the "Mouse wheel" setting each time a scroll event
+        // arrives over the tiles. With "Adjust thumbnail size" the event
+        // zooms the grid instead of scrolling it (`GridView::wheel_zoom`).
         let mouse = {
             let mut content = card(theme).child(title(theme, t("Mouse"))).child(row(
                 theme,
@@ -98,7 +106,17 @@ impl SettingsWindow {
                     })),
                 ))
         };
-        let size = grid.target_size.unwrap_or(220.);
+        // The "Thumbnail size" slider sets the default tile size in pixels,
+        // from 150 to 600 in steps of 10. Each grid turns the size into the
+        // number of columns that fit its own width
+        // (`grid::layout::columns`). The slider cannot step by columns as
+        // the toolbar's zoom control does, because the Settings window has
+        // no grid width to count columns in. The range starts at 150 px
+        // because that is the smallest tile size the zoom allows.
+        // Production's slider goes from 100 to 600 in steps of 50.
+        const LEAST: f64 = crate::grid::layout::SMALLEST_TILE as f64;
+        const MOST: f64 = 600.;
+        let size = grid.target_size.unwrap_or(220.).clamp(LEAST, MOST);
         let fit = grid.thumbnail_fit.as_deref() == Some("cover");
         let flag = |value: Option<bool>, fallback: bool| value.unwrap_or(fallback);
         let labels: [(&str, bool, fn(&mut super::model::GridDefaults)); 6] = [
@@ -141,6 +159,22 @@ impl SettingsWindow {
                     .on_toggle(edit(model, move |draft| toggle(&mut draft.grid))),
             );
         }
+        // The seventh check box turns the grid's zoom animation on or off.
+        // It is an application setting and not one of the grid's default
+        // view preferences, so it changes `draft.app`. The grid reads the
+        // saved value each time the zoom changes
+        // (`GridView::snapshot`), so a change applies to the next zoom step
+        // after Apply. Production has no such setting.
+        checks = checks.child(
+            ui::check(
+                "grid-zoom-animation",
+                en("Animate zoom in the grid"),
+                app.grid_zoom_animation,
+            )
+            .on_toggle(edit(model, |draft| {
+                draft.app.grid_zoom_animation = !draft.app.grid_zoom_animation
+            })),
+        );
         let half = |name: &'static str, child: AnyElement| {
             div()
                 .flex_1()
@@ -174,10 +208,12 @@ impl SettingsWindow {
                 div()
                     .flex()
                     .items_center()
-                    // `.settingControl`'s gap.
+                    // The 6 px gap between the slider and the label that
+                    // shows its value is the gap of production's
+                    // `.settingControl`.
                     .gap(px(6.))
                     .child(
-                        ui::slider("thumbnail-size", size, 100., 600., 50.).on_change(number(
+                        ui::slider("thumbnail-size", size, LEAST, MOST, 10.).on_change(number(
                             model,
                             |draft, value: f64| draft.grid.target_size = Some(value),
                         )),
@@ -209,8 +245,11 @@ impl SettingsWindow {
                                     .clone()
                                     .unwrap_or_else(|| prefs::sort_value(SortField::ImportedAt).into()),
                             ),
-                            // `SORT_FIELD_OPTIONS`: Settings lists Rating
-                            // before File Size, unlike the view panel.
+                            // The sort fields are listed in the order of
+                            // production's `SORT_FIELD_OPTIONS`, in which
+                            // Rating comes before File Size. The view
+                            // panel's list (`prefs::SORTS`) has File Size
+                            // before Rating.
                             [
                                 SortField::ImportedAt,
                                 SortField::CapturedAt,

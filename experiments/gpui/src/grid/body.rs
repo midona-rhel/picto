@@ -1,12 +1,18 @@
-//! The grid's body: the tiles in their scrolling list, or the error,
-//! loading or empty state in their place, and what is laid over it (the
-//! pointer followed outside it, the wheel's zoom, the drag's ghost and the
-//! hover preview).
+//! The two functions that build the content of the grid view.
+//!
+//! `GridView::body` builds what fills the grid's area. That is one of four
+//! things: the scrolling list of tiles, an error message with a Retry
+//! button, an empty area while the first page of results is loading, or
+//! the empty state when there are no items to show.
+//!
+//! `GridView::overlays` adds what is drawn over that area or listens for
+//! events over it: the listeners that follow the pointer anywhere in the
+//! window during a rubber band selection or a drag, the listener that zooms
+//! the grid with the mouse wheel, the picture of the dragged items that
+//! follows the pointer, and the hover preview.
 use super::prefs::ViewPrefs;
 use super::tile::TileData;
-use super::{
-    EmptyMenuRequested, GridView, Surface, capture_pointer, drag, nav, pointer, selection,
-};
+use super::{EmptyMenuRequested, GridView, Surface, capture_pointer, drag, pointer, selection};
 use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{theme, ui};
@@ -14,7 +20,10 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 impl GridView {
-    /// What fills the grid's place, faded to `fade`.
+    /// Builds what fills the grid's area for `surface`: the tiles, the
+    /// error message, the empty area shown while loading, or the empty
+    /// state. The tiles, the error message and the empty state are drawn at
+    /// the opacity `fade`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn body(
         &mut self,
@@ -64,8 +73,13 @@ impl GridView {
             Surface::Loading => div().id("grid-loading").size_full(),
             Surface::Empty(copy) => {
                 let actions = if copy.import {
-                    // `chooseAndImportFiles` / `chooseAndImportFolder` into
-                    // this destination, held while an import runs.
+                    // The "Import Files" and "Import Folder" buttons open a
+                    // file chooser or a folder chooser and import what is
+                    // chosen into the destination shown, as production's
+                    // `chooseAndImportFiles` and `chooseAndImportFolder`
+                    // do. Both buttons are disabled while
+                    // `imports::blocked` gives a reason that an import
+                    // cannot start, such as an import that is running.
                     let destination = {
                         let session = self.session.read(cx);
                         session
@@ -124,10 +138,11 @@ impl GridView {
                     ))
             }
             Surface::Tiles => {
-                // The whole destination's height, so the scrollbar stands
-                // for every item, loaded or not.
-                // The subfolder header, then the whole destination's height
-                // below it.
+                // `content` holds the tiles. It starts below the subfolder
+                // header and is as tall as all of the destination's items
+                // laid out (`placement.height`), not only the items that
+                // are loaded. The scrollbar's size and position therefore
+                // account for every item in the destination.
                 let header = self.subfolders.height();
                 let mut content = div()
                     .absolute()
@@ -143,7 +158,9 @@ impl GridView {
                 if let Some(marker) = self.reorder_marker(&prefs) {
                     content = content.child(marker);
                 }
-                // `.marquee`: square corners, over the tiles.
+                // The rectangle of a rubber band selection (production's
+                // `.marquee`) is drawn over the tiles. It has square
+                // corners, a fill at 12% opacity and a 1 px border.
                 if let Some(rect) = self.marquee.as_ref().and_then(|marquee| marquee.rect) {
                     content = content.child(
                         div()
@@ -157,7 +174,8 @@ impl GridView {
                             .border_color(rgba(theme::MARQUEE_BORDER)),
                     );
                 }
-                // The tiles' list: several can be selected.
+                // To assistive technology the scrolling list of tiles is a
+                // list box in which more than one item can be selected.
                 div()
                     .id("media-grid")
                     .role(Role::ListBox)
@@ -166,7 +184,9 @@ impl GridView {
                     .opacity(fade)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    // The frame that follows a scroll notices the new position.
+                    // Each scroll event asks for the grid to be built again,
+                    // so that the next frame is built for the new scroll
+                    // position.
                     .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                         this.pointer_moved(event.position, cx)
@@ -182,15 +202,26 @@ impl GridView {
                             this.pressed(event, window, cx)
                         }),
                     )
-                    // A right-click no image took is on empty space.
+                    // A tile's image stops a right-click on it from reaching
+                    // this handler. A right-click that arrives here was
+                    // therefore on empty space: between tiles, or on the
+                    // text rows under an image, which count as empty space.
+                    // It opens the grid's own menu.
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(|this, event: &MouseDownEvent, window, cx| {
                             this.empty_menu(event.position, window, cx)
                         }),
                     )
-                    // A click that no image took is a click on empty space,
-                    // unless it ends a rubber band or was a secondary click.
+                    // A tile's image also stops a click on it from reaching
+                    // this handler, so a click that arrives here was on
+                    // empty space. It clears the selection and gives the
+                    // grid the keyboard focus. Two kinds of click are
+                    // ignored. One is the click made by the release that
+                    // ends a rubber band selection (`swallow_click`). The
+                    // other is a secondary click (a Control-click on
+                    // macOS), whose press has already opened the grid's
+                    // menu.
                     .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                         if std::mem::take(&mut this.swallow_click)
                             || selection::Press::here(event.modifiers()) == selection::Press::Menu
@@ -215,10 +246,20 @@ impl GridView {
         }
     }
 
-    /// What lies over the body: while a rubber band is out, or after a
-    /// press on a tile, the pointer followed anywhere in the window; the
-    /// wheel's zoom over tiles that `scrolls`; the drag's ghost; the hover
-    /// preview.
+    /// Adds to `root` what is drawn over the grid's body or listens for
+    /// events over it, and returns `root`:
+    ///
+    /// - While a rubber band selection is in progress, a listener that
+    ///   follows the pointer and the button's release anywhere in the
+    ///   window.
+    /// - After a press on a tile and during a drag of items, a listener of
+    ///   the same kind for the drag.
+    /// - When `scrolls` is true, which is when the grid shows tiles, a
+    ///   listener that zooms the grid when a scroll event arrives over the
+    ///   tiles and the "Mouse wheel" setting is "Adjust thumbnail size".
+    /// - During a drag, the picture of the dragged items that follows the
+    ///   pointer (`drag::ghost`).
+    /// - The hover preview, while one is shown.
     pub(super) fn overlays(
         &mut self,
         mut root: Div,
@@ -226,9 +267,12 @@ impl GridView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        // While a rubber band is out, or after a press on a tile (which can
-        // become a drag), the pointer is followed and the release heard
-        // anywhere in the window, as pointer capture does.
+        // During a rubber band selection, and after a press on a tile
+        // (which becomes a drag once the pointer has moved far enough), the
+        // grid has to receive the pointer's moves and the button's release
+        // even when the pointer is outside the grid. `capture_pointer` adds
+        // a listener for the whole window that passes them on, which is
+        // what pointer capture does in a browser.
         if self.marquee.is_some() {
             root = root.child(capture_pointer(
                 cx.entity().downgrade(),
@@ -243,9 +287,13 @@ impl GridView {
                 |this, _, cx| this.drag_released(cx),
             ));
         }
-        // Settings › Controls "Mouse wheel: Zoom" (`onGridWheel`): the wheel
-        // over the tiles changes the tile size instead of scrolling. The
-        // setting is read when the wheel turns, so a change applies at once.
+        // When "Mouse wheel" in Settings › Controls is set to "Adjust
+        // thumbnail size", a scroll event over the tiles zooms the grid
+        // instead of scrolling it, as production's `onGridWheel` does. The
+        // setting is read each time a scroll event arrives, so a change to
+        // it applies to the next event. The listener handles the event in
+        // the capture phase and stops it, so the list of tiles does not
+        // scroll as well.
         if scrolls {
             let entity = cx.entity().downgrade();
             root = root.child(
@@ -259,18 +307,18 @@ impl GridView {
                             {
                                 return;
                             }
-                            // The browser's `deltaY` is positive scrolling
-                            // down; GPUI's is the other way round.
-                            let delta_y =
-                                -f32::from(event.delta.pixel_delta(window.line_height()).y);
+                            // `wheel_zoom` takes the distance with the
+                            // browser's sign, positive for scrolling down.
+                            // GPUI's sign is the opposite, so it is negated.
+                            // A mouse wheel reports lines and a trackpad
+                            // reports pixels.
+                            let (delta_y, notch) = match event.delta {
+                                ScrollDelta::Lines(lines) => (-lines.y, true),
+                                ScrollDelta::Pixels(pixels) => (-f32::from(pixels.y), false),
+                            };
                             cx.stop_propagation();
-                            let _ = entity.update(cx, |this, cx| {
-                                this.session.update(cx, |session, cx| {
-                                    if let Some(size) = nav::wheel_zoom(session.tile, delta_y) {
-                                        session.set_tile(size, cx);
-                                    }
-                                })
-                            });
+                            let _ =
+                                entity.update(cx, |this, cx| this.wheel_zoom(delta_y, notch, cx));
                         });
                     },
                 )

@@ -1,8 +1,13 @@
-//! The viewer toolbar (`ViewerToolbar` in `GridToolbar.tsx`), which takes the
-//! titlebar's place of the grid toolbar while an item is open. Left: back to
-//! the grid, the breadcrumb and the item's place in the results. Centre: the
-//! zoom percentage and a logarithmic zoom slider. Right: fit, actual size,
-//! previous and next.
+//! The viewer toolbar (`ViewerToolbar` in `GridToolbar.tsx`). While an item
+//! is open in the viewer, it is shown in the titlebar where the grid toolbar
+//! normally is.
+//!
+//! On the left are the back button, the breadcrumb (only while a collection
+//! is being edited) and the item's position in the results, for example
+//! "3 / 120". In the centre are the zoom percentage and the zoom slider,
+//! whose track is logarithmic. On the right are the "Fit to window", "Actual
+//! size", "Previous" and "Next" buttons, and the "Edit group" button while a
+//! collection is shown in its reader.
 use super::surface::{self, MediaSurface};
 use crate::i18n::t;
 use crate::session::{Change, Session};
@@ -13,7 +18,9 @@ use crate::{theme, ui};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
-/// The zoom menu's levels, in percent, with the action each reports.
+/// The zoom levels offered in the menu that opens when the zoom percentage
+/// is clicked. Each entry is the name of the action its menu row reports,
+/// and the level in percent.
 const LEVELS: [(&str, f32); 11] = [
     ("zoom-5", 5.),
     ("zoom-10", 10.),
@@ -30,12 +37,15 @@ const LEVELS: [(&str, f32); 11] = [
 
 pub struct ViewerToolbar {
     session: Entity<Session>,
-    /// The viewer, which steps to the previous or next item.
+    /// The viewer. The toolbar's buttons call it to step to the previous or
+    /// next item, to close a member that is open by itself, and to switch a
+    /// collection to its editor.
     viewer: WeakEntity<super::Viewer>,
     surface: Entity<MediaSurface>,
     zoom: Entity<Zoom>,
-    /// The zoom percentage's menu. The keyboard goes back where it was
-    /// before it opened.
+    /// The host of the menu that opens when the zoom percentage is clicked.
+    /// When the menu closes, keyboard focus returns to whatever had it
+    /// before the menu opened.
     menu: menu::Host,
     _subscriptions: Vec<Subscription>,
 }
@@ -59,13 +69,15 @@ impl ViewerToolbar {
             }),
             cx.subscribe(&surface, |this, surface, _: &surface::Event, cx| {
                 let percent = surface.read(cx).percent();
-                this.zoom.update(cx, |zoom, cx| zoom.show(percent, cx));
+                this.zoom
+                    .update(cx, |zoom, cx| zoom.show(zoom::Value::Percent(percent), cx));
                 cx.notify();
             }),
             cx.subscribe(&zoom, |this, _, event: &zoom::Changed, cx| {
-                let percent = event.0;
-                this.surface
-                    .update(cx, |surface, cx| surface.set_percent(percent, cx));
+                if let zoom::Changed::Percent(percent) = *event {
+                    this.surface
+                        .update(cx, |surface, cx| surface.set_percent(percent, cx));
+                }
             }),
         ];
         Self {
@@ -78,8 +90,10 @@ impl ViewerToolbar {
         }
     }
 
-    /// The zoom percentage's menu at the pointer: the common levels, the
-    /// current one checked, then actual size and fit.
+    /// Opens the zoom menu at `position`, which is where the pointer was
+    /// when the zoom percentage was clicked. The menu lists the zoom levels
+    /// in [`LEVELS`], with a check mark on the one that equals the current
+    /// zoom, then a separator, then "Actual size" and "Fit to window".
     fn open_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         let current = self.surface.read(cx).percent();
         let mut entries: Vec<menu::Entry> = LEVELS
@@ -101,7 +115,8 @@ impl ViewerToolbar {
                 .shortcut_for("view.fitWindow", cx)
                 .into(),
         );
-        // `showSearch: false`, as `GridToolbar.tsx` opens it.
+        // This menu has no search row. Production's `GridToolbar.tsx` opens
+        // it with `showSearch: false`.
         let menu = cx.new(|cx| Menu::new(entries, position, cx).search(false));
         self.menu.open(menu, window, cx, |this, _, action, _, cx| {
             this.surface.update(cx, |surface, cx| match action {
@@ -116,8 +131,11 @@ impl ViewerToolbar {
         });
     }
 
-    /// `.viewerBreadcrumb`: the parent, which goes back, a slash, and the
-    /// current name, ellipsised, within `min(420px, 42vw)`.
+    /// `.viewerBreadcrumb`: the name of the place the collection was opened
+    /// from (`parent`), a slash, and the collection's name (`current`). A
+    /// click on the parent's name closes the viewer. The breadcrumb is at
+    /// most `min(420px, 42vw)` wide, and a name that does not fit is cut off
+    /// with an ellipsis.
     fn breadcrumb(
         &self,
         parent: SharedString,
@@ -161,11 +179,15 @@ impl ViewerToolbar {
 impl Render for ViewerToolbar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme::theme(cx);
-        // How a collection shows (`GroupSurface`'s display controls): its
-        // reader offers "Edit group"; its editor has the breadcrumb and
-        // nothing to step through; a member open by itself (`MediaView`
-        // over the members) steps through the members and goes back to
-        // the group.
+        // What the toolbar shows for a collection depends on how the
+        // collection is displayed (`GroupSurface`'s display controls in
+        // production). In the reader, the toolbar has the "Edit group"
+        // button. In the editor, it has the breadcrumb, and it has no
+        // position counter and no "Previous" and "Next" buttons. In both,
+        // the zoom controls are left out. When one member is open by itself
+        // (production's `MediaView` over the members), "Previous" and "Next"
+        // step through the members and the back button returns to the
+        // collection.
         let (mode, member_open) = self
             .viewer
             .upgrade()
@@ -194,8 +216,10 @@ impl Render for ViewerToolbar {
         };
         let can_previous = index.is_some_and(|index| index > 0);
         let can_next = index.is_some_and(|index| (index as u64) + 1 < total);
-        // The editor names where the collection was opened from, or
-        // "Collections", and the collection, or "Untitled".
+        // The breadcrumb, which is shown only in the editor. Its first part
+        // is the name of the place the collection was opened from, or
+        // "Collections" when that place has no name. Its second part is the
+        // collection's name, or "Untitled" when it has none.
         let breadcrumb: Option<(SharedString, SharedString)> = editing.then(|| {
             let session = self.session.read(cx);
             let parent = session
@@ -236,7 +260,8 @@ impl Render for ViewerToolbar {
             left = left.child(self.breadcrumb(parent, current, window, cx));
         }
         if let Some(index) = index {
-            // `TitlebarCounter`
+            // The position counter, for example "3 / 120"
+            // (`TitlebarCounter` in production).
             left = left.child(
                 div()
                     .ml(px(4.))
@@ -259,9 +284,12 @@ impl Render for ViewerToolbar {
             center = center.child(
                 zoom::section(cx)
                     .child(
-                        // `.zoomLabel`: a click opens the levels; a right
-                        // click switches between fit and actual size.
-                        // `<span role="button">` read as its percent.
+                        // The zoom percentage (`.zoomLabel`). A click opens
+                        // the zoom menu. A right-click sets the zoom to "Fit
+                        // to window" when it is at 100%, and to 100%
+                        // otherwise. Production's element is a
+                        // `<span role="button">`, so assistive technology
+                        // reads it as a button named by the percentage.
                         div()
                             .id("viewer-zoom-label")
                             .role(Role::Button)
@@ -324,10 +352,12 @@ impl Render for ViewerToolbar {
                     })),
             );
         }
-        // The editor has nothing to step through.
+        // The "Previous" and "Next" buttons are left out in the editor,
+        // which shows all the members at once.
         right = right.when(!editing, |right| {
             right.child(
-                // `TitlebarControlGroup`
+                // The group that holds the "Previous" and "Next" buttons
+                // (`TitlebarControlGroup` in production).
                 div()
                     .flex()
                     .items_center()
@@ -360,8 +390,9 @@ impl Render for ViewerToolbar {
         ui::drag_region("viewer-toolbar", window, cx)
             .relative()
             .size_full()
-            // As the grid toolbar: 8px from the titlebar on either side and
-            // 8 more on the right from the toolbar itself.
+            // The same padding as the grid toolbar: 8px on the left and
+            // 16px on the right. In production the titlebar gives 8px on
+            // each side and the toolbar itself adds 8px more on the right.
             .pl(px(8.))
             .pr(px(16.))
             .flex()

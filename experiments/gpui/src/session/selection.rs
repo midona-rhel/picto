@@ -1,5 +1,7 @@
-//! The selection: items chosen one by one or query-wide, the item shown,
-//! subfolder tiles, and keyboard moves.
+//! The part of `Session` that changes the selection: selecting items one by
+//! one, in ranges or all at once, choosing the item the inspector and the
+//! viewer show, selecting subfolder tiles, and moving the selection with the
+//! keyboard.
 use super::{Change, Focused, Session};
 use crate::backend;
 use crate::grid::nav;
@@ -11,6 +13,9 @@ use picto_library::predicate::FilterExpr;
 impl Session {
     // ── Selection ───────────────────────────────────────────────
 
+    /// Clears the selection of items and of subfolder tiles, the range anchor,
+    /// and the item the inspector shows with its details. It does not emit a
+    /// change.
     pub(super) fn forget_selection(&mut self) {
         self.selection = Selection::default();
         self.folder_selection.clear();
@@ -20,9 +25,11 @@ impl Session {
         self.details = None;
     }
 
-    /// Shows the item at `ordinal` in the inspector, or nothing. The
-    /// previous item's details stay up until this one's arrive, and
-    /// choosing the item already shown asks for nothing.
+    /// Makes the item at `ordinal` the one the inspector and the viewer show,
+    /// or none with `None`. The item's details are read from the library.
+    /// Until they arrive, the `details` field keeps the previous item's
+    /// details. When the item is the one whose details are already shown,
+    /// nothing is read. Also clears the selection of subfolder tiles.
     pub(super) fn focus_on(&mut self, ordinal: Option<usize>, cx: &mut Context<Self>) {
         self.folder_selection.clear();
         let showing = self.selected_details().map(|details| details.root.root_id);
@@ -46,7 +53,8 @@ impl Session {
         cx.emit(Change::Selection);
     }
 
-    /// Selects one item alone, as a plain click does.
+    /// Selects the item at `ordinal` and deselects everything else, as a click
+    /// without modifier keys does. The item becomes the range anchor.
     pub fn select(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let Some(end) = self.end_at(ordinal) else {
             return;
@@ -56,7 +64,11 @@ impl Session {
         self.focus_on(Some(ordinal), cx);
     }
 
-    /// Adds or removes one item, as a command-click does.
+    /// Adds the item at `ordinal` to the selection, or removes it if it is
+    /// selected, as a Command-click does (a Control-click on Windows and
+    /// Linux). An item that was added becomes the range anchor and the item
+    /// the inspector shows. After a removal the inspector shows the last
+    /// selected item that the window holds.
     pub fn toggle(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let Some(end) = self.end_at(ordinal) else {
             return;
@@ -74,10 +86,14 @@ impl Session {
         }
     }
 
-    /// Selects from the anchor to `ordinal`, as a shift-click or shift-move
-    /// does; `keep` adds the range to what is selected already. A range
-    /// from an anchor outside the window is a span of the order, which the
-    /// library resolves.
+    /// Selects every item from the range anchor to `ordinal`, as a Shift-click
+    /// or a move with Shift held does. With `keep` set, the range is added to
+    /// the current selection; otherwise it replaces it. When there is no
+    /// anchor, the item at `ordinal` becomes the anchor. When the anchor is
+    /// not in the window, the session cannot list the items in between, so the
+    /// selection stores the range by its two ends and the library finds the
+    /// items when an edit needs them. A range added to a query-wide selection
+    /// is stored the same way.
     pub fn select_to(&mut self, ordinal: usize, keep: bool, cx: &mut Context<Self>) {
         let Some(focus) = self.end_at(ordinal) else {
             return;
@@ -90,7 +106,9 @@ impl Session {
         self.focus_on(Some(ordinal), cx);
     }
 
-    /// Everything the destination holds, loaded or not.
+    /// Selects every item of the destination, including items the window does
+    /// not hold. The inspector keeps showing its item if the window holds it;
+    /// otherwise it shows the first item of the window.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         if self.total == 0 {
             return;
@@ -106,19 +124,23 @@ impl Session {
         self.focus_on(Some(focus), cx);
     }
 
-    /// Whether the selection reaches past the items chosen one by one (the
-    /// whole destination, or a range), so that only the library knows all
-    /// it holds (production's `query_results` selection).
+    /// Whether the selection is query-wide: Select All, or a range stored by
+    /// its two ends. Such a selection can include items the window does not
+    /// hold, so only the library can list all of its items (production's
+    /// `query_results` selection).
     pub fn selects_whole(&self) -> bool {
         self.selection.query_wide()
     }
 
-    /// How many items are selected, loaded or not.
+    /// The number of selected items, including selected items the window does
+    /// not hold.
     pub fn selection_count(&self) -> u64 {
         self.selection.count(self.total)
     }
 
-    /// What an edit of the grid's selection addresses.
+    /// The description of the selected items that an edit sends to the
+    /// library: a list of ids, or, for a query-wide selection, the query with
+    /// its ranges and the items taken out. `None` when nothing is selected.
     pub fn selection_target(&self) -> Option<picto_library::selection::SelectionTarget> {
         if self.selection.is_empty() {
             return None;
@@ -126,10 +148,12 @@ impl Session {
         self.selection.target(self.ran.as_ref())
     }
 
-    /// Replaces the selection with the items at these ordinals, as a
-    /// finished rubber band does; `keep` adds them to the items chosen. The
-    /// item shown stays if it is still selected; otherwise the last one is
-    /// shown. No range anchor remains.
+    /// Selects the items at `ordinals`, as a rubber band does when it ends.
+    /// With `keep` set, they are added to the items already selected, unless
+    /// the selection is query-wide, in which case they replace it. The
+    /// inspector keeps showing its item if that item is still selected;
+    /// otherwise it shows the item at the highest of `ordinals`. The range
+    /// anchor is cleared.
     pub fn set_selection(
         &mut self,
         ordinals: std::collections::BTreeSet<usize>,
@@ -159,9 +183,11 @@ impl Session {
         self.focus_on(focus, cx);
     }
 
-    /// Selects these subfolder tiles alone (`replace_folders`), or adds or
-    /// removes one when `toggle` (`toggle_folder`, a command-click, which
-    /// starts afresh from a selection of items). Items are deselected.
+    /// Selects subfolder tiles by node id. Without `toggle`, `nodes` become
+    /// the only selected tiles (`replace_folders`). With `toggle`, as on a
+    /// Command-click, each of `nodes` is added if it was not selected and
+    /// removed if it was (`toggle_folder`); if items were selected, the toggle
+    /// starts from no selected tiles. In both cases every item is deselected.
     pub fn select_folders(&mut self, nodes: Vec<String>, toggle: bool, cx: &mut Context<Self>) {
         let mut chosen = if toggle && self.selection.is_empty() {
             std::mem::take(&mut self.folder_selection)
@@ -189,8 +215,9 @@ impl Session {
         cx.emit(Change::Selection);
     }
 
-    /// The one subfolder tile selected with no items, which the inspector
-    /// describes (`selectedSubfolderNodeIdAtom`).
+    /// The node id of the selected subfolder tile, when exactly one tile and
+    /// no item is selected. The inspector then describes that subfolder
+    /// (`selectedSubfolderNodeIdAtom`).
     pub fn selected_folder(&self) -> Option<&str> {
         match self.folder_selection.as_slice() {
             [node] if self.selection.is_empty() => Some(node),
@@ -198,19 +225,23 @@ impl Session {
         }
     }
 
-    /// Whether the search field narrows the results (three characters or more).
+    /// Whether the search text filters the results. It does when it has three
+    /// characters or more, not counting spaces at either end.
     pub fn searching(&self) -> bool {
         backend::text_filter(&self.search_text) != FilterExpr::default()
     }
 
-    /// Selects `id` alone once the destination, read again now, says where
-    /// it is: an item an edit has just made, which the loaded results do
-    /// not hold yet.
+    /// Starts a refresh in place and, when it reports the ordinal of the item
+    /// `id`, selects that item alone. It is used for an item that an edit has
+    /// just created, such as a new collection, which the window does not hold
+    /// yet.
     pub fn select_when_listed(&mut self, id: RootId, cx: &mut Context<Self>) {
         self.pending_select = Some(id);
         self.refresh_results(cx);
     }
 
+    /// Deselects every item and every subfolder tile. The inspector then shows
+    /// no item.
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if !self.selection.is_empty() || self.focus.is_some() || !self.folder_selection.is_empty() {
             self.selection = Selection::default();
@@ -219,32 +250,46 @@ impl Session {
         }
     }
 
-    /// The ordinal a keyboard move lands on, given the grid's current
-    /// geometry, in the whole destination.
+    /// The ordinal that the keyboard move `action` goes to, counted in the
+    /// whole destination and not only in the window. `width` and `height` are
+    /// the grid's width and the viewport's height in pixels, which give the
+    /// number of columns and the number of rows on a page. `None` when the
+    /// move does not change the item.
     pub fn move_target(&self, action: nav::Move, width: f32, height: f32) -> Option<usize> {
         let action = match action {
-            // With the viewer open only the item changes, one at a time.
+            // While the viewer is open, only Left and Right work: they go to
+            // the previous and the next item. The other moves do nothing.
             nav::Move::Left | nav::Move::Right => action,
             _ if self.viewer => return None,
             _ => action,
         };
-        // With nothing selected, any move selects the first item.
+        // The inspector shows no item, so there is no item to move from. Any
+        // move goes to the first item of the destination.
         let Some(focus) = self.focus_ordinal() else {
             return (self.total > 0).then_some(0);
         };
+        let (columns, row) = crate::grid::layout::keyboard_step(
+            width,
+            self.tile,
+            self.prefs.gap,
+            self.prefs.mode,
+            self.prefs.text_height(),
+        );
         nav::target(
             action,
             focus,
             self.total as usize,
-            nav::column_count(width, self.tile, self.prefs.gap),
-            nav::visible_rows(height, self.tile, self.prefs.gap),
+            columns,
+            nav::visible_rows(height, row),
         )
     }
 
-    /// Moves to the item at `ordinal` (a keyboard move, the viewer's next
-    /// and previous), selecting it alone or, with `extend`, as a range,
-    /// and asks the grid to bring it into view. An item outside the window
-    /// is selected once its window arrives; until then what is shown stays.
+    /// Moves the selection to the item at `ordinal`. Keyboard moves and the
+    /// viewer's next and previous call this. The item is selected alone, or
+    /// with `extend` the range from the anchor to it is selected, and the grid
+    /// is asked to scroll it into view (`reveal`). When the window does not
+    /// hold the item, its window is requested and the item is selected when
+    /// that window arrives; until then the selection does not change.
     pub fn move_to(&mut self, ordinal: usize, extend: bool, cx: &mut Context<Self>) {
         if ordinal >= self.total as usize {
             return;
@@ -258,8 +303,9 @@ impl Session {
                 self.select(ordinal, cx);
             }
         } else if !self.loading {
-            // While the destination is read again there is no window to
-            // move; the key does nothing.
+            // The window does not hold the item, so request the window that
+            // does. This is skipped while the results are loading, because a
+            // window cannot be requested then, so the key does nothing.
             self.reveal = Some(ordinal);
             self.pending_focus = Some((ordinal, extend));
             self.request_window_at(ordinal, cx);

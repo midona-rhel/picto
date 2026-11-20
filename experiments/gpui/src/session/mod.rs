@@ -1,6 +1,10 @@
-//! What is being browsed: the destination, its results, the selection and the
-//! viewer. One model that every view reads, so a view repaints only for the
-//! kind of change it shows and no view owns another's state.
+//! `Session` holds the state of browsing one open library: the list of
+//! destinations in the sidebar and which one is open, the results the grid
+//! shows for it, the selection, and whether the viewer is open. Every view
+//! (the sidebar, the toolbar, the grid, the inspector, the viewer) reads this
+//! one model. With every change the session emits a `Change` that names the
+//! kind of state that changed, so each view redraws only for the kinds it
+//! shows, and no view keeps state that belongs to another view.
 mod edits;
 mod events;
 mod navigation;
@@ -29,9 +33,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Changing destination, as `WorkspaceSurface.tsx` stages it: the current grid
-/// fades out, the surface stays hidden until the destination is ready, then
-/// the destination fades in.
+/// The stage of the fade that plays when the grid's contents are replaced:
+/// when another destination opens, or when a change of view preferences, such
+/// as a new sort, reads the open destination again. The stages run in the
+/// order `WorkspaceSurface.tsx` runs them. `FadingOut`: what is on screen
+/// fades out over 170 ms (`motion::SCOPE_FADE`). `Waiting`: the grid stays
+/// invisible until the new results have arrived. `FadingIn`: the new results
+/// fade in over 170 ms. `Idle`: no fade is running. The two fading stages hold
+/// the time at which the fade started.
 #[derive(Clone, Copy)]
 pub enum Transition {
     Idle,
@@ -41,7 +50,8 @@ pub enum Transition {
 }
 
 impl Transition {
-    /// Opacity of the grid surface and the scope title.
+    /// The opacity, from 0 to 1, that the grid and the scope title are drawn
+    /// with at this stage of the fade.
     pub fn opacity(&self) -> f32 {
         let eased = |started: &Instant| {
             motion::EASE_DEFAULT.ease(motion::progress(started.elapsed(), motion::SCOPE_FADE))
@@ -59,38 +69,57 @@ impl Transition {
     }
 }
 
-/// What changed, so each view can ignore what it does not show.
+/// The kind of state that changed. The session emits one of these with every
+/// change, and each view redraws only for the kinds it shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Change {
-    /// The destination list, the chosen destination, or its transition.
+    /// The list of destinations, the open destination or the place open inside
+    /// it, the Back and Forward history, the stage of the fade (`Transition`),
+    /// or the library's cover changed.
     Navigation,
-    /// The items, their count, the view preferences or the zoom.
+    /// The results changed: the items the grid holds, their total, whether
+    /// they are loading, the view preferences, the zoom, the filter bar's
+    /// settings, or the grayscale setting.
     Results,
+    /// The width the grid lays its tiles out in changed. The same zoom may
+    /// give a different number of columns at the new width, so the toolbar
+    /// updates its zoom control.
+    GridWidth,
+    /// The selected items, the selected subfolder tiles, or the item the
+    /// inspector shows changed.
     Selection,
+    /// The details of the item the inspector shows arrived.
     Details,
-    /// An edit of the selected items finished: a summary of them is read
-    /// again.
+    /// An edit of the selected items has finished. The inspector reads its
+    /// summary of the selected items again.
     Edited,
-    /// The viewer opened, closed, or moved to another member.
+    /// The viewer opened or closed, or it now shows another member of the
+    /// collection it has open.
     Viewer,
-    /// Background work the sidebar shows: whether subscriptions are running
-    /// or held globally.
+    /// Whether any subscription is running, or whether all subscriptions are
+    /// paused, changed. The sidebar's Subscriptions row shows this.
     Activity,
 }
 
-/// Whether subscriptions are running, as the sidebar's Subscriptions row
-/// shows it (`runningSubscriptionIds`, `globalPaused`).
+/// The state of subscriptions that the sidebar's Subscriptions row shows with
+/// its pause and resume button. `running` is true while any subscription has a
+/// run in progress (`runningSubscriptionIds`). `paused` is true while all
+/// subscriptions are paused (`globalPaused`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SubscriptionActivity {
     pub running: bool,
     pub paused: bool,
-    /// A pause or resume of everything is on its way.
+    /// True from the click on the row's button until the
+    /// `subscriptions.pause_all` command has answered. Clicks on the button
+    /// are ignored during that time.
     pub busy: bool,
 }
 
 impl SubscriptionActivity {
-    /// Reads `subscriptions.list` as `getSubscriptionOverview` does: running
-    /// means an active run that is pending or running.
+    /// Builds the state from the answer of the `subscriptions.list` command,
+    /// the way `getSubscriptionOverview` does. A subscription counts as
+    /// running when it has an `active_run_id` and its `status` is `pending` or
+    /// `running`. `paused` is the answer's `global_paused` field.
     pub fn from_list(list: &serde_json::Value) -> Self {
         let running = list
             .get("subscriptions")
@@ -108,41 +137,54 @@ impl SubscriptionActivity {
         }
     }
 
-    /// The row shows its activity button.
+    /// Whether the Subscriptions row shows its pause and resume button. It
+    /// does while a subscription is running or all subscriptions are paused.
     pub fn shown(&self) -> bool {
         self.running || self.paused
     }
 }
 
-/// `subscriptionsSettle.ts`: progress is read again this often while a run
-/// is going.
+/// How often the session reads `subscriptions.list` again while a subscription
+/// run is in progress: every 1.5 seconds, as `subscriptionsSettle.ts` does.
 pub const SUBSCRIPTION_POLL: Duration = Duration::from_millis(1500);
-/// How often the session looks for the application's events (replies from
-/// the library's thread wake it at once).
+/// The session checks for events from the application layer every 30 ms.
+/// Replies from the library's thread do not wait for this: the thread wakes
+/// the session each time it sends one.
 const RECEIVE_INTERVAL: Duration = Duration::from_millis(30);
-/// `VIEW_PREFS_SAVE_DEBOUNCE_MS`: a view change is saved once it has rested
-/// this long.
+/// A zoom change is saved to the destination's view preferences 500 ms after
+/// the last change (`VIEW_PREFS_SAVE_DEBOUNCE_MS`).
 const VIEW_SAVE_DELAY: Duration = Duration::from_millis(500);
-/// How long quitting waits for the library's thread to save a view change.
+/// When the app quits while a zoom change is not saved yet, the main thread
+/// waits at most 200 ms for the library's thread to write it.
 const QUIT_WAIT: Duration = Duration::from_millis(200);
-/// `gridController.scheduleRefresh`: a refresh after background changes
-/// waits at least this long, and at most a second, three times as long as
-/// the last refresh took, counted from when it finished.
+/// The shortest delay before the grid's results are read again after a
+/// background change: 40 ms (`gridController.scheduleRefresh`). The delay is
+/// three times as long as the previous refresh took, limited to the range from
+/// `REFRESH_MIN` to `REFRESH_MAX`, and it is counted from the moment the
+/// previous refresh finished (see `refresh_delay` in `results.rs`).
 const REFRESH_MIN: Duration = Duration::from_millis(40);
+/// The longest that delay can be: 1 second.
 const REFRESH_MAX: Duration = Duration::from_millis(1000);
-/// While the grid cannot be refreshed (a drag, a scope change, a page on
-/// its way), a wanted refresh looks again after this long.
+/// When a background refresh is due but cannot run yet, it is tried again
+/// after 100 ms. It cannot run while the pointer is pressed, drawing a rubber
+/// band or dragging in the grid, while results are loading, or while the fade
+/// between destinations is running.
 const REFRESH_RETRY: Duration = Duration::from_millis(100);
 
-/// A read of something that can change while it is read. Asked for again
-/// while one is under way, it runs once more when that one is done, rather
-/// than twice at once or not at all.
+/// Keeps track of a read that may be requested again while it is still
+/// running. `None` means no read is running. `Some(false)` means one is
+/// running. `Some(true)` means one is running and at least one more was
+/// requested meanwhile. A request made during a running read does not start a
+/// second read at the same time. The caller runs the read once more when the
+/// running one finishes, so the data read last is never older than the last
+/// request.
 #[derive(Debug, Default)]
 pub struct Coalesced(Option<bool>);
 
 impl Coalesced {
-    /// Whether to start a read now; while one is under way, another is
-    /// noted instead.
+    /// Call this when a read is requested. Returns true when the caller should
+    /// start the read now. Returns false when a read is already running; the
+    /// request is remembered and `end` reports it.
     pub fn begin(&mut self) -> bool {
         match &mut self.0 {
             Some(again) => {
@@ -156,27 +198,37 @@ impl Coalesced {
         }
     }
 
-    /// The read is done: whether it was asked for again meanwhile.
+    /// Call this when the read finishes. Returns true when another read was
+    /// requested while it ran, in which case the caller starts the read again.
     pub fn end(&mut self) -> bool {
         self.0.take() == Some(true)
     }
 }
 
-/// One step of Back and Forward.
+/// One entry in the Back and Forward history.
 #[derive(Clone, Copy, PartialEq)]
 struct Visit {
     scope: usize,
-    /// The viewer, opened on an item of this destination.
+    /// True when this entry is the viewer open on an item of the destination.
+    /// False when it is the destination's grid or screen.
     viewing: bool,
-    /// A place inside a screen, such as the subscription it has open.
+    /// The place open inside a screen, by id: for example the id of the
+    /// subscription that the Subscriptions screen has open. `None` is the
+    /// screen's own top level.
     place: Option<i64>,
-    /// The filters the grid had, as an index into `Session::filter_steps`:
-    /// a change of filters is a step of its own (`navigateWithGridFilters`).
+    /// The filter bar's filters that the grid had at this entry, as an index
+    /// into `Session::filter_steps`. Changing the filters adds a history entry
+    /// of its own (`navigateWithGridFilters`), so Back returns to the previous
+    /// filters.
     filters: usize,
 }
 
-/// A destination's grid as it was left: its window, where it lay, and
-/// what was selected.
+/// The state of a destination's grid at the moment the user left it. It is
+/// kept so that Back and Forward can show the grid again as it was, without
+/// reading the library: the window of results, the scroll position, the view
+/// preferences and zoom, and the selection. Most fields are copies of the
+/// `Session` fields of the same name; `scroll` is a copy of
+/// `Session::grid_scroll`.
 struct SavedGrid {
     items: Vec<RootSummary>,
     start: usize,
@@ -192,30 +244,44 @@ struct SavedGrid {
     scroll: f32,
     density: Option<Density>,
     window_top: f32,
-    /// The search and filters the results were for.
+    /// The search text and the filter bar's filters that these results were
+    /// read with. `step_history` shows a saved grid again only when its search
+    /// text is empty and its filters are the ones the history entry asks for.
     search_text: String,
     filters: Filters,
 }
 
-/// The item the inspector and viewer show, and where it is in the
-/// destination; it stays known when the grid's window moves away from it.
+/// The item that the inspector and the viewer show, with its ordinal (its
+/// position in the destination's order). The session keeps its own copy of the
+/// item, so the item is still available after the grid has loaded a window of
+/// results that does not contain it.
 #[derive(Clone)]
 struct Focused {
     ordinal: usize,
     item: RootSummary,
 }
 
-/// A file's thumbnail in a library's `blobs` folder, under its content
-/// hash, for work that runs away from the session.
+/// The path of the thumbnail of the file with content hash `hash`, inside a
+/// library's `blobs` folder: `blobs/t/<ab>/<cd>/<hash>.jpg`. This is a
+/// function outside `Session` so that code which has the `blobs` path but
+/// cannot use the session can call it. The covers of the subfolder tiles are
+/// read that way on the library's thread (`grid/subfolders.rs`).
 pub fn thumbnail_in(blobs: &std::path::Path, hash: &str) -> PathBuf {
     blob_in(blobs, "t", hash, "jpg")
 }
 
-/// `blobs/<kind>/<ab>/<cd>/<hash>.<extension>`, the layout core's blob
-/// store keeps (`BlobStore::original_path_with_ext`, `thumbnail_path_with_ext`;
-/// opening a `BlobStore` writes its staging folder, so the layout is
-/// followed here). A hash the library hands back that is not hexadecimal,
-/// and so could step out of the folder or split a character, names no file.
+/// Builds the path `blobs/<kind>/<ab>/<cd>/<hash>.<extension>`, where `<ab>`
+/// and `<cd>` are the first two and the next two characters of the hash. This
+/// is the layout that the blob store in the `picto_core` crate uses
+/// (`BlobStore::original_path_with_ext`, `thumbnail_path_with_ext`). The path
+/// is built here and not by a `BlobStore`, because opening a `BlobStore`
+/// creates its staging folder on disk.
+///
+/// Returns an empty path when `hash` is shorter than four characters or
+/// contains a character that is not a hexadecimal digit. Such a hash could
+/// contain `..` or a path separator and lead outside the `blobs` folder. It
+/// could also contain a character of several bytes, and cutting the hash in
+/// the middle of such a character makes Rust panic.
 fn blob_in(blobs: &std::path::Path, kind: &str, hash: &str, extension: &str) -> PathBuf {
     if hash.len() < 4 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return PathBuf::new();
@@ -227,117 +293,191 @@ fn blob_in(blobs: &std::path::Path, kind: &str, hash: &str, extension: &str) -> 
         .join(format!("{hash}.{extension}"))
 }
 
-/// The height per item the grid measured for a layout geometry (width,
-/// zoom, spacing, mode, text rows), which the scrollable height of a
-/// destination is estimated from.
+/// The average height in pixels that one item takes in the grid's layout,
+/// together with the layout geometry it was measured for: the grid's width,
+/// the zoom's tile size (as the bits of the `f32`), the spacing, the layout
+/// mode, and the height of the text rows under a tile. The grid measures it on
+/// the first items it lays out and multiplies it by the destination's total to
+/// estimate the scrollable height of the whole destination. A measurement is
+/// reused only while the geometry is the same.
 pub type Density = ((u32, u32, u32, crate::grid::layout::ViewMode, u32), f32);
 
 pub struct Session {
     sender: Sender<Request>,
     receiver: Receiver<Reply>,
-    /// The application layer: commands and its events.
+    /// The application layer of the open library. `dispatch` and `call` send
+    /// commands to it, and its events arrive on `events`.
     application: Arc<Application>,
     events: Receiver<Event>,
     pub subscriptions: SubscriptionActivity,
-    /// The subscription list is being read for the sidebar's activity.
+    /// Tracks the read of `subscriptions.list` that `refresh_activity` makes
+    /// for the sidebar's Subscriptions row, so that only one runs at a time.
     activity_reading: Coalesced,
-    /// Reads progress again while a run is going.
+    /// The timer that calls `refresh_activity` again after 1.5 seconds
+    /// (`SUBSCRIPTION_POLL`). It is set only while a subscription is running.
     activity_poll: Option<Task<()>>,
-    /// What runs have announced, and what is being read to announce.
+    /// The model that decides which notifications to show about subscription
+    /// runs and gallery downloads (see `settle.rs`). It remembers what it has
+    /// already announced and which reads it is waiting for.
     settle: settle::Settle,
-    /// The sidebar's destinations are being read again.
+    /// Tracks the read of the sidebar's destinations and counts that
+    /// `refresh_navigation` makes, so that only one runs at a time.
     navigation_reading: Coalesced,
     pub nav: Vec<Navigation>,
     pub tags: HashMap<u32, TagRecord>,
-    /// The destination chosen in the sidebar.
+    /// The open destination, as an index into `nav`. It changes as soon as the
+    /// user chooses a destination.
     pub scope: usize,
-    /// The destination shown in the grid and title; trails `scope` while the
-    /// previous one fades out.
+    /// The destination whose grid and title are on screen, as an index into
+    /// `nav`. While the previous destination fades out and the new one's
+    /// results have not arrived, this is still the previous destination. It
+    /// becomes equal to `scope` when the new one is shown.
     pub displayed: usize,
-    /// Visited places, for Back and Forward: each destination's grid, and
-    /// each item opened from one.
+    /// The Back and Forward history. Opening a destination, changing the
+    /// filter bar's filters, opening a place inside a screen and opening the
+    /// viewer each add an entry. `history_index` is the entry the user is at.
     history: Vec<Visit>,
     history_index: usize,
-    /// What each destination's grid held, with each set of filters, when
-    /// it was last left, so going back shows it where it was.
+    /// The grid of each destination as the user last left it, keyed by the
+    /// destination's index in `nav` and the index of its filters in
+    /// `filter_steps`. Back and Forward show a saved grid at the scroll
+    /// position it had, without reading the library. The map is emptied
+    /// whenever the library changes or the results are read again after an
+    /// edit, because the saved items may then be out of date.
     saved: HashMap<(usize, usize), SavedGrid>,
-    /// Every set of filters a step of Back and Forward has had, once each;
-    /// the first is none.
+    /// Every different set of filter bar filters that a history entry has
+    /// used. `Visit::filters` is an index into this list. Index 0 is the empty
+    /// set, which filters nothing.
     filter_steps: Vec<Filters>,
-    /// A saved grid to show once the surface has faded out.
+    /// A saved grid that is shown when what is on screen has finished fading
+    /// out.
     pending_restore: Option<SavedGrid>,
-    /// How far the grid is scrolled, which the grid reports as it paints.
+    /// The grid's scroll offset in pixels. The grid writes it each time it
+    /// draws (`GridView::prepare` in `grid/frame.rs`).
     pub grid_scroll: f32,
-    /// Where the grid should scroll to when it lays out the restored results.
+    /// The scroll offset in pixels that the grid starts at the next time it
+    /// draws new results. It is set when a saved grid is restored, to the
+    /// offset that grid had. The grid takes the value, so it applies once.
+    /// When it is `None`, new results start at the top.
     pub restore_scroll: Option<f32>,
     pub transition: Transition,
-    /// A destination's first window that arrived before the fade-out
-    /// finished.
+    /// The first window of results of the destination that is opening, when it
+    /// arrived while the previous grid was still fading out. It is shown when
+    /// the fade-out finishes.
     pending_page: Option<Box<Arrived>>,
-    /// The window of the results that is held: at most `window::WINDOW`
-    /// items, the first at ordinal `start` of the destination's order.
+    /// The window of results the session holds: at most `window::WINDOW`
+    /// (1,500) items of the destination. `start` is the ordinal of `items[0]`,
+    /// which is its position in the destination's order.
     pub items: Vec<RootSummary>,
     pub start: usize,
-    /// The destination's first items, wherever the window is, for the
-    /// inspector's preview of it.
+    /// The first items of the destination, whichever part of it the window
+    /// holds. The inspector uses them for its preview of the destination
+    /// (`inspector/scope.rs`).
     pub head: Vec<RootSummary>,
-    /// Counts each time the results are another destination's, or read
-    /// afresh, rather than another window of the same.
+    /// A counter that goes up each time the results are replaced by a
+    /// different set: the results of a read from the first page arrived, a
+    /// saved grid was restored, or the results were emptied because a screen
+    /// or an error is shown. It does not go up when another window of the same
+    /// results arrives or when the results are refreshed in place. The grid
+    /// compares it with the value it last drew, and when it differs the grid
+    /// resets its scroll position and its layout.
     pub results_epoch: u64,
-    /// Counts each time the window's items change: another window, or the
-    /// same read again in place.
+    /// A counter that goes up each time `items` is replaced: when another
+    /// window arrives, when the window is refreshed in place, and every time
+    /// `results_epoch` goes up. The grid lays its tiles out again when it
+    /// changes.
     pub window_epoch: u64,
-    /// Every item of the results, not only the window's.
+    /// The number of items in the whole destination with the current search
+    /// and filters, not only in the window.
     pub total: u64,
-    /// The size of every item in the results, not only the loaded ones.
+    /// The combined file size in bytes of all those items, not only of the
+    /// ones in the window.
     pub total_size_bytes: u128,
-    /// The latest window asked for (`requestWindowAt`): its number, and
-    /// the one on its way and the one waiting behind it, each with its
-    /// start. Only the latest is shown when it arrives.
+    /// The state of the requests for another window of results
+    /// (`requestWindowAt`). `window_request` is the number given to the newest
+    /// request. `window_active` is the request that was sent to the library's
+    /// thread and has not been answered yet, as its number and the start
+    /// ordinal of its window. `window_queued` is the one request that waits
+    /// until the active one is answered. A window that arrives is shown only
+    /// if its number equals `window_request`; an older one is dropped.
     window_request: u64,
     window_active: Option<(u64, usize)>,
     window_queued: Option<(u64, usize)>,
-    /// An item moved to by the keyboard or a viewer outside the window: it
-    /// is selected (with `true`, as a range) once its window arrives.
+    /// The ordinal of an item that a keyboard move, or the viewer's next or
+    /// previous, moved to while the window did not hold it. The item is
+    /// selected when its window arrives. The `bool` is true when the move
+    /// extends the selection as a range.
     pending_focus: Option<(usize, bool)>,
-    /// An item to select alone once a refresh finds where it is, such as a
-    /// group just made (`replace_items` with the new collection).
+    /// An item that becomes the only selected item when the refresh in
+    /// progress reports its ordinal. It is used for an item that an edit has
+    /// just created, for example a new collection, which the window does not
+    /// hold yet (production calls `replace_items` with the new collection).
     pending_select: Option<RootId>,
-    /// An ordinal the grid should bring into view once it is laid out.
+    /// The ordinal of an item that the grid scrolls into view the next time it
+    /// lays out a window that holds it. The grid then clears it.
     pub reveal: Option<usize>,
-    /// The height per item the grid measured, kept with the results so
-    /// the scrollable height stays the same as the window moves.
+    /// The average height per item that the grid measured (see `Density`). It
+    /// is kept here and not in the grid so that it stays the same while other
+    /// windows of the same results load. The estimated scrollable height then
+    /// does not change as the user scrolls.
     pub density: Option<Density>,
-    /// Where the grid's window lay, as the grid last placed it, and where a
-    /// restored window should lie again.
+    /// `window_top` is the distance in pixels from the top of the scrollable
+    /// height to the top of the window's tiles, as the grid last placed them.
+    /// The grid writes it each time it draws. `restore_window_top` is that
+    /// distance for a saved grid that is being restored: the grid places the
+    /// window there again, so that the saved scroll offset shows the same
+    /// items.
     pub window_top: f32,
     pub restore_window_top: Option<f32>,
     pub loading: bool,
     pub error: Option<String>,
+    /// The number of the newest read of results. It goes up each time the
+    /// destination is read from its first page or refreshed in place, and when
+    /// a destination opens that needs no read. A reply that carries another
+    /// number is ignored.
     generation: u64,
     pub prefs: ViewPrefs,
+    /// The destination, as an index into `nav`, that the zoom in `tile` was
+    /// last taken from. `apply_open` takes the saved zoom from the view
+    /// preferences only when the open destination is not this one.
     prefs_scope: Option<usize>,
-    /// The zoom: the target tile size.
+    /// The zoom's tile size in pixels. The layout turns it into a number of
+    /// columns for the grid's width (`grid::layout::columns`), or uses it as
+    /// the row height in the justified layout.
     pub tile: f32,
-    /// The selected items, by id, or query-wide: everything, or spans of
-    /// the order. Edits address query-wide selections through the query
-    /// (`selection_target`), as production's do.
+    /// The width in pixels the grid lays its tiles out in. The grid sets it
+    /// each time it draws. It is 0 until the grid has drawn once.
+    pub grid_width: f32,
+    /// The selected items. Either a set of item ids chosen one by one, or a
+    /// query-wide selection: every item of the destination (Select All), or
+    /// ranges of the destination's order (Shift-click), which can include
+    /// items the window does not hold. An edit of a query-wide selection sends
+    /// the query to the library, which finds the items (`selection_target`),
+    /// as production does.
     pub selection: Selection,
-    /// The subfolder tiles selected in the grid (`folderNodeIds`), by node
-    /// id (`folder:5`). Selecting items clears them, and the other way round.
+    /// The subfolder tiles selected in the grid (`folderNodeIds`), as node ids
+    /// such as `folder:5`. Items and subfolder tiles are never selected
+    /// together: selecting an item empties this list, and selecting a
+    /// subfolder tile empties `selection`.
     pub folder_selection: Vec<String>,
-    /// Items to select once the destination's results are read afresh: the
-    /// items a reorder drag put back, as production keeps them selected.
+    /// Items to select when the destination's results, which are being read
+    /// again from the first page, arrive. The grid sets it after a drag that
+    /// reordered items in a folder, so that the dragged items are still
+    /// selected afterwards, as in production.
     pub reselect: Option<Vec<RootId>>,
-    /// The query the shown results were read with.
+    /// The query that the results in `items` were read with. Requests for
+    /// another window and refreshes in place send it again.
     ran: Option<RootQuery>,
-    /// The selected item the inspector and viewer show: the one last chosen.
+    /// The one selected item that the inspector and the viewer show. It is the
+    /// item that was selected most recently.
     focus: Option<Focused>,
-    /// Where a shift-click or shift-move range starts.
+    /// The item a range selection starts from. A Shift-click or a move with
+    /// Shift held selects from this item to the item clicked or moved to.
     anchor: Option<End>,
     pub details: Option<RootDetails>,
     pub viewer: bool,
-    /// Which member of a collection the viewer shows.
+    /// The index of the member of a collection that the viewer shows. 0 is the
+    /// first member.
     pub member: usize,
     search_text: String,
     pub filter: Option<FilterExpr>,
@@ -345,57 +485,86 @@ pub struct Session {
     pub filters: Filters,
     /// Whether the filter bar shows under the titlebar.
     pub filter_bar_open: bool,
-    /// Whether the filters stay when another destination opens.
+    /// Whether the filter bar's filters are kept when another destination
+    /// opens. When false, a destination chosen in the sidebar opens without
+    /// filters.
     pub filters_locked: bool,
-    /// A view change, and the last query sent before it was saved: pages of
-    /// that query or older bring the preferences from before it.
+    /// View preference changes that results still on their way may not
+    /// include. The `u64` is the value of `generation` when the user made the
+    /// change, and the JSON object holds the changed fields. Results of a
+    /// query with that number or a lower one may have been read before the
+    /// change was saved, so `fresh_prefs` applies these fields on top of the
+    /// preferences those results bring. The first results of a newer query
+    /// clear it.
     view_patch: Option<(u64, serde_json::Value)>,
     blobs: PathBuf,
-    /// The library the application opened: a disposable copy or one the
-    /// user keeps.
+    /// The folder of the open library. It is either a disposable copy or a
+    /// library the user keeps.
     root: PathBuf,
-    /// The library's cloud sync state, which the shell keeps.
+    /// The cloud sync state of the library. The shell creates it and sets this
+    /// field.
     pub cloud: Option<Entity<crate::cloud::Cloud>>,
-    /// The library the copy was made from, which the recents are kept under.
+    /// The key under which this library's recent folders are stored in the
+    /// app's state. For a disposable copy it is the path of the library the
+    /// copy was made from, so the recent folders are still there when a new
+    /// copy is made. For any other library it is the library's own path.
     library_key: String,
-    /// Whether `root` passed the guard when the session began. The root
-    /// never changes, so the guard's file checks are not run again.
+    /// Whether `root` is a marked disposable copy: the result of
+    /// `application::guard(&root)` when the session was created. The result is
+    /// stored because `root` never changes, so the guard's file checks do not
+    /// have to run again.
     disposable: bool,
     pub library_cover: Option<PathBuf>,
-    /// The grid draws its thumbnails without colour.
+    /// When true, the grid draws its thumbnails in grayscale.
     pub grayscale: bool,
-    /// A folder of the session's own, in a copy's temporary folder or the
-    /// system's, that the library cover's crops are written to.
+    /// A temporary folder that belongs to this session. The cropped image of
+    /// the library's cover is written to it. For a disposable copy the folder
+    /// is created in the folder that holds the copy: a folder named
+    /// `picto-gpui-…` in a temporary folder, made for that copy alone. For a
+    /// library the user keeps, or if that fails, it is created in the system's
+    /// temporary folder. `None` when no folder could be created.
     scratch: Option<tempfile::TempDir>,
-    /// What the open place of a screen is called, for the scope title.
+    /// The name of the place open inside a screen, which the toolbar shows in
+    /// the scope title. The screen sets it with `set_place_label`.
     pub place_label: Option<SharedString>,
-    /// Folders items were added to, newest first, for the folder picker's
-    /// Recent view and the grid menu's "Add to “…”" (`useRecentFolders`).
-    /// Production keeps them per library in the renderer's localStorage;
-    /// here they are kept in the app's state under the library the copy was
-    /// made from.
+    /// The folders that items were most recently added to, newest first, at
+    /// most 30. The folder picker's Recent view and the grid menu's "Add to
+    /// “…”" row use them (`useRecentFolders`). Production stores them per
+    /// library in the renderer's localStorage. This app stores them in its
+    /// state (`crate::state`) under `library_key`.
     pub recent_folders: Vec<picto_library::FolderId>,
-    /// Tags put on items, newest first, for the Add Tags dialog's Recent
-    /// view (`picto-recent-tags`), kept in the app's state.
+    /// The tags most recently added to items, newest first, at most 30. The
+    /// Add Tags dialog's Recent view shows them (`picto-recent-tags`). They
+    /// are stored in the app's state.
     pub recent_tags: Vec<String>,
-    /// The recents changed since they were last kept. They are kept on the
-    /// next poll, which has the app to write to.
+    /// True when `recent_folders` or `recent_tags` changed and has not been
+    /// written to the app's state yet. `keep_recents` writes them the next
+    /// time `receive` runs. The methods that record a use cannot write them,
+    /// because they do not have the `App` context that writing needs.
     recents_changed: bool,
-    /// A zoom change waiting to be saved to its destination's view: the
-    /// destination's key, the tile size, and the timer.
+    /// A zoom change that has not been saved to its destination's view
+    /// preferences yet: the destination's `view_pref` key, the tile size, and
+    /// the timer that saves it after 500 ms (`VIEW_SAVE_DELAY`).
     tile_save: Option<(String, f32, Task<()>)>,
-    /// A refresh in place is on its way: what the grid shows stays until it
-    /// arrives, an empty state included.
+    /// True while a refresh in place is waiting for its answer. The grid keeps
+    /// showing what it showed until the answer arrives, even if that is the
+    /// empty state, and does not show the loading state.
     pub refreshing: bool,
-    /// The grid has the pointer for a gesture (a press, a rubber band, a
-    /// drag) that a refresh would cut short. The grid says so as it paints.
+    /// True while the pointer is pressed on the grid, drawing a rubber band,
+    /// or dragging items. A background refresh waits until this is false,
+    /// because replacing the items would interrupt the gesture. The grid
+    /// writes it each time it draws.
     pub pointer_busy: bool,
-    /// Background changes asked for the shown results to be read again
-    /// (`requestReconcile`), and the timer that will.
+    /// `refresh_wanted` is true when a change made in the background (an
+    /// import, a subscription run) means the shown results must be read again
+    /// (`requestReconcile`) and that read has not started yet. `refresh_timer`
+    /// is the timer that starts the read.
     refresh_wanted: bool,
     refresh_timer: Option<Task<()>>,
-    /// When the last refresh in place started and finished, for spacing the
-    /// next one.
+    /// When the last background refresh started, how long it took, and when it
+    /// finished. `refresh_started` is set only while one is running.
+    /// `refresh_delay` uses the other two to decide how long the next
+    /// background refresh waits.
     refresh_started: Option<Instant>,
     refresh_took: Duration,
     refresh_finished: Option<Instant>,
@@ -428,18 +597,26 @@ impl Session {
             use futures::{StreamExt as _, future::Either};
             let mut woken = Some(woken);
             loop {
-                // A reply is taken in as soon as it is sent; the application's
-                // events at the next look.
+                // Each turn of the loop waits for whichever comes first: the
+                // 30 ms timer (`RECEIVE_INTERVAL`) or a wake from the
+                // library's thread, which sends one with every reply. So a
+                // reply is handled as soon as it is sent, and an event from
+                // the application layer is handled at most 30 ms after it
+                // arrives.
                 let tick = std::pin::pin!(cx.background_executor().timer(RECEIVE_INTERVAL));
                 match &mut woken {
                     Some(wake) => {
                         let first = futures::future::select(tick, wake.next());
-                        // The library's thread has stopped: looks alone.
+                        // The wake channel has closed, which means the
+                        // library's thread has stopped. From now on the loop
+                        // only waits for the timer.
                         if let Either::Right((None, _)) = first.await {
                             woken = None;
                         }
-                        // One look takes every reply sent so far, so the
-                        // wakes sent with them are spent too.
+                        // The call to `receive` below handles every reply sent
+                        // so far. Remove the wakes already queued for those
+                        // replies, so that they do not each cause another call
+                        // that finds nothing.
                         while let Some(Ok(())) = woken.as_mut().map(|wake| wake.try_recv()) {}
                     }
                     None => tick.await,
@@ -453,8 +630,13 @@ impl Session {
             }
         })
         .detach();
-        // In a copy's own temporary folder, beside it, else the system's.
-        // Never beside a library the user keeps: its folder is the user's.
+        // Create the scratch folder. For a disposable copy it goes in the
+        // folder that holds the copy: a folder named `picto-gpui-…` in a
+        // temporary folder, made for that copy alone. For a library the user
+        // keeps it goes in the system's temporary folder, because the folder
+        // that holds such a library belongs to the user and this app must not
+        // write to it. The system's temporary folder is also used if the first
+        // attempt fails.
         let scratch = root
             .parent()
             .filter(|_| disposable)
@@ -465,8 +647,8 @@ impl Session {
                     .ok()
             })
             .or_else(|| tempfile::tempdir().ok());
-        // The library's cover is cropped off the thread that draws, and
-        // shown once it is ready.
+        // Crop the library's cover on a background thread, so that the main
+        // thread is not blocked, and show it when it is ready.
         if let Some(folder) = scratch.as_ref().map(|scratch| scratch.path().to_path_buf()) {
             let library = root.clone();
             let prepared = cx
@@ -483,8 +665,10 @@ impl Session {
             })
             .detach();
         }
-        // A zoom change still waiting to be saved is saved as the app quits,
-        // before the application closes the library.
+        // When the app quits, save a zoom change that is still waiting for its
+        // 500 ms delay. The save has to reach the library's thread before the
+        // quit handler in `main.rs` closes the library
+        // (`libraries::host::close_for_quit`).
         cx.on_app_quit(|this: &mut Self, _| {
             this.save_view_now();
             async {}
@@ -541,6 +725,7 @@ impl Session {
             prefs: ViewPrefs::default(),
             prefs_scope: None,
             tile: 200.,
+            grid_width: 0.,
             selection: Selection::default(),
             folder_selection: Vec::new(),
             reselect: None,
@@ -578,37 +763,44 @@ impl Session {
         }
     }
 
-    /// Stops using the library before it is closed: its thread ends once
-    /// the requests in hand are answered, and the application refuses
-    /// commands, so nothing of this session reaches the library opened
-    /// next (`libraries::host`).
+    /// Disconnects this session from the library before the library is closed
+    /// (`libraries::host` calls this). The sender to the library's thread is
+    /// replaced by one that leads nowhere, so later requests are lost, and the
+    /// thread ends once it has answered the requests already sent. The
+    /// application layer is told to refuse commands. After this, nothing this
+    /// session does can reach the library that is opened next.
     pub fn shut(&mut self) {
         let (sender, _) = std::sync::mpsc::channel();
         self.sender = sender;
         self.application.retire();
     }
 
-    /// Whether the open library is a marked disposable copy, which the
-    /// library switcher says so it is never taken for the library it was
-    /// copied from. Nothing is gated on it: see [`Session::writable_root`].
+    /// Whether the open library is a marked disposable copy. The sidebar's
+    /// library switcher shows this, so that the user does not mistake the copy
+    /// for the library it was copied from. No feature is enabled or disabled
+    /// by it. What may be written is decided by [`Session::writable_root`].
     pub fn disposable(&self) -> bool {
         self.disposable
     }
 
-    /// Where the edits that write files themselves may write, and whether
-    /// Delete Permanently may run: this session's library when it is the
-    /// one open, however it was admitted (`libraries::writable`).
+    /// The folder that edits which write files directly (regenerated
+    /// thumbnails, Set as Thumbnail, the library's cover) may write to.
+    /// Returns this session's library folder when it is the library open in
+    /// the main window, whether it is a disposable copy or a library the user
+    /// keeps, and `None` otherwise. Delete Permanently runs only when this
+    /// returns a folder. See `libraries::writable`.
     pub fn writable_root(&self, cx: &App) -> Option<std::path::PathBuf> {
         crate::libraries::writable(&self.root, cx)
     }
 
-    /// The open library's canonical root.
+    /// The canonical path of the open library's folder.
     pub fn root(&self) -> &std::path::Path {
         &self.root
     }
 
-    /// The session's scratch folder, for the library cover's crops: its own
-    /// temporary folder, or, when none could be made, the system's.
+    /// The folder that the cropped image of the library's cover is written to:
+    /// this session's own temporary folder, or the system's temporary folder
+    /// if the session's could not be created.
     pub fn scratch(&self) -> std::path::PathBuf {
         match &self.scratch {
             Some(scratch) => scratch.path().to_path_buf(),
@@ -616,12 +808,13 @@ impl Session {
         }
     }
 
-    /// The open library's folder, the one that holds its blobs.
+    /// The folder of the open library: the parent of its `blobs` folder.
     pub fn library_root(&self) -> Option<&std::path::Path> {
         self.blobs.parent()
     }
 
-    /// What the search field holds, which the results are filtered by.
+    /// The text in the search field. The results are filtered by it when it
+    /// has three characters or more.
     pub fn search_text(&self) -> &str {
         &self.search_text
     }
@@ -632,12 +825,16 @@ impl Session {
         Some(name.trim_end_matches(".library").to_owned())
     }
 
-    /// The library's blob store.
+    /// The path of the library's `blobs` folder, which holds the original
+    /// files and the thumbnails.
     pub fn blobs(&self) -> &std::path::Path {
         &self.blobs
     }
 
-    /// The place open inside the current screen, if any.
+    /// The id of the place open inside the current screen, for example the
+    /// subscription that the Subscriptions screen has open. `None` when the
+    /// screen shows its top level, or when the current history entry is for
+    /// another destination.
     pub fn place(&self) -> Option<i64> {
         self.history
             .get(self.history_index)
@@ -645,8 +842,9 @@ impl Session {
             .and_then(|visit| visit.place)
     }
 
-    /// Opens a place inside the current screen, or the screen's own top
-    /// with `None`, as a step of Back and Forward.
+    /// Opens a place inside the current screen, or the screen's top level when
+    /// `place` is `None`, and adds a Back and Forward history entry for it.
+    /// Does nothing when that place is already open.
     pub fn open_place(&mut self, place: Option<i64>, cx: &mut Context<Self>) {
         if self.place() == place {
             return;
@@ -661,7 +859,8 @@ impl Session {
         cx.emit(Change::Navigation);
     }
 
-    /// Names the open place in the scope title, or clears the name.
+    /// Sets the name of the open place, which the toolbar shows in the scope
+    /// title. `None` removes the name.
     pub fn set_place_label(&mut self, label: Option<SharedString>, cx: &mut Context<Self>) {
         if self.place_label != label {
             self.place_label = label;
@@ -669,8 +868,9 @@ impl Session {
         }
     }
 
-    /// Where the library keeps an original: beside its thumbnail's folder,
-    /// under its content hash and its type's extension.
+    /// The path of the original file with content hash `hash`:
+    /// `blobs/f/<ab>/<cd>/<hash>.<extension>`. The extension is the one the
+    /// blob store uses for the MIME type `mime`.
     pub fn original(&self, hash: &str, mime: &str) -> PathBuf {
         blob_in(
             &self.blobs,
@@ -680,16 +880,19 @@ impl Session {
         )
     }
 
+    /// The path of the thumbnail of the file with content hash `hash` in the
+    /// open library.
     pub fn thumbnail(&self, hash: &str) -> PathBuf {
         thumbnail_in(&self.blobs, hash)
     }
 
+    /// The item that the inspector and the viewer show, if there is one.
     pub fn selected_item(&self) -> Option<&RootSummary> {
         self.focus.as_ref().map(|focused| &focused.item)
     }
 
-    /// Where the item shown in the inspector and viewer is in the
-    /// destination's order.
+    /// The ordinal of the item that the inspector and the viewer show: its
+    /// position in the destination's order.
     pub fn focus_ordinal(&self) -> Option<usize> {
         self.focus.as_ref().map(|focused| focused.ordinal)
     }
@@ -706,7 +909,8 @@ impl Session {
         })
     }
 
-    /// Whether the item at `ordinal`, held in the window, is selected.
+    /// Whether the item at `ordinal` is selected. Returns false for an ordinal
+    /// the window does not hold.
     pub fn is_selected(&self, ordinal: usize) -> bool {
         self.item_at(ordinal)
             .is_some_and(|item| self.selection.contains(item.root_id, ordinal))
@@ -725,9 +929,12 @@ impl Session {
             .collect()
     }
 
-    /// The selected items by id, in the grid's order: every item chosen one
-    /// by one, loaded or not; of a query-wide selection, the ones loaded.
-    /// An edit of the selection addresses [`Session::selection_target`].
+    /// The ids of the selected items, in the grid's order. When the items were
+    /// chosen one by one, this is all of them, including items the window no
+    /// longer holds. When the selection is query-wide (Select All or a range),
+    /// this is only the selected items the window holds, so it can be
+    /// incomplete. An edit does not use this list. It uses
+    /// [`Session::selection_target`], which covers the whole selection.
     pub fn selected_ids(&self) -> Vec<RootId> {
         if self.selection.query_wide() {
             self.selected_loaded()
@@ -744,14 +951,18 @@ impl Session {
         self.start + self.items.len() < self.total as usize
     }
 
-    /// A window of the results is on its way.
+    /// Whether a request for another window of results has not been answered
+    /// yet.
     pub fn window_loading(&self) -> bool {
         self.window_active.is_some() || self.window_queued.is_some()
     }
 
-    /// The details of the selected item, once they have arrived. `details`
-    /// itself keeps the previous item's until then, so the inspector never
-    /// shows an empty frame between two items.
+    /// The details of the item the inspector and the viewer show, or `None`
+    /// while they have not arrived. The `details` field still holds the
+    /// previous item's details until the new ones arrive, so that the
+    /// inspector can keep showing them and is not empty for a moment between
+    /// two items. This method returns the details only when they belong to the
+    /// current item.
     pub fn selected_details(&self) -> Option<&RootDetails> {
         let id = self.selected_item()?.root_id;
         self.details
@@ -759,14 +970,17 @@ impl Session {
             .filter(|details| details.root.root_id == id)
     }
 
-    /// The screen showing instead of the grid, if the destination is one.
+    /// The screen that is shown in place of the grid, when the displayed
+    /// destination is a screen (Tags, Subscriptions or Duplicates) and not a
+    /// grid.
     pub fn screen(&self) -> Option<backend::Screen> {
         self.nav.get(self.displayed)?.screen
     }
 
-    /// Runs work on the library's thread and hands back its answer. This is
-    /// how a screen reads and edits what only it needs; the library is never
-    /// touched from the thread that draws.
+    /// Runs `work` on the library's thread and returns a receiver for its
+    /// result. Screens use this for the reads and edits that only they need.
+    /// The library is never read or written on the main thread, which draws
+    /// the interface.
     pub fn run<T: Send + 'static>(
         &self,
         work: impl FnOnce(&picto_library::Library) -> T + Send + 'static,
@@ -779,9 +993,9 @@ impl Session {
     }
 
     /// Sends a command to the application layer, as the Electron renderer's
-    /// `invoke(command, args)` does, and hands back its JSON answer. The
-    /// command runs on the application's runtime, never on the thread that
-    /// draws. The command names and their arguments are those of
+    /// `invoke(command, args)` does, and returns a receiver for its JSON
+    /// answer. The command runs on the application's runtime, never on the
+    /// main thread. The command names and their arguments are those of
     /// `core/src/ipc.rs`.
     pub fn dispatch(
         &self,
@@ -791,9 +1005,11 @@ impl Session {
         self.application.dispatch(command, args)
     }
 
-    /// `media.resolve_target_paths`: the content hash and path of every
-    /// file `target` holds, collection members included, in its order,
-    /// resolved by the library in one request however large the selection.
+    /// Asks the application layer (`media.resolve_target_paths`) for the
+    /// content hash and the path of every file in `target`, in the target's
+    /// order. A collection contributes each of its members. The library
+    /// resolves the whole target in one request, whatever the number of
+    /// selected items.
     pub fn resolve_files(
         &self,
         target: &picto_library::selection::SelectionTarget,
@@ -822,7 +1038,8 @@ impl Session {
         }
     }
 
-    /// [`Session::dispatch`]'s answer, as a future of its own.
+    /// The same as [`Session::dispatch`], but returns a future that resolves
+    /// to the answer instead of a receiver.
     pub fn call<C: Into<String>>(
         &self,
         command: C,
@@ -840,19 +1057,22 @@ mod tests {
     fn a_read_asked_for_while_one_runs_runs_once_more() {
         let mut reading = Coalesced::default();
         assert!(reading.begin());
-        // Two more asks while it runs: one more read, not two.
+        // Two more requests arrive while the read runs. Together they cause
+        // one more read, not two.
         assert!(!reading.begin());
         assert!(!reading.begin());
         assert!(reading.end());
         assert!(reading.begin());
         assert!(!reading.end());
-        // Nothing under way: the next ask starts at once.
+        // No read is running, so the next request starts one at once.
         assert!(reading.begin());
     }
     use std::path::{Path, PathBuf};
 
-    /// The blob layout core keeps; a hash that is not hexadecimal names no
-    /// file, so it can neither leave the folder nor split a character.
+    /// A thumbnail's path follows the blob store's layout. A hash that is too
+    /// short or is not hexadecimal gives an empty path, so it cannot lead
+    /// outside the `blobs` folder or cut a character of several bytes in the
+    /// middle.
     #[test]
     fn blobs_are_found_under_their_hash_and_only_a_hash() {
         let blobs = Path::new("lib/blobs");

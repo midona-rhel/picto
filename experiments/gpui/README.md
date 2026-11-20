@@ -332,16 +332,62 @@ without keys has an action of its own under the same rule. Each action is
 handled only while its rule holds, so AppKit's row enablement and the key
 follow one rule.
 
-**Grid** (`grid/`). `layout.rs` ports `layoutMath.ts`; `window.rs` is the
-windowed model of `gridWindow.ts` (at most 1,500 items held, the scroll
-height standing for every item); `selection.rs` keeps the selection by item
-(chosen items, Select All less exceptions, shift ranges as spans);
-`thumbnails.rs` loads and budgets thumbnails; `rendered.rs` draws the
-thumbnails the core cannot make; `menu.rs` holds the context menus' rows as
-pure functions; `drag.rs` drags items within the app and out of it;
-`pointer.rs` is the pointer over tiles the collection editor shares; the
-frame reads the session and lays out in `frame.rs` and draws in `body.rs`. Rule:
-every decoded picture leaves GPUI's sprite atlas through
+**Grid** (`grid/`). The grid shows the items of the open destination as
+tiles. These files hold its parts:
+
+- `layout.rs` computes each tile's position and size. It is a port of
+  `layoutMath.ts`, except for how the zoom becomes columns (below).
+- `window.rs` is the port of `gridWindow.ts`. The grid holds at most 1,500
+  items of the destination at a time, and the scrollable height is an
+  estimate for all of the destination's items.
+- `selection.rs` stores the selection as items: chosen items, Select All
+  with exceptions, and Shift ranges as spans of the order.
+- `thumbnails.rs` loads thumbnails and limits how many decoded thumbnails
+  are kept in memory. `rendered.rs` draws the thumbnails the core cannot
+  make.
+- `menu.rs` holds the rows of the context menus as pure functions.
+- `drag.rs` drags items within the app and out of it.
+- `pointer.rs` holds the pointer handling that the grid shares with the
+  collection editor.
+- `frame.rs` reads the session and computes what a frame draws, and
+  `body.rs` builds the elements.
+- `zoom_animation.rs` is the animation played when the zoom changes.
+
+The zoom. Each destination saves a tile size in pixels (`target_size`), and
+the saved value is used as it is. In the grid and waterfall layouts,
+`layout::columns` turns the tile size into a number of columns for the
+grid's current width: at least one column, and at most the number of columns
+that 150 px tiles give. One zoom step adds or removes exactly one column. A
+zoom step is a press of the toolbar's − or + button, a move of the toolbar's
+zoom knob to the next position, a press of a zoom key (`+`, `=` or `-`), or,
+when Settings > Controls > Mouse wheel is "Adjust thumbnail size", one notch
+of a mouse wheel or 60 px of trackpad scrolling. After a step, the size that
+is saved is the size at which the new number of columns exactly fills the
+grid's width (`layout::size_for_columns`). The same window width therefore
+opens with the same number of columns after a restart, and a wider window
+opens with more columns. The justified layout has a target row height and no
+columns. There the zoom is the row height, from 150 to 900 px. Dragging the
+knob sets any height in that range, and one step multiplies or divides the
+height by 1.1. The arrow keys and the page keys use the same number of
+columns and the same row height as the layout (`layout::keyboard_step`).
+
+The zoom animation. When the zoom changes and the items, the width, the
+spacing, the layout mode and the text rows stay the same, every tile that is
+in the viewport before or after the change is drawn moving in a straight
+line from its old position and size to its new position and size. This takes
+150 ms (`motion::ZOOM_GLIDE`). The subfolder tiles above the items move in
+the same way. The scroll position is set so that one tile stays at the same
+height on screen: the tile under the pointer when the pointer is over the
+grid, and otherwise the tile nearest the centre of the viewport. A zoom step
+made during the animation starts a new animation from the positions the
+tiles have at that moment. A change of the grid's width, spacing, layout
+mode or results is not animated: the new layout is drawn in the next frame.
+The check box Settings > Controls > Grid Defaults > "Animate zoom in the
+grid" turns the animation off. It is on by default. When it is off, a zoom
+step draws the new layout in the next frame, and the same tile still stays
+at the same height on screen.
+
+Rule: every decoded picture leaves GPUI's sprite atlas through
 `crate::atlas::release`.
 
 **Viewer** (`viewer/`). One media surface for images, animation, Flash
@@ -637,6 +683,7 @@ reading production's code, seen in this app).
 | Shell: titlebar, rails, themes, Back and Forward | pictures; values |
 | Sidebar: rows, folders and smart folders, drag reorder and nesting, every menu row, smart-folder editor | pictures; values |
 | Grid: three layouts, windowed results, selection, keyboard, hover preview, subfolder tiles, drag out, drop import | pictures; values |
+| Grid zoom: one column per step, and the 150 ms animation of the tiles | values; pictures off-screen and of a real window on macOS, taken during the animation too |
 | Filter bar and view menu | pictures; read |
 | Inspector: destination, one item, several items, pickers and dialogs | pictures |
 | Item menus and application menu | pictures; values (production's menu cases); off-screen in CI |
@@ -717,6 +764,35 @@ reading production's code, seen in this app).
   it is shown (a change to the vendored GPUI, `vendor/README.md`).
 - A picture's original is read once it has been on screen for 200 ms, in
   the viewers and the grid alike (production: 100 ms and 250 ms).
+- The grid's zoom works differently from production's.
+  - Production rounds the saved tile size to a multiple of 50 px before it
+    counts columns. Because of that, some steps of its zoom control do not
+    change the layout, and other steps skip a number of columns: in a grid
+    2,500 px wide with wide spacing, 150 px gives 15 columns and 200 px
+    gives 12. This app uses the saved size without rounding. One zoom step
+    adds or removes exactly one column, from one column up to the number
+    that 150 px tiles give, and the toolbar's zoom control has one knob
+    position for each number of columns. A destination whose zoom was saved
+    by production can open with one column more or fewer than in
+    production.
+  - Production draws the new layout in one frame and keeps the topmost tile
+    in place. This app moves the tiles from their old positions and sizes
+    to the new ones over 150 ms, and keeps the tile under the pointer, or
+    else the tile nearest the centre of the viewport, at the same height on
+    screen. The check box "Animate zoom in the grid" in Settings > Controls
+    turns the movement off. Production has no such setting. The setting is
+    saved in the library's application settings under the key
+    `gridZoomAnimation`.
+  - In the justified layout the row height can be any value from 150 to
+    900 px. Production rounds it to a multiple of 50 px.
+  - The "Thumbnail size" slider in Settings > Controls goes from 150 to
+    600 px in steps of 10 px. Production's goes from 100 to 600 px in steps
+    of 50 px. It sets a size and not a number of columns, because the
+    Settings window has no grid whose width columns could be counted in.
+  - When the mouse wheel is set to zoom, one notch of a mouse wheel is one
+    zoom step, and a trackpad makes one zoom step for every 60 px it
+    scrolls. In production every wheel event changes the tile size by
+    25 px.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge

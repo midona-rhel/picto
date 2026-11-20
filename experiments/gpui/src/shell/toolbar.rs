@@ -1,7 +1,13 @@
-//! The titlebar's content (`.titlebarContent` in `AppShell.tsx`): the grid
-//! toolbar (`GridToolbar.tsx`) with Back, Forward and the scope title, or the
-//! viewer toolbar while an item is open.
+//! This file draws the content of the window's titlebar (`.titlebarContent`
+//! in production's `AppShell.tsx`).
+//!
+//! While the grid or a screen is shown, the content is the grid toolbar
+//! (`GridToolbar.tsx`): the Back and Forward buttons, the scope title, and
+//! then either the grid's controls (zoom, view options, filter, search) or
+//! the screen's own controls. While an item is open in the viewer, the
+//! content is the viewer toolbar instead.
 use crate::backend::Screen;
+use crate::grid::layout;
 use crate::i18n::t;
 use crate::session::{Change, Session, Transition};
 use crate::ui::{
@@ -16,8 +22,9 @@ use crate::{theme, ui::zoom::Zoom};
 use gpui::*;
 use std::{cell::Cell, rc::Rc};
 
-/// The "View options" button was pressed: the view menu opens at this
-/// point, the button's left edge 4px below it.
+/// The toolbar emits this event when the "View options" button is clicked.
+/// The shell opens the view menu at the point the event carries, which is
+/// at the button's left edge, 4 px below the button's bottom edge.
 pub struct ViewMenuRequested(pub Point<Pixels>);
 
 impl EventEmitter<ViewMenuRequested> for Toolbar {}
@@ -27,30 +34,48 @@ pub struct Toolbar {
     search: Entity<TextInput>,
     zoom: Entity<Zoom>,
     viewer: Entity<ViewerToolbar>,
-    /// Set when the viewer closed by going to another destination: the
-    /// titlebar's content then fades with the grid (`data-viewer-exit-transition`),
-    /// the viewer toolbar out and the destination's toolbar in.
+    /// True from the moment the viewer closes because the session went to
+    /// another destination, until that destination has finished fading in.
+    /// It is set when the viewer closes while the session's transition is
+    /// running, and cleared when the transition is idle again. While it is
+    /// true, the whole titlebar content is drawn at the transition's
+    /// opacity, as the grid is: the viewer toolbar fades out, then the
+    /// destination's toolbar fades in. Production marks the same state
+    /// with `data-viewer-exit-transition`.
     viewer_exit: bool,
-    /// The controls a screen puts in the titlebar in place of the grid's.
+    /// For each screen that has its own titlebar controls, the view that
+    /// draws them. While that screen is shown, the titlebar shows this view
+    /// in place of the grid's zoom, view options, filter and search
+    /// controls.
     screen_controls: Vec<(Screen, AnyView)>,
-    /// What a screen shows after its title at its top (a count).
+    /// For each screen that shows a note after its name in the scope title,
+    /// the view that draws the note. The Subscriptions screen's note is the
+    /// number of subscriptions.
     screen_notes: Vec<(Screen, AnyView)>,
-    /// The toolbar's width when last painted, which decides how much of a
-    /// screen place's path the title has room for.
+    /// The toolbar's width in pixels the last time it was painted. The
+    /// scope title ends at the toolbar's middle, so this width decides
+    /// whether the path to a place open inside a screen fits in the title
+    /// or has to be shortened.
     width: Rc<Cell<f32>>,
-    /// Where the "View options" button was painted.
+    /// The bounds of the "View options" button the last time it was
+    /// painted. The point the view menu opens at is taken from them.
     view_button: Rc<Cell<Bounds<Pixels>>>,
-    /// The width the grid's controls (zoom, view options, filter, search)
-    /// were last painted at, which decides which of them show.
+    /// The width of the row that holds the grid's controls (zoom, view
+    /// options, filter, search) the last time it was painted. The zoom
+    /// control and the search field are hidden when this row is too narrow
+    /// for them.
     controls_width: Rc<Cell<Pixels>>,
-    /// The view menu while it is open or fading, which keeps the button
-    /// lit (`active={viewMenu.state != null}`).
+    /// The view menu, and the subscription that observes it, from the time
+    /// the menu opens until it has finished fading out. While this is set,
+    /// the "View options" button is drawn in its toggled state, as
+    /// production's `active={viewMenu.state != null}` does.
     view_menu: Option<(Entity<Menu>, Subscription)>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Toolbar {
-    /// The search field, which `nav.search` gives the keyboard to.
+    /// Returns the focus handle of the grid's search field. The `nav.search`
+    /// shortcut uses it to put the keyboard focus in the field.
     pub fn search_focus(&self, cx: &App) -> FocusHandle {
         self.search.focus_handle(cx)
     }
@@ -65,15 +90,24 @@ impl Toolbar {
                     .update(cx, |session, cx| session.set_search(text, cx));
             }),
             cx.subscribe(&zoom, |this, _, event: &zoom::Changed, cx| {
-                this.session
-                    .update(cx, |session, cx| session.set_tile(event.0, cx));
+                this.session.update(cx, |session, cx| match *event {
+                    zoom::Changed::Columns(columns) => session.zoom_to_columns(columns, cx),
+                    zoom::Changed::Height(height) => session.zoom_to_height(height, cx),
+                    zoom::Changed::Step { larger } => session.zoom_step(larger, cx),
+                    // Only the viewer toolbar's zoom control emits a
+                    // percentage. The grid's control never does.
+                    zoom::Changed::Percent(_) => {}
+                });
             }),
             cx.subscribe(
                 &session,
                 |this, session, change: &Change, cx| match change {
                     Change::Navigation => {
-                        // A destination opens without a search; the field
-                        // empties with it.
+                        // The session clears its search text every time a
+                        // destination opens. The search field holds its own
+                        // copy of the text, so the field is cleared here
+                        // when the session's text is empty and the field's
+                        // is not.
                         if session.read(cx).search_text().is_empty()
                             && !this.search.read(cx).is_empty()
                         {
@@ -88,11 +122,17 @@ impl Toolbar {
                         cx.notify();
                     }
                     Change::Results => {
-                        // A destination opens at its saved zoom.
-                        let tile = session.read(cx).tile;
-                        this.zoom.update(cx, |zoom, cx| zoom.show(tile, cx));
+                        // The session emits `Change::Results` when the
+                        // items, the view preferences or the zoom change.
+                        // That includes a destination opening with the zoom
+                        // saved for it, so the zoom control is set to the
+                        // grid's current zoom each time.
+                        this.show_zoom(cx);
                         cx.notify();
                     }
+                    // At another width the same tile size gives another
+                    // number of columns, so the zoom control's knob moves.
+                    Change::GridWidth => this.show_zoom(cx),
                     _ => {}
                 },
             ),
@@ -113,11 +153,32 @@ impl Toolbar {
         }
     }
 
-    /// Keeps the "View options" button lit while this menu is open, until
-    /// it has faded out.
+    /// Sets the toolbar's zoom control to the grid's current zoom: the
+    /// number of columns in the grid and waterfall layouts, or the target
+    /// row height in the justified layout.
+    fn show_zoom(&mut self, cx: &mut Context<Self>) {
+        let value = match self.session.read(cx).zoom() {
+            layout::Zoom::Columns { count, most } => zoom::Value::Columns { count, most },
+            layout::Zoom::Height(height) => zoom::Value::Height {
+                height,
+                least: layout::SMALLEST_TILE,
+                most: layout::TALLEST_ROW,
+            },
+        };
+        self.zoom.update(cx, |zoom, cx| zoom.show(value, cx));
+    }
+
+    /// The shell calls this when it opens the view menu. The toolbar keeps
+    /// `menu` so that the "View options" button is drawn in its toggled
+    /// state until the menu has been dismissed and has finished fading out.
     pub fn watch_view_menu(&mut self, menu: Entity<Menu>, cx: &mut Context<Self>) {
         let observed = cx.observe(&menu, |_, menu, cx| {
-            // A dismissed menu fades for 80 ms; look again once it is gone.
+            // A dismissed menu takes 80 ms (`motion::MENU_OUT`) to fade
+            // out, and `render` drops the menu once `finished()` is true.
+            // The menu notifies its observers when it is dismissed, which
+            // is when the fade starts, not when it ends. So each time the
+            // menu notifies, the toolbar is drawn again 80 ms later to make
+            // that check.
             if !menu.read(cx).finished() {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor()
@@ -132,15 +193,20 @@ impl Toolbar {
         cx.notify();
     }
 
-    /// Shows `controls` after the history buttons while `screen` is the
-    /// destination shown.
+    /// Registers `controls` as the titlebar controls of `screen`. While
+    /// `screen` is the destination shown, the toolbar draws them to the
+    /// right of the Back and Forward buttons, in place of the grid's
+    /// controls. A second call for the same screen replaces the first.
     pub fn set_screen_controls(&mut self, screen: Screen, controls: AnyView) {
         self.screen_controls.retain(|(owner, _)| *owner != screen);
         self.screen_controls.push((screen, controls));
     }
 
-    /// Shows `note` after the scope title while `screen` is the
-    /// destination shown; the note itself says nothing on a place of it.
+    /// Registers `note` as the view drawn after the scope title while
+    /// `screen` is the destination shown. A second call for the same screen
+    /// replaces the first. The toolbar also draws the note while a place is
+    /// open inside the screen, so the note's own view has to draw nothing
+    /// then.
     pub fn set_screen_note(&mut self, screen: Screen, note: AnyView) {
         self.screen_notes.retain(|(owner, _)| *owner != screen);
         self.screen_notes.push((screen, note));
@@ -148,11 +214,24 @@ impl Toolbar {
 }
 
 impl Toolbar {
-    /// The scope title (`.scopeTitle`): the destination's ancestors as links,
-    /// then its own name. While a search or a filter narrows the grid, the
-    /// name is a link too, back to the destination unnarrowed, followed by
-    /// "Search results · N". It runs from 72px in to the toolbar's middle and
-    /// fades out over its last 40px rather than ending in an ellipsis.
+    /// Builds the scope title (production's `.scopeTitle`), drawn at
+    /// `opacity`. It is a path: the names of the destination's ancestors,
+    /// each a link to that ancestor and followed by "/", and then the
+    /// destination's own name as plain text.
+    ///
+    /// While a search or a filter is limiting the items in the grid, the
+    /// destination's own name is a link as well. Clicking it clears the
+    /// search and the filters. It is followed by "/" and
+    /// "Search results · N", where N is the number of items found.
+    ///
+    /// The title starts 80 px from the toolbar's left edge (the toolbar's
+    /// 8 px of padding plus 72 px), which is to the right of the Back and
+    /// Forward buttons, and it ends at the toolbar's middle. The last 40 px
+    /// of that space are covered by a gradient from transparent to the
+    /// background colour, so a title too long for the space fades out there
+    /// instead of being cut off with an ellipsis. The one exception is the
+    /// name of a place open inside a screen: the comments in the function
+    /// say how that name is shortened.
     fn title(&self, opacity: f32, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = theme::theme(cx);
         let (mut crumbs, results, place, note) = {
@@ -170,8 +249,11 @@ impl Toolbar {
                 at = session.nav[index].parent;
             }
             crumbs.reverse();
-            // A screen's open place follows the screen, which links back to
-            // the screen's top.
+            // When a place is open inside a screen (one subscription inside
+            // the Subscriptions screen), the place's name is added to the
+            // path after the screen's name. The screen's name is then no
+            // longer last, so it is drawn as a link, and clicking it closes
+            // the place and shows the screen's top.
             if let Some(label) = session.place().and(session.place_label.clone()) {
                 crumbs.push((usize::MAX, label.to_string()));
             }
@@ -183,9 +265,13 @@ impl Toolbar {
             });
             (crumbs, results, session.place().is_some(), note)
         };
-        // A screen's open place keeps its own name whole: when the path does
-        // not fit the title's room, the screen's name before it goes, and
-        // only then is the place's name cut short with an ellipsis.
+        // `room` is the width the title has, in pixels: from 80 px to the
+        // toolbar's middle. When a place is open inside a screen and the
+        // whole path (the names and the "/" separators between them) is
+        // wider than `room`, the title is shortened. The names before the
+        // place's name are removed and the place's name is shown alone, cut
+        // off with an ellipsis if it is still too wide. This shows as much
+        // of the place's name as fits.
         let room = (self.width.get() * 0.5 - (8. + 72.)).max(0.);
         let shortened = place && crumbs.len() > 1 && {
             let width = |text: &str| {
@@ -204,8 +290,9 @@ impl Toolbar {
                 + (crumbs.len() - 1) as f32 * (10. + width("/"));
             path > room
         };
-        // With no room for even a few letters of it, the place's name is
-        // left out rather than shown as an ellipsis alone.
+        // When the title has less than 40 px of room, the place's name is
+        // not shown at all. So little room would show an ellipsis with no
+        // letters before it.
         if shortened && room < 40. {
             crumbs.clear();
         }
@@ -216,8 +303,10 @@ impl Toolbar {
         let mut path = div().flex().items_center().whitespace_nowrap();
         let separator = || div().mx(px(5.)).opacity(0.4).child("/");
         for (position, (index, label)) in crumbs.into_iter().enumerate() {
-            // `translateMessage(label)`: a destination's name in the language
-            // of the moment.
+            // The name is translated into the app's current language here,
+            // each time the title is drawn, as production's
+            // `translateMessage(label)` does. A name that has no
+            // translation, such as a folder's, is shown as it is.
             let label = crate::i18n::t(&label).to_owned();
             if position == last && results.is_none() {
                 path = path.child(if shortened {
@@ -231,7 +320,9 @@ impl Toolbar {
             path = path.child(ui::crumb(("scope-crumb", index), label, true, cx).on_click(
                 cx.listener(move |this, _, _, cx| {
                     if clears {
-                        // `clearSearchResults`: no search, no filters.
+                        // As production's `clearSearchResults` does: empty
+                        // the search field, clear the session's search
+                        // text, and show this destination with no filters.
                         this.search.update(cx, |search, cx| search.clear(cx));
                         this.session.update(cx, |session, cx| {
                             session.set_search(String::new(), cx);
@@ -289,7 +380,9 @@ impl Toolbar {
     }
 }
 
-/// `Search results · N`, the count grouped by thousands.
+/// Returns the text "Search results · N" for the scope title. N is `total`,
+/// the number of items found, written with a comma between each group of
+/// three digits (2,673).
 fn search_results_label(total: u64) -> String {
     format!(
         "{} · {}",
@@ -309,7 +402,10 @@ impl Render for Toolbar {
         if self.viewer_exit && matches!(transition, Transition::Idle) {
             self.viewer_exit = false;
         }
-        // The content as a whole fades only on the way out of the viewer.
+        // The whole titlebar content is faded only while `viewer_exit` is
+        // true, which is while the viewer is closing into another
+        // destination. It is then drawn at the transition's opacity. At all
+        // other times it is fully opaque.
         let content = if self.viewer_exit {
             if transition.animating() {
                 window.request_animation_frame();
@@ -345,7 +441,10 @@ impl Render for Toolbar {
             self.view_menu = None;
         }
         let view_menu_open = self.view_menu.is_some();
-        // The scope title fades with the grid.
+        // The scope title is drawn at the transition's opacity, so it fades
+        // out and in together with the grid. While the fade is running,
+        // another frame is requested so that the title is drawn again at
+        // the next opacity.
         if animating {
             window.request_animation_frame();
         }
@@ -367,8 +466,9 @@ impl Render for Toolbar {
             .relative()
             .size_full()
             .opacity(content)
-            // 8px either side from the titlebar, and 8 more on the right
-            // from the toolbar itself.
+            // The padding is 8 px on the left and 16 px on the right. In
+            // production the titlebar has 8 px of padding on each side, and
+            // the toolbar adds 8 px more on its right.
             .pl(px(8.))
             .pr(px(16.))
             .flex()
@@ -406,18 +506,25 @@ impl Render for Toolbar {
                 ui::tip(t("Forward")).shortcut("nav.forward", cx),
                 cx,
             ));
-        // A screen has no grid to zoom, filter or search: the Electron
-        // titlebar shows the grid's controls only over the grid, and a
-        // screen's own controls, if it has any, in their place.
+        // A screen (Tags, Subscriptions or Duplicates) has no grid, so the
+        // zoom, view options, filter and search controls do not apply to
+        // it. As in production, the titlebar shows those controls only
+        // while the grid is shown. While a screen is shown, the titlebar
+        // shows the controls the screen registered with
+        // `set_screen_controls` instead, or no controls if it registered
+        // none.
         if let Some(screen) = screen {
             let controls = self
                 .screen_controls
                 .iter()
                 .find(|(owner, _)| *owner == screen)
                 .map(|(_, controls)| controls.clone());
-            // `.titlebarToolbar`: the controls take the rest of the row and
-            // sit at its right end, clear of the scope title. They belong to
-            // the screen, so they fade with it as the title does.
+            // As production's `.titlebarToolbar` does, the screen's controls
+            // are given all of the row to the right of the Back and Forward
+            // buttons and are aligned to its right end, away from the scope
+            // title on the left. They are drawn at the transition's
+            // opacity, so they fade out and in with the screen they belong
+            // to, as the scope title does.
             return toolbar
                 .child(
                     div()
@@ -432,9 +539,15 @@ impl Render for Toolbar {
                 )
                 .into_any_element();
         }
-        // `.toolbar` is a size container: the zoom gives way when it is
-        // 350px wide or less, then the search at 240px
-        // (`@container (max-width: …)`). Its width is the one painted last.
+        // The grid's controls are hidden when there is too little room for
+        // them, as production's `.toolbar` container queries
+        // (`@container (max-width: …)`) do. `width` is the width of the row
+        // that holds the controls, to the right of the Back and Forward
+        // buttons. The zoom control is hidden when that row is 350 px wide
+        // or less, and the search field when it is 240 px wide or less. The
+        // width is the one measured when the row was last painted, because
+        // the width of the frame being built now is not known until it has
+        // been laid out.
         let width = self.controls_width.get();
         let mut controls = div()
             .relative()
@@ -458,10 +571,11 @@ impl Render for Toolbar {
                 .inset_0()
             })
             .child(
-                // The zoom is centred in the space between the history
-                // buttons and the right-hand controls. It has the app
-                // background, with a short fade on its left, so a long
-                // scope title disappears under it.
+                // The zoom control is centred in the space between the Back
+                // and Forward buttons and the "View options" button.
+                // `zoom::section` gives it the app's background colour and a
+                // 20 px gradient on its left side, so a scope title long
+                // enough to reach the zoom control is covered by it.
                 div()
                     .flex_1()
                     .min_w_0()
@@ -498,8 +612,10 @@ impl Render for Toolbar {
             )
             .child(div().w(px(4.)).flex_none())
             .child(
-                // Lit while the filter bar is open or any filter is set,
-                // with the number set.
+                // The "Filter library" button is drawn in its toggled state
+                // while the filter bar is open or at least one filter is
+                // set. Its badge shows the number of filters that are set,
+                // and is hidden when none are.
                 ui::icon_button("filter-library", "toolbar-filter")
                     .tip(ui::tip(t("Filter library")))
                     .toggled(bar_open || filter_count > 0)
