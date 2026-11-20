@@ -1,60 +1,79 @@
-//! The Duplicates screen's drawing: the loading and empty states, the two
-//! files side by side (each its picture, then one line with its name and
-//! its keep action, then its facts as the inspector writes them), and the
-//! titlebar's row: the place in the queue, what was measured, the decisions
-//! on the pair and the zoom.
+//! Draws the Duplicates screen: the loading state, the empty state, the two
+//! files side by side, and the screen's controls in the titlebar.
 //!
-//! Everything is laid out by flex in the frame that draws it, and each
-//! picture is placed from its pane's size in that same frame (`ui::sized`),
-//! so the screen follows the window while it is resized.
+//! Each file is drawn as a column. From top to bottom the column has a row
+//! with the file's name and its Keep left or Keep right button, the
+//! picture, and the list of the file's facts.
+//!
+//! Nothing here measures a size in one frame and uses it in the next frame.
+//! The columns are laid out with flex. A picture needs the size of its pane
+//! to be placed, and the titlebar's row needs its own width to decide what
+//! fits, so both are built with `ui::sized`, which builds an element from
+//! its bounds in the frame that lays it out. The screen is therefore drawn
+//! correctly in every frame while the window is being resized.
 use super::{
-    ActualPixels, CONTEXT, Decision, Drag, DuplicatesScreen, DuplicatesToolbar, FitPair, KeepBoth,
-    KeepLeft, KeepRight, NextPair, NotDuplicate, PreviousPair, ShowDifference, Shown, SmartMerge,
-    compare, extent, lean,
+    ActualPixels, CONTEXT, Counted, Decision, Drag, DuplicatesScreen, DuplicatesToolbar, FitPair,
+    KeepBoth, KeepLeft, KeepRight, NextPair, NotDuplicate, PreviousPair, ShowDifference, Shown,
+    Side, SmartMerge, compare, extent, pane_edge,
 };
+use crate::grid::layout::SELECTION_EXTENT;
 use crate::i18n::{en, t};
 use crate::theme::Text as _;
 use crate::ui::action_button::Look;
-use crate::ui::property_row::Emphasis;
-use crate::{motion, theme, ui};
+use crate::ui::property_row::RowColor;
+use crate::{theme, ui};
 use gpui::*;
 use picto_library::{Rating, RootKind};
 use std::sync::Arc;
 
-/// The room around the two files and between them.
-const MARGIN: f32 = 12.;
-/// A picture's pane is never lower than this, however short the window.
+/// The space in pixels around the two columns and between them. The
+/// inspector uses the same 16 px as its side padding.
+const EDGE: f32 = 16.;
+/// The height in pixels of the row above each picture, which holds the
+/// file's name and its Keep button. It is the height of the Keep button.
+const NAME_ROW: f32 = theme::CONTROL_MD;
+/// The space in pixels between the name row and the picture, and between
+/// the picture and the list of facts.
+const AROUND_PICTURE: f32 = 8.;
+/// The smallest height in pixels that a picture's pane gets when the window
+/// is short.
 const PANE_MIN: f32 = 120.;
-/// A file's name line and facts are no wider than the inspector is, and
-/// stand against the middle of the screen, where the two pictures meet.
+/// The largest width in pixels of a file's list of facts. The left file's
+/// list is placed against the right edge of its column and the right file's
+/// list against the left edge of its column, so the two lists are next to
+/// each other in the middle of the screen.
 const FACTS_WIDTH: f32 = 360.;
-const NAME_LINE: f32 = 36.;
-/// A property row's height, and how many rows a file's facts take at most,
-/// so the pictures keep their place from pair to pair.
+/// The height in pixels of one row of the list of facts (`ui::property_row`).
 const ROW: f32 = 20.;
+/// The number of rows that the list of facts reserves space for. A pair has
+/// 8 rows, or 9 when one of its files is in a collection. Reserving 9 keeps
+/// the pictures the same size for every pair.
 const ROWS: f32 = 9.;
-/// How far the file Smart merge would not keep dims while Smart merge is
-/// under the pointer or has the keyboard.
-const MERGED_AWAY: f32 = 0.35;
-/// Where the scope title starts in the titlebar's row of controls (it is
-/// drawn 80px into the toolbar, the row starting after the toolbar's 8px
-/// and the two history buttons), and the room kept clear after it.
+/// The distance in pixels from the left edge of the titlebar's row of
+/// controls to the left edge of the screen's title. The toolbar draws the
+/// title 80 px from its own left edge. The row of controls starts after the
+/// toolbar's 8 px of padding and its Back and Forward buttons.
 const TITLE_START: f32 = 80. - 8. - 2. * theme::ICON_BUTTON;
+/// The space in pixels that is kept empty between the screen's title and
+/// the first control after it.
 const TITLE_CLEAR: f32 = 16.;
-/// The room between the titlebar's groups: the place, what was measured,
-/// the decisions and the zoom.
+/// The space in pixels between the groups of controls in the titlebar.
 const GROUP_GAP: f32 = 12.;
-/// Between the similarity and what was counted, and the most the two take.
+/// The space in pixels between the similarity and the pixel measurement in
+/// the titlebar's line of text.
 const MEASURED_BETWEEN: f32 = 5.;
+/// The largest width in pixels of the titlebar's line of text.
 const MEASURED_MOST: f32 = 420.;
 
-/// One fact of the two files, as the inspector would write each.
+/// One fact about the two files: its label and its value for the left and
+/// for the right file.
 struct Fact {
     label: &'static str,
     values: [String; 2],
 }
 
-/// A rating as the inspector's menus write it.
+/// Writes a rating as text: "Unrated", or one star for each point of the
+/// rating.
 fn rating_text(rating: Rating) -> String {
     match rating {
         Rating::Unrated => t("Unrated").to_owned(),
@@ -62,18 +81,20 @@ fn rating_text(rating: Rating) -> String {
     }
 }
 
-/// The facts the Electron screen lists of each file, in its order, in the
-/// inspector's words and formats (the dates as days). Both files have the same rows, so a row
-/// of one is beside the same row of the other.
+/// The facts of the two files, in the order in which the Electron screen
+/// lists them: resolution, size, format, rating, number of tags, creation
+/// date, import date, collection and number of occurrences. The labels and
+/// the formats are the inspector's (Dimensions, Type, Date Created, Date
+/// Imported). Both files always have the same rows, so the same fact is at
+/// the same height in both lists.
 fn facts(shown: &Shown) -> Vec<Fact> {
-    let each = |value: &dyn Fn(&super::Side) -> String| shown.sides.each_ref().map(value);
-    // The day alone, as the Electron screen writes it (`toLocaleDateString`):
-    // two files brought in on one day say the same.
+    let each = |value: &dyn Fn(&Side) -> String| shown.sides.each_ref().map(value);
+    // A date in the inspector's format, `YYYY/MM/DD HH:MM`, in local time.
     let date = |at: Option<i64>| {
         use chrono::TimeZone;
         at.filter(|at| *at != 0)
             .and_then(|at| chrono::Local.timestamp_millis_opt(at).single())
-            .map(|at| crate::i18n::format::date(at.date_naive()))
+            .map(|at| at.format(crate::text::date_format::INSPECTOR).to_string())
             .unwrap_or_else(|| t("Unknown").to_owned())
     };
     let mut facts = vec![
@@ -133,9 +154,11 @@ fn facts(shown: &Shown) -> Vec<Fact> {
             }),
         },
     ];
-    // A file inside a collection names it; the row shows for both files
-    // when either is in one.
-    let group = |side: &super::Side| {
+    // The name of the collection that holds the file. The Electron screen
+    // shows this row only for a file that is in a collection. Here the row
+    // is shown for both files when either file is in a collection, and the
+    // other file's value is "None".
+    let group = |side: &Side| {
         side.details
             .as_ref()
             .map(|details| &details.root)
@@ -162,7 +185,8 @@ fn facts(shown: &Shown) -> Vec<Fact> {
 }
 
 impl DuplicatesScreen {
-    /// The queue's first read, with its message after 200 ms.
+    /// The screen while the queue is being read for the first time. It is
+    /// empty for the first 200 ms and then shows a message.
     fn loading_state(&self, cx: &App) -> Div {
         let theme = theme::theme(cx);
         div()
@@ -178,6 +202,8 @@ impl DuplicatesScreen {
             )
     }
 
+    /// The screen when the queue has no pairs, or when it could not be
+    /// read. It has a button that scans the library.
     fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         let resolved = self.initial_total.saturating_sub(self.total);
         let (title, description) = match &self.error {
@@ -212,8 +238,9 @@ impl DuplicatesScreen {
             vec![action.into_any_element()],
             cx,
         )
-        // `.progress`: the 180 × 2 slot of the scan's progress bar, which
-        // keeps its place while empty.
+        // The scan's progress bar is 180 px wide and 2 px high. Its space
+        // is reserved while the bar is not shown, so the button above it
+        // does not move when the bar appears.
         .child(
             div()
                 .w(px(180.))
@@ -225,9 +252,8 @@ impl DuplicatesScreen {
         .into_any_element()
     }
 
-    /// One file: its picture, the line with its name and its keep action,
-    /// and its facts. The line and the facts stand against the middle of
-    /// the screen, as the pictures do.
+    /// The column of one file. `index` is 0 for the left file and 1 for the
+    /// right file.
     fn side(
         &self,
         index: usize,
@@ -242,38 +268,32 @@ impl DuplicatesScreen {
             || side.file.file_hash.clone(),
             |media| media.media_name.clone(),
         );
-        // Production fills the side's English name in: `t("Keep {value0}")`
-        // for the tip, `{t("Keep ")}{side}` on the button.
+        // Production puts the English word "left" or "right" into the
+        // translated text: `t("Keep {value0}")` for the tooltip, and
+        // `t("Keep ")` followed by the word for the button's label.
         let which = if index == 0 { "left" } else { "right" };
-        // Keeps this file and merges the other's item into it. While Smart
-        // merge is previewed, the keep action it would take is the lit one.
-        let previewed = self.merge_previewed();
-        let keep = ui::action_button(
-            ("duplicate-keep", index),
-            if previewed == Some(index) {
-                Look::Primary
-            } else {
-                Look::Ghost
-            },
-        )
-        .icon("check", 14.)
-        .label(format!("{}{which}", t("Keep ")))
-        .height(theme::CONTROL_SM)
-        .padding(10.)
-        .gap(6.)
-        .text_size(theme::TEXT_SM)
-        .tip(ui::tip(crate::tf!("Keep {value0}", which)).shortcut(
-            if index == 0 {
-                "dup.keepLeft"
-            } else {
-                "dup.keepRight"
-            },
-            cx,
-        ))
-        .disabled(self.resolving)
-        .on_click(cx.listener(move |this, _, window, cx| this.keep(index, window, cx)));
-        let name_line = div()
-            .h(px(NAME_LINE))
+        let keep = ui::action_button(("duplicate-keep", index), Look::Standard)
+            .icon("check", 15.)
+            .label(format!("{}{which}", t("Keep ")))
+            .height(NAME_ROW)
+            .padding(10.)
+            .text_size(theme::TEXT_SM)
+            .tip(ui::tip(crate::tf!("Keep {value0}", which)).shortcut(
+                if index == 0 {
+                    "dup.keepLeft"
+                } else {
+                    "dup.keepRight"
+                },
+                cx,
+            ))
+            .disabled(self.resolving)
+            .on_click(cx.listener(move |this, _, window, cx| this.keep(index, window, cx)));
+        // The row above the picture: the file's name on the left and the
+        // Keep button on the right. A name that does not fit is cut off
+        // with an ellipsis, and the tooltip shows the whole name.
+        let name_row = div()
+            .w_full()
+            .h(px(NAME_ROW))
             .flex_none()
             .flex()
             .items_center()
@@ -289,56 +309,44 @@ impl DuplicatesScreen {
                     .child(name.clone()),
                 ("duplicate-name-tip", index),
                 ui::tip(name.clone()),
-                NAME_LINE,
+                NAME_ROW,
                 window,
                 cx,
             ))
             .child(keep);
-        // What the two files say differently stands out; what they say
-        // alike stays quiet.
+        // A row whose value is the same for both files is drawn in the
+        // secondary text colour. A row whose value differs is drawn in the
+        // primary text colour for both files, so the rows that differ are
+        // the brightest text in the list.
         let rows = facts.iter().map(|fact| {
-            ui::property_row(fact.label, fact.values[index].clone()).emphasis(
+            ui::property_row(fact.label, fact.values[index].clone()).color(
                 if fact.values[0] == fact.values[1] {
-                    Emphasis::Quiet
+                    RowColor::Secondary
                 } else {
-                    Emphasis::Strong
+                    RowColor::Primary
                 },
             )
         });
-        // Read as one group, named by its file.
-        let about = div()
+        // Assistive technology reads the list as one group that has the
+        // file's name.
+        let list = div()
             .id(("duplicate-facts", index))
             .role(Role::Group)
-            .aria_label(name.clone())
+            .aria_label(name)
             .w_full()
             .max_w(px(FACTS_WIDTH))
+            .h(px(ROW * ROWS))
             .flex_none()
             .flex()
             .flex_col()
-            .child(name_line)
-            .child(
-                div()
-                    .h(px(ROW * ROWS))
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .children(rows),
-            );
-        // The file Smart merge would merge away dims while Smart merge is
-        // previewed, over 140 ms.
-        let fade = self.survivor.value();
-        let dimmed = if self.preview_side == Some(1 - index) {
-            1. - (1. - MERGED_AWAY) * fade
-        } else {
-            1.
-        };
+            .children(rows);
         let column = div()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
-            .opacity(dimmed)
+            .gap(px(AROUND_PICTURE))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -346,8 +354,9 @@ impl DuplicatesScreen {
                     this.open_file_menu(index, event.position, window, cx);
                 }),
             )
+            .child(name_row)
             .child(self.pane(index, cx))
-            .child(about);
+            .child(list);
         if index == 0 {
             column.items_end()
         } else {
@@ -355,8 +364,9 @@ impl DuplicatesScreen {
         }
     }
 
-    /// A file's menu (`MediaCard`'s): open it in its default application,
-    /// or in a window of its own.
+    /// Opens a file's context menu at `position`. Like the menu of the
+    /// Electron screen's `MediaCard`, it has two rows: one opens the file in
+    /// its default application, and one opens it in a detail window.
     fn open_file_menu(
         &mut self,
         index: usize,
@@ -387,12 +397,15 @@ impl DuplicatesScreen {
                     return;
                 };
                 if key == rows::Action::OpenDefault.key() {
-                    // `openDefaultAppForHash`: where the library keeps the file.
+                    // The file is opened from the path at which the library
+                    // stores it, as production's `openDefaultAppForHash`
+                    // does.
                     if let Some(media) = &side.media {
                         crate::desktop::open_default(std::path::Path::new(&media.file_path), cx);
                     }
                 } else if key == rows::Action::OpenInNewWindow.key() {
-                    // `openDetailWindow({ hash, width, height })`: the file alone.
+                    // The detail window shows this one file, as production's
+                    // `openDetailWindow({ hash, width, height })` does.
                     let Some(details) = &side.details else {
                         return;
                     };
@@ -413,8 +426,9 @@ impl DuplicatesScreen {
             });
     }
 
-    /// A file's pane: all the room its side has above its name. It has no
-    /// frame and no fill of its own; the picture is what shows.
+    /// The pane of one picture. It takes all the height of the column that
+    /// the name row and the list of facts leave. It has no border and no
+    /// background of its own, so nothing is drawn around the picture.
     fn pane(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
         let entity = cx.weak_entity();
         let dragging = self.drag.as_ref().is_some_and(|drag| drag.side == index);
@@ -424,7 +438,6 @@ impl DuplicatesScreen {
             .w_full()
             .flex_1()
             .min_h(px(PANE_MIN))
-            .overflow_hidden()
             .cursor(if dragging {
                 CursorStyle::ClosedHand
             } else {
@@ -444,6 +457,7 @@ impl DuplicatesScreen {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&this.focus, cx);
                     if event.click_count == 2 {
+                        // A double click zooms both pictures to fit.
                         this.drag = None;
                         this.fit(cx);
                     } else {
@@ -463,10 +477,16 @@ impl DuplicatesScreen {
             }))
     }
 
-    /// What a pane of these bounds shows, built in the frame that gives the
-    /// pane its bounds: the picture where the shared zoom puts it (its
-    /// original over its thumbnail once that is decoded), or the difference
-    /// picture while the difference is asked for.
+    /// Builds what a pane shows. `ui::sized` calls this with the pane's
+    /// bounds while the pane is being laid out, so the picture is placed
+    /// for the pane's size in the same frame.
+    ///
+    /// The pane shows the file's thumbnail, with the file's original drawn
+    /// over it as soon as the original is decoded. While the difference is
+    /// shown, the pane shows the difference picture instead. The picture
+    /// that Smart merge would keep gets the grid's selection outline while
+    /// the pointer is on the Smart merge button or the button has keyboard
+    /// focus.
     fn picture(
         &mut self,
         index: usize,
@@ -481,27 +501,29 @@ impl DuplicatesScreen {
         };
         let side = &shown.sides[index];
         let (pane, image) = (extent(bounds), side.image());
-        let frame = |layer: Div| {
-            if pane.width > 0. && pane.height > 0. && image.width > 0. && image.height > 0. {
-                let frame = self.zoom.frame(pane, image, lean(index));
-                layer
-                    .absolute()
-                    .left(px(frame.left))
-                    .top(px(frame.top))
-                    .w(px(frame.width))
-                    .h(px(frame.height))
-            } else {
-                // A file whose size the library does not know fills the
-                // pane, fitted.
-                layer.absolute().inset_0()
-            }
+        // The rectangle of the picture inside the pane, as the zoom places
+        // it. It is `None` when the library does not know the file's size
+        // in pixels, and the picture then fills the pane.
+        let frame = (pane.width > 0. && pane.height > 0. && image.width > 0. && image.height > 0.)
+            .then(|| self.zoom.frame(pane, image, pane_edge(index)));
+        let place = |layer: Div| match frame {
+            Some(frame) => layer
+                .absolute()
+                .left(px(frame.left))
+                .top(px(frame.top))
+                .w(px(frame.width))
+                .h(px(frame.height)),
+            None => layer.absolute().inset_0(),
         };
         let fill = |image: Arc<RenderImage>, fit: ObjectFit| {
             img(image).absolute().inset_0().size_full().object_fit(fit)
         };
-        let mut inside = div()
-            .relative()
-            .size_full()
+        // Everything in this element is clipped to the pane, so a picture
+        // that is zoomed in does not cover the other picture.
+        let mut clipped = div()
+            .absolute()
+            .inset_0()
+            .overflow_hidden()
             .flex()
             .items_center()
             .justify_center()
@@ -512,9 +534,10 @@ impl DuplicatesScreen {
                     .child(t("Media details unavailable"))
             }));
         if self.difference_shown() {
-            // `.differenceComposite`: on black, over the picture's place.
-            inside = inside.child(
-                frame(div().bg(rgb(theme::DIFFERENCE_BACKGROUND))).children(
+            // The difference picture is drawn on black over the rectangle of
+            // the picture, as production's `.differenceComposite` is.
+            clipped = clipped.child(
+                place(div().bg(rgb(theme::DIFFERENCE_BACKGROUND))).children(
                     shown
                         .difference
                         .clone()
@@ -524,15 +547,16 @@ impl DuplicatesScreen {
         } else {
             let (thumbnail, original) = self.pictures_of(side);
             let opacity = if original.is_some() {
-                side.sharp_opacity()
+                side.original_opacity()
             } else {
                 0.
             };
-            // Painting continues only while an arrived original fades in.
+            // While the original is fading in over the thumbnail, the
+            // screen asks for another frame.
             if original.is_some() && opacity < 1. {
                 window.request_animation_frame();
             }
-            let mut layers = frame(div());
+            let mut layers = place(div());
             if opacity < 1.
                 && let Some(thumbnail) = thumbnail
             {
@@ -541,24 +565,58 @@ impl DuplicatesScreen {
             if let Some(original) = original {
                 layers = layers.child(fill(original, ObjectFit::Contain).opacity(opacity));
             }
-            inside = inside.child(layers);
+            clipped = clipped.child(layers);
         }
-        inside.into_any_element()
+        // The outline is the one the grid draws around a selected tile: a
+        // 2 px line in the grid's selection colour, `SELECTION_EXTENT`
+        // pixels outside the picture. It is drawn around the part of the
+        // picture that is inside the pane, and it is not clipped to the
+        // pane.
+        let outline = (self.outlined_side() == Some(index)).then(|| {
+            let (left, top, right, bottom) = match frame {
+                Some(frame) => (
+                    frame.left.max(0.),
+                    frame.top.max(0.),
+                    (frame.left + frame.width).min(pane.width),
+                    (frame.top + frame.height).min(pane.height),
+                ),
+                None => (0., 0., pane.width, pane.height),
+            };
+            div()
+                .absolute()
+                .left(px(left - SELECTION_EXTENT))
+                .top(px(top - SELECTION_EXTENT))
+                .w(px(right - left + 2. * SELECTION_EXTENT))
+                .h(px(bottom - top + 2. * SELECTION_EXTENT))
+                .rounded(px(theme::TILE_RADIUS + SELECTION_EXTENT))
+                .border_2()
+                .border_color(rgb(theme::GRID_SELECTION))
+        });
+        div()
+            .relative()
+            .size_full()
+            .child(clipped)
+            .children(outline)
+            .into_any_element()
     }
 
-    /// The screen's titlebar, built for the titlebar's own width in the
-    /// frame that gives it that width, as a subscription's page builds its
-    /// actions: after the screen's title the place in the queue between the
-    /// buttons for the pair before and after, and quietly beside it how
-    /// alike the scan found the files and what comparing their pixels
-    /// counted; at the right end the decisions on the pair, Smart merge
-    /// first, then the zoom.
+    /// Builds the screen's row of controls in the titlebar. `ui::sized`
+    /// calls this with the row's bounds while the titlebar is being laid
+    /// out, so the row is built for its width in the same frame. The
+    /// buttons are the kind that a subscription's page has in the titlebar
+    /// (`ui::titlebar_button`).
     ///
-    /// A titlebar too short for all of it gives way in one order: what was
-    /// counted shortens to an ellipsis, down to the similarity alone; the
-    /// four decisions show their glyphs, all together, each named with its
-    /// key by its tooltip; the similarity goes; then the place's figures,
-    /// the zoom and last the two arrows. Nothing moves to another row.
+    /// From left to right the row has: empty space under the screen's
+    /// title, which the toolbar draws; the Previous pair button, the
+    /// position in the queue (for example "1 / 500") and the Next pair
+    /// button; one line of small text with the similarity and the pixel
+    /// measurement (for example "100% similar · 0% of pixels differ"); the
+    /// Smart merge, Not duplicates, Keep both and Show Difference buttons;
+    /// and the Zoom to fit and Actual pixels buttons. The buttons are at
+    /// the right end of the row.
+    ///
+    /// When the row is too narrow for all of this, parts are removed in the
+    /// order that [`fit`] describes.
     pub(super) fn titlebar(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -569,12 +627,12 @@ impl DuplicatesScreen {
             return div().into_any_element();
         };
         let theme = theme::theme(cx);
-        let width_of = |text: &str, window: &Window| {
+        let width_of = |text: &str, size: f32, window: &Window| {
             f32::from(
                 ui::shape_line(
                     text.to_owned(),
                     font(theme::FONT_UI),
-                    theme::TEXT_SM,
+                    size,
                     theme.text(),
                     window,
                 )
@@ -582,50 +640,45 @@ impl DuplicatesScreen {
             )
             .ceil()
         };
-        // The scope title is drawn over the start of this row.
-        let title = f32::from(
-            ui::shape_line(
-                t("Duplicates").to_owned(),
-                font(theme::FONT_UI),
-                theme::TEXT_MD,
-                theme.text(),
-                window,
-            )
-            .width,
-        )
-        .ceil();
-        let lead = TITLE_START + title + TITLE_CLEAR;
-        // The place keeps the width of its widest figures, so the arrows
-        // stay put from pair to pair.
+        // The width of the empty space at the start of the row. The
+        // toolbar draws the screen's title there.
+        let lead = TITLE_START + width_of(t("Duplicates"), theme::TEXT_MD, window) + TITLE_CLEAR;
+        // The position is given the width of its widest text, for example
+        // "500 / 500", so the Next pair button does not move when the
+        // number of digits changes.
         let place = format!("{} / {}", model.index + 1, model.total);
-        let place_width = width_of(&format!("{0} / {0}", model.total), window) + 12.;
+        let place_width =
+            width_of(&format!("{0} / {0}", model.total), theme::TEXT_SM, window) + 12.;
         let shown = self.shown.as_ref();
         let similarity = shown.map(|shown| compare::similarity_label(shown.distance));
-        // What was counted is written once it has been, and stays as it is
-        // for as long as the pair does.
-        let counted = shown.and_then(|shown| match shown.measure {
-            Some(measure) => {
+        // The line of text is drawn only once the pixel comparison has
+        // finished or is known to be impossible. It is then complete, and
+        // it does not change while the pair is on screen.
+        let (line_shown, counted) = match shown.map(|shown| shown.counted) {
+            Some(Counted::Done(measure)) => {
                 let (counted, more) = measure.sentence();
-                Some(match more {
-                    Some(more) => format!("{counted} · {more}"),
-                    None => counted,
-                })
+                (
+                    true,
+                    Some(match more {
+                        Some(more) => format!("{counted} · {more}"),
+                        None => counted,
+                    }),
+                )
             }
-            None if !shown.measurable() => {
-                Some(en("Pixels are compared in still images only").to_owned())
-            }
-            None => None,
-        });
+            Some(Counted::Impossible) => (true, None),
+            Some(Counted::Waiting) | None => (false, None),
+        };
         let similarity_width = similarity
             .as_deref()
-            .map_or(0., |text| width_of(text, window));
-        let measured_width = (similarity_width
+            .map_or(0., |text| width_of(text, theme::TEXT_SM, window));
+        let line_width = (similarity_width
             + counted.as_deref().map_or(0., |text| {
-                MEASURED_BETWEEN + width_of(&format!("· {text}"), window)
+                MEASURED_BETWEEN + width_of(&format!("· {text}"), theme::TEXT_SM, window)
             }))
         .min(MEASURED_MOST);
-        // How wide the four decisions are with their words, in this
-        // language: laid out once to be measured, as a list measures a row.
+        // The width of the four buttons with their labels depends on the
+        // language. It is measured here by laying the four buttons out once
+        // without drawing them.
         let labelled = f32::from(
             self.decisions(true, cx)
                 .into_any_element()
@@ -643,7 +696,7 @@ impl DuplicatesScreen {
                 place: place_width,
                 similarity: similarity_width,
                 labelled,
-                glyphs: 4. * ui::titlebar_button::HEIGHT + 3. * ui::titlebar_button::BETWEEN,
+                icons: 4. * ui::titlebar_button::HEIGHT + 3. * ui::titlebar_button::BETWEEN,
                 zoom: 2. * theme::ICON_BUTTON + ui::titlebar_button::BETWEEN,
             },
         );
@@ -697,21 +750,24 @@ impl DuplicatesScreen {
                 model.can_next,
             ));
         }
-        if let (Some(room), Some(similarity)) = (fit.measured, similarity) {
+        if let (Some(room), Some(similarity), true) = (fit.line, similarity, line_shown) {
+            // The line is small text in the secondary text colour. When it
+            // does not fit in `room`, the pixel measurement is cut off with
+            // an ellipsis, and its tooltip shows it whole.
             let line = div()
-                .w(px(room.min(measured_width)))
+                .w(px(room.min(line_width)))
                 .ml(px(GROUP_GAP))
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap(px(MEASURED_BETWEEN))
                 .text(theme::TEXT_SM)
+                .text_color(theme.text_secondary())
                 .child(ui::tooltip::attach(
                     div()
                         .id("duplicates-similarity")
                         .flex_none()
                         .whitespace_nowrap()
-                        .text_color(theme.text_secondary())
                         .child(similarity),
                     "duplicates-similarity-tip",
                     ui::tip(t("Perceptual similarity is not pixel equality")),
@@ -726,7 +782,6 @@ impl DuplicatesScreen {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(theme.text_tertiary())
                         .child(format!("· {counted}")),
                     "duplicates-counted-tip",
                     ui::tip(counted),
@@ -739,7 +794,7 @@ impl DuplicatesScreen {
         }
         row = row
             .child(div().flex_1().min_w(px(GROUP_GAP)))
-            .child(self.decisions(fit.words, cx));
+            .child(self.decisions(fit.labels, cx));
         if fit.zoom {
             row = row.child(
                 div()
@@ -765,21 +820,28 @@ impl DuplicatesScreen {
         row.into_any_element()
     }
 
-    /// The four decisions on the pair, Smart merge first: with their words
-    /// or, where the titlebar is short, as glyphs named by their tooltips.
-    fn decisions(&self, words: bool, cx: &mut Context<Self>) -> Div {
+    /// The four buttons that make a decision on the pair or show the
+    /// difference, in this order: Smart merge, Not duplicates, Keep both,
+    /// Show Difference. With `labels` each button shows its icon and its
+    /// label, and its tooltip describes what it does. Without `labels` each
+    /// button shows only its icon, and its tooltip is its label. In both
+    /// cases the tooltip also shows the button's key.
+    fn decisions(&self, labels: bool, cx: &mut Context<Self>) -> Div {
         let button = |id: &'static str,
                       look: Look,
                       icon: &'static str,
                       label: &'static str,
                       about: &'static str,
                       shortcut: &'static str| {
-            ui::titlebar_button(id, look, icon, label, words)
-                .tip(ui::tip(if words { about } else { label }).shortcut(shortcut, cx))
+            ui::titlebar_button(id, look, icon, label, labels)
+                .tip(ui::tip(if labels { about } else { label }).shortcut(shortcut, cx))
                 .disabled(self.resolving)
         };
-        // Keeps the better file of the two and merges the other into it.
-        // Under the pointer or with the keyboard, it shows which.
+        // Smart merge keeps the file that the library rates as better and
+        // merges the other file's item into its item. The screen records
+        // whether the pointer is on the button and whether the button has
+        // keyboard focus, because the picture that would be kept gets an
+        // outline in both cases.
         let (hover, focus) = (cx.weak_entity(), cx.weak_entity());
         let smart_merge = button(
             "duplicates-smart-merge",
@@ -801,6 +863,8 @@ impl DuplicatesScreen {
                 this.smart_focused = focused;
                 cx.notify();
             });
+            // The button reports a focus change while a frame is being
+            // drawn. The screen needs one more frame to draw the outline.
             window.request_animation_frame();
         });
         let not_duplicates = button(
@@ -830,8 +894,9 @@ impl DuplicatesScreen {
             t("Show differences while held"),
             "dup.difference",
         )
-        // A press gives the button the keyboard in the Electron app, so the
-        // difference stays until a press elsewhere.
+        // In the Electron app a click gives the button keyboard focus, and
+        // the difference stays on screen until something else is clicked.
+        // This flag reproduces that.
         .on_click(cx.listener(|this, _, _, cx| {
             this.difference_pressed = true;
             cx.notify();
@@ -860,7 +925,9 @@ impl DuplicatesScreen {
             .child(difference)
     }
 
-    /// A key came up: the difference's own ends the difference it held.
+    /// Runs when a key is released. If it is the key bound to Show
+    /// Difference, the screen stops showing the difference that the key
+    /// started. If no key is bound to Show Difference, any key does.
     fn key_released(&mut self, event: &KeyUpEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keys = window
             .bindings_for_action_in(&ShowDifference, &self.focus)
@@ -908,8 +975,8 @@ impl Render for DuplicatesScreen {
             .on_action(cx.listener(|this, _: &SmartMerge, window, cx| {
                 this.decide(Decision::Smart, window, cx)
             }))
-            // The difference shows from its key going down until that key
-            // comes up.
+            // Pressing the Show Difference key shows the difference, and
+            // releasing that key stops showing it.
             .on_action(
                 cx.listener(|this, _: &ShowDifference, _, cx| this.hold_difference(true, cx)),
             )
@@ -921,9 +988,11 @@ impl Render for DuplicatesScreen {
                 self.empty_state(cx)
             });
         }
-        // A drag follows the pointer anywhere in the window until the
-        // button is released, as pointer capture does; and a press anywhere
-        // ends the difference a press on its button began.
+        // While a picture is being dragged, the screen listens to the
+        // pointer in the whole window until the button is released, as a
+        // browser's pointer capture does. While the difference is shown
+        // because of a click on Show Difference, the next press of a mouse
+        // button anywhere in the window stops showing it.
         if self.drag.is_some() || self.difference_pressed {
             let entity = cx.weak_entity();
             root = root.child(
@@ -963,29 +1032,20 @@ impl Render for DuplicatesScreen {
                 .size_full(),
             );
         }
-        // `mergePreviewActive`: the side Smart merge would keep, while it
-        // is under the pointer or has the keyboard.
-        let previewed = self.merge_previewed();
-        if previewed.is_some() {
-            self.preview_side = previewed;
-        }
-        self.survivor
-            .set(previewed.is_some(), motion::MERGE_PREVIEW);
-        if self.survivor.animating() {
-            window.request_animation_frame();
-        }
         let facts = facts(self.shown.as_ref().expect("a pair is on screen"));
         let files = div()
             .flex_1()
             .min_h_0()
             .flex()
-            .gap(px(MARGIN))
-            .p(px(MARGIN))
+            .gap(px(EDGE))
+            .p(px(EDGE))
             .overflow_hidden()
             .child(self.side(0, &facts, window, cx))
             .child(self.side(1, &facts, window, cx));
         let menu = self.menu.layer(window, cx);
         root.child(files)
+            // The scan's progress bar is drawn over the top edge of the
+            // screen, so it does not move the pictures.
             .children(self.scan_progress.then(|| {
                 div()
                     .absolute()
@@ -1008,7 +1068,9 @@ impl Render for DuplicatesToolbar {
         if !shown {
             return bar;
         }
-        // The row is the screen's, built for this width as it is laid out.
+        // The screen builds the row, because the row's buttons call the
+        // screen's methods. The row is built from its own bounds while it
+        // is laid out.
         let screen = self.screen.clone();
         bar.child(
             ui::sized(move |bounds, window, cx| {
@@ -1021,39 +1083,66 @@ impl Render for DuplicatesToolbar {
     }
 }
 
-/// How wide each part of the titlebar's row is.
+/// The widths in pixels of the parts of the titlebar's row of controls.
 struct Widths {
+    /// The Previous pair and Next pair buttons together.
     arrows: f32,
+    /// The position in the queue, for example "1 / 500".
     place: f32,
+    /// The similarity, for example "100% similar".
     similarity: f32,
+    /// The four decision buttons with their labels.
     labelled: f32,
-    glyphs: f32,
+    /// The four decision buttons with only their icons.
+    icons: f32,
+    /// The Zoom to fit and Actual pixels buttons together.
     zoom: f32,
 }
 
-/// What of the titlebar's row is shown in the room it has.
+/// Which parts of the titlebar's row of controls are shown.
 struct Fit {
-    /// The decisions carry their words.
-    words: bool,
-    /// The room for the similarity and what was counted, when they show.
-    measured: Option<f32>,
+    /// The four decision buttons show their labels.
+    labels: bool,
+    /// The width in pixels that the line of text may use. It is `None` when
+    /// there is no room for the line.
+    line: Option<f32>,
+    /// The position in the queue is shown.
     place: bool,
+    /// The Zoom to fit and Actual pixels buttons are shown.
     zoom: bool,
+    /// The Previous pair and Next pair buttons are shown.
     arrows: bool,
 }
 
-/// What a titlebar with `room` after the title shows: everything, or as
-/// much as fits, given up in one order.
+/// Decides which parts of the titlebar's row of controls are shown in
+/// `room` pixels, which is the width of the row after the screen's title.
+///
+/// When everything fits, everything is shown. When it does not, parts are
+/// removed in this order until the rest fits:
+/// 1. The pixel measurement in the line of text is cut off with an
+///    ellipsis, until only the similarity is left.
+/// 2. The four decision buttons lose their labels, all four at the same
+///    width, and show only their icons. The line of text then has room
+///    again.
+/// 3. The line of text is removed.
+/// 4. The position in the queue is removed.
+/// 5. The Zoom to fit and Actual pixels buttons are removed.
+/// 6. The Previous pair and Next pair buttons are removed.
+///
+/// The result depends only on the widths, never on what the line of text
+/// says, so the buttons do not move while a pair is on screen.
 fn fit(room: f32, widths: Widths) -> Fit {
+    // The width that is left for the line of text when the parts that
+    // `fit` names are shown.
     let rest = |fit: &Fit| {
         let mut left = if fit.arrows { widths.arrows } else { 0. };
         if fit.place {
             left += widths.place;
         }
-        let mut right = if fit.words {
+        let mut right = if fit.labels {
             widths.labelled
         } else {
-            widths.glyphs
+            widths.icons
         };
         if fit.zoom {
             right += GROUP_GAP + widths.zoom;
@@ -1061,23 +1150,24 @@ fn fit(room: f32, widths: Widths) -> Fit {
         room - left - GROUP_GAP - right
     };
     let mut fit = Fit {
-        words: true,
-        measured: None,
+        labels: true,
+        line: None,
         place: true,
         zoom: true,
         arrows: true,
     };
-    // The similarity whole, with or without the decisions' words.
+    // The line of text needs at least the width of the similarity and the
+    // gap before it.
     let needed = GROUP_GAP + widths.similarity;
     if rest(&fit) < needed {
-        fit.words = false;
+        fit.labels = false;
     }
     let left = rest(&fit);
     if left >= needed {
-        fit.measured = Some(left - GROUP_GAP);
+        fit.line = Some(left - GROUP_GAP);
         return fit;
     }
-    for part in [
+    for remove in [
         |fit: &mut Fit| fit.place = false,
         |fit: &mut Fit| fit.zoom = false,
         |fit: &mut Fit| fit.arrows = false,
@@ -1085,7 +1175,7 @@ fn fit(room: f32, widths: Widths) -> Fit {
         if rest(&fit) >= 0. {
             break;
         }
-        part(&mut fit);
+        remove(&mut fit);
     }
     fit
 }

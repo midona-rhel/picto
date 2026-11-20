@@ -1,40 +1,54 @@
-//! What the Subscriptions screen puts in the window's chrome, as the grid
-//! and the other screens do: its actions at the end of the titlebar (the
-//! count and Add, Add Gallery and Accounts over the cards; Run now, Hold and
-//! the overflow menu on a subscription's page), and a subscription's
-//! counters, schedule and destination in the inspector's rail.
+//! What the Subscriptions screen draws outside its own area of the window, as
+//! the grid and the other screens do. There are three parts. The first is the
+//! screen's buttons at the right end of the titlebar: Add, Add Gallery and
+//! Accounts while the screen shows its subscription cards, and Run now, Hold
+//! and the "More actions" menu button while it shows one subscription's page.
+//! The second is the count of subscriptions, which is shown after the screen's
+//! title in the titlebar. The third is the rail of a subscription's page,
+//! which is drawn where the inspector is for the grid and shows that
+//! subscription's counters, schedule and destination.
 use super::{SubscriptionsScreen, format, measure, place_of};
 use crate::i18n::t;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
 
-/// The labelled buttons of a subscription's page need this much of the
-/// titlebar's room for controls, which starts after the history buttons and
-/// shares the scope title's half; with less they show their glyphs alone,
-/// their labels in their tooltips, as the grid's toolbar gives up its zoom
-/// and search when narrow.
+/// The width, in pixels, that the titlebar's space for the screen's controls
+/// must have for the buttons to show their labels. `PAGE_LABELLED` is for the
+/// buttons of a subscription's page and `HOME_LABELLED` is for the buttons
+/// shown over the subscription cards. That space starts after the Back and
+/// Forward buttons and runs to the right end of the toolbar. The scope title
+/// covers the toolbar's left half, so it lies over the left part of the space.
+/// When the space is narrower than this, each button shows only its icon and
+/// puts its label in its tooltip. The grid's toolbar does something similar:
+/// it hides its zoom control, and then its search field, when it is narrow.
 const PAGE_LABELLED: f32 = 360.;
 const HOME_LABELLED: f32 = 420.;
 
-/// The screen's titlebar controls; they follow the screen.
+/// The view that draws the Subscriptions screen's buttons in the titlebar. It
+/// observes the screen and is drawn again whenever the screen changes.
 pub struct SubscriptionsToolbar {
     screen: WeakEntity<SubscriptionsScreen>,
     _observing: Subscription,
 }
 
-/// The count after the screen's title; it follows the screen.
+/// The view that draws the count of subscriptions after the screen's title in
+/// the titlebar. It observes the screen and is drawn again whenever the screen
+/// changes.
 pub struct SubscriptionsNote {
     screen: WeakEntity<SubscriptionsScreen>,
     _observing: Subscription,
 }
 
-/// A subscription's rail, in the inspector's place; it follows the screen.
+/// The view that draws a subscription's rail, which the shell shows where the
+/// inspector normally is. It observes the screen and is drawn again whenever
+/// the screen changes.
 pub struct SubscriptionRail {
     screen: WeakEntity<SubscriptionsScreen>,
     _observing: Subscription,
 }
 
-/// The screen's titlebar controls, for the toolbar.
+/// Creates the view of the screen's titlebar buttons. The shell gives it to
+/// the toolbar with `Toolbar::set_screen_controls`.
 pub fn controls(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     cx.new(|cx| SubscriptionsToolbar {
         screen: screen.downgrade(),
@@ -43,7 +57,8 @@ pub fn controls(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     .into()
 }
 
-/// The count after the screen's title, for the toolbar.
+/// Creates the view of the count that is shown after the screen's title. The
+/// shell gives it to the toolbar with `Toolbar::set_screen_note`.
 pub fn note(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     cx.new(|cx| SubscriptionsNote {
         screen: screen.downgrade(),
@@ -52,8 +67,9 @@ pub fn note(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> AnyView {
     .into()
 }
 
-/// A subscription's rail, for the shell to show in the inspector's place
-/// while a subscription's page shows.
+/// Creates a subscription's rail for the shell. The shell shows it where the
+/// inspector normally is, for as long as the screen shows a subscription's
+/// page (`showing_page`).
 pub fn rail(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> crate::shell::ScreenRail {
     let view = cx
         .new(|cx| SubscriptionRail {
@@ -119,7 +135,10 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// How many subscriptions there are, or how many are selected.
+    /// The text of the count. It is "No subscriptions yet" when there are no
+    /// subscription cards, the number selected out of the total (for example
+    /// "2 of 5 selected") when more than one card is selected, and otherwise
+    /// the number of subscription cards (for example "5 subscriptions").
     fn count_note(&self) -> String {
         let count = self.cards().len();
         let selected = self.selected.len();
@@ -136,7 +155,9 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// The add actions; the count follows the title (`note`).
+    /// Builds the titlebar buttons shown over the subscription cards: Add, Add
+    /// Gallery and Accounts. The count is not drawn here; the view that
+    /// [`note`] creates draws it after the screen's title.
     fn home_titlebar(&mut self, bar: Div, cx: &mut Context<Self>) -> Div {
         let gallery_running = self.gallery_running();
         let labelled = self.titlebar_width.get() >= HOME_LABELLED;
@@ -157,8 +178,8 @@ impl SubscriptionsScreen {
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.open_create(cx))),
                 )
-                // One gallery downloads at a time, so the button waits
-                // while one runs.
+                // Only one gallery can download at a time, so the Add Gallery
+                // button is disabled while a gallery download is running.
                 .child(
                     ui::titlebar_button(
                         "subscription-add-gallery",
@@ -183,7 +204,10 @@ impl SubscriptionsScreen {
         )
     }
 
-    /// Run or pause, hold or stop, and the overflow menu.
+    /// Builds the titlebar buttons of a subscription's page: the run button
+    /// (Run now, Pause, Resume or Retry), the hold button (Hold, Release or
+    /// Stop) and the "More actions" button, which opens the subscription's
+    /// menu.
     fn page_titlebar(
         &mut self,
         bar: Div,
@@ -201,8 +225,10 @@ impl SubscriptionsScreen {
                 subscription.run_status.as_deref(),
                 Some("paused" | "inbox_full")
             );
-        // Run Now, Pause, Resume and Retry (`subscriptions.run`,
-        // `subscriptions.run.pause`, `subscriptions.run.resume`).
+        // The run button. It reads Pause while a run is under way, Resume
+        // while the run is paused, Retry for any other active run, and Run now
+        // when no run is active. A click sends `subscriptions.run`,
+        // `subscriptions.run.pause` or `subscriptions.run.resume`.
         let acting = self.acting.contains(&id);
         let labelled = self.titlebar_width.get() >= PAGE_LABELLED;
         let primary = if active {
@@ -229,8 +255,11 @@ impl SubscriptionsScreen {
             .disabled(acting || subscription.paused || subscription.queries.is_empty())
         }
         .on_click(cx.listener(move |this, _, _, cx| this.run_control(id, cx)));
-        // Stop the run (`subscriptions.cancel`), or hold and release future
-        // runs (`subscriptions.hold`).
+        // The hold button. While a run is active it reads Stop, and a click
+        // cancels the run (`subscriptions.cancel`). Otherwise it reads Hold,
+        // or Release when the subscription is already on hold, and a click
+        // puts future runs on hold or allows them again
+        // (`subscriptions.hold`).
         let (hold_icon, hold_label, hold_tip) = if active {
             (
                 "player-stop",

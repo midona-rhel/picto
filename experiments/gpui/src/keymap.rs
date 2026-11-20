@@ -1,18 +1,22 @@
-//! The app's key bindings, built from the shortcut registry
-//! (`settings::registry`, ported from `shortcuts.ts`). Every registry id
-//! either maps to the actions that perform it, each in the key context
-//! where production's shortcut scope listens, or is listed in [`NOT_YET`]
-//! with the reason. The bindings follow the applied keyboard preset and the
-//! user's overrides, both slots of each shortcut, and are rebuilt when the
-//! Settings window applies a change.
+//! This file makes the app's key bindings from the shortcut registry in
+//! `settings::registry`, which is a port of production's `shortcuts.ts`.
+//! For every id in the registry, [`targets`] gives the actions that the
+//! shortcut performs. Each action is bound in the key context that
+//! corresponds to the place where production's shortcut scope handles the
+//! key. An id that has no action yet is listed in [`NOT_YET`] with the
+//! reason. The bindings use the keyboard preset that is applied and the
+//! user's overrides, and both key slots of each shortcut are bound. The
+//! bindings are made again when the Settings window applies a change.
 //!
-//! The scope rules of `shortcutRuntime.ts` become context predicates:
-//! nothing below fires while a text field, a context menu, a popover or a
-//! dialog has the keyboard, since those own their keys (Escape closes the
-//! menu, then the popover, then the dialog, before the viewer or the
-//! selection hear it). The grid's keys need the `Grid` context, which the
-//! shell carries only while the grid itself shows, and the viewer's keys
-//! need the viewer to have the keyboard.
+//! The scope rules of production's `shortcutRuntime.ts` are written here as
+//! key-context predicates. A binding of any scope except `Anywhere` and
+//! `TextField` does not run while keyboard focus is in a text field, a
+//! context menu, a popover or a dialog, because each of those handles its
+//! keys itself. For example, Escape closes the menu, then the popover, then
+//! the dialog, and only when none of those is open does it close the viewer
+//! or clear the selection. The grid's bindings need the `Grid` key context,
+//! which the shell sets only while the grid itself is shown. The viewer's
+//! bindings need the viewer to have keyboard focus.
 use crate::screens::duplicates;
 use crate::settings::registry::{self, KeyboardPreset, Overrides};
 use crate::shell;
@@ -63,44 +67,62 @@ actions!(
     ]
 );
 
-/// `rate.0`–`rate.5` and Set Rating's rows: the stars, 0 for none.
+/// The action that the shortcuts `rate.0` to `rate.5` perform. `stars` is
+/// the rating to set, from 0 to 5 stars, and 0 means no rating.
 #[derive(Clone, Debug, PartialEq, Action)]
 #[action(namespace = shortcut, no_json)]
 pub struct Rate {
     pub stars: u8,
 }
 
-/// Where a shortcut listens. Each is a key-context predicate.
+/// The part of the app in which a shortcut works. [`Scope::predicate`]
+/// gives each scope as a key-context predicate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
-    /// Every window, Settings included (the application menu's keys).
+    /// The shortcut works in every window, including the Settings window.
+    /// This scope is for the application menu's keys.
     Anywhere,
-    /// The main window, whatever it shows (`AppShell`'s and the sidebar's
-    /// scopes, and the application menu's selection commands).
+    /// The shortcut works in the main window, whatever the window shows.
+    /// This corresponds to the shortcut scopes of production's `AppShell`
+    /// and sidebar, and to the application menu's commands that act on the
+    /// selection.
     App,
-    /// The grid while it shows (`GridScreen`'s and `useGridArrowNav`'s).
+    /// The shortcut works while the grid is shown. This corresponds to the
+    /// shortcut scopes of production's `GridScreen` and `useGridArrowNav`.
     Grid,
-    /// The media viewer while it has the keyboard (`MediaView`'s).
+    /// The shortcut works while the media viewer has keyboard focus. This
+    /// corresponds to the shortcut scope of production's `MediaView`.
     Viewer,
-    /// A collection's editor in the media viewer (`GroupSurface`'s editor
-    /// scope), which wins over the viewer's keys around it.
+    /// The shortcut works in a collection's editor, which is inside the
+    /// media viewer. This corresponds to the editor scope of production's
+    /// `GroupSurface`. When this scope and the viewer's scope bind the same
+    /// key, the key performs this scope's action.
     GroupEditor,
-    /// The duplicate review (`DuplicatesScreen`'s).
+    /// The shortcut works on the duplicate review screen. This corresponds
+    /// to the shortcut scope of production's `DuplicatesScreen`.
     Duplicates,
-    /// The Subscriptions screen (`SubscriptionsGrid`'s shortcut scope).
+    /// The shortcut works on the Subscriptions screen. This corresponds to
+    /// the shortcut scope of production's `SubscriptionsGrid`.
     Subscriptions,
-    /// A detail window (`DetailWindow`'s), which has the viewer's keys but
-    /// closes only on Escape.
+    /// The shortcut works in a detail window. This corresponds to the
+    /// shortcut scope of production's `DetailWindow`. A detail window has
+    /// the viewer's keys, except that Escape is the only key that closes it.
     DetailWindow,
-    /// The media player while a viewer that shows it has the keyboard
-    /// (`VideoPlayer`'s, which wins over the viewer's own).
+    /// The shortcut works while a viewer that shows the media player has
+    /// keyboard focus. This corresponds to the shortcut scope of
+    /// production's `VideoPlayer`. When this scope and the viewer's scope
+    /// bind the same key, the key performs this scope's action.
     Media,
-    /// A focused text field, wherever it is: the Edit menu's Undo and Redo
-    /// go to the field's own history there (`historyRuntime.ts`).
+    /// The shortcut works while a text field has keyboard focus, in any
+    /// window. The Edit menu's Undo and Redo use this scope so that in a
+    /// text field they undo and redo the field's own edits, as production's
+    /// `historyRuntime.ts` does.
     TextField,
 }
 
-/// What has the keyboard instead of the window's own shortcuts.
+/// The part of a scope's predicate that stops the window's shortcuts from
+/// running while keyboard focus is in a text field, a menu, a dialog or a
+/// popover. Every scope except `Anywhere` and `TextField` adds it.
 const OWNERS: &str = "!TextInput && !Menu && !Modal && !Popover";
 
 impl Scope {
@@ -111,7 +133,8 @@ impl Scope {
             Scope::App => "Browser",
             // i18n: a key context
             Scope::Grid => "Grid",
-            // Flash keeps its keys for the movie.
+            // While a Flash movie has keyboard focus, the keys go to the
+            // movie and the viewer's shortcuts do not run.
             Scope::Viewer => "Viewer && !Flash",
             Scope::GroupEditor => viewer::group_editor::CONTEXT,
             // i18n: a key context
@@ -125,11 +148,14 @@ impl Scope {
     }
 }
 
-/// One action a shortcut performs, and where.
+/// One action that a shortcut performs, and the scope in which the shortcut
+/// performs it.
 pub struct Target {
     pub scope: Scope,
     pub action: fn() -> Box<dyn Action>,
-    /// Shift with the keys extends the selection (`allowExtraShift`).
+    /// When this is true, the same keys with Shift held are bound to the
+    /// action as well, and they extend the selection. This is production's
+    /// `allowExtraShift` option.
     pub extends: bool,
 }
 
@@ -150,10 +176,11 @@ macro_rules! to {
     };
 }
 
-/// The actions a registry id performs. Empty for the ids in [`NOT_YET`].
+/// Returns the actions that the shortcut with this registry id performs.
+/// The list is empty for the ids in [`NOT_YET`].
 pub fn targets(id: &str) -> Vec<Target> {
     match id {
-        // Navigation.
+        // The shortcuts of the Navigation group.
         "nav.allActive" => vec![to!(App, ShowAll)],
         "nav.inbox" => vec![to!(App, ShowInbox)],
         "nav.untagged" => vec![to!(App, ShowUntagged)],
@@ -169,9 +196,10 @@ pub fn targets(id: &str) -> Vec<Target> {
         "grid.last" => vec![to!(Grid, shell::Last, extends)],
         "grid.pageUp" => vec![to!(Grid, shell::PageUp, extends)],
         "grid.pageDown" => vec![to!(Grid, shell::PageDown, extends)],
-        // File.
+        // The shortcuts of the File group.
         "file.settings" => vec![to!(Anywhere, crate::settings::OpenSettings)],
-        // The grid's selection, or the selected subscriptions' cards.
+        // Delete acts on the selected items in the grid, or on the selected
+        // subscriptions' cards on the Subscriptions screen.
         "file.delete" => vec![to!(Grid, DeleteItems), to!(Subscriptions, DeleteItems)],
         "file.removeFromFolder" => vec![to!(Grid, RemoveFromFolder)],
         "file.restore" => vec![to!(Grid, RestoreItems)],
@@ -183,18 +211,23 @@ pub fn targets(id: &str) -> Vec<Target> {
         "file.openDefaultApp" => vec![to!(Grid, OpenDefaultApp)],
         "file.revealInFolder" => vec![to!(Grid, RevealInFinder)],
         "file.openNewWindow" => vec![to!(Grid, shell::OpenInNewWindow)],
-        // An application menu accelerator in production, so the whole
-        // window's.
+        // Production binds this key as an accelerator of the application
+        // menu, so it works anywhere in the main window.
         "file.import" => vec![to!(App, ImportFiles)],
-        // Application menu accelerators too.
+        // Production binds the keys of Export Originals and Export As as
+        // accelerators of the application menu too, so they also work
+        // anywhere in the main window.
         "file.export" => vec![to!(App, ExportOriginals)],
-        // The Edit menu's row, enabled by the menu's rule.
+        // Regenerate Thumbnail is a row of the Edit menu. Its key works
+        // only while the menu's rule enables that row.
         "file.regenerateThumbnail" => vec![to!(App, RegenerateThumbnails)],
         "file.exportAs" => vec![to!(App, ExportAs)],
-        // Edit.
+        // The shortcuts of the Edit group.
         "organize.addTag" => vec![to!(Grid, AddTags)],
-        // An application menu accelerator in production, so the whole
-        // window's: the viewer's item, else the grid's selection.
+        // Production binds this key as an accelerator of the application
+        // menu, so it works anywhere in the main window. It acts on the item
+        // that the viewer shows, or on the grid's selection when the viewer
+        // is not open.
         "organize.autoTag" => vec![to!(App, AutoTag)],
         "organize.addFolder" => vec![to!(Grid, AddToFolders)],
         "edit.undo" => vec![
@@ -209,15 +242,19 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(Grid, shell::SelectAll),
             to!(GroupEditor, shell::SelectAll),
         ],
-        // The collection editor's selected members leave it.
+        // Removes the selected members from the collection that the
+        // collection's editor shows.
         "group.removeMembers" => vec![to!(GroupEditor, viewer::group_editor::RemoveMembers)],
-        // Escape: the viewer's own binding closes it while it has the
-        // keyboard; this one closes it otherwise, or clears the selection.
+        // The key is Escape. While the viewer has keyboard focus, the
+        // viewer's own binding (`view.closeDetail`) closes the viewer. In
+        // the rest of the main window this binding closes the viewer when
+        // it is open, and clears the selection when it is not.
         "edit.deselectAll" => vec![to!(App, shell::ClosePreview)],
         "edit.rename" => vec![to!(App, Rename)],
         "edit.copyFilePath" => vec![to!(App, CopyFilePath), to!(DetailWindow, CopyFilePath)],
-        // The files themselves: the grid's selection, the item the viewer
-        // or Quick Look shows, a detail window's file.
+        // Copy copies the files themselves: the selected items in the grid,
+        // the item that the viewer or Quick Look shows, the file of a
+        // detail window, or the members of a collection in its editor.
         "edit.copy" => vec![
             to!(Grid, CopyFiles),
             to!(Viewer, CopyFiles),
@@ -225,28 +262,35 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(GroupEditor, CopyFiles),
         ],
         "edit.pasteImport" => vec![to!(Grid, PasteImport)],
-        // Inbox. The viewer's review the item it shows.
+        // The shortcuts of the Inbox group. The viewer's bindings accept or
+        // reject the item that the viewer shows.
         "inbox.accept" => vec![to!(Grid, AcceptInbox), to!(Viewer, AcceptInbox)],
         "inbox.reject" => vec![to!(Grid, RejectInbox), to!(Viewer, RejectInbox)],
-        // Rating: the selection in the grid, the shown item in the viewer.
+        // The shortcuts of the Rating group. In the grid they rate the
+        // selected items, and in the viewer they rate the item that the
+        // viewer shows.
         "rate.0" => vec![to!(Grid, Rate { stars: 0 }), to!(Viewer, Rate { stars: 0 })],
         "rate.1" => vec![to!(Grid, Rate { stars: 1 }), to!(Viewer, Rate { stars: 1 })],
         "rate.2" => vec![to!(Grid, Rate { stars: 2 }), to!(Viewer, Rate { stars: 2 })],
         "rate.3" => vec![to!(Grid, Rate { stars: 3 }), to!(Viewer, Rate { stars: 3 })],
         "rate.4" => vec![to!(Grid, Rate { stars: 4 }), to!(Viewer, Rate { stars: 4 })],
         "rate.5" => vec![to!(Grid, Rate { stars: 5 }), to!(Viewer, Rate { stars: 5 })],
-        // View. Enter and Space open the viewer from the grid and close it
-        // from inside, as `MediaView` treats both as its close keys.
+        // The shortcuts of the View group. Enter and Space open the viewer
+        // from the grid, and close the viewer when it has keyboard focus,
+        // because production's `MediaView` treats both keys as its close
+        // keys.
         "view.detailView" => vec![
             to!(Grid, shell::Preview),
             to!(Viewer, viewer::Close),
-            // Enter does nothing in a collection's editor.
+            // Enter is bound to `NoAction` in a collection's editor, so
+            // that it does nothing there.
             to!(GroupEditor, NoAction),
         ],
         "view.quicklook" => vec![
             to!(Grid, QuickLook),
             to!(Viewer, viewer::Close),
-            // Space peeks at the editor's one selected member.
+            // In a collection's editor, Space opens Quick Look for the
+            // selected member when exactly one member is selected.
             to!(GroupEditor, viewer::group_editor::QuickLookMember),
         ],
         "view.closeDetail" => vec![
@@ -280,7 +324,9 @@ pub fn targets(id: &str) -> Vec<Target> {
             to!(Viewer, viewer::ZoomOut),
             to!(DetailWindow, viewer::ZoomOut),
         ],
-        // Document pages, in whichever host shows the document.
+        // These two shortcuts go to the previous and the next page of a
+        // document, in the viewer or in a detail window, whichever of them
+        // shows the document.
         "document.previousPage" => vec![
             to!(Viewer, viewer::document::PreviousPage),
             to!(DetailWindow, viewer::document::PreviousPage),
@@ -294,18 +340,19 @@ pub fn targets(id: &str) -> Vec<Target> {
         "view.toggleInspector" => vec![to!(App, shell::ToggleInspector)],
         "view.toggleBothPanels" => vec![to!(App, shell::TogglePanels)],
         "view.grayscale" => vec![to!(Grid, ToggleGrayscale)],
-        // Duplicates.
+        // The shortcuts of the Duplicates group.
         "dup.keepBoth" => vec![to!(Duplicates, duplicates::KeepBoth)],
         "dup.notDuplicate" => vec![to!(Duplicates, duplicates::NotDuplicate)],
         "dup.keepLeft" => vec![to!(Duplicates, duplicates::KeepLeft)],
         "dup.keepRight" => vec![to!(Duplicates, duplicates::KeepRight)],
         "dup.smartMerge" => vec![to!(Duplicates, duplicates::SmartMerge)],
-        // Not in production's registry: the difference while its key is held.
+        // This shortcut is not in production's registry. It shows the pixel
+        // difference for as long as its key is held down.
         "dup.difference" => vec![to!(Duplicates, duplicates::ShowDifference)],
         "dup.fitToWindow" => vec![to!(Duplicates, duplicates::FitPair)],
         "dup.prevPair" => vec![to!(Duplicates, duplicates::PreviousPair)],
         "dup.nextPair" => vec![to!(Duplicates, duplicates::NextPair)],
-        // Video.
+        // Toggle Logs, and after it the shortcuts of the Video group.
         "view.toggleLogs" => vec![to!(App, crate::app_menu::LogWindow)],
         "video.togglePlay" => vec![to!(Media, viewer::video::TogglePlay)],
         "video.seekBackward" => vec![to!(Media, viewer::video::SeekBackward)],
@@ -322,8 +369,9 @@ pub fn targets(id: &str) -> Vec<Target> {
     }
 }
 
-/// The registry ids the app cannot perform yet. They stay in the registry
-/// (Settings lists those production lists) and are bound to nothing.
+/// The registry ids that this app cannot perform yet, each with the reason.
+/// They stay in the registry and no key is bound to them. Settings lists
+/// those of them that production's Settings lists.
 pub const NOT_YET: &[(&str, &str)] = &[
     (
         "nav.commandPalette",
@@ -342,9 +390,10 @@ pub const NOT_YET: &[(&str, &str)] = &[
     ("view.toggleTileMetadata", "deferred in production"),
 ];
 
-/// Binds keys written as the registry writes them (`Mod+Q`), spelled for
-/// this platform, to `action` under `context`: for the few bindings outside
-/// the registry whose keys still differ by platform.
+/// Binds `keys` to `action` in the key context `context`. `keys` is written
+/// in the registry's form (for example `Mod+Q`) and is converted to this
+/// platform's keys. This function is for the few bindings that are not in
+/// the registry but whose keys still differ between platforms.
 pub fn bind_written(keys: &str, action: Box<dyn Action>, context: Option<&str>, cx: &mut App) {
     let Some(written) = keystroke(keys) else {
         return;
@@ -358,9 +407,10 @@ pub fn bind_written(keys: &str, action: Box<dyn Action>, context: Option<&str>, 
     }
 }
 
-/// A registry key string (`Mod+Shift+Backspace`) as a GPUI keystroke
-/// (`cmd-shift-backspace`), or `None` for an empty slot or a key GPUI has no
-/// name for. `Mod` is Command on the Mac and Control elsewhere, as
+/// Converts a key string in the registry's form (`Mod+Shift+Backspace`) to
+/// a GPUI keystroke (`cmd-shift-backspace`). Returns `None` for an empty
+/// slot and for a key that GPUI has no name for. `Mod` means Command on the
+/// Mac and Control on other platforms, which is how production's
 /// `matchesShortcut` reads it.
 pub fn keystroke(keys: &str) -> Option<String> {
     if keys.is_empty() {
@@ -411,7 +461,8 @@ pub fn keystroke(keys: &str) -> Option<String> {
         {
             function.to_lowercase()
         }
-        // GPUI reads an upper-case letter as Shift with it.
+        // The key is written in lower case, because GPUI reads an upper-case
+        // letter as that letter with Shift held.
         single if single.chars().count() == 1 => single.to_lowercase(),
         _ => return None,
     };
@@ -419,8 +470,9 @@ pub fn keystroke(keys: &str) -> Option<String> {
     Some(written.join("-"))
 }
 
-/// One binding to make: the keystroke, the shortcut it comes from and what
-/// it does where.
+/// One key binding that [`install`] makes: the keystroke, the id of the
+/// shortcut it comes from, the scope in which it works and the action it
+/// performs.
 pub struct Planned {
     pub keystroke: String,
     pub id: &'static str,
@@ -428,9 +480,11 @@ pub struct Planned {
     pub action: fn() -> Box<dyn Action>,
 }
 
-/// The bindings for the registry as configured: both slots of every
-/// shortcut, each for every target, and Shift with the keys where Shift
-/// extends the selection.
+/// Returns the bindings for the registry with this preset and these
+/// overrides applied. Each of a shortcut's two key slots is bound to every
+/// target of the shortcut. For a target that extends the selection with
+/// Shift, the same keys with Shift are bound as well, unless the keys
+/// already contain Shift.
 pub fn plan(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Planned> {
     let mut planned = Vec::new();
     for shortcut in registry::all(preset, overrides) {
@@ -458,10 +512,13 @@ pub fn plan(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Planned> {
     planned
 }
 
-/// Marks the bindings made here, so a rebuild replaces only them.
+/// The mark that [`install`] puts on every binding it makes, so that the
+/// next call to [`install`] removes only the bindings that have the mark.
 const FROM_REGISTRY: KeyBindingMetaIndex = KeyBindingMetaIndex(0x5052_4547);
 
-/// The registry as last installed, which tooltips and menu rows read.
+/// The keyboard preset and the overrides that [`install`] last applied.
+/// [`badges`] and [`hint`] read them to get the keys that tooltips and menu
+/// rows show.
 #[derive(Default)]
 struct Installed {
     preset: KeyboardPreset,
@@ -470,8 +527,9 @@ struct Installed {
 
 impl Global for Installed {}
 
-/// Replaces the registry's bindings with ones for this preset and these
-/// overrides. Bindings made elsewhere (text fields, menus, dialogs) stay.
+/// Replaces the bindings made from the registry with bindings for this
+/// preset and these overrides. Bindings made in other files, such as those
+/// of text fields, menus and dialogs, are kept.
 pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
     if cx
         .try_global::<Installed>()
@@ -527,8 +585,9 @@ pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
         preset,
         overrides: overrides.clone(),
     });
-    // The application menu's keys, after the registry's so that a row
-    // whose action the registry binds shows the registry's keys.
+    // The application menu's keys are added after the registry's bindings,
+    // so that a menu row whose action the registry also binds shows the
+    // keys from the registry.
     for accelerator in crate::app_menu::accelerators(preset, overrides) {
         let predicate = accelerator.predicate.map(|source| {
             Rc::new(KeyBindingContextPredicate::parse(&source).expect("menu key predicate"))
@@ -545,20 +604,24 @@ pub fn install(preset: KeyboardPreset, overrides: &Overrides, cx: &mut App) {
             Err(error) => eprintln!("menu: {}: {error}", accelerator.keystroke),
         }
     }
-    // A document's scrolling keys come after the registry's, which they
-    // override where pages are shown (Space).
+    // The keys that scroll a document are added after the registry's
+    // bindings. Space is bound by both, and while a document's pages are
+    // shown Space scrolls the document.
     bindings.extend(
         crate::viewer::document::scroll_bindings()
             .into_iter()
             .map(|binding| binding.with_meta(FROM_REGISTRY)),
     );
-    // Adding bindings redraws every window, so tooltips and the
-    // application menu's key equivalents follow.
+    // Adding bindings makes GPUI draw every window again, so the tooltips
+    // and the application menu's key equivalents then show the new keys.
     cx.bind_keys(bindings);
     crate::set_app_menus(cx);
 }
 
-/// A shortcut's first binding as installed, in registry form, or empty.
+/// Returns the keys in the first slot of the shortcut `id`, in the
+/// registry's form, with the preset and the overrides that [`install`] last
+/// applied. Before the first call to [`install`] it uses the US preset and
+/// no overrides. Returns an empty string when there is no such shortcut.
 fn primary(id: &str, cx: &App) -> String {
     let shortcut = match cx.try_global::<Installed>() {
         Some(installed) => registry::shortcut(id, installed.preset, &installed.overrides),
@@ -567,8 +630,9 @@ fn primary(id: &str, cx: &App) -> String {
     shortcut.map(|shortcut| shortcut.keys).unwrap_or_default()
 }
 
-/// The keys a tooltip shows for a shortcut, one badge each
-/// (`KbdTooltip` with `shortcutId`).
+/// Returns the keys that a tooltip shows for the shortcut `id`, one string
+/// for each key badge. This is what production's `KbdTooltip` shows when it
+/// is given a `shortcutId`.
 pub fn badges(id: &str, cx: &App) -> Vec<SharedString> {
     registry::parts(&primary(id, cx))
         .into_iter()
@@ -576,7 +640,9 @@ pub fn badges(id: &str, cx: &App) -> Vec<SharedString> {
         .collect()
 }
 
-/// The hint a menu row shows for a shortcut (`shortcutHint`), if it has one.
+/// Returns the keys that a menu row shows for the shortcut `id`, as
+/// production's `shortcutHint` does. Returns `None` when the shortcut is
+/// deferred or its first slot has no keys.
 pub fn hint(id: &str, cx: &App) -> Option<SharedString> {
     let deferred = registry::SHORTCUT_DEFS
         .iter()
@@ -591,7 +657,9 @@ mod tests {
     use crate::settings::registry::{KeyboardPreset, Override, Overrides, SHORTCUT_DEFS, conflict};
     use gpui::{Keystroke, Modifiers, OperatingSystem};
 
-    /// A keystroke written for the Mac, as this platform spells `Mod`.
+    /// Takes a keystroke that is written with the Mac's `cmd-` and returns
+    /// it as this platform writes it: unchanged on macOS, and with `cmd-`
+    /// replaced by `ctrl-` on other platforms.
     fn spelled(written: &str) -> String {
         if cfg!(target_os = "macos") {
             written.to_owned()
@@ -606,7 +674,8 @@ mod tests {
             .unwrap_or_else(|error| panic!("{keys} as {written}: {error}"))
     }
 
-    /// `Mod` is Command on the Mac and Control elsewhere.
+    /// Returns the modifiers that a test case expects. `mod_key` stands for
+    /// `Mod`, which is Command on the Mac and Control on other platforms.
     fn modifiers(mod_key: bool, control: bool, alt: bool, shift: bool) -> Modifiers {
         let mac = cfg!(target_os = "macos");
         Modifiers {
@@ -828,7 +897,9 @@ mod tests {
             bound(KeyboardPreset::Us, &overrides, "nav.back"),
             [(spelled("cmd-shift-b"), Scope::App)]
         );
-        // The new keys now conflict with nothing; the old ones are free.
+        // Go Back no longer uses `Mod+[`, so that key is free for another
+        // shortcut. The new keys `Mod+Shift+B` are reported as a conflict
+        // with Go Back.
         assert_eq!(
             conflict("nav.forward", "Mod+[", KeyboardPreset::Us, &overrides),
             None
@@ -837,7 +908,8 @@ mod tests {
             conflict("nav.forward", "Mod+Shift+B", KeyboardPreset::Us, &overrides),
             Some("Go Back")
         );
-        // Resetting is removing the override.
+        // Removing the override resets the shortcut to its two default
+        // bindings.
         overrides.remove("nav.back");
         assert_eq!(bound(KeyboardPreset::Us, &overrides, "nav.back").len(), 2);
     }

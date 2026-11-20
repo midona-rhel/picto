@@ -1,38 +1,52 @@
-//! The difference view of two images, and what it measures. The Electron
-//! screen stacks the right image over the left with `mix-blend-mode:
-//! difference` on black; GPUI has no blend modes, so the same picture is
-//! computed once per pair, off the drawing thread, from the decoded
-//! originals, and counted: how many pixels differ at all, and how many by
-//! enough to see. The count is written out as a measurement
-//! ([`Measure::sentence`]); it never says the pictures are the same.
+//! Computes the difference picture of two images and counts the pixels that
+//! differ.
+//!
+//! The Electron screen draws the right image over the left image on a black
+//! background with the CSS property `mix-blend-mode: difference`. GPUI has
+//! no blend modes, so this module computes the same picture from the two
+//! decoded images. The screen runs it on a background thread.
+//!
+//! While the picture is computed, two numbers are counted: the share of
+//! pixels that differ at all, and the share of pixels that differ enough to
+//! be visible. [`Measure::sentence`] writes them as text. The text states
+//! only what was counted. It never says that two pictures are the same.
 use crate::i18n::{en, t};
 use gpui::RenderImage;
 use image::{ImageBuffer, Rgba, imageops};
 use std::sync::Arc;
 
-/// The longest side of the computed image. A larger original is compared at
-/// this size, which is plenty for a pane and keeps the work bounded.
+/// The largest width or height, in pixels, of the difference picture. Two
+/// larger images are scaled down to this size before they are compared.
+/// This limits the time and the memory that the comparison takes, and the
+/// picture is still larger than a pane of the screen.
 const LIMIT: u32 = 4096;
 
 type Buffer = ImageBuffer<Rgba<u8>, Vec<u8>>;
 
-/// A channel apart by more than this (of 255) is a difference the eye can
-/// see; less is the noise of a format's own compression.
+/// A pixel counts as visibly different when one of its colour channels
+/// differs by more than this number, on the scale from 0 to 255. Smaller
+/// differences are typical of the compression of a lossy format such as
+/// JPEG.
 const VISIBLE: u8 = 24;
 
-/// What comparing two pictures found.
+/// The result of comparing two pictures pixel by pixel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Measure {
-    /// The two pictures' sizes in pixels, when they differ: the right one
-    /// was stretched onto the left one's to compare them.
+    /// The sizes in pixels of the left and the right picture, when the two
+    /// sizes are different. The right picture was then scaled to the size
+    /// of the left picture before the comparison. This is `None` when the
+    /// two pictures have the same size.
     pub sizes: Option<((u32, u32), (u32, u32))>,
-    /// The share of pixels that differ at all, 0 to 1.
+    /// The share of pixels that differ at all, from 0 to 1.
     pub changed: f32,
-    /// The share of pixels that differ by enough to see, 0 to 1.
+    /// The share of pixels that differ visibly (by more than [`VISIBLE`]),
+    /// from 0 to 1.
     pub visible: f32,
 }
 
-/// A share of the picture's pixels, as the sentence writes it.
+/// Writes a share from 0 to 1 as a percentage: "0%" for zero, "<0.1%" for
+/// a share below a tenth of a percent, "100%" for a share that rounds to
+/// 100.0%, and otherwise one decimal, for example "0.5%".
 fn share(value: f32) -> String {
     let percent = value * 100.;
     if percent <= 0. {
@@ -47,9 +61,12 @@ fn share(value: f32) -> String {
 }
 
 impl Measure {
-    /// What was counted, in words: first how much of the picture differs,
-    /// then, if there is more to say, how much differs at all and that the
-    /// pictures were of different sizes.
+    /// Writes the result as two pieces of text. The first says what share
+    /// of the pixels differ, for example "0% of pixels differ" or "<0.1% of
+    /// pixels differ visibly". The second is `None` when there is nothing
+    /// to add. Otherwise it says what share of the pixels differ at all, if
+    /// that is more than the share that differ visibly, and it says that the
+    /// two pictures had different sizes, if they had.
     pub fn sentence(&self) -> (String, Option<String>) {
         let counted = if self.visible > 0. {
             format!("{} {}", share(self.visible), en("of pixels differ visibly"))
@@ -78,9 +95,11 @@ impl Measure {
     }
 }
 
-/// The difference of two decoded images, at the left image's proportions
-/// (the right one is stretched onto it, as `object-fit: fill` does in the
-/// composite), and what it measures. `None` if either image is empty.
+/// Computes the difference picture of two decoded images and counts the
+/// pixels that differ. The picture has the proportions of the left image.
+/// The right image is scaled to the size of the left image, as the Electron
+/// screen does with `object-fit: fill`. The result is `None` when either
+/// image has no pixels.
 pub fn compute(left: &RenderImage, right: &RenderImage) -> Option<(Arc<RenderImage>, Measure)> {
     let buffer = |image: &RenderImage| -> Option<Buffer> {
         let size = image.size(0);
@@ -100,8 +119,8 @@ pub fn compute(left: &RenderImage, right: &RenderImage) -> Option<(Arc<RenderIma
     ))
 }
 
-/// Counts the difference picture's pixels that are not black, and those
-/// past [`VISIBLE`].
+/// Counts the pixels of a difference picture that are not black, and the
+/// pixels of which a colour channel is greater than [`VISIBLE`].
 fn measure(pixels: &Buffer, sizes: Option<((u32, u32), (u32, u32))>) -> Measure {
     let (mut changed, mut visible) = (0u64, 0u64);
     for pixel in pixels.pixels() {
@@ -117,9 +136,12 @@ fn measure(pixels: &Buffer, sizes: Option<((u32, u32), (u32, u32))>) -> Measure 
     }
 }
 
-/// Each channel is `|left − right|` of the two images laid on black, and the
-/// result is opaque. Channel order does not matter, so this works on GPUI's
-/// BGRA as well as on RGBA.
+/// Computes the difference picture. Each image is first drawn on black, so
+/// a transparent pixel counts as black. Each colour channel of the result
+/// is the absolute difference of that channel in the two images, and the
+/// result is fully opaque. The calculation is the same for every colour
+/// channel, so it gives the right result for GPUI's BGRA pixels as well as
+/// for RGBA pixels.
 fn difference(left: &Buffer, right: &Buffer) -> Option<Buffer> {
     let (width, height) = bounded(left.dimensions())?;
     let fitted = |image: &Buffer| -> Option<Buffer> {
@@ -144,7 +166,9 @@ fn difference(left: &Buffer, right: &Buffer) -> Option<Buffer> {
     Some(out)
 }
 
-/// The size to compare at: the left image's, scaled down to the limit.
+/// The size at which two images are compared: the size of the left image,
+/// scaled down so that neither side is longer than [`LIMIT`]. The result is
+/// `None` when the width or the height is zero.
 fn bounded((width, height): (u32, u32)) -> Option<(u32, u32)> {
     if width == 0 || height == 0 {
         return None;
@@ -179,7 +203,7 @@ mod tests {
         let right = Buffer::from_pixel(2, 2, Rgba([50, 150, 50, 255]));
         let out = difference(&left, &right).unwrap();
         assert_eq!(out.get_pixel(0, 0).0, [150, 50, 0, 255]);
-        // A transparent pixel counts as black.
+        // A fully transparent pixel counts as black, whatever its colour.
         let clear = Buffer::from_pixel(2, 2, Rgba([255, 255, 255, 0]));
         assert_eq!(
             difference(&left, &clear).unwrap().get_pixel(1, 1).0,

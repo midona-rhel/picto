@@ -1,12 +1,19 @@
-//! An element whose contents depend on its own size, built in the frame
-//! that gives it that size: what CSS does with a container query, or with a
-//! picture placed by its pane's width and height.
+//! An element that builds its contents from its own bounds, in the same
+//! frame in which it gets those bounds.
 //!
-//! The element takes the place its style gives it in its parent's layout
-//! and has no children there. Once its bounds are known, in the same frame,
-//! it builds its contents from them, lays them out in exactly those bounds
-//! and paints them. Nothing is measured in one frame and applied in the
-//! next, so the contents are right while the window is being resized.
+//! Some contents can only be built when their size is known. A picture is
+//! placed according to the width and height of its pane. A row of buttons
+//! shows labels only when the row is wide enough. CSS does this with a
+//! container query.
+//!
+//! A view could measure the size while one frame is drawn and build the
+//! contents from that size in the next frame. The contents would then be
+//! built for the previous size in every frame in which the size changes, for
+//! example while the window is being resized. This element avoids that. It
+//! takes part in its parent's layout with the style it is given and has no
+//! children there. When GPUI has computed its bounds, it calls the builder
+//! with those bounds, lays the result out in exactly those bounds and paints
+//! it, all in that same frame.
 use gpui::*;
 
 type Build = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> AnyElement>;
@@ -16,8 +23,9 @@ pub struct Sized {
     build: Option<Build>,
 }
 
-/// The contents `build` makes for the bounds the element is given. Style it
-/// as the box the contents fill (`size_full`, `flex_1`, `absolute` …).
+/// Makes an element whose contents `build` returns for the element's
+/// bounds. Give the element the style of the box that the contents should
+/// fill, for example `size_full`, `flex_1` or `absolute` with `inset_0`.
 pub fn sized(
     build: impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> AnyElement + 'static,
 ) -> Sized {
@@ -60,6 +68,8 @@ impl Element for Sized {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
+        // The element has no children during its parent's layout. Its size
+        // comes only from its style.
         let mut style = Style::default();
         style.refine(&self.style);
         (window.request_layout(style, [], cx), ())
@@ -74,6 +84,9 @@ impl Element for Sized {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
+        // The bounds are known here. The contents are built for them and
+        // laid out as a tree of their own that is exactly as large as the
+        // bounds.
         let mut contents = (self.build.take()?)(bounds, window, cx);
         contents.prepaint_as_root(bounds.origin, bounds.size.into(), window, cx);
         Some(contents)

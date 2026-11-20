@@ -1,19 +1,24 @@
-//! The context menus of items (`gridContextMenu.tsx`): a right-click on a
-//! tile, on empty grid space, in the viewer and on the inspector's preview.
+//! The context menus for items, which production builds in
+//! `gridContextMenu.tsx`. They open on a right-click on a tile in the grid,
+//! on empty space in the grid, in the viewer, and on the preview in the
+//! inspector.
 //!
-//! The rows are built by pure functions from a [`Description`] of what was
-//! right-clicked: the selection, the scope, and which actions the caller can
-//! perform (production's optional handlers). A row whose handler is missing
-//! is shown disabled, or left out, exactly where production does either. The
-//! shell turns the rows into a [`menu::Entry`] list and performs the chosen
-//! [`Action`].
+//! The functions in this file build a menu's rows from a [`Description`] of
+//! what was right-clicked, and they have no other input and no side effect.
+//! The description holds the selection, the scope that the grid shows, and
+//! which actions the caller can perform (in production these are optional
+//! handler functions). When the caller cannot perform a row's action, the
+//! row is shown disabled or is left out, whichever production does for that
+//! row. The shell turns the rows into a list of [`menu::Entry`] and performs
+//! the [`Action`] of the row that the user chooses.
 use crate::i18n::format::grouped;
 use crate::i18n::t;
 pub use crate::search_by_image::{ENGINES, Engine};
 use crate::ui::menu;
 use picto_library::ContentSortField;
 
-/// Where the menu was opened (`GridMenuContext.surface`).
+/// Whether the menu was opened in the grid or in the viewer
+/// (`GridMenuContext.surface` in production).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Surface {
     #[default]
@@ -21,7 +26,8 @@ pub enum Surface {
     Viewer,
 }
 
-/// `scopeKind`: what kind of destination the grid shows.
+/// The kind of place whose items the grid shows: one of the system scopes,
+/// a folder, or a smart folder (`scopeKind` in production).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScopeKind {
     System,
@@ -29,8 +35,9 @@ pub enum ScopeKind {
     SmartFolder,
 }
 
-/// `statusFilter`: the lifecycle the menu acts within, as the application
-/// menu has it.
+/// Whether the items that the menu acts on are in the Inbox, are active, or
+/// are in the Trash (`statusFilter` in production). This is the same type
+/// that the application menu uses.
 pub use crate::app_menu::Status;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,29 +46,39 @@ pub enum Kind {
     Collection,
 }
 
-/// How "Open With Other" can be offered (`openWithOptions`/`openWithPending`).
+/// How the menu offers "Open With Other" (`openWithOptions` and
+/// `openWithPending` in production).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum OpenWith {
     #[default]
     None,
-    /// The applications are being looked up: a submenu with one disabled row.
-    /// Production's state on macOS until it has listed them.
+    /// The applications that can open the file are still being looked up.
+    /// The menu shows a submenu with one disabled row, "Loading
+    /// applications...". Production is in this state on macOS until it has
+    /// the list of applications.
     Pending,
-    /// The applications that open the file (macOS): a submenu of them, or
-    /// nothing when there are none.
+    /// The applications that can open the file, which macOS provides. The
+    /// menu shows a submenu with one row for each application, or no "Open
+    /// With Other" row at all when the list is empty.
     Applications(Vec<crate::desktop::Application>),
-    /// The system's own chooser (Windows): one row.
+    /// The application chooser that Windows itself provides. The menu shows
+    /// one row, "Open With Other...", which opens the chooser.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Chooser,
 }
 
-// Windows' own application chooser on the file (`desktop::open_with_chooser`,
-// `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`); Windows is the only
-// system that offers "Open With Other..." as a chooser.
+// Whether the "Open With Other..." row is enabled. The row opens Windows' own
+// application chooser for the file (`desktop::open_with_chooser`, which runs
+// `rundll32.exe shell32.dll,OpenAs_RunDLL <path>`). Windows is the only
+// system that offers "Open With Other..." as a chooser, so the row is
+// disabled on every other system.
 const OPEN_WITH_CHOOSER_BUILT: bool = cfg!(target_os = "windows");
 
-/// `CONTENT_SORT_OPTIONS`: a folder's own order, rewritten by one field,
-/// its label, and the value production's menu row carries.
+/// The fields that "Sort by" can sort a folder's contents by
+/// (`CONTENT_SORT_OPTIONS` in production). Choosing one rewrites the folder's
+/// own order of its items, so that they are sorted by that field. Each entry
+/// holds the field, the label of its menu row, and the string that production
+/// uses for the field, which a menu row carries as its value.
 // i18n: translated where drawn (menu rows)
 pub const CONTENT_SORT: [(ContentSortField, &str, &str); 6] = [
     (ContentSortField::Name, "Name", "name"),
@@ -72,18 +89,24 @@ pub const CONTENT_SORT: [(ContentSortField, &str, &str); 6] = [
     (ContentSortField::Notes, "Notes", "notes"),
 ];
 
-/// One of the view panels production draws in the menu as custom
-/// entries (`buildContextMenuViewEntries`); the shell supplies them.
+/// One of the two panels of view controls that production draws inside the
+/// menu as custom entries (`buildContextMenuViewEntries`). This file only
+/// marks where a panel goes. The shell supplies the entry that draws it
+/// when it calls [`entries`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panel {
-    /// `ViewPanel`: the layout and the sort, inline.
+    /// Production's `ViewPanel`, which holds the layout and the sort
+    /// controls. It is placed directly in the menu.
     Layout,
-    /// `DisplayPanel`: the display switches, inside "Display".
+    /// Production's `DisplayPanel`, which holds the display switches. It is
+    /// placed inside the "Display" submenu.
     Display,
 }
 
-/// Which of production's optional handlers the caller has: a row whose
-/// handler is missing is disabled or left out, as production decides.
+/// Which actions the caller can perform. Each field stands for one of the
+/// optional handler functions that production passes to its menu, and is
+/// true when the caller has that handler. When the field for a row is false,
+/// the row is disabled or left out, whichever production does for that row.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Handlers {
     pub open_default: bool,
@@ -135,14 +158,16 @@ pub struct Handlers {
     pub toggle_grayscale: bool,
 }
 
-/// `GridMenuContext`: what was right-clicked, where.
+/// What was right-clicked and where (`GridMenuContext` in production).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Description {
     pub surface: Surface,
     pub selection_count: usize,
-    /// The selection is a whole query or range rather than listed items.
+    /// True when the selection is everything that a query or a range
+    /// matches, and not a list of individual items.
     pub query_selection: bool,
-    /// Whether Auto Tag can run; without it, whether there is a tagger.
+    /// Whether the "Auto Tag" row is enabled. When this is `None`, the row
+    /// is enabled if the caller has the `ai_tagger` handler.
     pub ai_tag_enabled: Option<bool>,
     pub single: bool,
     pub single_hash: Option<String>,
@@ -151,8 +176,9 @@ pub struct Description {
     pub single_name: Option<String>,
     pub single_mime: Option<String>,
     pub contains_group: bool,
-    /// The selected collections: `None` when the caller does not say,
-    /// `Some(None)` while they are being counted.
+    /// How many collections are in the selection. It is `None` when the
+    /// caller does not give a number, and `Some(None)` while the collections
+    /// are still being counted.
     pub collection_count: Option<Option<usize>>,
     pub mixed: bool,
     pub scope: Option<ScopeKind>,
@@ -161,20 +187,23 @@ pub struct Description {
     pub last_folder_name: Option<String>,
     pub clipboard_tags: bool,
     pub open_with: OpenWith,
-    /// Another import is running, so none can start.
+    /// True while another import is running. The import rows are then
+    /// disabled, because a second import cannot start.
     pub import_blocked: bool,
     pub handlers: Handlers,
-    /// `sortFields`: the fields "Sort by" offers, when not all of them (a
-    /// collection's contents sort by name or size only).
+    /// The fields that the "Sort by" submenu offers (`sortFields` in
+    /// production). `None` means every field. A collection's contents can be
+    /// sorted only by name or by size.
     pub sort_fields: Option<Vec<ContentSortField>>,
 }
 
-/// What a row does when chosen.
+/// The action that a row performs when the user chooses it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
     OpenDefault,
     OpenWithOther,
-    /// One of "Open With Other"'s applications, named by its row's value.
+    /// Opens the file with one of the applications in the "Open With Other"
+    /// submenu. The row's `value` holds the path of the application.
     OpenWithApplication,
     LoadingApplications,
     Reveal,
@@ -225,13 +254,16 @@ pub enum Action {
     FlashStop,
     FlashMute,
     SetAsThumbnail,
-    /// A collection's members leave it (`detachMembers`).
+    /// Removes the selected members from their collection (`detachMembers`
+    /// in production).
     RemoveFromGroup,
 }
 
 impl Action {
-    /// The menu's name for the row; each action has its own, so a row can
-    /// be checked or unchecked while the menu is open.
+    /// The string by which the shared menu identifies the row of this
+    /// action. Every action has a different string, so the shell can find
+    /// the action that the user chose, and can check or uncheck one row
+    /// while the menu is open.
     pub fn key(self) -> &'static str {
         use Action::*;
         match self {
@@ -306,7 +338,8 @@ impl Action {
     }
 }
 
-/// A row as built, before it becomes a [`menu::Entry`].
+/// One row of a menu as this file builds it, before [`entries`] turns it
+/// into a [`menu::Entry`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     Item(ItemRow),
@@ -329,13 +362,17 @@ pub struct ItemRow {
     pub disabled: bool,
     pub checked: Option<bool>,
     pub keep_open: bool,
-    /// Tells rows that share an action apart (an application's path).
+    /// A value that distinguishes rows that have the same action. For a row
+    /// in the "Open With Other" submenu, it is the path of the application.
     pub value: Option<String>,
-    /// A picture in place of the glyph (an application's icon).
+    /// An image that is drawn in place of the row's icon. For a row in the
+    /// "Open With Other" submenu, it is the icon of the application.
     pub image: Option<std::sync::Arc<gpui::Image>>,
 }
 
-/// `item(label, { action })`: without its handler a row is disabled.
+/// Makes a row with the label `label` that performs `action`, as
+/// `item(label, { action })` does in production. The row is disabled when
+/// `handled` is false, which means that the caller has no handler for it.
 fn item(action: Action, label: impl Into<String>, handled: bool) -> ItemRow {
     ItemRow {
         action,
@@ -392,7 +429,8 @@ fn submenu(label: impl Into<String>, icon: Option<&'static str>, children: Vec<R
     }
 }
 
-/// Builds the rows; `hint` gives each shortcut's text.
+/// Builds rows. `hint` returns the text of the keyboard shortcut with the
+/// given id, or `None` when there is none to show.
 struct Builder<'a> {
     hint: &'a dyn Fn(&str) -> Option<String>,
 }
@@ -402,7 +440,10 @@ impl Builder<'_> {
         (self.hint)(id)
     }
 
-    /// `buildEntityOpenContextEntries`.
+    /// Adds the rows that open the file (`buildEntityOpenContextEntries` in
+    /// production): "Open with Default App", "Open With Other", the row
+    /// that shows the file in the system's file manager, and "Open in New
+    /// Window". Each row is added only when the caller has its handler.
     fn open_entries(&self, d: &Description, rows: &mut Vec<Row>) {
         let h = &d.handlers;
         if h.open_default {
@@ -473,7 +514,9 @@ impl Builder<'_> {
             .into()
     }
 
-    /// `buildEntityCopyContextEntries`.
+    /// Adds the rows that copy one item (`buildEntityCopyContextEntries` in
+    /// production): "Copy", "Copy File Path", "Copy Name" and "Copy as
+    /// Link". Each row is added only when the caller has its handler.
     fn copy_entries(&self, d: &Description, rows: &mut Vec<Row>) {
         let h = &d.handlers;
         if h.copy_file {
@@ -508,8 +551,10 @@ impl Builder<'_> {
         }
     }
 
-    /// `buildContextMenuViewEntries`: the layout and sort panel inline,
-    /// then the display panel inside "Display".
+    /// Adds the view controls (`buildContextMenuViewEntries` in
+    /// production): the panel with the layout and the sort directly in the
+    /// menu, then a separator, then the "Display" submenu, which holds the
+    /// panel with the display switches.
     fn view_entries(&self, rows: &mut Vec<Row>) {
         rows.push(Row::Panel(Panel::Layout));
         rows.push(Row::Separator);
@@ -521,14 +566,16 @@ impl Builder<'_> {
     }
 }
 
-/// `buildTileContextMenu`: a right-click on a tile, or in the viewer.
+/// Builds the menu for a right-click on a tile or in the viewer
+/// (`buildTileContextMenu` in production).
 pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let b = Builder { hint };
     let mut rows: Vec<Row> = Vec::new();
     let mut more: Vec<Row> = Vec::new();
 
     let h = &d.handlers;
-    // A selection with folders in it has a short menu of its own.
+    // A mixed selection, which is a selection that has folders in it, gets
+    // a menu with only "Move to Trash".
     if d.mixed {
         if h.move_to_trash {
             rows.push(
@@ -552,7 +599,8 @@ pub fn tile_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<
     rows
 }
 
-/// Inbox review: Accept and Reject first.
+/// Adds "Accept", "Reject" and a separator as the first rows of the menu
+/// when the items are in the Inbox and something is selected.
 fn inbox_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -583,7 +631,10 @@ fn inbox_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     }
 }
 
-/// One item: how to open it; its "More" rows for covers and matches.
+/// For a single item, adds the rows that open it, followed by a separator. A
+/// collection gets only "Open in New Window". This function also adds "Set
+/// as Library Cover" and "Find Items with This Media" to `more`, which holds
+/// the rows of the "More" submenu.
 fn open_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
     let h = &d.handlers;
     let can_set_library_cover = d.single
@@ -618,7 +669,8 @@ fn open_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Ve
     }
 }
 
-/// Outside the viewer: the content sort, the view panels and Grayscale.
+/// When the menu was not opened in the viewer, adds the "Sort by" submenu,
+/// the view panels and the "Grayscale" row.
 fn view_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let viewer = d.surface == Surface::Viewer;
@@ -640,7 +692,10 @@ fn view_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     }
 }
 
-/// Folders and collections the selection goes into or out of.
+/// When something is selected, adds the rows that put the selection into a
+/// folder ("Add to Folder" and the rows next to it), and the rows that group
+/// the selection into a collection, edit a collection, or ungroup
+/// collections ("Group...", "Edit Group" and "Ungroup...").
 fn organize_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -676,8 +731,11 @@ fn organize_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
             );
         }
         if count > 1 && h.organize_group {
-            // Grouping merges any selected collections into one; a selection
-            // whose collections are still being counted may hold some.
+            // Grouping a selection that contains collections merges them
+            // into one collection, and the row then says "Merge into One
+            // Group...". While the collections in the selection are still
+            // being counted, the selection may contain some, so the row
+            // says the same.
             let may_merge = d.contains_group
                 || matches!(d.collection_count, Some(None))
                 || matches!(d.collection_count, Some(Some(n)) if n > 0);
@@ -703,7 +761,10 @@ fn organize_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     }
 }
 
-/// Rename, the folder cover, Batch Rename.
+/// Adds "Rename" for a single item, and "Batch Rename N Items..." for a
+/// selection of more than one item. For a single item in a folder, it also
+/// adds "Set as Folder Cover" to `more`, which holds the rows of the "More"
+/// submenu.
 fn rename_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -738,7 +799,9 @@ fn rename_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut 
     }
 }
 
-/// Copying the item, or the selection, to the clipboard.
+/// Adds the rows that copy to the clipboard. A single item that is not a
+/// collection gets the rows for one item. Any other selection of listed
+/// items gets the rows that copy the whole selection.
 fn copy_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -787,7 +850,8 @@ fn copy_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     }
 }
 
-/// Tags: add, auto tag, copy and paste.
+/// When something is selected, adds the tag rows: "Add Tags", "Auto Tag",
+/// "Copy Tags" and "Paste Tags".
 fn tag_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -837,7 +901,9 @@ fn tag_section(d: &Description, b: &Builder, rows: &mut Vec<Row>) {
     }
 }
 
-/// Rating, export and the search engines.
+/// Adds the "Set Rating" submenu, the "Export" submenu and, for a single
+/// image, the "Search by Image" submenu, which has one row for each search
+/// engine.
 fn share_section(d: &Description, rows: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -882,8 +948,10 @@ fn share_section(d: &Description, rows: &mut Vec<Row>) {
     }
 }
 
-/// "More", removal from the folder, and Trash last; only "Delete
-/// Permanently" is drawn as dangerous.
+/// Adds the last rows of the menu: the "More" submenu, then "Remove from
+/// Folder" when the grid shows a folder, and then "Move to Trash". When the
+/// items are in the Trash, "Restore" and "Delete Permanently" take the place
+/// of "Move to Trash". Only "Delete Permanently" is marked as dangerous.
 fn end_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec<Row>) {
     let h = &d.handlers;
     let count = d.selection_count;
@@ -971,12 +1039,13 @@ fn end_section(d: &Description, b: &Builder, rows: &mut Vec<Row>, more: &mut Vec
     }
 }
 
-/// `one` for a single item, else `many`.
+/// Returns `many` when `count` is more than 1, and `one` otherwise.
 fn several(count: usize, one: &str, many: String) -> String {
     if count > 1 { many } else { one.to_owned() }
 }
 
-/// `buildEmptyContextMenu`: a right-click on empty grid space.
+/// Builds the menu for a right-click on empty space in the grid
+/// (`buildEmptyContextMenu` in production).
 pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let b = Builder { hint };
     let h = &d.handlers;
@@ -1042,8 +1111,10 @@ pub fn empty_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec
     rows
 }
 
-/// `contentSortSubmenu`: "Sort by" with each field, or only `fields`, in
-/// production's order.
+/// Builds the "Sort by" submenu (`contentSortSubmenu` in production). It has
+/// one row for each field in [`CONTENT_SORT`], or only for the fields in
+/// `fields` when that is given. The rows are in the same order as in
+/// production.
 fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
     submenu(
         t("Sort by"),
@@ -1056,12 +1127,15 @@ fn content_sort(fields: Option<&[ContentSortField]>) -> Row {
     )
 }
 
-/// The fields a collection's contents sort by (`sortCollectionContents`).
+/// The two fields that a collection's contents can be sorted by, which are
+/// name and size (`sortCollectionContents` in production).
 pub const COLLECTION_SORT: [ContentSortField; 2] = [ContentSortField::Name, ContentSortField::Size];
 
-/// `openMemberMenu`: a collection member's menu is the tile menu with
-/// "Remove from Group" (or "Remove N from Group") after a separator, just
-/// above the Trash row, or at the end when there is none.
+/// Turns the tile menu in `rows` into the menu of a collection's member
+/// (`openMemberMenu` in production). It adds a separator and then the row
+/// "Remove from Group", or "Remove N from Group" when `count` is more than
+/// 1. Both are put directly above the "Move to Trash" row, or at the end of
+/// the menu when there is no "Move to Trash" row.
 pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
     let label = if count > 1 {
         crate::tf!("Remove {value0} from Group", count)
@@ -1083,9 +1157,13 @@ pub fn with_remove_from_group(mut rows: Vec<Row>, count: usize) -> Vec<Row> {
     rows
 }
 
-/// The handlers `openMemberMenu` gives a collection's members: one member
-/// or the editor's selection of them. Sorting the contents is the editor's
-/// (`selectionEnabled`); the edits that act on items act on the collection.
+/// Returns the handlers that the menu of a collection's members has
+/// (`openMemberMenu` in production). `single` is true when the menu is for
+/// one member, and false when it is for several members that are selected in
+/// the collection's editor. `editor` is true when the menu was opened in the
+/// editor (`selectionEnabled` in production), and only then does the menu
+/// offer "Sort by". The rows that change items change the whole collection,
+/// and not only the members that the menu was opened on.
 pub fn member_handlers(single: bool, editor: bool) -> Handlers {
     Handlers {
         open_default: true,
@@ -1117,8 +1195,10 @@ pub fn member_handlers(single: bool, editor: bool) -> Handlers {
     }
 }
 
-/// `openEmptyMenu`: the space between a collection's members, or around its
-/// tiles in the editor: sort its contents, then ungroup it.
+/// Builds the menu for a right-click on the empty space between a
+/// collection's members, or around its tiles in the collection's editor
+/// (`openEmptyMenu` in production). It has the "Sort by" submenu for the
+/// collection's contents, a separator, and "Ungroup...".
 pub fn collection_menu() -> Vec<Row> {
     vec![
         content_sort(Some(&COLLECTION_SORT)),
@@ -1129,17 +1209,22 @@ pub fn collection_menu() -> Vec<Row> {
     ]
 }
 
-/// What the viewer shows that has its own commands: the Flash movie's
-/// playback, and a frame that can become the thumbnail.
+/// What the viewer is showing, for the rows that only the viewer's menu has:
+/// the play, stop and mute rows of a Flash movie, and "Set as Thumbnail" for
+/// a frame that can be captured.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Playback {
-    /// `Some((playing, muted))` for a Flash movie.
+    /// `Some((playing, muted))` when the viewer shows a Flash movie, and
+    /// `None` otherwise.
     pub flash: Option<(bool, bool)>,
-    /// The current frame can be captured.
+    /// True when the current frame can be captured, so that it can be set
+    /// as the thumbnail.
     pub capture: bool,
 }
 
-/// `useViewerEntityContextMenu`: the viewer's own rows, then the item's.
+/// Builds the viewer's menu (`useViewerEntityContextMenu` in production).
+/// The rows that only the viewer has come first, then a separator, and then
+/// the rows of the tile menu for the item.
 pub fn viewer_menu(
     d: &Description,
     playback: Playback,
@@ -1193,16 +1278,18 @@ pub fn viewer_menu(
     rows
 }
 
-/// `buildEntityOpenContextEntries` alone: the rows that open the file, as
-/// the Duplicates screen's cards offer them.
+/// Builds a menu that has only the rows that open the file
+/// (`buildEntityOpenContextEntries` in production). The cards on the
+/// Duplicates screen show this menu.
 pub fn open_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let mut rows = Vec::new();
     Builder { hint }.open_entries(d, &mut rows);
     rows
 }
 
-/// The inspector preview's menu (`InspectorPreview`): opening the file, then
-/// "Set as Library Cover".
+/// Builds the menu of the preview in the inspector (`InspectorPreview` in
+/// production). It has the rows that open the file, and then "Set as Library
+/// Cover".
 pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let b = Builder { hint };
     let mut rows = Vec::new();
@@ -1211,8 +1298,10 @@ pub fn preview_menu(d: &Description, hint: &dyn Fn(&str) -> Option<String>) -> V
     rows
 }
 
-/// One application of "Open With Other": its icon, or the apps glyph
-/// without one, and "(Default)" after the default's name.
+/// Builds the row for one application in the "Open With Other" submenu. The
+/// row shows the application's icon, or the `menu-apps` icon when the
+/// application has none. Its label is the application's name, followed by
+/// "(Default)" when it is the default application.
 fn application_row(application: &crate::desktop::Application) -> Row {
     let label = if application.default {
         crate::tf!("{value0} (Default)", application.name)
@@ -1228,9 +1317,10 @@ fn application_row(application: &crate::desktop::Application) -> Row {
     row.into()
 }
 
-/// The "Open With Other" row as the applications looked up make it, to
-/// replace the pending one in the open menu: none when nothing opens the
-/// file.
+/// Builds the "Open With Other" row from `applications`, once they have been
+/// looked up. The shell puts the result in place of the row that says
+/// "Loading applications..." in the menu that is already open. The result
+/// is empty when no application can open the file.
 pub fn open_with_rows(applications: Vec<crate::desktop::Application>) -> Vec<Row> {
     let d = Description {
         open_with: OpenWith::Applications(applications),
@@ -1245,21 +1335,27 @@ pub fn open_with_rows(applications: Vec<crate::desktop::Application>) -> Vec<Row
     rows
 }
 
-/// `buildLibraryCoverContextEntry`.
+/// Builds the "Set as Library Cover" row (`buildLibraryCoverContextEntry` in
+/// production).
 fn library_cover_row() -> Row {
     item(Action::SetLibraryCover, "Set as Library Cover", true)
         .icon("menu-photo")
         .into()
 }
 
-/// `groupMenuEntry`.
+/// Builds the row that groups the selection into a collection
+/// (`groupMenuEntry` in production). `may_merge` is true when the selection
+/// may contain collections, which grouping merges into one.
 pub fn group_row(may_merge: bool) -> Row {
     item(Action::Group, group_row_label(may_merge), true)
         .icon("menu-group-create")
         .into()
 }
 
-/// The label of [`group_row`], by which an open menu finds it.
+/// Returns the label of [`group_row`]: "Merge into One Group..." when
+/// `may_merge` is true, and "Group..." otherwise. The shell also uses the
+/// label to find the row in a menu that is already open, so that it can
+/// replace the row.
 pub fn group_row_label(may_merge: bool) -> String {
     if may_merge {
         t("Merge into One Group...").to_owned()
@@ -1268,14 +1364,18 @@ pub fn group_row_label(may_merge: bool) -> String {
     }
 }
 
-/// `ungroupMenuEntry`: `None` while the collections are being counted.
+/// Builds the row that ungroups the selected collections (`ungroupMenuEntry`
+/// in production). `count` is the number of selected collections, or `None`
+/// while they are still being counted.
 pub fn ungroup_row(count: Option<usize>) -> Row {
     item(Action::Ungroup, ungroup_row_label(count), true)
         .icon("menu-group-remove")
         .into()
 }
 
-/// The label of [`ungroup_row`], by which an open menu finds it.
+/// Returns the label of [`ungroup_row`]. The shell also uses the label to
+/// find the row in a menu that is already open, so that it can replace the
+/// row.
 pub fn ungroup_row_label(count: Option<usize>) -> String {
     match count {
         None => t("Ungroup Collections...").to_owned(),
@@ -1284,7 +1384,9 @@ pub fn ungroup_row_label(count: Option<usize>) -> String {
     }
 }
 
-/// `buildExportContextEntry`.
+/// Builds the "Export" submenu (`buildExportContextEntry` in production). It
+/// has "Export Originals...", "Export As..." and, when the caller has the
+/// `export_pack` handler, "Export as Picto Pack...".
 fn export_row(h: &Handlers) -> Row {
     let mut children: Vec<Row> = vec![
         item(
@@ -1301,7 +1403,9 @@ fn export_row(h: &Handlers) -> Row {
     submenu("Export", Some("menu-file-export"), children)
 }
 
-/// Every action the rows offer, to find the one chosen by its key.
+/// Returns the action of every row in `rows`, including the rows inside
+/// submenus. The shell searches this list for the action whose
+/// [`Action::key`] the menu reported as chosen.
 pub fn actions(rows: &[Row]) -> Vec<Action> {
     let mut found = Vec::new();
     for row in rows {
@@ -1314,8 +1418,9 @@ pub fn actions(rows: &[Row]) -> Vec<Action> {
     found
 }
 
-/// The rows as the shared menu draws them, with `panel` drawing the view
-/// panels.
+/// Turns `rows` into the entries that the shared menu (`ui::menu`) draws.
+/// `panel` is called for each view panel and returns the entry that draws
+/// that panel.
 pub fn entries(rows: Vec<Row>, panel: &mut dyn FnMut(Panel) -> menu::Entry) -> Vec<menu::Entry> {
     rows.into_iter()
         .map(|row| match row {

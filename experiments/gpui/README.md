@@ -351,37 +351,71 @@ sound) and documents (`document/`). Three hosts: the media view, Quick Look
 and detail windows. Collections open in the reader or the editor. Rule:
 decoding never runs on the thread that draws.
 
-**Screens** (`screens/`): Tags, Subscriptions, Duplicates. A screen's
-actions go in the titlebar (`Toolbar::set_screen_controls`). Subscriptions
-lays its subscriptions out as grid tiles (`grid::layout`), and a
-subscription's page puts its counters, schedule and destination in a rail
-the shell shows in the inspector's place, with the inspector's width,
-toggle and sections (`ui::panel_section`, `ui::property_row`); any screen
-may give the shell such a rail (`shell::ScreenRail`). Duplicates is the
-Electron screen's review, one pair of matching files at a time, in this
-app's own dress (`screens/duplicates/`): the two pictures side by side at
-one shared zoom, with no frame around them, leaning toward each other and
-resting on their names; under each picture one line with the file's name
-and its keep action (Z keeps the left file, X the right), then its facts
-as the inspector writes them, the rows in which the two files differ in the
-primary colour and the rest faint. The screen has no footer: like every
-main screen its controls are in the titlebar, built as a subscription
-page's are (`ui::titlebar_button`). After the title, the place in the
-queue between the pair before and after (← →) and, quietly beside it, how
-alike the scan found the files and what comparing the originals' pixels
-counted (a measurement, never a verdict of sameness); at the right end
-Smart merge (S), Not duplicates (N), Keep both (B) and Show Difference,
-then the zoom. A titlebar too short for all of it gives way in one order:
-what was counted shortens, the four decisions show their glyphs together,
-the similarity goes, then the place's figures, the zoom and the arrows.
-Smart merge under the pointer lights the keep action it would take and
-dims the other file. The pixel difference shows while Show Difference is
-under the pointer, after a press on it until a press elsewhere, or while D
-is held. The wheel zooms and never changes the pair, and the pictures of
-the pair after the one on screen are decoded ahead, so a decision lands on
-them sharp. Every part is laid out for its size in the frame that gives it
-that size (`ui::sized`): a picture from its pane, the titlebar's row from
-its own width.
+**Screens** (`screens/`). There are three: Tags, Subscriptions and
+Duplicates. A screen puts its buttons in the titlebar
+(`Toolbar::set_screen_controls`). The Subscriptions and Duplicates screens
+build their labelled buttons with `ui::titlebar_button`: when the titlebar
+is too narrow for the labels, all of the screen's labelled buttons show
+only their icons, and each button's label is then its tooltip.
+
+The Subscriptions screen draws its subscriptions as grid tiles
+(`grid::layout`). The page of one subscription shows the subscription's
+counters, schedule and destination in a rail. The shell draws that rail
+where the inspector is drawn for the grid, with the inspector's width and
+the inspector's show and hide command, and the rail is built from the
+inspector's controls (`ui::panel_section`, `ui::property_row`). Any screen
+can give the shell such a rail (`shell::ScreenRail`).
+
+The Duplicates screen (`screens/duplicates/`) shows the pairs of files that
+a scan found to be similar, one pair at a time, as the Electron app's
+Duplicates screen does. It has no rail.
+
+- The two pictures are side by side and are zoomed and panned together. A
+  picture has no border and no background around it. A picture that is
+  narrower than its half of the screen is drawn against the middle of the
+  screen, so the two pictures are next to each other.
+- Above each picture is a row 28 px high with the file's name on the left
+  and the Keep left or Keep right button on the right (keys Z and X).
+- Under each picture is a list of the file's facts, drawn with
+  `ui::property_row` in the inspector's words and formats: Dimensions,
+  Size, Type, Rating, Tags, Date Created, Date Imported, Group and
+  Occurrences. A row whose value is the same for both files is drawn in the
+  secondary text colour. A row whose value differs is drawn in the primary
+  text colour for both files.
+- The titlebar has, from left to right: the Previous pair button, the
+  position in the queue (for example "1 / 500") and the Next pair button
+  (keys ← and →); one line of small text in the secondary text colour with
+  the similarity and the pixel measurement (for example "100% similar · 0%
+  of pixels differ"); the Smart merge (S), Not duplicates (N), Keep both (B)
+  and Show Difference (D) buttons; and the Zoom to fit (F) and Actual
+  pixels buttons.
+- The pixel measurement says what share of the two originals' pixels
+  differ. It never says that two pictures are identical. The line of text is
+  drawn when the measurement is finished, and it does not change while the
+  same pair is on screen. When the two files cannot be compared, because one
+  of them is not a still image or could not be decoded, the line has only
+  the similarity.
+- When the titlebar is too narrow, its parts are removed in this order: the
+  pixel measurement is cut off with an ellipsis; the four buttons Smart
+  merge to Show Difference lose their labels, all at the same width; the
+  line of text is removed; then the position, the two zoom buttons and the
+  Previous pair and Next pair buttons. Nothing wraps to a second row.
+- While the pointer is on Smart merge, or Smart merge has keyboard focus,
+  the picture that Smart merge would keep has the outline that the grid
+  draws around a selected tile. No outline is drawn when the library cannot
+  rate one file as better.
+- The pictures are replaced by the pixel difference while the pointer is on
+  Show Difference, while the D key is held down, and after a click on Show
+  Difference until the next click anywhere.
+- The mouse wheel zooms the pictures. It never moves to another pair.
+- The thumbnails and originals of the pair after the pair on screen are
+  decoded in advance, and its originals are compared in advance, so that
+  after a decision the next pair is drawn from its originals at once.
+- The screen measures no size in one frame to use it in the next frame. The
+  pictures and the titlebar's row are built for their size in the frame
+  that lays them out (`ui::sized`), so the screen is drawn correctly in
+  every frame while the window is resized.
+
 **Inspector**
 (`inspector/`): the destination, one item, several items, the pickers and
 their dialogs.
@@ -723,18 +757,24 @@ reading production's code, seen in this app).
   it is shown (a change to the vendored GPUI, `vendor/README.md`).
 - A picture's original is read once it has been on screen for 200 ms, in
   the viewers and the grid alike (production: 100 ms and 250 ms).
-- The Duplicates screen keeps production's workflow, facts and keys, not
-  its look: the pictures have no bordered card or dark pane around them and
-  stand together in the middle; a file's name and keep action share one
-  line; the facts are in the inspector's words and formats (Dimensions,
-  Type as PNG, Date Imported), a collection's row shows for both files, and
-  rows that differ stand out; production's footer of decisions is in the
-  titlebar, where every main screen of this app has its actions, with the
-  keys in the tooltips. Beyond production: D held down shows the
-  difference, and the titlebar says what comparing the pixels counted.
-  Production's one-column layout under 620 points and its icon-only keep
-  buttons under 900 are left out. Tab stays Toggle Panels there, as in
-  production, so a button gets the keyboard only from assistive technology.
+- The Duplicates screen differs from production's in these ways. The
+  four buttons Smart merge, Not duplicates, Keep both and Show Difference
+  are in the titlebar and not in a footer, because every main screen of
+  this app has its buttons in the titlebar. The pictures have no bordered
+  card and no dark background around them, and a narrow picture is drawn
+  against the middle of the screen and not in the middle of its own half.
+  There are no "Left candidate" and "Right candidate" headings. The facts
+  use the inspector's labels and formats (for example "Type: PNG" where
+  production writes "Format: image/png"), the Group row is shown for both
+  files when either file is in a collection, and rows that differ are drawn
+  in a brighter colour than rows that are the same. Smart merge marks the
+  file it would keep with the grid's selection outline, where production
+  draws a green ring around the file's card. The D key shows the pixel
+  difference while it is held down, and the titlebar says what share of
+  the pixels differ; production has neither. Production stacks the two
+  files in one column when the screen is narrower than 620 px and hides the
+  labels of the Keep buttons when it is narrower than 900 px; this app does
+  neither.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge

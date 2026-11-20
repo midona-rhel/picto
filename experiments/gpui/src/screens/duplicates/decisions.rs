@@ -1,7 +1,7 @@
-//! The decisions on a pair and the movement through the queue: the next or
-//! previous pair, Keep Both, Not Duplicates, keeping one side, Smart Merge's
-//! survivor, the difference's states, the fit and actual-size zoom, and what
-//! the toolbar shows.
+//! What the Duplicates screen does when the user acts: moving to the
+//! previous or next pair, making a decision on the pair on screen, showing
+//! the pixel difference, and changing the zoom. It also works out what the
+//! titlebar controls show.
 use super::compare::{Mode, pair_key};
 use super::{Decision, DuplicatesScreen, Fetch, ToolbarModel};
 use crate::i18n::{en, t};
@@ -11,7 +11,9 @@ use gpui::*;
 use picto_library::{DuplicateQualityDecision, DuplicateResolutionChoice};
 
 impl DuplicatesScreen {
-    /// `requestIndex`: another pair of the queue, one at a time.
+    /// Moves `delta` pairs forward (or backward when `delta` is negative) in
+    /// the queue. It does nothing while a move or a decision is under way.
+    /// The Electron screen's `requestIndex` behaves the same way.
     pub(super) fn step(&mut self, delta: isize, cx: &mut Context<Self>) {
         if self.navigating || self.resolving {
             return;
@@ -29,16 +31,20 @@ impl DuplicatesScreen {
         self.fetch(Fetch::Pair(pair_key(pair.file_id_a, pair.file_id_b)), cx);
     }
 
-    /// Settles the pair on screen as two different files. "Not duplicates"
-    /// and "Keep both" both record this; neither touches a file.
+    /// Records that the two files of the pair on screen are different
+    /// files. The Not duplicates button and the Keep both button both call
+    /// this. Neither file is changed.
     pub(super) fn keep_both(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.decide(Decision::KeepBoth, window, cx);
     }
 
-    /// `resolveCurrent`: makes a decision on the pair on screen, then shows
-    /// the next one. Keeping one file merges the other's item into it; the
-    /// merged-away file is deleted from the library by the application.
-    /// Smart merge on a pair the library cannot rank says so and leaves it.
+    /// Writes a decision on the pair on screen to the library and then
+    /// shows the next pair. The Electron screen's `resolveCurrent` does the
+    /// same. When the decision keeps one file, the library merges the other
+    /// file's item into the kept file's item, and the application deletes
+    /// the other file. When the decision is Smart merge and the library
+    /// cannot rate one file as better, a warning says so and the pair stays
+    /// on screen.
     pub(super) fn decide(
         &mut self,
         decision: Decision,
@@ -52,9 +58,11 @@ impl DuplicatesScreen {
             return;
         };
         self.resolving = true;
-        // The buttons are disabled while the decision is written, which
-        // takes the pointer and the keyboard from them: the keyboard goes
-        // back to the screen, whose keys keep working.
+        // The buttons are disabled while the decision is being written. A
+        // disabled button reports neither the pointer nor keyboard focus, so
+        // the flags that follow them are cleared here. If one of the
+        // screen's buttons has keyboard focus, focus moves to the screen
+        // itself, so that the screen's keys keep working.
         self.difference_hovered = false;
         self.difference_focused = false;
         self.difference_pressed = false;
@@ -87,7 +95,8 @@ impl DuplicatesScreen {
                     this.fetch(Fetch::Settled(key), cx);
                 }
                 Ok(None) => {
-                    // The pair stays.
+                    // The library could not rate one file as better, so it
+                    // changed nothing and the pair stays on screen.
                     ui::notify::warning(
                         t("Smart merge needs a choice"),
                         en("No clear quality winner. Choose left or right, or keep both."),
@@ -106,7 +115,8 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Keeps the left (0) or right (1) file.
+    /// Keeps the left file when `side` is 0 and the right file when `side`
+    /// is 1.
     pub(super) fn keep(&mut self, side: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some((a, b)) = self.shown.as_ref().map(|shown| shown.files) else {
             return;
@@ -114,24 +124,35 @@ impl DuplicatesScreen {
         self.decide(Decision::Keep(if side == 0 { a } else { b }), window, cx);
     }
 
-    /// The side Smart merge keeps (`smartMergeWinner`), when it is clear.
-    pub(super) fn survivor_side(&self) -> Option<usize> {
+    /// The file that Smart merge would keep: 0 for the left file, 1 for the
+    /// right file, and `None` when the library cannot rate one file as
+    /// better. The Electron screen calls this `smartMergeWinner`.
+    pub(super) fn smart_merge_keeps(&self) -> Option<usize> {
         let shown = self.shown.as_ref()?;
         let pair = self.pair(shown.key)?;
-        survivor(pair.decision)
+        match pair.decision {
+            DuplicateQualityDecision::LeftBetter | DuplicateQualityDecision::AutoTieLeft => Some(0),
+            DuplicateQualityDecision::RightBetter | DuplicateQualityDecision::AutoTieRight => {
+                Some(1)
+            }
+            DuplicateQualityDecision::NeedsChoice => None,
+        }
     }
 
-    /// `mergePreviewActive`: Smart merge is under the pointer or has the
-    /// keyboard, nothing is being written, and the library can tell which
-    /// file it would keep.
-    pub(super) fn merge_previewed(&self) -> Option<usize> {
+    /// The picture that gets the selection outline: the file that Smart
+    /// merge would keep, while the pointer is on the Smart merge button or
+    /// the button has keyboard focus, and no decision is being written. The
+    /// Electron screen calls this condition `mergePreviewActive`.
+    pub(super) fn outlined_side(&self) -> Option<usize> {
         ((self.smart_hovered || self.smart_focused) && !self.resolving)
-            .then(|| self.survivor_side())
+            .then(|| self.smart_merge_keeps())
             .flatten()
     }
 
-    /// `differenceActive`: the difference shows while its button is under
-    /// the pointer or has the keyboard, or its key is held down.
+    /// True when the pictures are replaced by the difference picture: while
+    /// the pointer is on the Show Difference button, while that button has
+    /// keyboard focus, after a click on it, or while its key is held down.
+    /// The Electron screen calls this `differenceActive`.
     pub(super) fn difference_shown(&self) -> bool {
         !self.resolving
             && (self.difference_hovered
@@ -140,7 +161,8 @@ impl DuplicatesScreen {
                 || self.difference_held)
     }
 
-    /// The difference's key going down and coming up.
+    /// Records that the Show Difference key was pressed (`held` is true) or
+    /// released (`held` is false).
     pub(super) fn hold_difference(&mut self, held: bool, cx: &mut Context<Self>) {
         if self.difference_held != held {
             self.difference_held = held;
@@ -148,16 +170,19 @@ impl DuplicatesScreen {
         }
     }
 
+    /// Zooms both pictures so that each fits its pane.
     pub(super) fn fit(&mut self, cx: &mut Context<Self>) {
         self.zoom.fit();
         self.changed(cx);
     }
 
+    /// Zooms both pictures so that one picture pixel is one screen point.
     pub(super) fn actual(&mut self, cx: &mut Context<Self>) {
         self.zoom.actual();
         self.changed(cx);
     }
 
+    /// The position of the pair on screen in the queue, counted from 0.
     fn index(&self) -> Option<usize> {
         let key = self.shown.as_ref()?.key;
         self.pairs
@@ -165,6 +190,8 @@ impl DuplicatesScreen {
             .position(|pair| pair_key(pair.file_id_a, pair.file_id_b) == key)
     }
 
+    /// What the titlebar controls show, or `None` while the queue is being
+    /// read for the first time or no pair is on screen.
     pub(super) fn toolbar_model(&self) -> Option<ToolbarModel> {
         if self.loading {
             return None;
@@ -179,14 +206,5 @@ impl DuplicatesScreen {
             fit: self.zoom.mode == Mode::Fit,
             actual: self.zoom.mode == Mode::Actual,
         })
-    }
-}
-
-/// `smartMergeWinner`: the side the library judges better, if it can tell.
-fn survivor(decision: DuplicateQualityDecision) -> Option<usize> {
-    match decision {
-        DuplicateQualityDecision::LeftBetter | DuplicateQualityDecision::AutoTieLeft => Some(0),
-        DuplicateQualityDecision::RightBetter | DuplicateQualityDecision::AutoTieRight => Some(1),
-        DuplicateQualityDecision::NeedsChoice => None,
     }
 }

@@ -1,6 +1,8 @@
-//! The shortcut registry of `src/shared/lib/shortcuts.ts`, as data: every
-//! shortcut's id, label, group, description and default keys, the keyboard
-//! presets, and how keys are written on the Mac.
+//! This file holds the shortcut registry of production's
+//! `src/shared/lib/shortcuts.ts` as data: the id, label, group, description
+//! and default keys of every shortcut. It also holds the keyboard presets,
+//! and the functions that write a shortcut's keys as macOS shows them and as
+//! Windows and Linux show them.
 use std::collections::BTreeMap;
 
 pub struct ShortcutDef {
@@ -10,7 +12,8 @@ pub struct ShortcutDef {
     pub keys: &'static str,
     pub keys2: Option<&'static str>,
     pub description: Option<&'static str>,
-    /// Registered for a feature without a handler; Settings does not list it.
+    /// True when the shortcut is registered for a feature that has no
+    /// handler yet. Settings does not list such a shortcut.
     pub deferred: bool,
 }
 
@@ -56,7 +59,8 @@ const RATING: &str = "Rating";
 const VIDEO: &str = "Video";
 const DUPLICATES: &str = "Duplicates";
 
-/// `SHORTCUT_DEFS`, in its order.
+/// Every shortcut, in the same order as `SHORTCUT_DEFS` in production's
+/// `shortcuts.ts`.
 pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
     def("nav.allActive", "All Active", NAV, "Mod+1"),
     def("nav.inbox", "Inbox", NAV, "Mod+2"),
@@ -242,13 +246,14 @@ pub const SHORTCUT_DEFS: &[ShortcutDef] = &[
     def("dup.nextPair", "Next Pair", DUPLICATES, "ArrowRight").about("Go to next duplicate pair"),
 ];
 
-/// The groups in the order Settings lists them (`getShortcutGroups`).
+/// The shortcut groups, in the order in which Settings lists them. This is
+/// the order of production's `getShortcutGroups`.
 const GROUP_ORDER: [&str; 9] = [
     NAV, FILE, EDIT, GROUPS, RATING, VIEW, INBOX, VIDEO, DUPLICATES,
 ];
 
-/// Shortcuts whose primary key needs AltGr on European layouts; the EU
-/// preset swaps their two bindings.
+/// The shortcuts whose first binding needs the AltGr key on European
+/// keyboard layouts. The EU preset swaps the two bindings of each of them.
 const EU_SWAP_IDS: [&str; 4] = [
     "view.fitWindow",
     "video.rateIncrease",
@@ -279,7 +284,9 @@ impl KeyboardPreset {
     }
 }
 
-/// A binding the user changed: either slot, `Some("")` when cleared.
+/// The bindings of one shortcut that the user changed. Each field is one of
+/// the shortcut's two key slots: `None` when the user did not change that
+/// slot, and `Some("")` when the user cleared it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Override {
     pub keys: Option<String>,
@@ -294,7 +301,8 @@ pub enum Slot {
     Keys2,
 }
 
-/// One shortcut as Settings shows it: the preset applied, then overrides.
+/// One shortcut as Settings shows it. The keyboard preset is applied to its
+/// keys first, and the user's overrides are applied after that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shortcut {
     pub id: &'static str,
@@ -328,7 +336,8 @@ fn resolve(def: &ShortcutDef, preset: KeyboardPreset, overrides: &Overrides) -> 
     }
 }
 
-/// One shortcut by id, the preset and overrides applied (`getShortcut`).
+/// Returns the shortcut with this id, with the preset and the overrides
+/// applied. This is production's `getShortcut`.
 pub fn shortcut(id: &str, preset: KeyboardPreset, overrides: &Overrides) -> Option<Shortcut> {
     SHORTCUT_DEFS
         .iter()
@@ -336,7 +345,8 @@ pub fn shortcut(id: &str, preset: KeyboardPreset, overrides: &Overrides) -> Opti
         .map(|def| resolve(def, preset, overrides))
 }
 
-/// Every shortcut, the preset and overrides applied, in registry order.
+/// Returns every shortcut, with the preset and the overrides applied, in
+/// the order of the registry.
 pub fn all(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Shortcut> {
     SHORTCUT_DEFS
         .iter()
@@ -349,7 +359,8 @@ pub struct Group {
     pub items: Vec<Shortcut>,
 }
 
-/// The working shortcuts, grouped in the Settings order.
+/// Returns the shortcuts that are not deferred, in groups, in the order in
+/// which Settings lists the groups. A group with no shortcuts is left out.
 pub fn groups(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Group> {
     GROUP_ORDER
         .iter()
@@ -365,8 +376,10 @@ pub fn groups(preset: KeyboardPreset, overrides: &Overrides) -> Vec<Group> {
         .collect()
 }
 
-/// `filterGroups`: label, group, description or written keys contain the
-/// query, ignoring case.
+/// Keeps the shortcuts whose label, group, description or first binding
+/// contains the query, ignoring case. The binding is compared as
+/// [`display`] writes it. A blank query keeps every shortcut. This is
+/// production's `filterGroups`.
 pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
     if query.trim().is_empty() {
         return groups;
@@ -380,7 +393,9 @@ pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
                 .items
                 .into_iter()
                 .filter(|item| {
-                    // As shown, in the interface's language.
+                    // The label, the group and the description are compared
+                    // in the interface's language, which is how they are
+                    // shown.
                     crate::i18n::t(item.label).to_lowercase().contains(&query)
                         || crate::i18n::t(item.group).to_lowercase().contains(&query)
                         || item.description.is_some_and(|text| {
@@ -394,8 +409,10 @@ pub fn filter(groups: Vec<Group>, query: &str) -> Vec<Group> {
         .collect()
 }
 
-/// `findShortcutConflict`: another shortcut already bound to `value`.
-/// Delete and Remove from Folder share their key on purpose.
+/// Returns the label of another shortcut that is already bound to `value`,
+/// or `None` when there is none. Delete and Remove from Folder share their
+/// key on purpose, so they are never reported as a conflict with each
+/// other. This is production's `findShortcutConflict`.
 pub fn conflict(
     id: &str,
     value: &str,
@@ -416,26 +433,32 @@ pub fn conflict(
         .map(|other| other.label)
 }
 
-/// `formatKeysAsArray`: each key of a shortcut as this platform writes it,
-/// the Mac's symbols on macOS and words elsewhere.
+/// Returns each key of a shortcut as this platform writes it: with the
+/// Mac's symbols on macOS, and with words on other platforms. This is
+/// production's `formatKeysAsArray`.
 pub fn parts(keys: &str) -> Vec<String> {
     parts_on(keys, cfg!(target_os = "macos"))
 }
 
-/// `formatKeysDisplay`: the Mac's symbols run together (`⌘⇧S`); elsewhere
-/// the words joined by `+` (`Ctrl+Shift+S`).
+/// Returns a shortcut's keys as one string. On macOS the Mac's symbols are
+/// joined with nothing between them (`⌘⇧S`). On other platforms the words
+/// are joined with `+` (`Ctrl+Shift+S`). This is production's
+/// `formatKeysDisplay`.
 pub fn display(keys: &str) -> String {
     display_on(keys, cfg!(target_os = "macos"))
 }
 
-/// [`display`] as macOS (`mac`) or Windows and Linux write it.
+/// Does what [`display`] does, as macOS writes the keys when `mac` is true
+/// and as Windows and Linux write them when `mac` is false.
 pub fn display_on(keys: &str, mac: bool) -> String {
     parts_on(keys, mac).join(if mac { "" } else { "+" })
 }
 
-/// [`parts`] as macOS (`mac`, `MAC_SYMBOLS`) or Windows and Linux
-/// (`WIN_LABELS`) write them. Only `Mod` changes name elsewhere: `Shift`,
-/// `Alt` and `Ctrl` are written as they are.
+/// Does what [`parts`] does, as macOS writes the keys when `mac` is true
+/// (production's `MAC_SYMBOLS`) and as Windows and Linux write them when
+/// `mac` is false (production's `WIN_LABELS`). On Windows and Linux, `Mod`
+/// is the only modifier that is written under another name (`Ctrl`);
+/// `Shift`, `Alt` and `Ctrl` are written as they are.
 pub fn parts_on(keys: &str, mac: bool) -> Vec<String> {
     if keys == "+" {
         return vec!["+".into()];
@@ -454,7 +477,8 @@ pub fn parts_on(keys: &str, mac: bool) -> Vec<String> {
         .collect()
 }
 
-/// `MAC_SYMBOLS`.
+/// Returns the symbol that macOS shows for one key. This is production's
+/// `MAC_SYMBOLS` table. A key that is not in the table is returned as it is.
 fn mac_symbol(part: &str) -> &str {
     match part {
         "Mod" => "⌘",
@@ -477,7 +501,9 @@ fn mac_symbol(part: &str) -> &str {
     }
 }
 
-/// `WIN_LABELS`.
+/// Returns the word that Windows and Linux show for one key. This is
+/// production's `WIN_LABELS` table. A key that is not in the table is
+/// returned as it is.
 fn label(part: &str) -> &str {
     match part {
         "Mod" => "Ctrl",
@@ -497,8 +523,9 @@ fn label(part: &str) -> &str {
     }
 }
 
-/// `eventToShortcutString`: a pressed key as the registry writes it, or
-/// `None` for a modifier on its own. `key` is GPUI's name for the key.
+/// Converts a pressed key to the form in which the registry writes keys.
+/// Returns `None` when the key is a modifier on its own. `key` is GPUI's
+/// name for the key. This is production's `eventToShortcutString`.
 pub fn from_keystroke(
     key: &str,
     command: bool,

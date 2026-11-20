@@ -150,4 +150,3 @@ Scan the library to find similar images.
 of pixels differ visibly
 of pixels differ, none visibly
 of pixels differ
-Pixels are compared in still images only

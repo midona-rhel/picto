@@ -1,18 +1,27 @@
-//! A screen's action in the titlebar: labelled while the titlebar has the
-//! room, else its glyph alone with the label as its tooltip. A screen
-//! switches all its actions together, so the row never mixes the two.
+//! The button that a screen puts in the titlebar for one of its actions.
+//! The Subscriptions screen and the Duplicates screen use it.
+//!
+//! The button has two forms. With `labelled` it shows its icon and its
+//! label. Without `labelled` it is a square that shows only its icon, and
+//! its label is its tooltip. A screen passes the same `labelled` to all of
+//! its buttons, so they all change form at the same titlebar width.
 use super::action_button::{ActionButton, Look, action_button};
 use crate::theme;
 use gpui::{ElementId, SharedString};
 
-/// The titlebar's control height, and the padding and gap a labelled
-/// button keeps there.
+/// The height in pixels of a titlebar button. A button without a label is
+/// also this wide.
 pub const HEIGHT: f32 = theme::CONTROL_MD;
+/// The space in pixels to the left and to the right of a labelled button's
+/// contents.
 const PADDING: f32 = 10.;
+/// The space in pixels between a labelled button's icon and its label.
 const GAP: f32 = 6.;
-/// The room between two buttons of one group.
+/// The space in pixels between two titlebar buttons that are next to each
+/// other.
 pub const BETWEEN: f32 = 4.;
 
+/// Makes a titlebar button. `icon` is the name of a 14 px icon.
 pub fn titlebar_button(
     id: impl Into<ElementId>,
     look: Look,

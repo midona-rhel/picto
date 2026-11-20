@@ -3,56 +3,62 @@ use crate::theme::Text as _;
 use gpui::*;
 use std::time::{Duration, Instant};
 
-/// How strong a quiet row's text is, in percent of the primary text colour.
-const QUIET: f32 = 40.;
-
-/// `property-spinner`: one turn of the loading spinner.
+/// The loading spinner makes one full turn in this time. Production's CSS
+/// animation `property-spinner` has the same duration.
 const SPIN: Duration = Duration::from_millis(650);
 
-/// A label and its value on one 20px line (`PropertyRow.tsx`): the label in
-/// an 88px column (a longer label widens it), the value right-aligned after
-/// a 12px gap, in a monospace face with tabular figures at 80%, ending in an
-/// ellipsis when too long; while the value loads, a spinner in its place.
+/// One row of the inspector's property list, a port of production's
+/// `PropertyRow.tsx`. The row is 20 px high. The label is on the left in a
+/// column at least 88 px wide. The value is right-aligned after a 12 px gap,
+/// in the Fira Mono font with tabular figures, and is cut off with an
+/// ellipsis when it does not fit. While the value is loading, a spinner is
+/// drawn where the value would be.
 #[derive(IntoElement)]
 pub struct PropertyRow {
     label: SharedString,
     value: SharedString,
     mono: &'static str,
-    /// Loading since then: the spinner shows instead of the value.
+    /// The time at which the value started loading. While this is set, the
+    /// spinner is drawn instead of the value.
     loading: Option<Instant>,
-    emphasis: Emphasis,
+    color: RowColor,
 }
 
-/// How much a row asks for the eye among its neighbours.
+/// The text colour of a property row's label and value.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub enum Emphasis {
-    /// The inspector's row: the label in the colour around it, the value
-    /// at 80%.
+pub enum RowColor {
+    /// The colours the inspector uses: the label takes the text colour of
+    /// the element that contains the row, and the value is drawn in the
+    /// contrast colour at 80% opacity.
     #[default]
-    Plain,
-    /// A row that says what the row compared with it says too: label and
-    /// value both faint.
-    Quiet,
-    /// A row that says something its counterpart does not: label and value
-    /// in the primary text colour.
-    Strong,
+    Inspector,
+    /// The label and the value are both drawn in the secondary text colour.
+    /// The Duplicates screen uses this for a row whose value is the same
+    /// for both files.
+    Secondary,
+    /// The label and the value are both drawn in the primary text colour.
+    /// The Duplicates screen uses this for a row whose value differs
+    /// between the two files.
+    Primary,
 }
 
-/// The value is set in `--inspector-mono-font-family` (Fira Mono), as it is
-/// inside the inspector.
+/// Makes a property row with the inspector's colours. The value is drawn in
+/// Fira Mono, which production names `--inspector-mono-font-family`.
 pub fn property_row(label: impl Into<SharedString>, value: impl Into<SharedString>) -> PropertyRow {
     PropertyRow {
         label: label.into(),
         value: value.into(),
         mono: theme::FONT_INSPECTOR_MONO,
         loading: None,
-        emphasis: Emphasis::Plain,
+        color: RowColor::Inspector,
     }
 }
 
-/// `.spinner`: a 10px ring open on its right, turning once every 650 ms
-/// from `since`, so spinners started together turn together. It is drawn
-/// again at [`crate::motion::LOOP_FRAME`], not at the display's rate.
+/// The loading spinner: a ring 10 px across with a gap on its right side,
+/// which production styles as `.spinner`. Its angle is computed from the
+/// time since `since`, so two spinners that started at the same time are
+/// always at the same angle. It asks for a new frame every
+/// [`crate::motion::LOOP_FRAME`] instead of at the display's refresh rate.
 pub fn spinner(since: Instant, window: &mut Window, cx: &mut App) -> Svg {
     crate::motion::loop_frame(window, cx);
     let turn = since.elapsed().as_secs_f32() / SPIN.as_secs_f32();
@@ -64,14 +70,16 @@ pub fn spinner(since: Instant, window: &mut Window, cx: &mut App) -> Svg {
 }
 
 impl PropertyRow {
-    /// `loading`: the value is on its way, loading since `since`.
+    /// Draws the spinner instead of the value. `since` is the time at which
+    /// the value started loading.
     pub fn loading(mut self, since: Instant) -> Self {
         self.loading = Some(since);
         self
     }
 
-    pub fn emphasis(mut self, emphasis: Emphasis) -> Self {
-        self.emphasis = emphasis;
+    /// Sets the text colour of the label and the value.
+    pub fn color(mut self, color: RowColor) -> Self {
+        self.color = color;
         self
     }
 }
@@ -79,10 +87,10 @@ impl PropertyRow {
 impl RenderOnce for PropertyRow {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = theme::theme(cx);
-        let (label_color, value_color) = match self.emphasis {
-            Emphasis::Plain => (None, theme.contrast(80.)),
-            Emphasis::Quiet => (Some(theme.text_at(QUIET)), theme.text_at(QUIET)),
-            Emphasis::Strong => (Some(theme.text()), theme.text()),
+        let (label_color, value_color) = match self.color {
+            RowColor::Inspector => (None, theme.contrast(80.)),
+            RowColor::Secondary => (Some(theme.text_secondary()), theme.text_secondary()),
+            RowColor::Primary => (Some(theme.text()), theme.text()),
         };
         let value = match self.loading {
             Some(since) => div()
@@ -106,8 +114,10 @@ impl RenderOnce for PropertyRow {
             label = label.text_color(color);
         }
         let label = label.child(self.label.clone());
-        // Read as one line of text, its label then its value; while the
-        // value loads, `Loading …` as the spinner's `aria-label` says.
+        // Assistive technology reads the row as one line of text: the label
+        // followed by the value. While the value is loading it reads
+        // "Loading" followed by the label, which is the `aria-label` of
+        // production's spinner.
         let read = match self.loading {
             Some(_) => crate::tf!("Loading {value0}", self.label),
             None => format!("{} {}", self.label, self.value),

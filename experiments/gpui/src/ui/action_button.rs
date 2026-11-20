@@ -7,49 +7,70 @@ use std::rc::Rc;
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type HoverHandler = Box<dyn Fn(bool, &mut Window, &mut App) + 'static>;
 
-/// Which of the shared text buttons this is.
+/// Which style a shared text button has. Each style copies a CSS class of
+/// production.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Look {
-    /// `actionButton.module.css` `.btn`: the hover surface in a primary
-    /// border with a dark 1px ring, deepening to the subtle overlay under
-    /// the pointer over 150 ms.
+    /// The class `.btn` in `actionButton.module.css`. The fill is
+    /// `--color-surface-hover`, the border is `--color-border-primary`, and
+    /// a 1px ring of 20% black is drawn around the border. While the
+    /// pointer is over the button, the fill changes to
+    /// `--color-subtle-overlay` over 150 ms.
     Standard,
-    /// `.btn.btnPrimary`: the primary colour, at 60% under the pointer.
+    /// The classes `.btn.btnPrimary`. The fill and the border are the
+    /// primary colour. While the pointer is over the button, both change to
+    /// the primary colour at 60% opacity (`--color-primary-60`).
     Primary,
-    /// `.btn.btnDanger`: a negative tint with a pale red label, deepening
-    /// from 8% to 15% under the pointer.
+    /// The classes `.btn.btnDanger`. The fill is the negative colour at 8%
+    /// opacity, the border is the negative colour at 35% opacity, and the
+    /// label is pale red (`#ff9aa4`). While the pointer is over the button,
+    /// the fill changes to the negative colour at 15% opacity.
     Danger,
-    /// `Settings.module.css` `.footerBtn` and `.inlineButton`: 36px, regular
-    /// weight, no ring, deepening to the active surface over 150 ms `ease`.
+    /// The classes `.footerBtn` and `.inlineButton` in
+    /// `Settings.module.css`. The button is 36px high, its label has the
+    /// regular font weight, and it has no 1px ring around its border. While
+    /// the pointer is over the button, the fill changes from
+    /// `--color-surface-hover` to `--color-surface-active` over 150 ms, with
+    /// the CSS timing function `ease`.
     Settings,
-    /// `Settings.module.css` `.footerBtnPrimary`: the primary colour,
-    /// semibold, lightening 5% toward white under the pointer.
+    /// The class `.footerBtnPrimary` in `Settings.module.css`. The fill and
+    /// the border are the primary colour and the label is semibold. While
+    /// the pointer is over the button, the fill changes to a mix of 95%
+    /// primary colour and 5% white.
     SettingsPrimary,
-    /// `TaskDialog.module.css` `.foot .ghost`: `.btn` with no fill, border
-    /// or ring and the secondary text colour, taking the hover surface and
-    /// the primary text colour under the pointer.
+    /// The rule `.foot .ghost` in `TaskDialog.module.css`. It is `.btn` with
+    /// a transparent fill, a transparent border, no 1px ring, and a label in
+    /// the secondary text colour. While the pointer is over the button, the
+    /// fill changes to `--color-surface-hover` and the label changes to the
+    /// primary text colour.
     Ghost,
 }
 
 impl Look {
-    /// The `.footerBtn` family rather than `.btn`.
+    /// Returns true for the two styles that copy `Settings.module.css`
+    /// (`.footerBtn` and `.footerBtnPrimary`), and false for the styles that
+    /// are based on `.btn`.
     fn settings(self) -> bool {
         matches!(self, Look::Settings | Look::SettingsPrimary)
     }
 }
 
-/// The shared action button (`actionButton.module.css`): a text button with
-/// an optional leading glyph, in one of its looks.
-/// Disabled, it fades to 35% and takes no pointer, so it has no hover and no
-/// tooltip. It occludes what is behind it.
+/// The shared action button (`actionButton.module.css`). It is a button with
+/// a text label and an optional icon before the label, drawn in one of the
+/// styles in [`Look`]. A disabled button is drawn at 35% opacity and does
+/// not react to the pointer: its colour does not change while the pointer is
+/// over it, it cannot be clicked, and it shows no tooltip. The button calls
+/// `occlude`, so the pointer does not reach the elements behind it.
 #[derive(IntoElement)]
 pub struct ActionButton {
     id: ElementId,
     look: Look,
     icon: Option<(&'static str, f32)>,
     label: Option<SharedString>,
-    /// A smaller tertiary text at the end, the label then filling the
-    /// width from the left (`.cloudProviderButton`'s `<small>`).
+    /// A second, smaller text in the tertiary text colour, drawn after the
+    /// label, at the end of the button. When it is set, the label is
+    /// left-aligned and fills the rest of the width. This copies the
+    /// `<small>` element in production's `.cloudProviderButton`.
     caption: Option<SharedString>,
     height: f32,
     width: Option<f32>,
@@ -101,8 +122,10 @@ impl ActionButton {
         self.label = Some(label.into());
         self
     }
-    /// A small tertiary text after the label, at the button's end; the
-    /// label is left-aligned and cut short with an ellipsis.
+    /// Sets a small text in the tertiary text colour that is drawn after the
+    /// label, at the end of the button. With a caption, the label is
+    /// left-aligned and, when it does not fit, is cut short with an
+    /// ellipsis.
     pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
         self.caption = Some(caption.into());
         self
@@ -111,17 +134,20 @@ impl ActionButton {
         self.height = height;
         self
     }
-    /// Fills the width it is given, as a button in a grid track does.
+    /// Makes the button as wide as the space that its parent gives it, as a
+    /// production button in a CSS grid track is.
     pub fn full_width(mut self) -> Self {
         self.full_width = true;
         self
     }
-    /// A fixed width, for a button that shows only its glyph.
+    /// Sets a fixed width in pixels. This is for a button that shows only an
+    /// icon and no label.
     pub fn width(mut self, width: f32) -> Self {
         self.width = Some(width);
         self
     }
-    /// The space on either side of the content.
+    /// Sets the padding in pixels to the left and to the right of the
+    /// button's content.
     pub fn padding(mut self, padding: f32) -> Self {
         self.padding = padding;
         self
@@ -149,15 +175,20 @@ impl ActionButton {
         self.on_click = Some(Box::new(handler));
         self
     }
-    /// Told when the pointer enters or leaves the button.
+    /// Sets a handler that is called with `true` when the pointer moves onto
+    /// the button and with `false` when the pointer leaves it.
     pub fn on_hover(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_hover = Some(Box::new(handler));
         self
     }
-    /// Told when the keyboard comes to the button or leaves it (`onFocus`
-    /// and `onBlur`), and that it has left when the button is disabled. The
-    /// button learns of it as it is drawn, so a handler that changes what a
-    /// view shows also asks for the next frame.
+    /// Sets a handler that is called with `true` when the button gets
+    /// keyboard focus and with `false` when it loses keyboard focus, as
+    /// `onFocus` and `onBlur` are in production. It is also called with
+    /// `false` when the button becomes disabled while it has keyboard focus.
+    /// The button only finds out that its focus has changed while it is
+    /// being drawn, so the handler runs during drawing. A handler that
+    /// changes what a view shows must therefore also ask for another frame
+    /// to be drawn.
     pub fn on_focus(mut self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_focus = Some(Box::new(handler));
         self
@@ -173,14 +204,18 @@ impl RenderOnce for ActionButton {
             cx,
             |_, _| tooltip::Hover::default(),
         );
-        // A button disabled under the pointer loses its hover at once.
+        // A button that becomes disabled while the pointer is over it stops
+        // showing its hover colour immediately, and its tooltip is told that
+        // the pointer has left.
         if self.disabled && fade.read(cx).on() {
             fade.update(cx, |fade, _| *fade = motion::Fade::default());
             hint.update(cx, |hint, cx| hint.set(false, cx));
         }
         let (hover, animating) = {
             let fade = fade.read(cx);
-            // `.btn` eases on `--ease-default`, the Settings buttons on `ease`.
+            // The hover transition of `.btn` uses the timing function
+            // `--ease-default`. The hover transition of the Settings buttons
+            // uses the CSS timing function `ease`.
             let curve = if self.look.settings() {
                 motion::EASE
             } else {
@@ -220,7 +255,8 @@ impl RenderOnce for ActionButton {
                 theme::clear(theme.border()),
                 theme::blend(theme.text_secondary(), theme.text(), hover),
             ),
-            // `color-mix(in srgb, var(--color-primary) 95%, #fff)`
+            // Production's fill while the pointer is over this button is
+            // `color-mix(in srgb, var(--color-primary) 95%, #fff)`.
             Look::SettingsPrimary => (
                 theme::blend(
                     theme.primary(),
@@ -231,7 +267,8 @@ impl RenderOnce for ActionButton {
                 theme.on_primary(),
             ),
         };
-        // Named by its label, or by its tooltip when it shows only a glyph.
+        // The button's accessible name is its label. A button that shows
+        // only an icon has no label, so its name is its tooltip's text.
         let name = self
             .label
             .clone()
@@ -263,7 +300,8 @@ impl RenderOnce for ActionButton {
         } else if self.full_width {
             button = button.w_full().min_w_0();
         }
-        // `.btn`: `box-shadow: 0 0 0 1px var(--color-black-20)`.
+        // `.btn` has `box-shadow: 0 0 0 1px var(--color-black-20)`. The two
+        // Settings styles and the Ghost style have no shadow.
         if !self.look.settings() && self.look != Look::Ghost {
             button = button.shadow(vec![
                 BoxShadow::new(px(0.), px(0.), rgba(theme::BLACK_20).into()).spread_radius(px(1.)),
@@ -307,9 +345,13 @@ impl RenderOnce for ActionButton {
             }
         }
         if self.disabled {
-            // CSS fades the button as one layer; GPUI fades its border and
-            // fill apart, and a border drawn over its own fill would show
-            // twice as strong. A border the fill's colour adds nothing.
+            // CSS applies `opacity` to the finished button, border and fill
+            // together. GPUI applies the opacity to the border and to the
+            // fill separately and draws the border on top of the fill, so
+            // the border's area would get the colour twice and look
+            // stronger than the rest of the button. A border that has the
+            // same colour as the fill cannot be seen in production, so it
+            // is made transparent here.
             if border == background {
                 button = button.border_color(theme::clear(border));
             }
@@ -318,7 +360,8 @@ impl RenderOnce for ActionButton {
         if let Some(tip) = &self.tip {
             button = button.children(hint.read(cx).layer(tip, self.height, cx));
         }
-        // `.btn:focus-visible`; the Settings buttons draw no ring.
+        // The focus ring of `.btn:focus-visible`. The two Settings styles
+        // draw no focus ring.
         if !self.look.settings() {
             button = button.children(focus.ring(
                 super::focus::Ring::button(&theme),

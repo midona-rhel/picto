@@ -1,12 +1,16 @@
-//! Text rules more than one view shares: the natural name order, search
-//! ranking and highlighting, byte sizes, the date formats, and the short
-//! names of common media types.
+//! This file holds the functions for text that more than one view uses.
+//! They put names in natural order, rank and highlight search matches, write
+//! byte sizes, shorten text that is too wide, give the date formats, and
+//! give the short names of common media types.
 use std::cmp::Ordering;
 
-// ── Name order ──────────────────────────────────────────────────
+// The functions in this section put names in order.
 
-/// Where a character sorts before its case-folded value: punctuation and
-/// symbols, then digits, then letters, as the Electron collator orders them.
+/// Returns the class of a character: 0 for punctuation and symbols, 1 for
+/// digits and 2 for letters. Two characters are compared by class first and
+/// by case-folded value after that, so punctuation and symbols sort before
+/// digits, and digits before letters. This is the order of the collator in
+/// the Electron app.
 fn class(character: char) -> u8 {
     if character.is_numeric() {
         1
@@ -17,13 +21,15 @@ fn class(character: char) -> u8 {
     }
 }
 
-/// The ASCII punctuation and symbols in the order of the Unicode root
-/// collation, which Chromium's `localeCompare` follows; any other
-/// punctuation sorts after them by code point.
+/// The ASCII punctuation marks and symbols, in the order in which the
+/// Unicode root collation sorts them. Chromium's `localeCompare` follows
+/// that order. Any other punctuation mark sorts after all of these, by its
+/// code point.
 const PUNCTUATION_ORDER: &str = " _-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
 
-/// Where a character sorts within its class: punctuation by the root
-/// collation's order, everything else by its case-folded value.
+/// Returns the value that orders a character among the characters of its
+/// class. Punctuation is ordered by its position in [`PUNCTUATION_ORDER`],
+/// and every other character by its case-folded value.
 fn within_class(character: char) -> (usize, String) {
     let rank = PUNCTUATION_ORDER
         .find(character)
@@ -31,8 +37,10 @@ fn within_class(character: char) -> (usize, String) {
     (rank, character.to_lowercase().collect())
 }
 
-/// `localeCompare(…, { sensitivity: 'base', numeric: true })`: case is
-/// ignored and runs of digits compare by their value.
+/// Compares two names as production's
+/// `localeCompare(…, { sensitivity: 'base', numeric: true })` does. Upper
+/// and lower case are treated as the same, and a run of digits is compared
+/// as a number, so `item9` comes before `item10`.
 pub fn natural_order(left: &str, right: &str) -> Ordering {
     let (mut left, mut right) = (left.chars().peekable(), right.chars().peekable());
     loop {
@@ -69,10 +77,13 @@ pub fn natural_order(left: &str, right: &str) -> Ordering {
     }
 }
 
-// ── Search ──────────────────────────────────────────────────────
+// The functions in this section rank and highlight search matches.
 
-/// `matchRank` in `searchRank.ts`: 0 exact, 1 prefix, 2 at the start of a
-/// word, 3 anywhere; `None` when absent. Both sides are lower case.
+/// Returns how well `text` matches `needle`, as `matchRank` in production's
+/// `searchRank.ts` does: 0 when the two are equal, 1 when `text` starts
+/// with `needle`, 2 when `needle` is at the start of a word in `text`, and
+/// 3 when `needle` is anywhere else in `text`. Returns `None` when `text`
+/// does not contain `needle`. The caller passes both in lower case.
 pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
     if text == needle {
         return Some(0);
@@ -80,7 +91,9 @@ pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
     if text.starts_with(needle) {
         return Some(1);
     }
-    // Every occurrence, overlapping ones included, as `indexOf` steps.
+    // This loop looks at every place where `needle` occurs in `text`,
+    // including a place that overlaps an earlier one, because production
+    // steps through them with `indexOf` in the same way.
     let mut found = false;
     let mut from = 0;
     while let Some(at) = text[from..].find(needle).map(|at| at + from) {
@@ -94,8 +107,9 @@ pub fn match_rank(text: &str, needle: &str) -> Option<u8> {
     found.then_some(3)
 }
 
-/// `rankMatches`: the items whose key contains `query`, best rank first,
-/// keeping their order within a rank. A blank query keeps them all.
+/// Returns the items whose key contains `query`, with the best rank first.
+/// Items of the same rank keep the order they came in. A blank query
+/// returns every item. This is production's `rankMatches`.
 pub fn rank_matches<T>(items: Vec<T>, query: &str, key: impl Fn(&T) -> &str) -> Vec<T> {
     let needle = query.trim().to_lowercase();
     if needle.is_empty() {
@@ -112,8 +126,11 @@ pub fn rank_matches<T>(items: Vec<T>, query: &str, key: impl Fn(&T) -> &str) -> 
     ranked.into_iter().map(|(_, item)| item).collect()
 }
 
-/// The first case-insensitive match of `query` in `text`, as a byte range,
-/// for `highlightMatch`; none where lower-casing would move the bytes.
+/// Returns the byte range of the first match of `query` in `text`, ignoring
+/// case. It is used to highlight the match, as production's
+/// `highlightMatch` does. Returns `None` when there is no match, when the
+/// query is blank, and when lower-casing `text` changes its length in
+/// bytes, because the range would then be for the wrong bytes.
 pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
     let query = query.trim();
     let lower = text.to_lowercase();
@@ -124,13 +141,13 @@ pub fn match_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
     Some(start..start + query.len())
 }
 
-// ── Byte sizes ──────────────────────────────────────────────────
-//
-// Production writes sizes its own way in each place; the two this app
-// shows keep theirs.
+// The functions in this section write byte sizes. Production writes sizes
+// in a different way in each place. This app shows two of those ways, and
+// each has its own function here.
 
-/// The inspector's Size row: bytes, then KB and MB to one decimal and GB to
-/// two, in binary units.
+/// Writes a size for the inspector's Size row, in binary units: whole bytes
+/// below 1024 bytes, then KB and MB with one decimal, and GB with two
+/// decimals.
 pub fn size_to_gigabytes(bytes: u64) -> String {
     let bytes = bytes as f64;
     if bytes < 1024. {
@@ -144,8 +161,10 @@ pub fn size_to_gigabytes(bytes: u64) -> String {
     }
 }
 
-/// `formatBytes` in Settings, the cloud sync bar and the Picto Pack dialog: bytes, then the largest binary unit up to TB,
-/// with two decimals under ten and one above.
+/// Writes a size as `formatBytes` does in production's Settings, cloud sync
+/// bar and Picto Pack dialog: whole bytes below 1024 bytes, and otherwise
+/// the largest binary unit up to TB, with two decimals when the number is
+/// below ten and one decimal when it is ten or more.
 pub fn size_to_terabytes(value: u64) -> String {
     if value < 1024 {
         return format!("{value} B");
@@ -162,16 +181,21 @@ pub fn size_to_terabytes(value: u64) -> String {
     format!("{amount:.digits$} {}", units[unit])
 }
 
-/// `truncateText`, and `text-overflow: ellipsis` as Chromium draws it: the
-/// text whole when it fits in `max`, else as many of its characters as fit
-/// with "…" after them (trailing punctuation kept, unlike GPUI's own
-/// truncation), measured by `measure`.
+/// Returns `text` whole when it fits in the width `max`, and otherwise as
+/// many of its first characters as fit, with "…" after them. This is what
+/// production's `truncateText` does, and how Chromium draws
+/// `text-overflow: ellipsis`. Punctuation just before the cut is kept,
+/// which GPUI's own truncation does not do. `measure` returns the width of
+/// a string.
 ///
-/// Each measurement is a text shaping, and a window of new tiles (a jump, a
-/// fast scroll) shapes every name it shows, so they are few: `guess` says
-/// how many characters probably fit (from the whole text's own shaping),
-/// the cuts on either side of it are measured, and only when the guess was
-/// off is the rest found by halving. A longer cut is never narrower.
+/// Each call to `measure` shapes the text. A window of new tiles (after a
+/// jump or a fast scroll) shapes every name it shows, so this function
+/// calls `measure` as few times as it can. `guess` returns the number of
+/// characters that probably fit, which the caller works out from the
+/// shaping of the whole text. The function measures the cut at the guess
+/// and the cut that is one character longer or shorter, and it searches
+/// the rest by halving only when the guess was wrong. The search relies on
+/// a longer cut never being narrower than a shorter one.
 pub fn truncate_to(
     text: &str,
     max: f32,
@@ -184,8 +208,8 @@ pub fn truncate_to(
     let chars = text.chars().collect::<Vec<_>>();
     let cut = |end: usize| chars[..end].iter().collect::<String>() + "…";
     let fit = |end: usize| measure(&cut(end)) <= max;
-    // The longest cut that fits lies in `fits..=last`; nothing at all ("…"
-    // alone) is the answer when none does.
+    // The longest cut that fits has its end in `fits..=last`. When no cut
+    // fits, the result is "…" alone.
     let (mut fits, mut last) = (0, chars.len().saturating_sub(1));
     let guess = guess().min(last);
     if guess > 0 && !fit(guess) {
@@ -214,21 +238,23 @@ pub fn truncate_to(
     cut(fits)
 }
 
-// ── Dates ───────────────────────────────────────────────────────
+// The date formats are in this section.
 
-/// The `chrono` formats the views write dates in that are not the
-/// system's (those are `crate::i18n::format`), each named for what it
-/// ports.
+/// The `chrono` format strings for the dates that the views write in a
+/// fixed format and not in the system's format. The system's formats are in
+/// `crate::i18n::format`. Each constant is named for the production format
+/// that it is a port of.
 pub mod date_format {
-    /// The inspector's date rows: `YYYY/MM/DD HH:MM`.
+    /// The format of the inspector's date rows: `YYYY/MM/DD HH:MM`.
     pub const INSPECTOR: &str = "%Y/%m/%d %H:%M";
-    /// A day as date fields store it (`YYYY-MM-DD`).
+    /// The format in which date fields store a day: `YYYY-MM-DD`.
     pub const DAY: &str = "%Y-%m-%d";
 }
 
-// ── Media types ─────────────────────────────────────────────────
+// The functions in this section give media types their short names.
 
-/// Types both the inspector and the type filter call by a short name.
+/// The media types that both the inspector and the type filter show by a
+/// short name.
 const TYPE_NAMES: [(&str, &str); 4] = [
     ("image/jpeg", "JPG"),
     ("image/svg+xml", "SVG"),
@@ -236,12 +262,15 @@ const TYPE_NAMES: [(&str, &str); 4] = [
     ("video/x-matroska", "MKV"),
 ];
 
-/// A subtype's plain name: in capitals without its `x-`.
+/// Returns the name for a subtype that has no short name of its own: the
+/// subtype in capital letters, without a leading `x-`.
 fn subtype_name(subtype: &str) -> String {
     subtype.strip_prefix("x-").unwrap_or(subtype).to_uppercase()
 }
 
-/// `fmtExt` in the inspector's Type row: by subtype alone.
+/// Returns the name that the inspector's Type row shows for a media type,
+/// as production's `fmtExt` does. Only the subtype, which is the part after
+/// the `/`, decides the name.
 pub fn inspector_type(mime: &str) -> String {
     let subtype = mime.split_once('/').map_or("", |(_, subtype)| subtype);
     if subtype == "epub+zip" {
@@ -253,8 +282,10 @@ pub fn inspector_type(mime: &str) -> String {
         .map_or_else(|| subtype_name(subtype), |(_, name)| (*name).into())
 }
 
-/// `mimeLabel` in the filter bar's type menu: a family's name, a few
-/// common types by their usual names, else the subtype's plain name.
+/// Returns the name that the filter bar's type menu shows for a media
+/// type, as production's `mimeLabel` does: the name of the family for a
+/// pattern such as `image/*`, the usual name for a few common types, and
+/// otherwise the subtype in capital letters without a leading `x-`.
 pub fn filter_type(mime: &str) -> String {
     // i18n: translated where drawn (the filter menu's rows, as production's)
     let family = match mime {
@@ -285,7 +316,7 @@ mod tests {
 
     #[test]
     fn names_truncate_with_an_ellipsis_to_what_fits() {
-        // Ten units a character.
+        // Every character is ten units wide in this test.
         let measure = |text: &str| text.chars().count() as f32 * 10.;
         let none = || 0;
         assert_eq!(truncate_to("Tribal", 60., measure, none), "Tribal");
@@ -293,10 +324,12 @@ mod tests {
             truncate_to("Main Four - Communal", 100., measure, none),
             "Main Four…"
         );
-        // A space before the cut stays, as `slice` keeps it.
+        // A space just before the cut is kept, as production's `slice`
+        // keeps it.
         assert_eq!(truncate_to("Main Four - C", 60., measure, none), "Main …");
         assert_eq!(truncate_to("ab", 5., measure, none), "…");
-        // A chip label's punctuation before the cut stays too.
+        // Punctuation just before the cut in a chip's label is kept as
+        // well.
         assert_eq!(
             truncate_to("adobe_photoshop_(artwork)", 120., measure, none),
             "adobe_photo…"
@@ -325,11 +358,13 @@ mod tests {
         assert_eq!(natural_order("art", "artist"), Ordering::Less);
         assert_eq!(natural_order("apple", "Banana"), Ordering::Less);
         assert_eq!(natural_order("artist 010", "Artist 10"), Ordering::Equal);
-        // Punctuation sorts before digits, as the collator puts it.
+        // Punctuation sorts before digits, which is the order that the
+        // collator uses.
         assert_eq!(natural_order("a-b", "a1"), Ordering::Less);
         assert_eq!(natural_order("a_", "a1"), Ordering::Less);
-        // Punctuation among itself follows the root collation, as the
-        // Tags screen's `#` section shows it.
+        // Punctuation marks are ordered among themselves by the Unicode
+        // root collation. The `#` section of the Tags screen shows them in
+        // this order.
         let mut symbols = vec![
             "!", "!!", ">_(", "...", "?", "^_^", "_/", "_>", "_3", "_d", "_o",
         ];
@@ -349,7 +384,8 @@ mod tests {
         assert_eq!(match_rank("black_cat", "cat"), Some(2));
         assert_eq!(match_rank("bobcat", "cat"), Some(3));
         assert_eq!(match_rank("dog", "cat"), None);
-        // An overlapping later match can start a word, as `indexOf` finds.
+        // A later occurrence that overlaps an earlier one can be at the
+        // start of a word, and production's `indexOf` loop finds it.
         assert_eq!(match_rank("xaa-aa", "aa"), Some(2));
         assert_eq!(match_rank("x-aaa", "aa"), Some(2));
         assert_eq!(match_rank("baaa a", "aa"), Some(3));

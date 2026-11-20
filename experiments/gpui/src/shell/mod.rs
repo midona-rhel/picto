@@ -1,7 +1,12 @@
-//! The window, arranged as `AppShell.tsx` arranges it: a titlebar row whose
-//! left block keeps the sidebar's width, above a body in which the sidebar
-//! and inspector are rails that slide away. Each part is its own cached view,
-//! so this root only places them.
+//! The root view of the main window. It lays the window out the way
+//! `AppShell.tsx` does in production. At the top is the titlebar row; the left
+//! block of that row is always as wide as the sidebar. Below the titlebar is
+//! the body, which holds the sidebar on the left and, in the centre, the grid,
+//! the viewer or a screen. The inspector is on the right and spans the
+//! window's full height. The sidebar and the inspector are called rails in
+//! this code. The user can hide either one, and it then slides out of the
+//! window. Each part is a separate cached view, so this root view only
+//! positions them.
 mod batch_rename;
 mod delete;
 mod export;
@@ -65,9 +70,11 @@ actions!(
     ]
 );
 
-/// A screen's rail: a view the shell shows in the inspector's place, with
-/// the inspector's width, resize edge, toggle and titlebar, while `shows`
-/// says the screen is showing what it belongs to.
+/// A rail that belongs to a screen. The shell draws `view` where the inspector
+/// normally is, and gives it the inspector's width, resize edge, show/hide
+/// toggle and titlebar strip. The shell draws it only while `shows` returns
+/// true; the screen uses `shows` to say that it is showing the page the rail
+/// belongs to.
 pub struct ScreenRail {
     pub view: AnyView,
     pub shows: Box<dyn Fn(&App) -> bool>,
@@ -80,78 +87,105 @@ pub struct Shell {
     grid: Entity<GridView>,
     inspector: Entity<Inspector>,
     viewer: Entity<Viewer>,
-    /// Quick Look, drawn over the whole window while it is open.
+    /// Quick Look. While it is open it is drawn over the whole window.
     quick_look: Entity<QuickLook>,
     tags: Entity<screens::tags::TagsScreen>,
     subscriptions: Entity<screens::subscriptions::SubscriptionsScreen>,
-    /// The screens' rails, each taking the inspector's place while its
-    /// screen says so (a subscription's page).
+    /// The rails that screens have registered. Each one is drawn where the
+    /// inspector normally is while its `shows` returns true. The only one so
+    /// far is the rail of a subscription's page.
     screen_rails: Vec<(Screen, ScreenRail)>,
     duplicates: Entity<screens::duplicates::DuplicatesScreen>,
     focus: FocusHandle,
     sidebar_collapsed: bool,
     inspector_collapsed: bool,
     inspector_pinned: bool,
-    /// The rails' widths, which their inner edges drag.
+    /// The widths of the sidebar and the inspector, in pixels. The user
+    /// changes a width by dragging the rail's inner edge.
     sidebar_width: f32,
     inspector_width: f32,
-    /// A drag of one of those edges.
+    /// The drag of one of those edges that is in progress, if there is one.
     resizing: Option<rails::Resize>,
-    /// How far each rail has slid out of view.
+    /// How far each rail has slid out of the window: 0 when the rail is fully
+    /// shown and 1 when it is fully hidden.
     rails: motion::Fades,
-    /// Whether the inspector belonged to what was shown last, and its fade
-    /// when that changes: it fades in and out over 170 ms when a screen
-    /// takes or gives back the window (`data-motion='fade'`), rather than
-    /// sliding as a toggle does.
+    /// `inspector_available` is whether the last frame had room for the
+    /// inspector: the grid, the viewer and a screen with a rail of its own
+    /// have it, and any other screen uses that width itself.
+    /// `inspector_presence` is the inspector's opacity. When
+    /// `inspector_available` changes because the user opened or left a screen,
+    /// the inspector fades in or out over 170 ms (`data-motion='fade'` in
+    /// production). It does not slide then; it slides only when the user hides
+    /// or shows it.
     inspector_available: Option<bool>,
     inspector_presence: motion::Fade,
-    /// Set when the viewer closed by going to another destination: the
-    /// viewer stays in the pane and fades out with it, as `MediaView` does
-    /// inside the fading workspace surface, until the destination replaces it.
+    /// True from the moment the viewer is closed by navigating to another
+    /// destination until the centre of the window has finished fading out.
+    /// During that time the viewer is still drawn in the centre and fades out
+    /// with it, and after that the destination replaces it. Production does
+    /// the same: `MediaView` stays inside the workspace surface while that
+    /// surface fades out.
     viewer_exit: bool,
-    /// The open context menu, the grid's, the sidebar's or the filter
-    /// bar's, above everything. The keyboard goes back to the grid after.
+    /// The context menu that is open, if there is one. The grid, the sidebar,
+    /// the filter bar and the other parts of the window all show their menus
+    /// through this one host, which draws the menu above the rest of the
+    /// window. When the menu closes, keyboard focus goes back to the shell's
+    /// `focus` handle, which the grid also uses.
     menu: ui::menu::Host,
-    /// The filter bar under the titlebar, over the grid.
+    /// The filter bar. It is drawn in a row between the titlebar and the grid.
     filter_bar: Entity<FilterBar>,
-    /// The view menu's panels while it is open, which show the rails.
+    /// The panels of the view menu while that menu is open. The panels have
+    /// switches that hide and show the sidebar and the inspector, so the shell
+    /// keeps the panels here to tell them when a rail is hidden or shown.
+    /// `_view_panels` holds the subscriptions to the panels' events.
     view_panels: Vec<Entity<view_menu::ViewOptions>>,
     _view_panels: Vec<Subscription>,
-    /// The item menus' state: what the open one acts on, copied tags, and
-    /// the confirmation it may ask.
+    /// The state of the item menus: the items the open menu acts on, the tags
+    /// that "Copy Tags" copied, and the confirmation dialog that a menu row
+    /// may open.
     items: item_menu::ItemMenus,
-    /// Imports, their dialogs and the task dialog and bar.
+    /// Holds the imports, the import dialogs, the task dialog and the task
+    /// bar.
     imports: Entity<crate::imports::Imports>,
-    /// Exports and Picto Packs, and their dialogs.
+    /// Holds the exports, the Picto Packs and the dialogs of both.
     exports: Entity<crate::export::Exports>,
     /// The batch rename dialog.
     batch_rename: Entity<batch_rename::BatchRename>,
     /// The library cover dialog.
     library_cover: Entity<library_cover::LibraryCover>,
-    /// The update dialog (`ApplicationUpdateHost`).
+    /// The update dialog, which is `ApplicationUpdateHost` in production.
     updates: Entity<crate::updates::dialog::UpdateDialog>,
-    /// Files dragged from the system over the window, until they are
-    /// dropped or leave it.
+    /// The paths of the files that the user is dragging over the window from
+    /// another application. It is `None` again once the files are dropped or
+    /// dragged out of the window.
     file_drag: Option<Vec<PathBuf>>,
-    /// The Inbox reviews in progress, the press flashing on the review
-    /// pill, a review waiting for the next page, and whether a review key
-    /// is held down.
+    /// The state of reviewing Inbox items. `reviewer` holds the reviews in
+    /// progress. `review_flash` is the flash drawn on a button of the review
+    /// pill after it is pressed. `pending_review` is a review that is waiting
+    /// for the next page of items to load. `review_keys` records whether a
+    /// review key is being held down.
     reviewer: crate::viewer::review::Reviewer,
     review_flash: Option<crate::viewer::review::Flash>,
     pending_review: Option<review::Pending>,
     review_keys: review::ReviewKeys,
-    /// The review button a click focused, and whether a key since has
-    /// made its focus ring show.
+    /// The review button that a click gave keyboard focus to, and whether a
+    /// key has been pressed since that click. The button's focus ring is drawn
+    /// only after such a key press.
     review_focus: Option<(crate::viewer::review::Decision, bool)>,
-    /// The notifications, drawn above everything.
+    /// The notifications. They are drawn above the rest of the window.
     notifications: Entity<ui::notify::Host>,
-    /// The log window while it is open, and what it says.
+    /// The log window while it is open, together with the two subscriptions
+    /// that close it: one to the panel's `Closed` event and one that watches
+    /// for the Escape key.
     diagnostics: Option<(Entity<crate::diagnostics::panel::Panel>, [Subscription; 2])>,
-    /// The library's cloud sync state, its bar and its blocking dialog,
-    /// which holds the keyboard here.
+    /// `cloud` is the library's cloud sync state. The cloud sync bar and the
+    /// dialog of a blocking sync are drawn from it. `cloud_focus` is the focus
+    /// handle that has keyboard focus while that dialog is open.
     cloud: Entity<crate::cloud::Cloud>,
     cloud_focus: FocusHandle,
-    /// The rails the cloud bar keeps clear of, as last laid out.
+    /// The widths of the left and right rails in the last frame that was laid
+    /// out. The cloud sync bar is drawn between them so that it does not cover
+    /// a rail.
     cloud_rails: (f32, f32),
     _subscriptions: Vec<Subscription>,
 }
@@ -177,7 +211,10 @@ impl Shell {
         let session = cx.new(|cx| Session::new(root, application, events, cx));
         crate::settings::init(session.clone(), cx);
         crate::desktop::start(&session, cx);
-        // The frame meter says "idle" once nothing has drawn for a second.
+        // While the frame meter is on, check once a second whether a second
+        // has passed with no frame drawn. If so, mark the next frame as the
+        // meter's own (`idle_look`) and draw the shell again, so that the
+        // meter can show "idle".
         if crate::meter::enabled() {
             cx.spawn(async move |this, cx| {
                 loop {
@@ -206,7 +243,9 @@ impl Shell {
             cx.new(|cx| Inspector::new(session.clone(), thumbnails.clone(), window, cx));
         let quick_look = cx.new(|cx| QuickLook::new(session.clone(), window, cx));
         let subscriptions = vec![
-            // The "Auto" theme follows the system's appearance as it changes.
+            // When the system switches between its light and dark appearance,
+            // apply the colour scheme from the settings again, so that the
+            // "Auto" theme changes with the system.
             cx.observe_window_appearance(window, |_, _, cx| {
                 let scheme = crate::settings::current(cx).color_scheme.clone();
                 crate::theme::show(&scheme, cx);
@@ -219,8 +258,12 @@ impl Shell {
                     this.activate(event.ordinal, event.middle, window, cx)
                 },
             ),
-            // The shell chooses what fills the centre: the grid, the viewer
-            // or a screen.
+            // The shell decides whether the centre of the window shows the
+            // grid, the viewer or a screen, so it is drawn again when the
+            // viewer opens or closes and when the destination changes. When
+            // the viewer closes because the user navigated to another
+            // destination, `viewer_exit` is set so that the viewer stays drawn
+            // while the centre fades out.
             cx.subscribe(&session, |this, session, change: &Change, cx| {
                 if matches!(change, Change::Viewer) {
                     let session = session.read(cx);
@@ -238,8 +281,9 @@ impl Shell {
                     this.open_tile_menu(event.0, window, cx)
                 },
             ),
-            // A subfolder tile's menu is the folder's: the sidebar builds it
-            // and acts on it.
+            // A subfolder tile in the grid has the same context menu as that
+            // folder has in the sidebar, so the sidebar builds the menu and
+            // carries out its rows.
             cx.subscribe_in(
                 &grid,
                 window,
@@ -267,7 +311,8 @@ impl Shell {
                     this.open_viewer_menu(event, surface, window, cx)
                 },
             ),
-            // The collection editor's Space: Quick Look on the member.
+            // Pressing Space in the collection editor opens Quick Look on the
+            // member of the collection that the event names.
             cx.subscribe_in(
                 &viewer,
                 window,
@@ -292,8 +337,9 @@ impl Shell {
                     this.open_preview_menu(event.0, window, cx)
                 },
             ),
-            // The sidebar builds its own menus and acts on them; the shell
-            // shows them above everything, as it does the grid's.
+            // The sidebar builds its own context menus and carries out their
+            // rows. The shell only shows them, through the same menu host that
+            // shows the grid's menus.
             cx.subscribe_in(
                 &sidebar,
                 window,
@@ -313,7 +359,12 @@ impl Shell {
                     let _ = shell.update(cx, |this, _| this.review_keystroke_coming(event));
                 })
             },
-            // The Inbox review pill follows the item being viewed.
+            // The Inbox review pill is drawn for the item that is open in the
+            // media view or Quick Look, so the shell is drawn again when the
+            // selection or the list of items changes while one of them is
+            // open. When the list of items changes, the shell also tells the
+            // reviewer, which continues a review that was waiting for more
+            // items.
             cx.subscribe_in(&session, window, |this, _, change: &Change, window, cx| {
                 if matches!(change, Change::Results) {
                     this.review_items_changed(window, cx);
@@ -355,7 +406,9 @@ impl Shell {
             cx.new(|cx| library_cover::LibraryCover::new(session.clone(), focus.clone(), cx));
         let updates = cx.new(|cx| crate::updates::dialog::UpdateDialog::new(focus.clone(), cx));
         let mut subscriptions = subscriptions;
-        // The rails as the user left them.
+        // Start with the sidebar and the inspector hidden or shown as the
+        // saved state (`crate::state`) records them, which is how the user
+        // last left them.
         let kept = crate::state::get(cx).clone();
         let mut rails = motion::Fades::default();
         rails.set(("sidebar", 0), kept.sidebar_collapsed, Default::default());
@@ -365,7 +418,9 @@ impl Shell {
             Default::default(),
         );
         subscriptions.extend([
-            // The bar's height belongs to the layout here.
+            // The shell lays out the filter bar above the grid, so the shell
+            // is drawn again when the filter bar changes, because the bar's
+            // height may have changed.
             cx.observe(&filter_bar, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &filter_bar,
@@ -381,8 +436,11 @@ impl Shell {
                     this.open_view_menu(event.0, window, cx)
                 },
             ),
-            // The application menu follows the selection, the destination
-            // and whether imports may start.
+            // Update the application menu when the selection, the list of
+            // items, the destination or the viewer changes, and when the
+            // imports change. Which menu rows are enabled depends on the
+            // selection, on the destination and on whether an import may
+            // start.
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if matches!(
                     change,
@@ -396,7 +454,10 @@ impl Shell {
         let cloud = cx.new(|cx| crate::cloud::Cloud::new(session.clone(), cx));
         session.update(cx, |session, _| session.cloud = Some(cloud.clone()));
         subscriptions.push(cx.observe_in(&cloud, window, |this, cloud, window, cx| {
-            // The keyboard comes back once a blocking sync has let it go.
+            // While a blocking cloud sync runs, its dialog has keyboard focus
+            // through `cloud_focus`. When the sync is no longer blocking and
+            // `cloud_focus` still has focus, give keyboard focus back to the
+            // shell.
             let blocking = cloud.read(cx).status.as_ref().is_some_and(|status| {
                 status.state == "reconciling" && status.blocking
             });
@@ -406,7 +467,10 @@ impl Shell {
             cx.notify();
         }));
         crate::app_menu::set_main_window(window.window_handle(), cx);
-        // A screen's titlebar controls take the grid's place in the toolbar.
+        // Give the toolbar each screen's titlebar controls. While a screen is
+        // shown, the toolbar shows that screen's controls where it otherwise
+        // shows the grid's controls. The Subscriptions screen also gives the
+        // toolbar the count that is shown after its title.
         let controls = duplicates.read(cx).toolbar();
         let tag_controls = tags.read(cx).toolbar();
         toolbar.update(cx, |toolbar, _| {
@@ -432,8 +496,10 @@ impl Shell {
             inspector_collapsed: kept.inspector_collapsed,
             inspector_pinned: false,
             sidebar_width: kept.sidebar_width,
-            // `PICTO_GPUI_INSPECTOR=272` opens at that width whatever was
-            // kept, to compare against an Electron window whose inspector
+            // In a debug build, setting the environment variable
+            // `PICTO_GPUI_INSPECTOR`, for example to `272`, opens the
+            // inspector at that width instead of the saved width. It is for
+            // comparing this window with an Electron window whose inspector
             // was resized.
             inspector_width: crate::seams::inspector_width()
                 .map_or(kept.inspector_width, crate::state::inspector_width),
@@ -467,8 +533,9 @@ impl Shell {
         }
     }
 
-    /// Opens the view menu (`GridViewMenu`) at `position`, and keeps the
-    /// button lit while it is open.
+    /// Opens the view menu (`GridViewMenu` in production) at `position`, and
+    /// tells the toolbar to keep its "View options" button highlighted while
+    /// the menu is open.
     fn open_view_menu(
         &mut self,
         position: Point<Pixels>,
@@ -489,8 +556,11 @@ impl Shell {
         self.menu.show(menu, window, cx);
     }
 
-    /// Keeps a menu's view panels while it is open: their rail switches
-    /// toggle the rails, and the rails' state reaches them.
+    /// Stores the view panels of `menu` for as long as the menu is open. When
+    /// the user uses a panel's sidebar or inspector switch, the shell hides or
+    /// shows that rail, and `toggle_rails` then writes the new state of both
+    /// rails back to the panels. The panels are dropped when the menu is
+    /// released.
     fn watch_view_panels(
         &mut self,
         menu: &Entity<ui::menu::Menu>,
@@ -515,10 +585,12 @@ impl Shell {
         self._view_panels = subscriptions;
     }
 
-    /// Hides or shows the rails. Both slide over the same 100 ms, so that
-    /// hidden together they leave as one movement (production's sidebar
-    /// takes 50 ms); what is between them takes the freed width at once and
-    /// is laid out for it once, the rails sliding away over it.
+    /// Hides or shows the sidebar when `sidebar` is true, and the inspector
+    /// when `inspector` is true, and saves the new state. Both rails slide
+    /// over the same 100 ms, so when they are hidden together they move in
+    /// step (in production the sidebar takes 50 ms). The content between the
+    /// rails gets its new width immediately and is laid out for that width
+    /// once; the rails are drawn over it while they slide.
     fn toggle_rails(&mut self, sidebar: bool, inspector: bool, cx: &mut Context<Self>) {
         let shown = (
             !(self.sidebar_collapsed ^ sidebar),
@@ -554,7 +626,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Starts dragging a rail's edge.
+    /// Starts a drag of the resize edge of `rail`, with the pointer at the
+    /// horizontal position `x`. It records the rail's width at that moment.
     fn start_resize(&mut self, rail: rails::Rail, x: Pixels) {
         let width = match rail {
             rails::Rail::Sidebar => self.sidebar_width,
@@ -567,7 +640,8 @@ impl Shell {
         });
     }
 
-    /// Ends a drag of a rail's edge and keeps the width it left.
+    /// Ends the drag of a rail's edge, if one is in progress, and saves the
+    /// widths of both rails.
     fn end_resize(&mut self, cx: &mut Context<Self>) {
         if self.resizing.take().is_none() {
             return;
@@ -580,7 +654,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// What the grid has open, for deciding what a key or click does.
+    /// Reports whether the media view is open, whether Quick Look is open and
+    /// whether exactly one item is selected. `trigger` uses these to decide
+    /// what a key press or a click does.
     fn trigger_state(&self, cx: &App) -> trigger::State {
         let session = self.session.read(cx);
         trigger::State {
@@ -590,8 +666,9 @@ impl Shell {
         }
     }
 
-    /// A double- or middle-click on the tile at `ordinal`, under the
-    /// Controls settings (`onTileDoubleClick`, `onTileMiddleClick`).
+    /// Handles a double-click on the tile at `ordinal`, or a middle-click when
+    /// `middle` is true. What the click does is chosen in the Controls
+    /// settings (`onTileDoubleClick` and `onTileMiddleClick` in production).
     fn activate(
         &mut self,
         ordinal: usize,
@@ -611,14 +688,17 @@ impl Shell {
             trigger::double_click(settings.grid_double_click_action, collection)
         };
         match action {
-            // A middle-click opens the clicked item alone.
+            // A middle-click opens only the clicked item in a detail window,
+            // with no other items to step through.
             trigger::Action::OpenWindow => self.open_in_window(vec![ordinal], ordinal, cx),
             trigger::Action::OpenDefault => self.open_default(ordinal, cx),
             action => self.perform(action, window, cx),
         }
     }
 
-    /// Carries out what a key asked for.
+    /// Carries out `action`, which `trigger` chose for a key press or a click.
+    /// `OpenWindow` and `OpenDefault` do nothing here, because `activate`
+    /// handles them.
     fn perform(&mut self, action: trigger::Action, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             trigger::Action::OpenMediaView => self
@@ -640,9 +720,11 @@ impl Shell {
         }
     }
 
-    /// `openGridItemInWindow`: opens the item at `start` in a detail window
-    /// that steps through the items at `ordinals`, those the grid's window
-    /// holds.
+    /// Opens the item at the ordinal `start` in a detail window, as
+    /// `openGridItemInWindow` does in production. The detail window can step
+    /// through the items at `ordinals`. An ordinal whose item is not among the
+    /// items the session has loaded is left out, and nothing opens if `start`
+    /// is such an ordinal.
     fn open_in_window(&mut self, ordinals: Vec<usize>, start: usize, cx: &mut Context<Self>) {
         let (entries, at) = {
             let session = self.session.read(cx);
@@ -663,7 +745,9 @@ impl Shell {
         }
     }
 
-    /// `openDefaultAppForHash`: the item's file in the system's application.
+    /// Opens the first media file of the item at `ordinal` in the application
+    /// that the system uses for that kind of file, as `openDefaultAppForHash`
+    /// does in production.
     fn open_default(&mut self, ordinal: usize, cx: &mut Context<Self>) {
         let Some(root) = self
             .session
@@ -687,17 +771,22 @@ impl Shell {
         .detach();
     }
 
-    /// Moves the selection; with shift held, extends it instead.
+    /// Moves the selection in the grid. With Shift held, it extends the
+    /// selection instead.
     fn move_selection(&mut self, action: nav::Move, window: &Window, cx: &mut Context<Self>) {
-        // Quick Look's steps never extend the selection it follows.
+        // Quick Look shows the selected item, so while Quick Look is open a
+        // move never extends the selection, even with Shift held.
         let extend = window.modifiers().shift && !self.quick_look.read(cx).is_open();
         self.grid
             .update(cx, |grid, cx| grid.move_selection(action, extend, cx));
     }
 
-    /// The titlebar's left block. It keeps the sidebar's width when the
-    /// sidebar is hidden, so the toolbar never shifts, and holds the shared
-    /// window actions clear of the traffic lights.
+    /// The left block of the titlebar. It is as wide as the sidebar even while
+    /// the sidebar is hidden, so the toolbar beside it does not move when the
+    /// sidebar is hidden or shown. It holds the Settings and Toggle Panels
+    /// buttons, and the application menu button where the window has one. Its
+    /// left padding (`TITLEBAR_INSET`) keeps the buttons clear of the macOS
+    /// window buttons (the traffic lights).
     fn titlebar_left(&self, window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = theme::theme(cx);
         ui::drag_region("titlebar-left", window, cx)
@@ -711,8 +800,11 @@ impl Shell {
             .justify_end()
             .gap(px(2.))
             .relative()
-            // The edge is drawn over the app background, with the rail
-            // surface inside it (`background-clip: padding-box`).
+            // The block has the app background colour and a 1px right border.
+            // While the sidebar is shown, the rail colour fills the area
+            // inside the border. The border is therefore drawn over the app
+            // background and not over the rail colour. Production's CSS does
+            // this with `background-clip: padding-box`.
             .bg(theme.background())
             .border_r_1()
             .border_color(if self.sidebar_collapsed {
@@ -723,8 +815,10 @@ impl Shell {
             .children(
                 (!self.sidebar_collapsed).then(|| div().absolute().inset_0().bg(theme.rail())),
             )
-            // Off the Mac the application menu is a button at the left
-            // (`ApplicationMenuButton`), the actions kept at the right.
+            // Where the application menu is shown inside the window (Windows
+            // and Linux), it is a button at the left of this block
+            // (`ApplicationMenuButton` in production). A flexible spacer after
+            // it keeps the other buttons at the right.
             .children(crate::app_menu::in_window().then(|| {
                 ui::icon_button("application-menu", "app-menu")
                     .size(theme::CONTROL_MD)
@@ -762,9 +856,10 @@ impl Render for Shell {
         crate::meter::frame_started();
         crate::stats::rendered(crate::stats::View::Shell);
         let theme = theme::theme(cx);
-        // While a screen shows, or a closed viewer fades out in the grid's
-        // place, there is no grid to move the scope change along, so the
-        // shell does.
+        // The grid advances the session's transition between destinations each
+        // time it is drawn (`advance_transition`). While a screen is shown, or
+        // while the closed viewer is fading out in the centre, the grid is not
+        // drawn, so the shell advances the transition here.
         let exiting = self.viewer_exit;
         let quick_look_open = self.quick_look.read(cx).is_open();
         let (viewer_open, screen, fade) = self.session.update(cx, |session, cx| {
@@ -781,25 +876,29 @@ impl Render for Shell {
         if (screen.is_some() || self.viewer_exit) && transition.animating() {
             window.request_animation_frame();
         }
-        // The viewer that closed by going elsewhere stays until the surface
-        // has faded out.
+        // A viewer that was closed by navigating to another destination stays
+        // drawn only while the centre fades out, so clear `viewer_exit` once
+        // the fade-out is over.
         if !matches!(transition, Transition::FadingOut(_)) {
             self.viewer_exit = false;
         }
-        // The rails give up their width at once; only their own slide is animated.
+        // When a rail is hidden, the centre gets the rail's width immediately.
+        // Only the rail's own slide out of the window is animated.
         let sidebar_width = self.sidebar_width;
         let left = if self.sidebar_collapsed {
             0.
         } else {
             sidebar_width
         };
-        // The inspector belongs to the grid and the viewer. A screen has the
-        // window's full width, titlebar included (`inspectorAvailable`),
-        // except where a screen shows a rail of its own (a subscription's
-        // page), which takes the inspector's place, width and toggle. A
-        // screen keeps what it shows while it fades out, so between such a
-        // view and the grid or the viewer the rail stays in place and only
-        // what is in it changes.
+        // The inspector is shown beside the grid and the viewer. A screen uses
+        // the window's full width, including the right-hand part of the
+        // titlebar (`inspectorAvailable` in production). The exception is a
+        // screen that shows a rail of its own, which so far is only a
+        // subscription's page: that rail is drawn where the inspector is, with
+        // the inspector's width and show/hide toggle. A screen goes on showing
+        // the same page while it fades out, so when the user goes between a
+        // page with a rail and the grid or the viewer, the rail's area stays
+        // where it is and only its content changes.
         let screen_rail = screen
             .filter(|_| !viewer_open)
             .and_then(|screen| self.screen_rails.iter().find(|(owner, _)| *owner == screen))
@@ -846,14 +945,16 @@ impl Render for Shell {
             .right(px(right))
             .child(match screen {
                 _ if viewer_open => self.viewer.clone().cached(fill()).into_any_element(),
-                // The viewer left for another destination fades out as the
-                // grid would.
+                // The viewer was closed by navigating to another destination.
+                // It is still drawn here, at the transition's opacity, so it
+                // fades out as the grid would.
                 _ if self.viewer_exit => div()
                     .size_full()
                     .opacity(fade)
                     .child(self.viewer.clone().cached(fill()))
                     .into_any_element(),
-                // A screen fades as the grid does when the destination changes.
+                // A screen is drawn at the transition's opacity, so it fades
+                // out and in when the destination changes, as the grid does.
                 Some(screen) => div()
                     .size_full()
                     .opacity(fade)
@@ -867,10 +968,13 @@ impl Render for Shell {
                         }
                     })
                     .into_any_element(),
-                // The grid keeps its scroll position and thumbnails while the
-                // viewer is open; it is only not painted. The filter bar sits
-                // above it, aligned with the titlebar's panel edges even while
-                // a rail is hidden.
+                // While the viewer is open the grid is not drawn, but its view
+                // is kept, so it still has its scroll position and thumbnails
+                // when the viewer closes. When the filter bar is open, it is
+                // drawn in a row above the grid. Its left and right margins
+                // keep it between the positions of the sidebar and the
+                // inspector even while one of them is hidden, so it stays in
+                // line with the toolbar in the titlebar.
                 None if filter_bar => div()
                     .size_full()
                     .flex()
@@ -901,10 +1005,11 @@ impl Render for Shell {
                 .w(px(sidebar_width))
                 .child(self.sidebar.clone().cached(fill()))
         });
-        // The inspector rail spans the window's full height, titlebar strip
-        // included, and slides as one piece.
-        // While it fades out it keeps its width over the content that has
-        // already taken the window's.
+        // The inspector rail spans the window's full height, including its
+        // strip of the titlebar, and all of it slides together when the user
+        // hides or shows it. While it fades out because a screen was opened,
+        // it is still drawn at its own width, on top of the centre content,
+        // which already uses the window's full width.
         let dragging = |rail| self.resizing.is_some_and(|resize| resize.rail == rail);
         let edge_listeners = |edge: Stateful<Div>, rail, cx: &mut Context<Self>| {
             edge.on_mouse_down(
@@ -914,15 +1019,17 @@ impl Render for Shell {
                     cx.stop_propagation();
                 }),
             )
-            // The edge lies over the window's own release listener while
-            // the pointer is on it.
+            // The resize edge occludes what is under it, so while the pointer
+            // is on the edge the root's mouse-up listener does not get the
+            // release. The edge therefore ends the drag itself.
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.end_resize(cx)),
             )
         };
-        // The sidebar's edge spans the window's height, titlebar included,
-        // its right side on the sidebar's divider.
+        // The sidebar's resize edge spans the window's full height, including
+        // the titlebar. It is 5px wide and its right side is at the sidebar's
+        // right border.
         let sidebar_edge = (!self.sidebar_collapsed).then(|| {
             let edge = rails::edge(
                 rails::Rail::Sidebar,
@@ -965,8 +1072,10 @@ impl Render for Shell {
                         .items_center()
                         .justify_end()
                         .children((!rail_shown).then(|| {
-                            // While pinned, the inspector keeps showing what
-                            // it had instead of following the selection.
+                            // The Pin button. While the inspector is pinned,
+                            // it goes on showing what it showed when it was
+                            // pinned and does not change when the selection
+                            // changes.
                             ui::icon_button(
                                 "pin-inspector",
                                 if self.inspector_pinned {
@@ -999,12 +1108,15 @@ impl Render for Shell {
                     Some(rail) => rail.cached(fill()).into_any_element(),
                     None => self.inspector.clone().cached(fill()).into_any_element(),
                 }))
-                // The rail's edge is its resize handle: 5px wide over the
-                // content, so it takes no width itself.
+                // The inspector's left edge is its resize handle. It is a 5px
+                // strip positioned over the rail's content, so it takes up no
+                // width in the layout.
                 .child(inspector_edge)
         });
-        // The window's own buttons (Windows, Linux) go in the inspector's
-        // titlebar while the inspector is drawn, else in its reserved strip.
+        // On Windows and Linux the app draws the window's minimise, maximise
+        // and close buttons. They are in the inspector's titlebar strip while
+        // the inspector is drawn, and otherwise in the part of the titlebar
+        // that is reserved for the inspector.
         let caption = inspector
             .is_none()
             .then(|| ui::window_chrome::caption_buttons("titlebar-caption", window))
@@ -1022,11 +1134,13 @@ impl Render for Shell {
                     .child(self.toolbar.clone().cached(fill())),
             )
             .child(
-                // The inspector's share of the titlebar stays reserved, and
-                // draggable, while the inspector is hidden; it holds the
-                // window's buttons then (`.titlebarInspectorHidden`), and
-                // while a screen has the inspector's width, at the end of
-                // the toolbar.
+                // The right-hand part of the titlebar is as wide as the
+                // inspector. It stays reserved, and still drags the window,
+                // while the inspector is hidden, and it then holds the
+                // window's buttons (`.titlebarInspectorHidden` in production).
+                // While a screen uses the inspector's width, this part has no
+                // fixed width and holds only the window's buttons, at the
+                // right end of the toolbar.
                 ui::drag_region("titlebar-right", window, cx)
                     .when(inspector_width > 0., |region| region.w(px(inspector_width)))
                     .flex_none()
@@ -1054,11 +1168,14 @@ impl Render for Shell {
             .text_color(theme.text())
             .font_family(theme::FONT_UI)
             .text(theme::TEXT_MD)
-            // CSS `line-height: normal` for the system font.
+            // This is the line height that CSS `line-height: normal` gives for
+            // the system font.
             .line_height(px(theme::LINE_HEIGHT))
             .track_focus(&self.focus)
-            // `Grid` while the grid itself shows: its shortcuts need it.
-            // Quick Look over the grid has the keyboard instead.
+            // The key context includes `Grid` only while the grid itself is
+            // shown, because the grid's shortcuts are bound to that context.
+            // While Quick Look is open over the grid, `Grid` is left out so
+            // that Quick Look gets those keys.
             .key_context(if screen.is_none() && !viewer_open && !quick_look_open {
                 "Browser Grid"
             } else {
@@ -1066,7 +1183,8 @@ impl Render for Shell {
             })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(resize) = this.resizing {
-                    // A release the window did not see ends the drag.
+                    // If the left button is no longer pressed, the window
+                    // missed the release event, so end the drag here.
                     if event.pressed_button != Some(MouseButton::Left) {
                         this.end_resize(cx);
                         return;
@@ -1083,9 +1201,14 @@ impl Render for Shell {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.end_resize(cx)),
             )
-            // A review key reviews once per press, not per repeat.
+            // A review key reviews one item per press and ignores the key's
+            // auto-repeat while it is held down, so record here that the key
+            // was released.
             .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| this.review_keys.released()))
-            // Before any view: the tail of a flick a review moved on from.
+            // This watcher is drawn before every view so that it sees scroll
+            // input first. After an Inbox review moves on to the next item, it
+            // swallows the scroll events that the system keeps sending from a
+            // trackpad flick that began on the previous item.
             .child(ui::momentum::watcher())
             .on_action(cx.listener(|this, _: &Next, window, cx| {
                 this.move_selection(nav::Move::Right, window, cx)
@@ -1112,8 +1235,10 @@ impl Render for Shell {
                 this.move_selection(nav::Move::PageDown, window, cx)
             }))
             .on_action(cx.listener(|this, _: &OpenInNewWindow, _, cx| {
-                // `file.openNewWindow`: the shown item, with the rest of the
-                // selection to step through.
+                // The `file.openNewWindow` shortcut opens the focused item in
+                // a detail window, or the first selected item when no item has
+                // focus. The detail window can step through the rest of the
+                // selection.
                 let (ordinals, start) = {
                     let session = this.session.read(cx);
                     let ordinals = session.selected_ordinals();
@@ -1126,7 +1251,10 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &Preview, _, cx| this.open_selected(cx)))
             .on_action(cx.listener(|this, _: &ClosePreview, _, cx| {
-                // Escape closes the menu, else the viewer, else deselects.
+                // Escape closes the open menu. If no menu is open, it closes
+                // the viewer. If the viewer is not open and the grid is shown
+                // with a selection, it clears the selection. Otherwise the
+                // action is passed on.
                 if !this.menu.close(cx) {
                     let handled = this.session.update(cx, |session, cx| {
                         if session.viewer {
@@ -1168,24 +1296,28 @@ impl Render for Shell {
             .child(body)
             .children(sidebar_edge)
             .children(inspector);
-        // Quick Look covers the whole window, titlebar and rails included,
-        // below the context menus (`--layer-overlay`).
+        // Quick Look covers the whole window, including the titlebar and the
+        // rails, and is drawn below the context menus (`--layer-overlay` in
+        // production).
         if quick_look_open {
             root = root.child(self.quick_look.clone());
         }
-        // The log window along the bottom, over Quick Look
-        // (`--z-overlay`, mounted after it), under the menus and dialogs.
+        // The log window is drawn along the bottom of the window. It is above
+        // Quick Look (in production it has `--z-overlay` and is mounted after
+        // Quick Look) and below the menus and dialogs.
         if let Some((panel, _)) = &self.diagnostics {
             root = root.child(panel.clone());
         }
-        // Imports in progress, below the menus and dialogs.
+        // The view of the imports in progress is drawn below the menus and
+        // dialogs.
         root = root.child(self.imports.clone());
         root = root.child(self.exports.clone());
         root = root.child(self.batch_rename.clone());
         root = root.child(self.library_cover.clone());
         root = root.child(self.updates.clone());
-        // The cloud sync bar along the bottom, and the dialog a blocking
-        // sync holds the window with.
+        // The cloud sync bar is drawn along the bottom of the window. While a
+        // sync blocks the window, a progress dialog is drawn instead of the
+        // bar and has keyboard focus.
         root = root.children(crate::cloud::bar::bar(
             &self.cloud,
             self.cloud_rails,
@@ -1193,10 +1325,12 @@ impl Render for Shell {
             window,
             cx,
         ));
-        // The registry's shortcuts that act on the window's content.
+        // Handle the actions of the shortcuts in the shortcut registry
+        // (`settings::registry`) that act on the window's content.
         root = self.shortcut_actions(root, cx);
         root = self.import_actions(root, cx);
-        // The application menu's rows that act on the window's content.
+        // Handle the actions of the application menu's rows that act on the
+        // window's content.
         root = self.menu_actions(root, cx);
         root = self.export_actions(root, cx);
         root = self.file_drop(root, cx);
@@ -1204,11 +1338,13 @@ impl Render for Shell {
         root = root.children(self.menu.layer(window, cx));
         root = root.children(self.group_organizer(window, cx));
         root = root.children(self.confirmation(window, cx));
-        // The Inbox review pill, over the media view and Quick Look, and
-        // over the question a reject may ask, which it waits on
-        // (`--layer-modal`, after the dialog's).
+        // The Inbox review pill is drawn over the media view and Quick Look.
+        // It is also drawn over the confirmation dialog that rejecting an item
+        // may open, and the review waits for the answer to that dialog (in
+        // production the pill has `--layer-modal` and comes after the dialog).
         root = root.children(self.review_controls(cx));
-        // The inspector's tag and folder pickers float over everything.
+        // The inspector's tag picker and folder picker are added to the root
+        // here so that they are drawn over the rest of the window.
         let (tag_picker, folder_picker) = self.inspector.read(cx).pickers();
         root = root
             .child(tag_picker)
@@ -1216,26 +1352,34 @@ impl Render for Shell {
             .child(self.inspector.read(cx).ai_tagger());
         let (tag_dialog, folder_dialog) = self.inspector.read(cx).dialogs();
         root = root.child(tag_dialog).child(folder_dialog);
-        // So are the filter bar's, in their filter mode.
+        // The filter bar has its own tag picker and folder picker, which work
+        // in filter mode. They are added to the root in the same way.
         let (tag_picker, folder_picker) = self.filter_bar.read(cx).pickers();
         root = root.child(tag_picker).child(folder_picker);
-        // The notifications, over every layer (`--layer-notification`).
+        // The notifications are drawn over every other layer
+        // (`--layer-notification` in production).
         root = root.child(self.notifications.clone());
-        // A video player that has the window to itself, over everything.
+        // A video player that is in fullscreen fills the whole window and is
+        // drawn over everything else.
         root = root.children(crate::viewer::video::fullscreen_layer(window, cx));
-        // A frameless window's resizing edges (Linux), over the content.
+        // On Linux, a window without a system frame gets edges that resize it.
+        // They are drawn over the content.
         root = root.children(ui::window_chrome::resize_edges(window));
-        // `.shellMac::after`: the window's rim, over everything.
+        // The window's rim is drawn over everything (`.shellMac::after` in
+        // production).
         root = root.children(ui::window_chrome::rim(window, cx));
-        // The frame meter, when debugging: last, so that it ends the frame.
+        // The frame meter, which is shown only when debugging, is the last
+        // child, so that its paint marks the end of the frame's drawing.
         root = root.children(crate::meter::overlay(cx));
-        // Keep painting while a rail slides.
+        // Ask for another frame while a rail is still sliding.
         if self.rails.animating() {
             window.request_animation_frame();
         }
-        // The window's content, which stands for the keyboard while no
-        // control has it, so that the grid's tile the keyboard is on reads
-        // as focused inside it (`aria_active_descendant`).
+        // This outer element is the accessibility node for the shell's `focus`
+        // handle, which has keyboard focus whenever no control has it.
+        // Assistive technology then treats this node as focused, and the grid
+        // can report the tile the keyboard is on as the active one inside it
+        // (`aria_active_descendant`).
         div()
             .id("shell")
             .role(Role::Group)

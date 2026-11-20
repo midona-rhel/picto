@@ -1,19 +1,42 @@
-# Pictures of the app for CI, played by the off-screen tool (src/offscreen.rs)
-# into a synthetic library (the million_grid_demo example): the grid, a
-# hovered tile, the grid scrolled, the viewer, an item's menu, the window's
-# close button hovered and the application menu (both drawn by the app on
-# Windows and Linux only), and the Settings window; then the interface zoomed
-# to 150% (the grid, and an item's menu opened by a press at window points,
-# which lands on the tile drawn there) and to 80% (the grid and the open
-# Settings window, which follows). Last, the Subscriptions screen with one
-# subscription made for it (no sources, so nothing can run), to show its
-# titlebar actions clear of the window's buttons: the home, a subscription's
-# page with its rail, the page with the rail hidden, and the page at 150%,
-# where the actions show their glyphs alone. Then the Duplicates screen
-# after a scan: its first pair; the same at 125% (the window about 970
-# points wide, near the smallest it may be), where the titlebar's decisions
-# show their glyphs clear of the window's buttons; the next pair; and the
-# pixel difference while its key is down.
+# CI plays this script with the off-screen tool (src/offscreen.rs) and
+# uploads the pictures it takes. The library is a generated one with 2,000
+# items, which the example million_grid_demo makes.
+#
+# Pictures 01 to 08 are taken at 100% interface zoom:
+#   01 the grid.
+#   02 the grid with the pointer over a tile.
+#   03 the grid scrolled down.
+#   04 the viewer with an item open.
+#   05 the context menu of an item.
+#   06 the window's close button with the pointer over it. The app draws
+#      this button only on Windows and Linux.
+#   07 the application menu. The app draws this menu in the window only on
+#      Windows and Linux.
+#   08 the Settings window.
+#
+# Pictures 09 and 10 are taken at 150% interface zoom: the grid, and the
+# context menu of an item. The menu is opened by a press at a position in
+# window points, which checks that the press reaches the tile that is drawn
+# at that position.
+#
+# Pictures 11 and 12 are taken at 80% interface zoom: the grid, and the
+# Settings window, which is still open and takes the same zoom.
+#
+# Pictures 13 to 16 show the Subscriptions screen with one subscription that
+# the script creates. The subscription has no sources, so it cannot run.
+# They show that the screen's buttons in the titlebar do not overlap the
+# window's own buttons:
+#   13 the list of subscriptions.
+#   14 the page of the subscription, with its rail.
+#   15 the same page with the rail hidden.
+#   16 the same page at 150% interface zoom, where the titlebar buttons show
+#      only their icons.
+#
+# Pictures 17 and 18 show the Duplicates screen after a scan, at 100% and at
+# 125% interface zoom. The generated library has no two images that match,
+# so the scan finds no pairs and both pictures show the screen's empty
+# state ("No duplicate pairs"). The screen with a pair on it is therefore
+# not photographed in CI.
 reload
 size 1213 865
 wait 800
@@ -156,7 +179,7 @@ move 73 338
 down 73 338
 up 73 338
 wait 3000
-shot 17-duplicates-pair
+shot 17-duplicates-empty
 key secondary-=
 wait 100
 key secondary-=
@@ -167,10 +190,4 @@ key secondary-=
 wait 100
 key secondary-=
 wait 1200
-shot 18-duplicates-pair-zoom-125
-key right
-wait 2500
-shot 19-duplicates-next
-key d
-wait 800
-shot 20-duplicates-difference
+shot 18-duplicates-empty-zoom-125

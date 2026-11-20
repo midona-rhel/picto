@@ -1,14 +1,24 @@
-//! The Duplicates screen (`DuplicatesScreen.tsx`): the review queue of
-//! perceptually similar pairs, one pair at a time, side by side with linked
-//! zoom and pan, each file's name, keep action and facts beneath it. Its
-//! place in the queue, the decisions on the pair and the zoom sit in the
-//! titlebar ([`DuplicatesToolbar`]), where this app's main screens have
-//! their actions; the Electron screen has the decisions in a footer.
+//! The Duplicates screen. It is a port of the Electron app's
+//! `DuplicatesScreen.tsx` and shows the library's queue of pairs of files
+//! that a scan found to be perceptually similar, one pair at a time.
 //!
-//! Beyond the Electron screen: the pixel difference also shows while its key
-//! is held; what comparing the two originals' pixels counted is written
-//! beside the similarity; and the pictures of the pair after the one on
-//! screen are decoded ahead, so that a decision lands on them sharp.
+//! The two pictures are side by side and are zoomed and panned together.
+//! Above each picture is a row with the file's name and its Keep left or
+//! Keep right button. Under each picture is a list of the file's facts.
+//!
+//! The titlebar holds the rest of the screen's controls
+//! ([`DuplicatesToolbar`]): the position in the queue with the Previous pair
+//! and Next pair buttons, one line of text with the similarity and the pixel
+//! measurement, the Smart merge, Not duplicates, Keep both and Show
+//! Difference buttons, and the Zoom to fit and Actual pixels buttons. The
+//! Electron screen has those four buttons in a footer. This app puts every
+//! main screen's buttons in the titlebar, so this screen does too.
+//!
+//! Three things here are not in the Electron screen. The pixel difference is
+//! also shown while the D key is held down. The titlebar says how many of
+//! the two originals' pixels differ. The pictures of the pair that follows
+//! the pair on screen are decoded in advance, so that when a decision moves
+//! to that pair its originals are drawn at once.
 mod compare;
 mod decisions;
 mod difference;
@@ -29,9 +39,10 @@ use picto_library::{
 use std::collections::HashMap;
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
-// The review's actions. Their keys come from the shortcut registry
-// (`crate::keymap`) and win over the grid's while the screen has the
-// keyboard, as its `useShortcutScope` does.
+// The screen's actions. The shortcut registry (`crate::keymap`) binds their
+// keys in the `Duplicates` key context, so they take priority over the
+// grid's keys while this screen has keyboard focus. The Electron screen does
+// the same with `useShortcutScope`.
 actions!(
     duplicates,
     [
@@ -50,24 +61,30 @@ actions!(
 
 // i18n: a key context
 const CONTEXT: &str = "Duplicates";
-
-/// `getDuplicatePairs`: the queue is read 500 pairs at a time.
+/// The number of pairs read from the library at a time. The Electron app's
+/// `getDuplicatePairs` reads the same number.
 const QUEUE_LIMIT: usize = 500;
-/// `scanDuplicates(distanceThreshold = 16)`.
+/// The distance threshold passed to `duplicates.scan`. It is the default of
+/// the Electron app's `scanDuplicates`.
 const SCAN_DISTANCE: u32 = 16;
 
-/// One side of the pair on screen.
+/// One of the two files of the pair on screen.
 struct Side {
     file: DuplicateFile,
+    /// The number of items in the library that hold this file.
     occurrences: usize,
-    /// The item holding this file; `None` if its details could not be read.
+    /// The details of the first item that holds this file. This is `None`
+    /// when the details could not be read.
     details: Option<RootDetails>,
-    /// That item's media record for this file (`mediaForFile`).
+    /// That item's media record for this file. The Electron screen finds it
+    /// with `mediaForFile`.
     media: Option<MediaRecord>,
-    /// When the original arrived while this side was on screen, for its
-    /// fade over the thumbnail. An original already decoded when the pair
-    /// was put on screen shows at once.
-    sharp_since: Option<Instant>,
+    /// The time at which this file's original was decoded, if that happened
+    /// while the file was on screen. The original then fades in over the
+    /// thumbnail, starting at this time. This is `None` when the original
+    /// was already decoded when the pair was put on screen, and the original
+    /// is then drawn at full opacity at once.
+    original_since: Option<Instant>,
 }
 
 impl Side {
@@ -85,11 +102,13 @@ impl Side {
             occurrences: side.occurrences.len(),
             details,
             media,
-            sharp_since: None,
+            original_since: None,
         }
     }
 
-    /// The original to load: this very file, when it is a still image.
+    /// The path of the original file to decode. This is `None` when the file
+    /// is not a still image, or when the item's media record is for a
+    /// different file.
     fn original(&self) -> Option<PathBuf> {
         let media = self.media.as_ref()?;
         (self.file.mime_type.starts_with("image/")
@@ -97,6 +116,8 @@ impl Side {
             .then(|| PathBuf::from(&media.file_path))
     }
 
+    /// The file's width and height in pixels. Both are zero when the library
+    /// does not know them.
     fn image(&self) -> Extent {
         Extent::new(
             self.file.pixel_width.unwrap_or(0) as f32,
@@ -104,79 +125,101 @@ impl Side {
         )
     }
 
-    /// How far the original has faded in over the thumbnail.
-    fn sharp_opacity(&self) -> f32 {
-        self.sharp_since.map_or(1., |since| {
+    /// The opacity of the original over the thumbnail, from 0 to 1. It
+    /// rises over [`motion::FULL_IMAGE_FADE`] from the time the original was
+    /// decoded.
+    fn original_opacity(&self) -> f32 {
+        self.original_since.map_or(1., |since| {
             motion::EASE_OUT.ease(motion::progress(since.elapsed(), motion::FULL_IMAGE_FADE))
         })
     }
 }
 
-/// A file's decoded pictures, kept while its pair is on screen, about to
-/// be, or next in the queue.
+/// The decoded pictures of one file. The screen keeps them while the file
+/// belongs to the pair on screen, to the pair that is about to be put on
+/// screen, or to the pair that follows the pair on screen.
 #[derive(Default)]
 struct Pictures {
     thumbnail: Option<Arc<RenderImage>>,
-    /// The thumbnail was read, or could not be.
+    /// True once the thumbnail was decoded, or once decoding it failed.
     thumbnail_settled: bool,
     thumbnail_task: Option<Task<()>>,
     original: Option<Arc<RenderImage>>,
-    /// The original is being decoded.
+    /// True while the original is being decoded.
     original_pending: bool,
     original_task: Option<Task<()>>,
 }
 
-/// The pair on screen.
+/// Whether the two originals of a pair have been compared pixel by pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Counted {
+    /// The comparison has not finished yet.
+    Waiting,
+    /// The comparison finished, with this result.
+    Done(difference::Measure),
+    /// The pair cannot be compared: a file is not a still image, or an
+    /// original could not be decoded.
+    Impossible,
+}
+
+/// A pair of files with what the screen knows about it. The screen keeps
+/// one for the pair on screen, one for the pair about to be put on screen
+/// and one for the pair that follows the pair on screen.
 struct Shown {
     key: PairKey,
     files: (FileId, FileId),
     distance: u32,
     sides: [Side; 2],
-    /// The difference picture, once computed, and whether each side of it
-    /// was its original.
+    /// The difference picture, once it was computed. The two booleans say,
+    /// for the left and the right file, whether the picture was computed
+    /// from the file's original (`true`) or from its thumbnail (`false`).
     difference: Option<(Arc<RenderImage>, [bool; 2])>,
-    /// What comparing the two originals counted. It is taken once and
-    /// stays for as long as the pair does.
-    measure: Option<difference::Measure>,
+    /// The result of comparing the two originals pixel by pixel. It is set
+    /// once and then never changes, so the titlebar's line of text does not
+    /// change while the pair is on screen.
+    counted: Counted,
 }
 
 impl Shown {
     fn new(pair: &DuplicateCandidate, [left, right]: [Option<RootDetails>; 2]) -> Self {
+        let sides = [Side::new(&pair.left, left), Side::new(&pair.right, right)];
+        let comparable = sides.iter().all(|side| side.original().is_some());
         Self {
             key: pair_key(pair.file_id_a, pair.file_id_b),
             files: (pair.file_id_a, pair.file_id_b),
             distance: pair.distance,
-            sides: [Side::new(&pair.left, left), Side::new(&pair.right, right)],
+            sides,
             difference: None,
-            measure: None,
+            counted: if comparable {
+                Counted::Waiting
+            } else {
+                Counted::Impossible
+            },
         }
     }
 
     fn hashes(&self) -> impl Iterator<Item = &String> {
         self.sides.iter().map(|side| &side.file.file_hash)
     }
-
-    /// Both files are still images whose originals can be compared.
-    fn measurable(&self) -> bool {
-        self.sides.iter().all(|side| side.original().is_some())
-    }
 }
 
-/// A decision on the pair on screen (`DuplicateAction`).
+/// A decision on the pair on screen. The Electron app calls it a
+/// `DuplicateAction`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Decision {
-    /// "Not duplicates" and "Keep both": two different files; neither
-    /// file is touched.
+    /// Records that the two files are different. Neither file is changed.
+    /// The Not duplicates button and the Keep both button both do this.
     KeepBoth,
-    /// Keep this file and merge the other's item into it. The other file
-    /// is freed and the application deletes it from the library's blobs.
+    /// Keeps this file and merges the other file's item into its item. The
+    /// application then deletes the other file from the library's blobs.
     Keep(FileId),
-    /// Keep whichever file the library judges better, if it can tell.
+    /// Keeps the file that the library rates as better, if the library can
+    /// rate one as better.
     Smart,
 }
 
-/// What "Duplicate scan complete" says after a scan that found `found` new
-/// pairs.
+/// The message of the "Duplicate scan complete" notification after a scan
+/// that found `found` new pairs.
 fn scan_message(found: u64) -> String {
     if found > 0 {
         format!("Found {found} new review pairs")
@@ -185,37 +228,41 @@ fn scan_message(found: u64) -> String {
     }
 }
 
-/// What a fetch is for.
+/// The reason for a read from the library.
 #[derive(Clone, Copy)]
 enum Fetch {
-    /// Read the queue again; `reset` starts the progress count afresh.
+    /// Read the queue again. With `reset`, the count of decisions made since
+    /// the queue was read starts again from zero.
     Queue { reset: bool },
-    /// Read the queue after this pair was settled: the one after it takes
-    /// its place.
+    /// Read the queue after a decision on this pair. The pair is no longer
+    /// in the queue, and the pair that followed it is shown.
     Settled(PairKey),
-    /// Show another pair of the queue already read.
+    /// Show this other pair of the queue that was already read.
     Pair(PairKey),
 }
 
-/// A pair with its two items' details.
+/// A pair together with the details of its two items.
 type Detailed = (DuplicateCandidate, [Option<RootDetails>; 2]);
 
-/// What came back from the library's thread.
+/// The answer to a read from the library.
 struct Fetched {
-    /// The queue, when it was read.
+    /// The queue, if this read was a read of the queue.
     pairs: Option<Vec<DuplicateCandidate>>,
-    /// The pair to show.
+    /// The key of the pair to show.
     key: Option<PairKey>,
-    /// The two items' details, when the pair to show is not the one shown.
+    /// The details of the two items of the pair to show. This is `None`
+    /// when the pair to show is the pair already on screen.
     details: Option<[Option<RootDetails>; 2]>,
-    /// The pair after the one to show, whose pictures are decoded ahead.
+    /// The pair that follows the pair to show. Its pictures are decoded in
+    /// advance.
     ahead: Option<Detailed>,
-    /// The sidebar's duplicate count.
+    /// The number of duplicate pairs that the sidebar shows.
     count: Option<u64>,
 }
 
-/// A pair read and waiting for both its thumbnails before it goes on
-/// screen, so the screen never shows a half-loaded pair.
+/// A pair that was read and is waiting for its two thumbnails to be decoded.
+/// It is put on screen only when both are, so the screen never shows one
+/// picture of the new pair beside one picture of the old pair.
 struct Pending {
     pairs: Option<Vec<DuplicateCandidate>>,
     reset: bool,
@@ -223,14 +270,18 @@ struct Pending {
     ahead: Option<Shown>,
 }
 
-/// A drag of one preview: where it started and the centre then.
+/// A drag of one of the two pictures with the left mouse button.
 struct Drag {
+    /// 0 for the left picture, 1 for the right picture.
     side: usize,
+    /// Where the pointer was when the drag started.
     from: Point<Pixels>,
+    /// The zoom's centre when the drag started.
     center: (f32, f32),
 }
 
-/// The titlebar controls' model (`DuplicateToolbarModel`).
+/// What the titlebar controls show. The Electron app calls it a
+/// `DuplicateToolbarModel`.
 struct ToolbarModel {
     index: usize,
     total: usize,
@@ -244,69 +295,86 @@ struct ToolbarModel {
 pub struct DuplicatesScreen {
     session: Entity<Session>,
     focus: FocusHandle,
-    /// Whatever had the keyboard before this screen took it.
+    /// The element that had keyboard focus before this screen took it. The
+    /// screen gives focus back to it when the user leaves the screen.
     return_focus: Option<FocusHandle>,
     controls: Entity<DuplicatesToolbar>,
-    /// The session's destination is this screen.
+    /// True while this screen is the session's destination.
     visible: bool,
-    /// The keyboard was taken for this visit.
+    /// True once the screen took keyboard focus during this visit.
     focused_once: bool,
     pairs: Vec<DuplicateCandidate>,
     total: usize,
-    /// The queue's length when it was last read afresh, for the count of
-    /// decisions made since.
+    /// The length of the queue when it was last read with `reset`. The
+    /// empty state subtracts `total` from it to say how many decisions were
+    /// saved.
     initial_total: usize,
+    /// The pair on screen.
     shown: Option<Shown>,
-    /// The pair about to go on screen.
+    /// The pair that is about to be put on screen.
     pending: Option<Pending>,
-    /// The pair after the one on screen, whose pictures are decoded ahead.
+    /// The pair that follows the pair on screen. Its pictures are decoded
+    /// and its originals compared in advance.
     ahead: Option<Shown>,
-    /// The decoded pictures of those pairs' files, by file hash.
+    /// The decoded pictures of the files of those three pairs, by file hash.
     pictures: HashMap<String, Pictures>,
-    /// The queue is being read for the first time.
+    /// True while the queue is being read for the first time.
     loading: bool,
-    /// The loading message, which waits 200 ms.
+    /// True once the first read has taken longer than 200 ms. The loading
+    /// message is shown only then.
     loading_message: bool,
+    /// True while a decision is being written to the library.
     resolving: bool,
-    /// Another pair is being prepared.
+    /// True while another pair of the queue is being prepared.
     navigating: bool,
     error: Option<String>,
-    /// Counts fetches, so a late answer to an earlier one is dropped.
+    /// A number that goes up with every read. An answer to an earlier read
+    /// carries a lower number and is ignored.
     generation: u64,
-    /// The library's revision after this screen's last decision: a change
-    /// reported up to it is the decision's own, whose queue is already read.
+    /// The library's revision after this screen's last decision. A change
+    /// event with this revision or a lower one reports that decision, and
+    /// the screen has already read the queue for it.
     own_revision: u64,
     zoom: LinkedZoom,
     drag: Option<Drag>,
-    /// Show Difference is under the pointer, has the keyboard (from
-    /// assistive technology; Tab is Toggle Panels here as in production),
-    /// was pressed (which gives a button the keyboard in the Electron app,
-    /// until a press elsewhere), or its key is held down.
+    /// True while the pointer is on the Show Difference button.
     difference_hovered: bool,
+    /// True while the Show Difference button has keyboard focus. On this
+    /// screen the Tab key toggles the panels, as it does in production, so
+    /// only assistive technology can give the button keyboard focus.
     difference_focused: bool,
+    /// True after a click on the Show Difference button, until the next
+    /// press of a mouse button anywhere in the window. In the Electron app a
+    /// click gives the button keyboard focus, and the difference stays on
+    /// screen until something else is clicked.
     difference_pressed: bool,
+    /// True while the key bound to Show Difference (D) is held down.
     difference_held: bool,
-    /// The two previews as last painted, for the pointer.
+    /// The bounds of the two picture panes in the last painted frame. The
+    /// pointer handlers use them.
     panes: [Bounds<Pixels>; 2],
     fetch_task: Option<Task<()>>,
+    /// The task that computes the difference picture of the pair on screen.
     difference_task: Option<Task<()>>,
+    /// The task that compares the originals of the pair in `ahead`.
+    ahead_task: Option<Task<()>>,
     message_task: Option<Task<()>>,
-    /// A scan of the library is running.
+    /// True while a scan of the library is running.
     scanning: bool,
-    /// Its progress bar, which waits 200 ms (`useDelayedFlag`).
+    /// True once the scan has taken longer than 200 ms. The scan's progress
+    /// bar is shown only then, as the Electron screen's `useDelayedFlag`
+    /// does.
     scan_progress: bool,
     scan_task: Option<Task<()>>,
-    /// The read of the queue that ends the scan.
+    /// The number of the read of the queue that follows a scan. The scan is
+    /// over when that read is answered.
     scan_fetch: Option<u64>,
-    /// Smart merge is under the pointer or has the keyboard, which shows
-    /// the file it would keep.
+    /// True while the pointer is on the Smart merge button.
     smart_hovered: bool,
+    /// True while the Smart merge button has keyboard focus.
     smart_focused: bool,
-    /// How far the preview of Smart merge has faded in, and the side it
-    /// last showed as kept, which the fade out still needs.
-    survivor: motion::Fade,
-    preview_side: Option<usize>,
-    /// A card's menu (`MediaCard`'s `contextMenu`).
+    /// The context menu of a file. The Electron screen's `MediaCard` opens
+    /// the same menu.
     menu: ui::menu::Host,
     _session: Vec<Subscription>,
 }
@@ -326,9 +394,11 @@ impl DuplicatesScreen {
                     this.navigated(window, cx);
                 }
             }),
-            // A scan made elsewhere (the media worker scans new images by
-            // itself) or an undo changes the queue; a decision of this
-            // screen reads the queue itself and is not read twice.
+            // The queue changes when the media worker scans newly imported
+            // images, and when a decision is undone. The screen then reads
+            // the queue again. It does not do that for the change that its
+            // own decision caused, because it reads the queue itself after a
+            // decision.
             cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
                 if let BackendEvent::Changed(changed) = event
                     && crate::application::touches(changed, "duplicates")
@@ -341,8 +411,10 @@ impl DuplicatesScreen {
                     this.fetch(Fetch::Queue { reset: true }, cx);
                 }
             }),
-            // A key let go while another application has the keyboard is
-            // never heard of: the difference's key counts as let go.
+            // When the user switches to another application while holding
+            // D, this window never receives the key-up event. The screen
+            // therefore stops showing the difference when the window stops
+            // being the active window.
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.hold_difference(false, cx);
@@ -381,6 +453,7 @@ impl DuplicatesScreen {
             panes: [Bounds::default(); 2],
             fetch_task: None,
             difference_task: None,
+            ahead_task: None,
             message_task: None,
             scanning: false,
             scan_progress: false,
@@ -388,27 +461,26 @@ impl DuplicatesScreen {
             scan_fetch: None,
             smart_hovered: false,
             smart_focused: false,
-            survivor: motion::Fade::default(),
-            preview_side: None,
             _session: subscriptions,
         }
     }
 
-    /// The titlebar controls this screen drives.
+    /// The view that draws this screen's controls in the titlebar.
     pub fn toolbar(&self) -> Entity<DuplicatesToolbar> {
         self.controls.clone()
     }
 
-    /// Repaints this screen and its titlebar controls.
+    /// Asks for this screen and its titlebar controls to be drawn again.
     fn changed(&mut self, cx: &mut Context<Self>) {
         cx.notify();
         self.controls.update(cx, |_, cx| cx.notify());
     }
 
-    // ── Visits ──────────────────────────────────────────────────
+    // The functions below run when the user enters or leaves the screen.
 
-    /// Follows the session: reads the queue when the screen is chosen,
-    /// takes the keyboard once it shows, and gives both back when left.
+    /// Runs when the session's destination changes. It reads the queue when
+    /// the user chooses this screen, takes keyboard focus once the screen is
+    /// drawn, and gives focus back when the user leaves.
     fn navigated(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (chosen, displayed) = {
             let session = self.session.read(cx);
@@ -455,8 +527,9 @@ impl DuplicatesScreen {
                 });
             }));
         } else {
-            // The pair left on screen shows at once; its originals, let go
-            // once the screen had faded out, load again.
+            // The pair from the last visit is still in `shown` and is drawn
+            // at once from its thumbnails. Its originals were released when
+            // the user left the screen, so they are decoded again.
             self.load_pictures(cx);
             self.refresh_difference(cx);
         }
@@ -464,8 +537,9 @@ impl DuplicatesScreen {
     }
 
     fn left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Nothing still on its way applies any more. What is on screen
-        // stays as it is while the screen fades out.
+        // Answers that are still on their way are ignored from here on. The
+        // pair on screen is kept, because the screen is still drawn while it
+        // fades out.
         self.generation += 1;
         self.fetch_task = None;
         self.pending = None;
@@ -488,16 +562,20 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Lets the originals and the difference picture go once the screen
-    /// is no longer painted. They are the large part; the thumbnails stay,
-    /// so the pair shows at once when the screen is chosen again.
+    /// Releases the decoded originals and the difference pictures once the
+    /// screen is no longer drawn. They use the most memory. The thumbnails
+    /// are kept, so the pair is drawn at once when the user comes back.
     fn release_originals(&mut self, cx: &mut Context<Self>) {
         self.difference_task = None;
+        self.ahead_task = None;
         let mut released = Vec::new();
-        if let Some(shown) = &mut self.shown {
-            released.extend(shown.difference.take().map(|(image, _)| image));
-            for side in &mut shown.sides {
-                side.sharp_since = None;
+        for pair in [self.shown.as_mut(), self.ahead.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            released.extend(pair.difference.take().map(|(image, _)| image));
+            for side in &mut pair.sides {
+                side.original_since = None;
             }
         }
         for pictures in self.pictures.values_mut() {
@@ -510,7 +588,7 @@ impl DuplicatesScreen {
         }
     }
 
-    // ── Fetching ────────────────────────────────────────────────
+    // The two functions below are used by the reads from the library.
 
     fn pair(&self, key: PairKey) -> Option<&DuplicateCandidate> {
         self.pairs
@@ -518,7 +596,7 @@ impl DuplicatesScreen {
             .find(|pair| pair_key(pair.file_id_a, pair.file_id_b) == key)
     }
 
-    /// No fetch is under way any more.
+    /// Records that no read and no decision is under way any more.
     fn settle(&mut self) {
         self.loading = false;
         self.loading_message = false;
@@ -530,11 +608,12 @@ impl DuplicatesScreen {
         }
     }
 
-    // ── Scanning ────────────────────────────────────────────────
+    // The two functions below scan the library for duplicates.
 
-    /// "Scan library" and "Retry": the application compares every image's
-    /// perceptual hash (`duplicates.scan`), then the queue is read again.
-    /// The progress bar shows if it takes longer than 200 ms.
+    /// Runs when the user clicks "Scan library" or "Retry" in the empty
+    /// state. The application compares the perceptual hashes of all images
+    /// (`duplicates.scan`), and then the screen reads the queue again. The
+    /// progress bar is shown if the scan takes longer than 200 ms.
     fn scan(&mut self, cx: &mut Context<Self>) {
         if self.scanning {
             return;
@@ -591,9 +670,11 @@ impl DuplicatesScreen {
         self.scan_fetch = None;
     }
 
-    /// Asks the library for what `fetch` needs, then prepares the pair to
-    /// show. The pair on screen stays until the next one's details and both
-    /// its thumbnails are ready.
+    // The functions below read from the library and put a pair on screen.
+
+    /// Reads from the library what `fetch` asks for, and then prepares the
+    /// pair to show. The pair on screen stays on screen until the details
+    /// and both thumbnails of the next pair are ready.
     fn fetch(&mut self, fetch: Fetch, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
@@ -605,7 +686,8 @@ impl DuplicatesScreen {
             .map(|pair| pair_key(pair.file_id_a, pair.file_id_b))
             .collect::<Vec<_>>();
         let shown = self.shown.as_ref().map(|shown| shown.key);
-        // Another pair of the queue as it is known, and the one after it.
+        // For a move to another pair of the queue that is already in
+        // memory: that pair, and the pair after it.
         let known = match fetch {
             Fetch::Pair(key) => previous
                 .iter()
@@ -625,8 +707,9 @@ impl DuplicatesScreen {
             let (pair, after) = match fetch {
                 Fetch::Pair(_) => known.map_or((None, None), |(pair, after)| (Some(pair), after)),
                 Fetch::Queue { .. } | Fetch::Settled(_) => {
-                    // A settled pair is gone from the queue: the next one
-                    // after it takes its place.
+                    // After a decision the decided pair is no longer in the
+                    // queue. `select_stable` then picks the pair that
+                    // followed it in the old queue.
                     let active = match fetch {
                         Fetch::Settled(key) => Some(key),
                         _ => shown,
@@ -727,7 +810,8 @@ impl DuplicatesScreen {
                 .cloned()
         });
         let (Some(pair), Some(details)) = (pair, fetched.details) else {
-            // The pair on screen stays, or the queue is empty.
+            // Either the pair to show is the pair already on screen, or the
+            // queue is empty.
             if let Some(pairs) = fetched.pairs {
                 self.set_pairs(pairs, reset);
             }
@@ -758,8 +842,9 @@ impl DuplicatesScreen {
         self.pairs = pairs;
     }
 
-    /// Puts the prepared pair on screen once both its thumbnails are read
-    /// (or cannot be), both at once.
+    /// Puts the pair in `pending` on screen, if both of its thumbnails were
+    /// decoded or could not be decoded. Otherwise it does nothing, and it
+    /// is called again when a thumbnail finishes decoding.
     fn commit_when_ready(&mut self, cx: &mut Context<Self>) {
         let ready = self.pending.as_ref().is_some_and(|pending| {
             pending.shown.hashes().all(|hash| {
@@ -771,7 +856,7 @@ impl DuplicatesScreen {
         if !ready {
             return;
         }
-        let Some(pending) = self.pending.take() else {
+        let Some(mut pending) = self.pending.take() else {
             return;
         };
         if let Some(pairs) = pending.pairs {
@@ -782,6 +867,14 @@ impl DuplicatesScreen {
         }
         self.drag = None;
         self.difference_task = None;
+        self.ahead_task = None;
+        // If this pair was the pair in `ahead`, its originals may already
+        // have been compared. The result is carried over, so the titlebar's
+        // line of text is complete as soon as the pair is on screen.
+        if let Some(ahead) = self.ahead.take_if(|ahead| ahead.key == pending.shown.key) {
+            pending.shown.difference = ahead.difference;
+            pending.shown.counted = ahead.counted;
+        }
         if let Some((image, _)) = self.shown.take().and_then(|old| old.difference) {
             crate::atlas::release(image, cx);
         }
@@ -793,7 +886,7 @@ impl DuplicatesScreen {
         self.changed(cx);
     }
 
-    /// Takes the pair off screen and gives its pictures back.
+    /// Removes the pair from the screen and releases its pictures.
     fn release(&mut self, cx: &mut Context<Self>) {
         self.difference_task = None;
         self.drag = None;
@@ -804,18 +897,31 @@ impl DuplicatesScreen {
         self.keep_pictures(cx);
     }
 
-    // ── Pictures ────────────────────────────────────────────────
+    // The functions below decode, keep and release the pictures.
 
-    /// The pair whose pictures are decoded ahead: the one after the pair
-    /// on screen.
+    /// Sets the pair whose pictures are decoded in advance. It is the pair
+    /// that follows the pair on screen in the queue.
     fn set_ahead(&mut self, ahead: Option<Shown>, cx: &mut Context<Self>) {
-        self.ahead = ahead;
+        // If the pair is the same as before, what was already computed for
+        // it is kept.
+        let same = match (&self.ahead, &ahead) {
+            (Some(old), Some(new)) => old.key == new.key,
+            _ => false,
+        };
+        if !same {
+            self.ahead_task = None;
+            if let Some((image, _)) = self.ahead.take().and_then(|old| old.difference) {
+                crate::atlas::release(image, cx);
+            }
+            self.ahead = ahead;
+        }
         self.keep_pictures(cx);
         self.load_pictures(cx);
+        self.compare_ahead(cx);
     }
 
-    /// Lets go of the pictures of files that are neither on screen, about
-    /// to be, nor next.
+    /// Releases the pictures of every file that belongs to none of the
+    /// three pairs the screen keeps.
     fn keep_pictures(&mut self, cx: &mut Context<Self>) {
         let kept = [
             self.shown.as_ref(),
@@ -842,9 +948,8 @@ impl DuplicatesScreen {
         }
     }
 
-    /// Starts reading what is missing of the thumbnails and originals of
-    /// the pair on screen, the one about to be and the one after, each
-    /// once. An original shown fades in over its thumbnail on arrival.
+    /// Starts decoding every thumbnail and original that the three pairs
+    /// need and that is neither decoded nor being decoded.
     fn load_pictures(&mut self, cx: &mut Context<Self>) {
         let wanted = [
             self.shown.as_ref(),
@@ -902,6 +1007,8 @@ impl DuplicatesScreen {
         }
     }
 
+    /// Runs when an original finishes decoding. `image` is `None` when the
+    /// file could not be decoded.
     fn original_arrived(
         &mut self,
         hash: String,
@@ -915,29 +1022,48 @@ impl DuplicatesScreen {
             return;
         };
         pictures.original_pending = false;
-        let Some(image) = image else {
-            return;
-        };
-        if let Some(old) = pictures.original.replace(image) {
+        let decoded = image.is_some();
+        if let Some(image) = image
+            && let Some(old) = pictures.original.replace(image)
+        {
             crate::atlas::release(old, cx);
         }
-        let Some(shown) = &mut self.shown else {
-            return;
-        };
+        for pair in [
+            self.shown.as_mut(),
+            self.pending.as_mut().map(|pending| &mut pending.shown),
+            self.ahead.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            // Without this original the pair cannot be compared.
+            if !decoded
+                && pair.counted == Counted::Waiting
+                && pair.hashes().any(|each| *each == hash)
+            {
+                pair.counted = Counted::Impossible;
+            }
+        }
         let mut on_screen = false;
-        for side in &mut shown.sides {
-            if side.file.file_hash == hash {
-                side.sharp_since = Some(Instant::now());
-                on_screen = true;
+        if let Some(shown) = &mut self.shown {
+            for side in &mut shown.sides {
+                if side.file.file_hash == hash {
+                    if decoded {
+                        side.original_since = Some(Instant::now());
+                    }
+                    on_screen = true;
+                }
             }
         }
         if on_screen {
             self.refresh_difference(cx);
-            cx.notify();
+            self.changed(cx);
         }
+        self.compare_ahead(cx);
     }
 
-    /// A side's thumbnail and original, as far as they are decoded.
+    /// The decoded thumbnail and the decoded original of a file, each if it
+    /// exists.
     fn pictures_of(&self, side: &Side) -> (Option<Arc<RenderImage>>, Option<Arc<RenderImage>>) {
         self.pictures
             .get(&side.file.file_hash)
@@ -946,25 +1072,28 @@ impl DuplicatesScreen {
             })
     }
 
-    /// Computes the difference picture from the best pictures there are,
-    /// and what comparing the two originals counts.
+    /// Computes the difference picture of the pair on screen from the best
+    /// pictures that are decoded: each file's original, or its thumbnail
+    /// while the original is not decoded. When both pictures are originals,
+    /// the computation also counts the pixels that differ.
     fn refresh_difference(&mut self, cx: &mut Context<Self>) {
         let Some(shown) = &self.shown else {
             return;
         };
-        // An original still on its way would only have the picture made
-        // twice.
+        // While an original is still being decoded, a difference picture
+        // that already exists is kept. It is computed again when that
+        // original arrives.
         let waiting = shown.hashes().any(|hash| {
             self.pictures
                 .get(hash)
                 .is_some_and(|pictures| pictures.original_pending)
         });
         let [left, right] = shown.sides.each_ref().map(|side| self.pictures_of(side));
-        let sharp = [left.1.is_some(), right.1.is_some()];
+        let from_originals = [left.1.is_some(), right.1.is_some()];
         if shown
             .difference
             .as_ref()
-            .is_some_and(|(_, made)| *made == sharp || waiting)
+            .is_some_and(|(_, made)| *made == from_originals || waiting)
         {
             return;
         }
@@ -978,25 +1107,68 @@ impl DuplicatesScreen {
         self.difference_task = Some(cx.spawn(async move |this, cx| {
             let made = work.await;
             let _ = this.update(cx, |this, cx| {
-                let Some((image, measure)) = made else {
-                    return;
-                };
-                let Some(shown) = this.shown.as_mut().filter(|shown| shown.key == key) else {
-                    crate::atlas::release(image, cx);
-                    return;
-                };
-                if let Some((old, _)) = shown.difference.replace((image, sharp)) {
-                    crate::atlas::release(old, cx);
-                }
-                if sharp == [true, true] && shown.measure.is_none() {
-                    shown.measure = Some(measure);
-                }
-                cx.notify();
+                this.store_difference(key, made, from_originals, cx)
             });
         }));
     }
 
-    // ── Pointer on the previews ─────────────────────────────────
+    /// Compares the two originals of the pair in `ahead` once both are
+    /// decoded, so that the result is known before the pair is put on
+    /// screen.
+    fn compare_ahead(&mut self, cx: &mut Context<Self>) {
+        let Some(ahead) = &self.ahead else {
+            return;
+        };
+        if ahead.counted != Counted::Waiting || self.ahead_task.is_some() {
+            return;
+        }
+        let [left, right] = ahead.sides.each_ref().map(|side| self.pictures_of(side).1);
+        let (Some(left), Some(right)) = (left, right) else {
+            return;
+        };
+        let key = ahead.key;
+        let work = cx
+            .background_executor()
+            .spawn(async move { difference::compute(&left, &right) });
+        self.ahead_task = Some(cx.spawn(async move |this, cx| {
+            let made = work.await;
+            let _ = this.update(cx, |this, cx| {
+                this.store_difference(key, made, [true, true], cx)
+            });
+        }));
+    }
+
+    /// Stores a computed difference picture in the pair with this key, which
+    /// is the pair on screen or the pair in `ahead`. `from_originals` says for each
+    /// file whether its original was used.
+    fn store_difference(
+        &mut self,
+        key: PairKey,
+        made: Option<(Arc<RenderImage>, difference::Measure)>,
+        from_originals: [bool; 2],
+        cx: &mut Context<Self>,
+    ) {
+        let on_screen = self.shown.as_ref().is_some_and(|shown| shown.key == key);
+        let pair = if on_screen {
+            self.shown.as_mut()
+        } else {
+            self.ahead.as_mut().filter(|ahead| ahead.key == key)
+        };
+        let (Some(pair), Some((image, measure))) = (pair, made) else {
+            return;
+        };
+        if let Some((old, _)) = pair.difference.replace((image, from_originals)) {
+            crate::atlas::release(old, cx);
+        }
+        if from_originals == [true, true] && pair.counted == Counted::Waiting {
+            pair.counted = Counted::Done(measure);
+        }
+        if on_screen {
+            self.changed(cx);
+        }
+    }
+
+    // The functions below handle the mouse wheel and a drag on a picture.
 
     fn pane_extent(&self, side: usize) -> Extent {
         extent(self.panes[side])
@@ -1008,17 +1180,18 @@ impl DuplicatesScreen {
             .map_or_else(Extent::default, |shown| shown.sides[side].image())
     }
 
-    /// The wheel zooms both previews about the pointer; it never changes
-    /// the pair.
+    /// Runs when the mouse wheel turns over a picture. It zooms both
+    /// pictures around the pointer. It never moves to another pair.
     fn wheel(&mut self, side: usize, event: &ScrollEvent, window: &Window, cx: &mut Context<Self>) {
         let bounds = self.panes[side];
         let delta = event.delta.pixel_delta(window.line_height());
         let offset = event.position - bounds.center();
-        // GPUI's delta is the content's movement; the DOM's is the wheel's.
+        // GPUI reports how far the content should move. The DOM's `deltaY`,
+        // which the zoom arithmetic expects, has the opposite sign.
         self.zoom.wheel(
             self.pane_extent(side),
             self.image(side),
-            lean(side),
+            pane_edge(side),
             (f32::from(offset.x), f32::from(offset.y)),
             -f32::from(delta.y),
         );
@@ -1041,13 +1214,15 @@ impl DuplicatesScreen {
     }
 }
 
-/// The left preview's picture rests against the right one's, and the
-/// right one's against the left's.
-fn lean(side: usize) -> compare::Lean {
+/// The edge that a picture narrower than its pane is drawn against. The
+/// left picture is drawn against the right edge of its pane and the right
+/// picture against the left edge of its pane, so the two pictures are next
+/// to each other.
+fn pane_edge(side: usize) -> compare::PaneEdge {
     if side == 0 {
-        compare::Lean::Right
+        compare::PaneEdge::Right
     } else {
-        compare::Lean::Left
+        compare::PaneEdge::Left
     }
 }
 
@@ -1055,8 +1230,9 @@ fn extent(bounds: Bounds<Pixels>) -> Extent {
     Extent::new(f32::from(bounds.size.width), f32::from(bounds.size.height))
 }
 
-/// Starts decoding an image file off the drawing thread: JPEG XL with the
-/// viewer's decoder, the rest with GPUI's.
+/// Starts decoding an image file on a background thread. A JPEG XL file is
+/// decoded with the viewer's JPEG XL decoder, and every other file with
+/// GPUI's image loader.
 fn load_image(path: PathBuf, mime: &str, cx: &mut App) -> Task<Option<Arc<RenderImage>>> {
     use crate::viewer::document;
     if document::kind::renderer_kind(mime) == document::kind::RendererKind::JpegXl {
@@ -1071,8 +1247,8 @@ fn load_image(path: PathBuf, mime: &str, cx: &mut App) -> Task<Option<Arc<Render
         .spawn(async move { load.await.ok() })
 }
 
-/// The screen's titlebar controls: the place in the queue, what was
-/// measured, the decisions on the pair and the zoom.
+/// The view that draws this screen's controls in the titlebar. The drawing
+/// code is `DuplicatesScreen::titlebar` in `view.rs`.
 pub struct DuplicatesToolbar {
     screen: WeakEntity<DuplicatesScreen>,
 }
