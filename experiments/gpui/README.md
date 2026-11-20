@@ -803,7 +803,10 @@ reading production's code, seen in this app).
   width once: a frame in which a view learns its size is drawn again before
   it is shown (a change to the vendored GPUI, `vendor/README.md`).
 - A picture's original is read once it has been on screen for 200 ms, in
-  the viewers and the grid alike (production: 100 ms and 250 ms).
+  the viewers and the grid alike (production: 100 ms and 250 ms). In the
+  viewers the same 200 ms wait applies before a video or audio player, a
+  document or a Flash movie is opened, so holding an arrow key down to go
+  through items opens none of them until the key is released.
 - The Duplicates screen differs from production's in these ways. The
   four buttons Smart merge, Not duplicates, Keep both and Show Difference
   are in the titlebar and not in a footer, because every main screen of

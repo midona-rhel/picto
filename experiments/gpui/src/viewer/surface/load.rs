@@ -1,6 +1,11 @@
-//! Opening an item on the surface: choosing its renderer, showing its
-//! thumbnail at once, and decoding the original (whole or at the size
-//! shown, JPEG XL on its own thread) off the thread that draws.
+//! Opens an item on the media surface.
+//!
+//! Opening an item has three steps. First the surface decides how the item
+//! is shown: as a picture, a video or audio player, a document or a Flash
+//! movie. Then it shows the item's thumbnail immediately. Last, after a
+//! short wait, it loads what the item needs beyond its thumbnail. A
+//! picture's original is decoded on a background thread, never on the
+//! thread that draws the window.
 use super::*;
 
 impl MediaSurface {
@@ -15,8 +20,9 @@ impl MediaSurface {
     ) {
         let media = crate::viewer::video::kind_of(mime);
         let kind = document::kind::renderer_kind(mime);
-        // The same item again keeps playing or showing, unless what showed
-        // it was stopped in the meantime.
+        // When the item is already open, leave it as it is, so that a video
+        // keeps playing. Open it again only if its player, document or
+        // Flash movie has been stopped since.
         if self.opened == key
             && (mime != "application/x-shockwave-flash" || self.flash.is_some())
             && (media.is_none() || self.player.is_some())
@@ -33,7 +39,9 @@ impl MediaSurface {
         self.show(key.clone(), thumbnail.clone(), natural, cx);
         self.opened = key.clone();
         self.error = None;
-        // What `show` kept of the previous item stays over this one.
+        // `show` may have kept the previous item's picture to draw over
+        // this item until this item is ready. `stop` would discard it, so
+        // it is taken out before `stop` and put back after.
         let held = (self.held.take(), self.held_since.take());
         self.stop();
         (self.held, self.held_since) = held;
@@ -42,6 +50,37 @@ impl MediaSurface {
             self.mode = mode;
             cx.emit(Event::Zoom);
         }
+        // What the item needs beyond its thumbnail (the original picture,
+        // a video or audio player, a document, a Flash movie) is started
+        // only after the item has been on screen for `ORIGINAL_DELAY`. When
+        // the user goes through items quickly, for example with an arrow
+        // key held down, each item is replaced before the wait ends, so
+        // nothing is read from disk for the items passed.
+        let mime = mime.to_owned();
+        self.full_wait = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(motion::ORIGINAL_DELAY).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.key == key {
+                    this.start(mode, kind, key, thumbnail, path, &mime, cx);
+                }
+            });
+        }));
+    }
+
+    /// Starts showing the item in full, after the wait in [`Self::open`]:
+    /// decodes the original picture, or opens the video or audio player,
+    /// the document or the Flash movie.
+    fn start(
+        &mut self,
+        mode: Mode,
+        kind: RendererKind,
+        key: String,
+        thumbnail: PathBuf,
+        path: PathBuf,
+        mime: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let media = crate::viewer::video::kind_of(mime);
         match mode {
             Mode::Flash => {
                 self.flash = Some(crate::viewer::flash::Flash::open(path));
@@ -84,26 +123,8 @@ impl MediaSurface {
                     }
                 }));
             }
-            Mode::Image => {
-                // The original is read only once the item has stayed: going
-                // through items with a key held down shows thumbnails and
-                // touches no original until the key is let go.
-                let jpeg_xl = kind == RendererKind::JpegXl;
-                let jpeg = mime == "image/jpeg";
-                self.full_wait = Some(cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(motion::ORIGINAL_DELAY).await;
-                    let _ = this.update(cx, |this, cx| {
-                        if this.key != key {
-                            return;
-                        }
-                        if jpeg_xl {
-                            this.decode_jpeg_xl(key, path, cx);
-                        } else {
-                            this.load_full(key, path, jpeg, cx);
-                        }
-                    });
-                }));
-            }
+            Mode::Image if kind == RendererKind::JpegXl => self.decode_jpeg_xl(key, path, cx),
+            Mode::Image => self.load_full(key, path, mime == "image/jpeg", cx),
             Mode::Document => {
                 let document = Document::open(
                     kind,
@@ -119,8 +140,9 @@ impl MediaSurface {
                     cx.emit(Event::Progressed);
                     cx.notify();
                 });
-                // A thumbnail already decoded for this item goes to the
-                // document at once.
+                // If this item's thumbnail has already been decoded, give
+                // it to the document now, so the document can show it
+                // while its first page loads.
                 if self.shown == self.key {
                     document.set_thumbnail(self.thumbnail.clone(), cx);
                 }
@@ -141,8 +163,9 @@ impl MediaSurface {
                     options.looping = false;
                     options.muted = false;
                 }
-                // `PICTO_GPUI_SILENT=1`: nothing plays aloud, for checks run
-                // while nobody is at the machine.
+                // When the environment variable `PICTO_GPUI_SILENT` is set
+                // to 1, the player starts muted. Automated checks use this
+                // so that they make no sound.
                 options.muted |= crate::seams::silent();
                 let mime = mime.to_owned();
                 let player = cx.new(|cx| {
@@ -167,8 +190,9 @@ impl MediaSurface {
         }
     }
 
-    /// Shows an item by its thumbnail, and its original once `full` decodes.
-    /// What is on screen stays until the new thumbnail has decoded.
+    /// Shows an item's thumbnail. The item's original picture replaces the
+    /// thumbnail later, when it has been decoded. Until the new thumbnail
+    /// has been decoded, the picture that was on screen before stays there.
     pub fn show(
         &mut self,
         key: String,
@@ -187,7 +211,7 @@ impl MediaSurface {
             if held.is_some() {
                 self.held = held;
                 self.held_since = Some(Instant::now());
-                // Wakes the surface when the wait runs out.
+                // Draw the surface again when the wait is over.
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(motion::MEDIA_HOLD).await;
                     let _ = this.update(cx, |_, cx| cx.notify());
@@ -202,8 +226,9 @@ impl MediaSurface {
                 let result = load.await;
                 let _ = entity.update(cx, |this, cx| {
                     if this.key == expected {
-                        // A thumbnail that fails to decode still counts as
-                        // settled: the original follows on its own.
+                        // A thumbnail that could not be decoded is treated
+                        // as finished, so the surface stops waiting for it.
+                        // The original picture is loaded separately.
                         let old = std::mem::replace(&mut this.thumbnail, result.ok());
                         this.retire(old);
                         if this.full_key != expected {
@@ -222,9 +247,12 @@ impl MediaSurface {
         }
     }
 
-    /// Decodes the original of `key`. A JPEG the pane shows at under half
-    /// its size is decoded at that size first ([`scaled`]), and whole only
-    /// once the view needs more of its pixels.
+    /// Decodes the original picture of the item `key`.
+    ///
+    /// With `reduce`, a JPEG that is shown at less than half its own size is
+    /// first decoded at the size it is shown ([`scaled`]), which is faster.
+    /// It is decoded at its full size later, when the user zooms in far
+    /// enough to need more pixels ([`Self::decode_whole_when_needed`]).
     pub(super) fn load_full(
         &mut self,
         key: String,
@@ -256,8 +284,10 @@ impl MediaSurface {
                     let old = std::mem::replace(&mut this.full, result);
                     this.retire(old);
                     this.full_key = key.clone();
-                    // Without the library's size the camera was fitted to
-                    // the thumbnail's pixels; the original's differ.
+                    // When the library has no size on record for this
+                    // picture, the view was fitted using the thumbnail's
+                    // size. The original has a different size, so the view
+                    // is fitted again.
                     if this.shown == key && this.shown_natural.is_none() {
                         this.refit();
                     }
@@ -269,9 +299,10 @@ impl MediaSurface {
         }));
     }
 
-    /// `JpegXlViewer.tsx`: the original decoded off the drawing thread
-    /// (jxl-oxide here, the jsquash decoder there) and shown on the image
-    /// camera, over its thumbnail until then.
+    /// Decodes a JPEG XL original on a background thread with the
+    /// `jxl-oxide` crate and shows it in place of its thumbnail. The
+    /// Electron app does the same in `JpegXlViewer.tsx` with the jsquash
+    /// decoder.
     pub(super) fn decode_jpeg_xl(&mut self, key: String, path: PathBuf, cx: &mut Context<Self>) {
         let decode = cx.background_executor().spawn(async move {
             document::pages::decode_jpeg_xl(&path).map(document::render_image)
@@ -296,7 +327,8 @@ impl MediaSurface {
         }));
     }
 
-    /// The requested item is now the one on screen; it opens fitted.
+    /// Records that the item that was asked for is now the item on screen,
+    /// and fits it to the view.
     pub(super) fn present_key(&mut self) {
         if self.shown != self.key {
             self.shown = self.key.clone();
@@ -305,8 +337,9 @@ impl MediaSurface {
         }
     }
 
-    /// Starts the whole decode of an original shown from a reduced one, once
-    /// the view shows it larger than the reduced one's pixels.
+    /// Decodes the original at its full size if it is currently shown from
+    /// a reduced decode and the view now draws it larger than the reduced
+    /// decode's size in pixels.
     pub(super) fn decode_whole_when_needed(&mut self, image: Option<Size>, cx: &mut Context<Self>) {
         let (Some(image), Some(decoded)) = (image, self.full.as_ref().map(|full| full.size(0)))
         else {
