@@ -18,7 +18,10 @@
 #
 # - `ffmpeg` and `ffprobe` in `vendor/ffmpeg/` at the repository's root.
 #   `bash scripts/download-ffmpeg.sh`, run there, downloads them.
-# - On Windows: Git Bash to run this script, and NSIS 3 (`makensis`).
+# - On Windows: Git Bash to run this script, NSIS 3 (`makensis`), and the
+#   Visual Studio (or its Build Tools) that builds the program, with the C++
+#   tools for x64. The Microsoft C++ runtime libraries that go into the
+#   package are copied from its folder `VC\Redist`.
 # - On Linux: `appimagetool`, either on the PATH or named by the environment
 #   variable `APPIMAGETOOL`. `APPIMAGE_RUNTIME` may name the runtime file
 #   that appimagetool puts into the AppImage; without it appimagetool
@@ -205,13 +208,15 @@ package_windows() {
 	local installer="$out/Picto-Setup-$version.exe"
 	local uninstall_list="$out/win-x64/uninstall-files.nsh"
 	local makensis library numbers name
+	local vswhere visual_studio linker runtime examine file imports
 	rm -rf "$out/win-x64" "$installer"
 	mkdir -p "$stage/resources"
 
 	# The program, the libraries that the build put beside it
 	# (`DirectML.dll`, which the application core's ONNX Runtime uses and
 	# which the program loads when it starts), `ffmpeg` and `ffprobe`, and
-	# the icon of pack files.
+	# the icon of pack files. The Microsoft C++ runtime libraries are added
+	# further down.
 	cp "$program" "$stage/Picto.exe"
 	for library in target/release/*.dll; do
 		[[ -e "$library" ]] || continue
@@ -220,6 +225,54 @@ package_windows() {
 	done
 	cp "${ffmpeg[@]}" "$stage/"
 	cp "$repository/build/picto-pack.ico" "$stage/resources/picto-pack.ico"
+
+	# The Microsoft C++ runtime libraries. The program loads the runtime from
+	# DLLs (`vcruntime140.dll` and others) that are not a part of Windows, so
+	# without them it does not start on a computer that has no Visual C++
+	# redistributable installed. The DLLs that the program and the libraries
+	# beside it import are copied from the Visual Studio of this machine into
+	# the program's folder, where Microsoft allows an application to install
+	# them. `vswhere` finds that Visual Studio. Its linker lists the DLLs a
+	# file imports (`link.exe -dump -dependents`, which is what `dumpbin`
+	# runs). A runtime library can import another one, so every library that
+	# is copied is looked at in the same way.
+	vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+	[[ -x "$vswhere" ]] || fail "vswhere.exe was not found. Install Visual Studio or its Build Tools."
+	visual_studio="$("$vswhere" -latest -products '*' \
+		-requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+		-property installationPath | tr -d '\r')"
+	[[ -n "$visual_studio" ]] || fail "vswhere found no Visual Studio that has the C++ tools for x64"
+	visual_studio="$(cygpath -u "$visual_studio")"
+	# A Visual Studio can hold several versions of the tools and of the
+	# runtime. The newest of each is taken; a newer runtime also works for
+	# a program that was built with older tools.
+	linker="$(printf '%s\n' "$visual_studio"/VC/Tools/MSVC/*/bin/Hostx64/x64/link.exe | sort -V | tail -n 1)"
+	[[ -x "$linker" ]] || fail "link.exe was not found in $visual_studio/VC/Tools/MSVC"
+	runtime="$(printf '%s\n' "$visual_studio"/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT | sort -V | tail -n 1)"
+	[[ -d "$runtime" ]] || fail "the folder of the C++ runtime libraries, VC/Redist/MSVC/<version>/x64/Microsoft.VC<number>.CRT, was not found in $visual_studio"
+	say "the C++ runtime libraries are taken from $(cygpath -w "$runtime")"
+	examine=("$stage/Picto.exe" "$stage"/*.dll)
+	while ((${#examine[@]} > 0)); do
+		file="${examine[0]}"
+		examine=("${examine[@]:1}")
+		[[ -e "$file" ]] || continue
+		imports="$("$linker" -dump -nologo -dependents "$(cygpath -w "$file")" | tr -d '\r' |
+			sed -n 's/^ *\([^ ]*\.[Dd][Ll][Ll]\)$/\1/p')" ||
+			fail "link.exe could not list the DLLs that $(basename "$file") imports"
+		say "$(basename "$file") imports: $(printf '%s' "$imports" | tr '\n' ' ')"
+		while read -r name; do
+			# These are the names of the C++ runtime's DLLs. Every other
+			# imported DLL is a part of Windows or is already in the folder.
+			printf '%s\n' "$name" |
+				grep -qiE '^(vcruntime|msvcp|concrt|vccorlib|vcomp|vcamp)[0-9].*\.dll$' || continue
+			[[ ! -e "$stage/$name" ]] || continue
+			library="$(find "$runtime" -maxdepth 1 -type f -iname "$name" | head -n 1)"
+			[[ -n "$library" ]] || fail "$(basename "$file") imports $name, which is not in $(cygpath -w "$runtime")"
+			cp "$library" "$stage/"
+			say "C++ runtime library shipped beside the program: $(basename "$library")"
+			examine+=("$stage/$(basename "$library")")
+		done <<<"$imports"
+	done
 
 	# The uninstaller deletes the installed files one by one, by name. This
 	# writes the instructions for it: a `Delete` for every file put together
