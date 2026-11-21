@@ -7,7 +7,7 @@
 //! title in the titlebar. The third is the rail of a subscription's page,
 //! which is drawn where the inspector is for the grid and shows that
 //! subscription's counters, schedule and destination.
-use super::{SubscriptionsScreen, format, measure, place_of};
+use super::{SubscriptionsScreen, format, place_of};
 use crate::i18n::t;
 use crate::ui::{self, action_button::Look};
 use gpui::*;
@@ -89,16 +89,29 @@ pub fn rail(screen: &Entity<SubscriptionsScreen>, cx: &mut App) -> crate::shell:
 }
 
 impl Render for SubscriptionsToolbar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bar = div().flex_1().min_w_0().h_full().flex().items_center();
-        let Some(screen) = self.screen.upgrade() else {
-            return bar;
-        };
-        screen.update(cx, |screen, cx| screen.titlebar(bar, window, cx))
+    /// The buttons show their labels only when the titlebar's space for
+    /// them is wide enough. The buttons are therefore built for the width of
+    /// that space in the frame that lays it out (`ui::sized_view`). The
+    /// screen builds them, because they call the screen's methods.
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().flex_1().min_w_0().h_full().child(
+            ui::sized_view(self.screen.clone(), |screen, bounds, window, cx| {
+                screen
+                    .titlebar(f32::from(bounds.size.width), window, cx)
+                    .into_any_element()
+            })
+            .size_full(),
+        )
     }
 }
 
 impl Render for SubscriptionsNote {
+    /// Draws the count of subscriptions (`count_note`) on one line. It
+    /// draws nothing until the list of subscriptions has been read for the
+    /// first time. It also draws nothing while the screen shows one
+    /// subscription's page. The toolbar goes on drawing this view after the
+    /// scope title then, so the view itself has to be empty
+    /// (`Toolbar::set_screen_note`).
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self
             .screen
@@ -110,6 +123,9 @@ impl Render for SubscriptionsNote {
 }
 
 impl Render for SubscriptionRail {
+    /// Draws the rail of the open subscription's page, which the screen
+    /// builds (`SubscriptionsScreen::rail` in `detail.rs`). It draws
+    /// nothing when the screen no longer exists.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(screen) = self.screen.upgrade() else {
             return div().into_any_element();
@@ -119,17 +135,20 @@ impl Render for SubscriptionRail {
 }
 
 impl SubscriptionsScreen {
-    fn titlebar(&mut self, bar: Div, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        let bar = bar
-            .relative()
-            .child(measure(self.titlebar_width.clone(), window));
+    /// Builds the screen's titlebar buttons for `width`, the width in pixels
+    /// of the titlebar's space for them. Nothing is drawn until the list of
+    /// subscriptions has been read for the first time.
+    fn titlebar(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let bar = div().relative().size_full().flex().items_center();
         if self.list.is_none() {
             return bar;
         }
         match self.place_seen {
-            None => self.home_titlebar(bar, cx),
+            None => self.home_titlebar(bar, width >= HOME_LABELLED, cx),
             Some(_) => match self.opened().cloned() {
-                Some(subscription) => self.page_titlebar(bar, &subscription, window, cx),
+                Some(subscription) => {
+                    self.page_titlebar(bar, width >= PAGE_LABELLED, &subscription, window, cx)
+                }
                 None => bar,
             },
         }
@@ -158,9 +177,8 @@ impl SubscriptionsScreen {
     /// Builds the titlebar buttons shown over the subscription cards: Add, Add
     /// Gallery and Accounts. The count is not drawn here; the view that
     /// [`note`] creates draws it after the screen's title.
-    fn home_titlebar(&mut self, bar: Div, cx: &mut Context<Self>) -> Div {
+    fn home_titlebar(&mut self, bar: Div, labelled: bool, cx: &mut Context<Self>) -> Div {
         let gallery_running = self.gallery_running();
-        let labelled = self.titlebar_width.get() >= HOME_LABELLED;
         bar.child(div().flex_1())
         .child(
             div()
@@ -211,6 +229,7 @@ impl SubscriptionsScreen {
     fn page_titlebar(
         &mut self,
         bar: Div,
+        labelled: bool,
         subscription: &super::data::Subscription,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -230,7 +249,6 @@ impl SubscriptionsScreen {
         // when no run is active. A click sends `subscriptions.run`,
         // `subscriptions.run.pause` or `subscriptions.run.resume`.
         let acting = self.acting.contains(&id);
-        let labelled = self.titlebar_width.get() >= PAGE_LABELLED;
         let primary = if active {
             let (look, icon, label) = if running {
                 (Look::Standard, "player-pause", t("Pause"))
@@ -291,6 +309,10 @@ impl SubscriptionsScreen {
                     .disabled(acting)
                     .on_click(cx.listener(move |this, _, _, cx| this.hold_control(id, cx))),
                 )
+                // The "More actions" button. The element from `place_of`
+                // stores the button's position and size in `overflow` each
+                // time it is drawn. A click opens the subscription's menu
+                // at the point 4 px below the button's bottom-left corner.
                 .child(
                     div()
                         .relative()

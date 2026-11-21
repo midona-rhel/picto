@@ -1,8 +1,21 @@
-//! The Subscriptions screen (`SubscriptionsScreen.tsx`): the library's
-//! subscriptions as grid tiles, and one subscription's page when a tile is
-//! opened, with its rail in the inspector's place. Opening a subscription is
-//! a place of the screen, so Back returns to the tiles and the scope title
-//! names it.
+//! The Subscriptions screen (production's `SubscriptionsScreen.tsx`). At its
+//! top level the screen shows one tile for each of the library's
+//! subscriptions (`home.rs`). When a tile is opened, the screen shows that
+//! subscription's page (`detail.rs`), and the shell draws the page's rail
+//! where the inspector normally is (`toolbar.rs`).
+//!
+//! The open subscription is a place inside the screen in the session's
+//! navigation (`Session::open_place`). Opening a subscription therefore adds
+//! an entry to the Back and Forward history, Back returns to the tiles, and
+//! the scope title in the titlebar shows the subscription's name after the
+//! screen's name.
+//!
+//! This file holds the screen's state, the commands that the run and hold
+//! controls send, the selection of tiles, the context menus, the editing of
+//! the folders and tags that a subscription gives its new files, and
+//! `render`. `sync.rs` reads the subscriptions from the library and follows
+//! the runs in progress. `dialogs.rs`, `cover.rs` and `accounts.rs` hold the
+//! screen's dialogs.
 mod accounts;
 mod cover;
 mod data;
@@ -38,9 +51,14 @@ use std::{
 
 actions!(subscriptions, [Open, Deselect]);
 
-/// The screen's own keys, over the browser's: Enter opens the selected
-/// subscription and Escape clears the selection. Like the registry's keys,
-/// they give way to a text field, a menu, a popover or a dialog.
+/// Binds the two keys that only this screen handles. Enter performs `Open`,
+/// which opens the selected subscription, and Escape performs `Deselect`,
+/// which clears the selection of tiles. Both are bound in the screen's
+/// `Subscriptions` key context. That context is inside the shell's `Browser`
+/// context, so these bindings take precedence over bindings for the same
+/// keys in `Browser`. Like the bindings made from the shortcut registry
+/// (`keymap.rs`), they do not run while the keyboard focus is in a text
+/// field, a context menu, a popover or a dialog.
 pub fn bind(cx: &mut App) {
     let context = Some("Subscriptions && !TextInput && !Menu && !Modal && !Popover");
     cx.bind_keys([
@@ -49,36 +67,54 @@ pub fn bind(cx: &mut App) {
     ]);
 }
 
-/// `subscriptionsSettle.ts`: a change to the subscriptions is read after
-/// 250 ms of quiet, and progress for 5 s after a run is started even before
-/// it shows as running.
+/// How long the screen waits, after the application reports a change to the
+/// subscriptions, before it reads them again. It is 250 ms, the time that
+/// production's `subscriptionsSettle.ts` waits. Each further report within
+/// that time starts the wait again, so several changes close together
+/// cause one read.
 const INVALIDATION_DEBOUNCE: Duration = Duration::from_millis(250);
+/// How long the screen goes on reading the subscriptions every 1.5 s after
+/// it has sent a command that can start a run, even though no subscription
+/// is reported as running yet. It is 5 s, as in `subscriptionsSettle.ts`.
 const RUN_GRACE: Duration = Duration::from_secs(5);
 
-/// What a run or hold control asks the application to do
-/// (`subscriptionsController`).
+/// A command that one of a subscription's controls sends to the application
+/// (production's `subscriptionsController`). The controls are the run
+/// button, the hold button, the Schedule control and the "Posts per run"
+/// field. `Command::request` gives the name the application knows each
+/// command by.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
-    /// Run Now.
+    /// Starts a run now (`subscriptions.run`).
     Run,
-    /// Pause the run in progress.
+    /// Pauses the run that is in progress (`subscriptions.run.pause`).
     Pause,
-    /// Resume a paused run, or retry a failed one.
+    /// Continues a run that is paused, or tries again a run that stopped on
+    /// a failure (`subscriptions.run.resume`).
     Resume,
-    /// Stop the run, keeping the posts already added.
+    /// Cancels the active run (`subscriptions.cancel`). The Stop button's
+    /// tooltip says that the posts the run has already added are kept.
     Stop,
-    /// Put future runs on hold, or release them.
+    /// With `true`, puts the subscription on hold, so that its future runs
+    /// do not start. With `false`, releases the hold (`subscriptions.hold`).
     Hold(bool),
-    /// When the subscription runs by itself: `manual`, `daily`, `weekly` or
-    /// `monthly`.
+    /// Sets when the subscription runs without being asked to. The value is
+    /// `manual`, `daily`, `weekly` or `monthly`
+    /// (`subscriptions.schedule`).
     Schedule(&'static str),
-    /// How many posts one run reads at most.
+    /// Sets the subscription's "Posts per run" limit to this number
+    /// (`subscriptions.posts_per_run`).
     PostsPerRun(i64),
 }
 
 impl Command {
-    /// The run control: Pause while running, Resume or Retry while a run
-    /// waits, else Run Now.
+    /// Returns the command that the run button sends. `active` says whether
+    /// the subscription has an active run, and `running` says whether that
+    /// run is in progress (`format::running`). The command is `Pause` when
+    /// the run is in progress. It is `Resume` when the run is active but not
+    /// in progress, which is when the run is paused or has stopped on a
+    /// failure; the button then reads Resume or Retry. It is `Run` when no
+    /// run is active.
     pub fn primary(active: bool, running: bool) -> Self {
         match (active, running) {
             (true, true) => Command::Pause,
@@ -87,7 +123,10 @@ impl Command {
         }
     }
 
-    /// The hold control: Stop while a run is active, else hold or release.
+    /// Returns the command that the hold button sends. It is `Stop` while
+    /// the subscription has an active run. Otherwise it is `Hold` with the
+    /// opposite of `held`: a subscription that is not on hold is put on
+    /// hold, and one that is on hold is released.
     pub fn hold(active: bool, held: bool) -> Self {
         if active {
             Command::Stop
@@ -96,7 +135,9 @@ impl Command {
         }
     }
 
-    /// The command name and arguments of `core/src/ipc.rs`.
+    /// Returns the request that sends this command for the subscription
+    /// `subscription_id`: the command's name and its arguments, as
+    /// `core/src/ipc.rs` reads them.
     pub fn request(self, subscription_id: i64) -> Request {
         let id = serde_json::json!({ "subscription_id": subscription_id });
         let (name, args) = match self {
@@ -123,13 +164,19 @@ impl Command {
         Request { name, args }
     }
 
-    /// Whether it may start a run, after which progress is followed at once.
+    /// Returns true for `Run` and `Resume`, the two commands that can start
+    /// a run. After `perform` has sent one of them, the screen reads the
+    /// subscriptions every 1.5 s for 5 s (`RUN_GRACE`), even though no
+    /// subscription is reported as running yet.
     fn starts(self) -> bool {
         matches!(self, Command::Run | Command::Resume)
     }
 }
 
-/// `SCHEDULES`: the stored value and its label.
+/// The schedules a subscription can have (production's `SCHEDULES`). Each
+/// pair holds the value that is stored and sent with
+/// `subscriptions.schedule`, and the label that the Schedule submenu of the
+/// context menu shows for it.
 // i18n: translated where drawn (menu rows)
 const SCHEDULES: [(&str, &str); 4] = [
     ("manual", "Manual"),
@@ -138,7 +185,10 @@ const SCHEDULES: [(&str, &str); 4] = [
     ("monthly", "Monthly"),
 ];
 
-/// A schedule's stored value, as the menu hands it back.
+/// Returns the stored value in `SCHEDULES` that is equal to `value`, or
+/// `None` when there is none. The context menu reports the chosen row's
+/// value as a string of its own, and `Command::Schedule` needs the
+/// `&'static str` from `SCHEDULES`.
 fn schedule_named(value: &str) -> Option<&'static str> {
     SCHEDULES
         .iter()
@@ -146,7 +196,12 @@ fn schedule_named(value: &str) -> Option<&'static str> {
         .find(|schedule| *schedule == value)
 }
 
-/// The Schedule submenu: the current schedule ticked and not offered again.
+/// Builds the Schedule submenu of a subscription's context menu, with one
+/// row for each schedule in `SCHEDULES`. The row of the schedule `current`
+/// has a check mark and is disabled, so the schedule that is already set
+/// cannot be chosen again. `current` is `None` in the menu for several
+/// subscriptions that do not all have the same schedule, and then no row
+/// has a check mark.
 fn schedule_menu(current: Option<&str>) -> menu::Entry {
     menu::submenu(
         t("Schedule"),
@@ -170,22 +225,33 @@ fn schedule_menu(current: Option<&str>) -> menu::Entry {
     .into()
 }
 
-/// The tabs of a subscription's data plane.
+/// The labels of the three tabs on a subscription's page, in the order they
+/// are shown. Each tab shows one table: the subscription's sources, its
+/// runs, or its open problems. The screen keeps the index of the tab that
+/// is shown in `tab`.
 // i18n: translated where drawn
 const TABS: [&str; 3] = ["Sources", "History", "Problems"];
+/// The index of the Sources tab in `TABS`.
 const SOURCES: usize = 0;
+/// The index of the History tab in `TABS`.
 const HISTORY: usize = 1;
 
-/// A gallery download's run as `subscriptions.progress.get` reports it.
+/// The progress of the run in progress of one gallery download, as the
+/// application answers `subscriptions.progress.get`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct GalleryProgress {
+    /// The id of the run that the two numbers below belong to.
     run: i64,
+    /// The number of images the run has downloaded so far.
     downloaded: i64,
-    /// The gallery's size once the site has reported it.
+    /// The number of images in the gallery, or `None` until the site has
+    /// reported it.
     total: Option<i64>,
 }
 
-/// Which destination list an open picker edits.
+/// Says which list the open folder picker or tag picker edits: the folders
+/// (`Folders`) or the tags (`Tags`) that the subscription with the given id
+/// gives its new files.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Picking {
     Folders(i64),
@@ -194,82 +260,165 @@ enum Picking {
 
 pub struct SubscriptionsScreen {
     session: Entity<Session>,
-    /// Covers decode into a cache of their own, so scrolling the grid never
-    /// evicts an image this screen still shows.
+    /// The cache that the subscriptions' cover pictures are decoded into.
+    /// It belongs to this screen and is separate from the grid's thumbnail
+    /// cache. The grid's cache removes the pictures that were used longest
+    /// ago when it is over its memory budget. Because the covers are not in
+    /// that cache, it cannot remove a cover that this screen still shows.
     covers: Entity<Thumbnails>,
+    /// The focus handle of the screen's root element. The screen's key
+    /// bindings (`bind`) and the Delete shortcut work while the root
+    /// element or an element inside it has the keyboard focus.
     focus: FocusHandle,
-    /// Every subscription, once the first read has arrived. A newer read
-    /// replaces it only when it arrives, so nothing blanks in between.
+    /// Every subscription in the library, gallery downloads included, or
+    /// `None` until the first read has arrived. A later read replaces the
+    /// list only when its answer arrives, so the screen shows the earlier
+    /// list until then.
     list: Option<Vec<data::Subscription>>,
+    /// The number of the latest read of the list (`load`). The answer to a
+    /// read is used only if no later read has been started since, so an
+    /// answer that arrives late does not replace a newer one.
     generation: u64,
-    /// Selected cards, by subscription.
+    /// The ids of the subscriptions whose tiles are selected.
     selected: HashSet<i64>,
-    /// The card a shift-click selects from, by position in the grid.
+    /// The index, in the order the tiles are shown, of the tile from which
+    /// a Shift-click selects a range. A click without Shift sets it, and so
+    /// does a right-click on a tile that is not selected. It is set back to
+    /// `None` each time the screen is opened and each time a subscription's
+    /// page is opened or closed.
     anchor: Option<usize>,
-    /// The open subscription's History and Problems, and which one they are
-    /// for; another subscription's stay until the new ones arrive.
+    /// The runs (History tab) and the open problems (Problems tab) that
+    /// were last read for a subscription, with that subscription's id.
+    /// After another subscription is opened, this still holds the earlier
+    /// subscription's data until the read for the new one arrives. The page
+    /// uses the data only when the id is the open subscription's.
     detail: Option<data::Detail>,
+    /// The number of the latest read of `detail` (`load_detail`). It is
+    /// used as `generation` is for the list.
     detail_generation: u64,
+    /// True while the next page of problems is being read for the Problems
+    /// tab. The tab's "Load more" button is disabled meanwhile.
     loading_more: bool,
+    /// The index in `TABS` of the tab that a subscription's page shows.
     tab: usize,
-    /// The open context menu, which stays while it fades out.
+    /// Holds the open context menu: the menu of one or several tiles, or
+    /// the "More actions" menu of a subscription's page. The menu stays in
+    /// it until it has faded out.
     menu: menu::Host,
-    /// The subscriptions the open menu acts on.
+    /// The ids of the subscriptions that the open context menu acts on.
     menu_targets: Vec<i64>,
-    /// The open dialog: new subscription, gallery, rename, a source's edit
-    /// or details, a confirmation, or the cover.
+    /// Holds the open dialog. The dialogs are "Add subscription", "Add
+    /// gallery", "Rename Subscription", "Edit query", a source's details, a
+    /// confirmation, the choice of a cover picture, and "Site accounts".
     dialog: modal::Host<dialogs::Dialog>,
-    /// The pickers that add folders and tags to a subscription's
-    /// destination, and which list the open one edits.
+    /// The picker that adds tags to, and removes them from, the tags that a
+    /// subscription gives its new files. It is the tag picker that the
+    /// inspector uses.
     tag_picker: Entity<TagPicker>,
+    /// The picker that adds folders to, and removes them from, the folders
+    /// that a subscription adds its new files to. It is the folder picker
+    /// that the inspector uses.
     folder_picker: Entity<FolderPicker>,
+    /// Which list of which subscription the picker that was opened last
+    /// edits. It is set when a picker is opened and is not cleared when the
+    /// picker closes.
     picking: Option<Picking>,
-    /// The add-query bar's source and query.
+    /// The id of the site that is chosen in the row that adds a source,
+    /// which is under the rows of the Sources table.
     add_site: &'static str,
+    /// The text field of that row, in which the query is typed.
     add_query: Entity<TextInput>,
-    /// The sites' saved logins and their last checks, for the chips of
-    /// sources that cannot run without one.
+    /// The sites that have a saved login, as `auth.credentials.list`
+    /// reports them. Together with `login_health` it decides whether a
+    /// source's row shows a warning that the site needs a login before the
+    /// source can run (`format::auth_warning`).
     logins: Vec<format::Login>,
+    /// The result of the last check of each site's login, as
+    /// `auth.health.list` reports it.
     login_health: Vec<format::Login>,
-    /// Gallery downloads' progress. The session settles those that end
-    /// (`session::settle`).
+    /// The progress of each gallery download that is running, keyed by the
+    /// download's subscription id. An entry is removed when its download is
+    /// no longer running. The session, not this screen, shows the
+    /// notification for a download that has ended and removes the download
+    /// from the library (`session::settle`).
     gallery_progress: HashMap<i64, GalleryProgress>,
-    /// A subscription just created, opened once the list has it.
+    /// The id of a subscription that the "Add subscription" dialog has just
+    /// created. The screen opens its page when a read of the list contains
+    /// it (`settled`).
     pending_open: Option<i64>,
-    /// Whether the screen showed at the last navigation, to read the list
-    /// again each time it is opened.
+    /// Whether the Subscriptions screen was the destination shown the last
+    /// time the session reported a navigation. `navigated` compares it with
+    /// the new state, and reads the list again each time the screen is
+    /// opened.
     shown: bool,
-    /// The place showing at the last navigation.
+    /// The id of the subscription whose page the screen shows, or `None`
+    /// when the screen shows the tiles. `navigated` copies it from the
+    /// session's place (`Session::place`) while the Subscriptions screen is
+    /// the destination shown. When the user goes to another destination it
+    /// keeps its value, so the screen goes on drawing the same thing while
+    /// the shell fades it out.
     place_seen: Option<i64>,
-    /// The tiles' width and the page's width, which the tiles' layout and
-    /// the tables' columns are measured against.
-    home_width: Rc<Cell<f32>>,
-    plane_width: Rc<Cell<f32>>,
-    /// Where the titlebar's "More actions" button is, to open its menu
-    /// below it; the rail, and the destination's add buttons, to open the
-    /// pickers beside the rail at them.
+    /// The width of the screen's area in pixels, in the frame that is
+    /// being built. `render` sets it before it builds the tiles or the
+    /// page. The tiles' layout and the tables' columns are computed for it.
+    width: f32,
+    /// The position and size, in window coordinates, of the "More actions"
+    /// button in the titlebar of a subscription's page. A click on the
+    /// button opens its menu at the point 4 px below the button's
+    /// bottom-left corner. This field and the three after it are each
+    /// written by an element from `place_of` every time the button, the
+    /// rail or the control they describe is drawn. They are read when a
+    /// click opens the menu or a picker.
     overflow: Rc<Cell<Bounds<Pixels>>>,
+    /// The position and size of the rail of a subscription's page. The
+    /// folder picker and the tag picker open to the left of the rail's left
+    /// edge.
     rail_bounds: Rc<Cell<Bounds<Pixels>>>,
-    /// The titlebar's room for the screen's controls.
-    titlebar_width: Rc<Cell<f32>>,
+    /// The position and size of the control in the rail that adds a folder.
+    /// The folder picker opens with its top at this control's top.
     add_folder: Rc<Cell<Bounds<Pixels>>>,
+    /// The position and size of the control in the rail that adds a tag.
+    /// The tag picker opens with its top at this control's top.
     add_tag: Rc<Cell<Bounds<Pixels>>>,
+    /// The scroll position of the area that shows the tiles.
     home_scroll: ScrollHandle,
+    /// The scroll position of the rail of a subscription's page.
     rail_scroll: ScrollHandle,
+    /// The scroll position of the table on a subscription's page. The three
+    /// tabs share it, and it is set back to the top when another tab is
+    /// chosen.
     table_scroll: ScrollHandle,
-    /// The rail's sections folded, by title.
+    /// The titles of the rail's sections that the user has folded. A folded
+    /// section shows only its title.
     collapsed: HashSet<&'static str>,
-    /// Subscriptions with a command on its way; their controls wait.
+    /// The ids of the subscriptions for which `perform` has sent a command
+    /// that has not been answered yet. The run button and the hold button
+    /// of such a subscription are disabled.
     acting: HashSet<i64>,
-    /// Edits on their way (`busyKey`): rows, dialogs and the add bar wait.
+    /// The number of calls of `act` whose requests have not all been
+    /// answered yet (production's `busyKey`). While it is not 0, `busy()`
+    /// returns true, and the buttons of the Sources and Problems rows, the
+    /// dialogs' buttons and the Add button of the row that adds a source
+    /// are disabled.
     busy: usize,
-    /// Where commands go: the application, or a log when runs are held.
+    /// Where the screen's commands are sent (`requests::Outbox`). Normally
+    /// they go to the application. When the environment variable
+    /// `PICTO_GPUI_HOLD_RUNS` is set, every command is also written to a
+    /// log, and a command that would start work on the network is answered
+    /// at once and not sent.
     outbox: Outbox,
-    /// Until when progress is read although nothing shows as running yet.
+    /// The time until which the screen goes on reading the subscriptions
+    /// every 1.5 s although none is reported as running. It is set to 5 s
+    /// from now (`RUN_GRACE`) when a command that can start a run is sent.
     grace_until: Option<Instant>,
-    /// The next progress read while a run is going.
+    /// The timer that `follow_runs` starts while a run is in progress or
+    /// `grace_until` has not passed. When it ends, after 1.5 s, the screen
+    /// reads the list and the open subscription's runs and problems again.
     poll: Option<Task<()>>,
-    /// The read after a burst of changes has settled.
+    /// The timer that waits 250 ms (`INVALIDATION_DEBOUNCE`) after the
+    /// application reports a change to the subscriptions. When it ends, the
+    /// screen reads them again. A new report replaces the timer, which
+    /// cancels the one before it.
     invalidation: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -294,9 +443,14 @@ impl SubscriptionsScreen {
                     this.navigated(cx);
                 }
             }),
-            // What the runners and other edits change, read again as the
-            // renderer's settle store does: the list after a quiet 250 ms,
-            // progress at once.
+            // The application reports which parts of the library have
+            // changed. While the screen is shown, a report that names
+            // `subscriptions` makes the screen read the list and the open
+            // subscription's runs and problems again, 250 ms after the last
+            // such report (`INVALIDATION_DEBOUNCE`). A report that names
+            // `tasks` and not `subscriptions` makes the screen read the list
+            // again at once. Production's `subscriptionsSettle.ts` does the
+            // same.
             cx.subscribe(&session, |this, _, event: &BackendEvent, cx| {
                 let BackendEvent::Changed(changed) = event else {
                     return;
@@ -329,7 +483,9 @@ impl SubscriptionsScreen {
             cx.subscribe(&add_query, |this, _, _: &Submitted, cx| {
                 this.submit_query(cx)
             }),
-            // The Add button follows what is typed.
+            // The Add button of the row that adds a source is enabled only
+            // while the row's text field holds text. The screen is
+            // therefore drawn again whenever the field changes.
             cx.observe(&add_query, |_, _, cx| cx.notify()),
         ];
         let focus = cx.focus_handle();
@@ -345,8 +501,11 @@ impl SubscriptionsScreen {
             detail_generation: 0,
             loading_more: false,
             tab: SOURCES,
-            // Over the window as the shell lays the grid's. The keyboard goes
-            // back to the screen unless the action moved it.
+            // The context menu is drawn over the whole window, on the layer
+            // that context menus use (`layer::MENU`). When the menu has
+            // closed, the keyboard focus goes back to the screen, unless
+            // the chosen action moved the focus somewhere else, for example
+            // into a dialog's text field.
             menu: menu::Host::deferred(crate::ui::layer::MENU, menu::Return::To(focus)),
             menu_targets: Vec::new(),
             dialog: modal::Host::default(),
@@ -361,11 +520,9 @@ impl SubscriptionsScreen {
             pending_open: None,
             shown: false,
             place_seen: None,
-            home_width: Rc::new(Cell::new(0.)),
-            plane_width: Rc::new(Cell::new(0.)),
+            width: 0.,
             overflow: Rc::new(Cell::new(Bounds::default())),
             rail_bounds: Rc::new(Cell::new(Bounds::default())),
-            titlebar_width: Rc::new(Cell::new(f32::MAX)),
             add_folder: Rc::new(Cell::new(Bounds::default())),
             add_tag: Rc::new(Cell::new(Bounds::default())),
             home_scroll: ScrollHandle::new(),
@@ -380,12 +537,17 @@ impl SubscriptionsScreen {
             invalidation: None,
             _subscriptions: subscriptions,
         };
-        // Read the list at once, so it is there before the screen is opened.
+        // The list is read as soon as the screen is created, and not only
+        // when the screen is first opened, so that the list has usually
+        // arrived by the time the user opens the screen.
         screen.load(cx);
         screen
     }
 
-    /// Sends a command to the application through the screen's outbox.
+    /// Sends `request` through the screen's outbox (`requests::Outbox`) and
+    /// returns the receiver of the answer. Unless the outbox holds the
+    /// request back, the request goes to the application through
+    /// `Session::dispatch`.
     fn send(
         &self,
         request: Request,
@@ -396,15 +558,27 @@ impl SubscriptionsScreen {
             .send(request, |name, args| session.dispatch(name, args))
     }
 
-    /// Whether an edit is on its way (`busy`).
+    /// Returns true while a call of `act` or a command sent by `perform` is
+    /// still waiting for its answer. The controls that change a
+    /// subscription or one of its sources are disabled while it is true.
     fn busy(&self) -> bool {
         self.busy > 0 || !self.acting.is_empty()
     }
 
-    /// `act`: sends `requests` one after another, stopping at the first
-    /// that fails, which is shown as production's error toast; then reads
-    /// the subscriptions again and hands `then` whether all succeeded and
-    /// the last answer.
+    /// Sends `requests` to the application one after another (production's
+    /// `act`). It waits for the answer to each request before it sends the
+    /// next, and it sends no more after the first one that fails. A failure
+    /// is shown as the error notification "Subscription action failed" with
+    /// the application's message.
+    ///
+    /// When the requests are done, `then` is called with the answer to the
+    /// last request that was sent, which is the error if one failed. After
+    /// that the screen reads the subscriptions again (`reload`). The field
+    /// `busy` is one higher from the call until the requests are done.
+    ///
+    /// If one of the requests starts work on the network
+    /// (`requests::starts_network`), the screen also reads the subscriptions
+    /// every 1.5 s for the next 5 s (`RUN_GRACE`).
     fn act(
         &mut self,
         requests: Vec<Request>,
@@ -445,20 +619,28 @@ impl SubscriptionsScreen {
         .detach();
     }
 
-    /// The opened subscription, when it is one the library has. The screen
-    /// keeps showing the place it had while it fades out.
+    /// Returns the subscription whose page the screen shows (`place_seen`).
+    /// It returns `None` when the screen shows the tiles, and when the list
+    /// does not hold that subscription, either because the list has not
+    /// been read yet or because the subscription has been deleted.
     fn opened(&self) -> Option<&data::Subscription> {
         let place = self.place_seen?;
         self.list.as_ref()?.iter().find(|entry| entry.id == place)
     }
 
-    /// Whether a subscription's page is what the screen shows (it keeps
-    /// showing it while the screen fades out), for its rail.
+    /// Returns true while the screen shows a subscription's page and not
+    /// the tiles. The shell draws the page's rail only while this is true
+    /// (`toolbar::rail`). `place_seen` keeps its value after the user goes
+    /// to another destination, so this stays true while the shell fades the
+    /// screen out.
     pub fn showing_page(&self) -> bool {
         self.place_seen.is_some()
     }
 
-    /// Gives the scope title the open subscription's name.
+    /// Sets the name that the scope title in the titlebar shows for the
+    /// open place (`Session::set_place_label`). The name is the open
+    /// subscription's name. It is removed when the screen shows the tiles
+    /// or the open subscription is not in the list.
     fn name_place(&self, cx: &mut Context<Self>) {
         let label = self
             .opened()
@@ -467,7 +649,11 @@ impl SubscriptionsScreen {
             .update(cx, |session, cx| session.set_place_label(label, cx));
     }
 
-    /// Opens a subscription's workspace, as a step of Back and Forward.
+    /// Opens the page of the subscription `id`. It closes the open context
+    /// menu and asks the session to open the subscription as a place inside
+    /// the screen (`Session::open_place`), which adds an entry to the Back
+    /// and Forward history. The session then reports a navigation, and
+    /// `navigated` makes the screen show the page.
     fn open(&mut self, id: i64, cx: &mut Context<Self>) {
         self.close_menu(cx);
         self.session
@@ -476,8 +662,21 @@ impl SubscriptionsScreen {
 
     // ── Selection ───────────────────────────────────────────────
 
-    /// Click, Cmd-click and Shift-click on the card at `index` of the grid's
-    /// order, as `SubscriptionsGrid` handles them.
+    /// Changes the selection for a click on the tile at `index` of `order`,
+    /// as production's `SubscriptionsGrid` does. `order` holds the ids of
+    /// the subscriptions in the order their tiles are shown, and
+    /// `modifiers` holds the keys held during the click.
+    ///
+    /// - With Shift, when there is an anchor: every tile from the anchor to
+    ///   the clicked tile is selected. The tiles that were selected before
+    ///   are deselected first, unless the platform modifier is also held.
+    ///   The anchor does not change.
+    /// - With the platform modifier (`modifiers.platform`, which is Command
+    ///   on macOS), when the first case does not apply: the clicked tile is
+    ///   selected if it was not selected and deselected if it was, and it
+    ///   becomes the anchor.
+    /// - In every other case the clicked tile becomes the only selected
+    ///   tile and the anchor.
     fn click_card(
         &mut self,
         index: usize,
@@ -510,7 +709,8 @@ impl SubscriptionsScreen {
         cx.notify();
     }
 
-    /// The selected cards, in the grid's order.
+    /// Returns the ids of the selected subscriptions, in the order their
+    /// tiles are shown.
     fn chosen(&self) -> Vec<i64> {
         self.card_order()
             .into_iter()
@@ -520,8 +720,28 @@ impl SubscriptionsScreen {
 
     // ── Context menu ────────────────────────────────────────────
 
-    /// Opens the menu for `targets` at `position`: the one subscription's
-    /// menu, or the bulk menu for several (`subscriptionsContextMenu.tsx`).
+    /// Opens a context menu at `position` that acts on the subscriptions
+    /// `targets` (production's `subscriptionsContextMenu.tsx`). No menu
+    /// opens when the list has not been read or holds none of `targets`.
+    ///
+    /// The menu for one subscription has these rows:
+    ///
+    /// - The run command, which reads Run Now, Pause, Resume or Retry. It
+    ///   is disabled while a command for the subscription is waiting for
+    ///   its answer. Run Now is also disabled while the subscription is on
+    ///   hold or has no sources.
+    /// - The hold command, which reads Hold, Release Hold or Stop. It is
+    ///   disabled while a command for the subscription is waiting for its
+    ///   answer.
+    /// - Rename, Set Cover Photo… and the Schedule submenu.
+    /// - Reset Sync History…, which is disabled while the subscription has
+    ///   an active run.
+    /// - Delete Subscription….
+    ///
+    /// The menu for several subscriptions has "Run N Now", "Hold N" and
+    /// "Release Hold for N", where N is the number of subscriptions, then
+    /// the Schedule submenu and "Delete N…". The first three are disabled
+    /// while any of the subscriptions has an active run.
     fn open_menu(
         &mut self,
         targets: Vec<i64>,
@@ -592,7 +812,8 @@ impl SubscriptionsScreen {
                 let any_active = several
                     .iter()
                     .any(|subscription| subscription.active_run_id.is_some());
-                // One schedule is ticked only when they all share it.
+                // A row of the Schedule submenu has a check mark only when
+                // every one of the subscriptions has that schedule.
                 let first = several[0].schedule.as_str();
                 let shared = several
                     .iter()
@@ -643,7 +864,9 @@ impl SubscriptionsScreen {
                     ("cover", [id]) => this.open_cover(*id, cx),
                     ("reset", [id]) => this.confirm_reset(*id, cx),
                     ("delete", [id]) => this.confirm_delete(*id, cx),
-                    // `handleBulk*`: each subscription on its own.
+                    // A row of the menu for several subscriptions sends
+                    // one command for each subscription, as production's
+                    // `handleBulk*` functions do.
                     ("run-all", _) => this.perform(targets, |_| Command::Run, cx),
                     ("hold-all", _) => this.perform(targets, |_| Command::Hold(true), cx),
                     ("release-all", _) => this.perform(targets, |_| Command::Hold(false), cx),
@@ -653,8 +876,11 @@ impl SubscriptionsScreen {
             });
     }
 
-    /// The menu for a right-clicked card: the whole selection when the card
-    /// is part of it, else the card alone, which becomes the selection.
+    /// Opens the context menu for a right-click at `position` on the tile
+    /// at `index` of `order`. When the tile is selected, the menu acts on
+    /// every selected subscription. When it is not, the tile first becomes
+    /// the only selected tile and the anchor, and the menu acts on it
+    /// alone.
     fn card_menu(
         &mut self,
         index: usize,
@@ -680,7 +906,12 @@ impl SubscriptionsScreen {
 
     // ── Destination ─────────────────────────────────────────────
 
-    /// Saves where a subscription's new files go, showing it at once.
+    /// Saves the destination of the subscription `id`
+    /// (`subscriptions.destination`): `folders` are the folders that its
+    /// new files are added to, and `tags` are the tags that its new files
+    /// are given. The subscription's entry in `list` is changed before the
+    /// request is sent, so the rail shows the new folders and tags without
+    /// waiting for the application's answer.
     fn set_destination(
         &mut self,
         id: i64,
@@ -696,6 +927,9 @@ impl SubscriptionsScreen {
         self.act(vec![request], cx, |_, _, _| {});
     }
 
+    /// Removes `folder` from the folders that the subscription `id` adds
+    /// its new files to, and saves the destination. The remove button of a
+    /// folder's chip in the rail calls it.
     fn remove_folder(&mut self, id: i64, folder: i64, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -710,6 +944,9 @@ impl SubscriptionsScreen {
         self.set_destination(id, folders, tags, cx);
     }
 
+    /// Removes `tag` from the tags that the subscription `id` gives its new
+    /// files, and saves the destination. The remove button of a tag's chip
+    /// in the rail calls it.
     fn remove_tag(&mut self, id: i64, tag: &str, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -724,8 +961,13 @@ impl SubscriptionsScreen {
         self.set_destination(id, folders, tags, cx);
     }
 
-    /// Where a picker opens for the add button at `control`: beside the
-    /// rail, its top at the button's, as the inspector's pickers open.
+    /// Returns the point that a picker is opened at for the rail's control
+    /// whose position and size are `control`. The point's x is the rail's
+    /// left edge and its y is the control's top. The picker opens with its
+    /// right edge 12 px to the left of that x and its top at that y, in the
+    /// way the inspector's pickers open to the left of the inspector. It is
+    /// moved from there only as far as is needed to keep it 12 px inside
+    /// the window.
     fn beside_rail(&self, control: Bounds<Pixels>) -> Point<f32> {
         point(
             f32::from(self.rail_bounds.get().left()),
@@ -733,7 +975,10 @@ impl SubscriptionsScreen {
         )
     }
 
-    /// The folder picker, beside the rail, on the folders new files go to.
+    /// Opens the folder picker to the left of the rail, with its top at the
+    /// top of the rail's control that adds a folder. The folders that the
+    /// subscription `id` already adds its new files to are checked in the
+    /// picker.
     fn pick_folders(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -751,7 +996,10 @@ impl SubscriptionsScreen {
         });
     }
 
-    /// The tag picker, beside the rail, on the tags new files get.
+    /// Opens the tag picker to the left of the rail, with its top at the
+    /// top of the rail's control that adds a tag. The tags that the
+    /// subscription `id` already gives its new files are checked in the
+    /// picker.
     fn pick_tags(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let Some(entry) = self.subscription(id) else {
             return;
@@ -768,7 +1016,11 @@ impl SubscriptionsScreen {
         });
     }
 
-    /// A folder checked or unchecked in the picker (`onApplyFolders`).
+    /// Called when a folder is checked (`add` is true) or unchecked in the
+    /// folder picker (production's `onApplyFolders`). The folder is added
+    /// to the end of, or removed from, the folders that the subscription
+    /// the picker was opened for adds its new files to, and the destination
+    /// is saved.
     fn folder_picked(&mut self, folder: i64, add: bool, cx: &mut Context<Self>) {
         let Some(Picking::Folders(id)) = self.picking else {
             return;
@@ -785,7 +1037,10 @@ impl SubscriptionsScreen {
         self.set_destination(id, folders, tags, cx);
     }
 
-    /// A tag checked or unchecked in the picker (`onApplyTags`).
+    /// Called when a tag is checked (`add` is true) or unchecked in the tag
+    /// picker (production's `onApplyTags`). The tag is added to the end of,
+    /// or removed from, the tags that the subscription the picker was
+    /// opened for gives its new files, and the destination is saved.
     fn tag_picked(&mut self, name: &str, add: bool, cx: &mut Context<Self>) {
         let Some(Picking::Tags(id)) = self.picking else {
             return;
@@ -804,7 +1059,9 @@ impl SubscriptionsScreen {
 
     // ── Sources ─────────────────────────────────────────────────
 
-    /// The add-query bar's source.
+    /// Sets the site that is chosen in the row that adds a source, and
+    /// changes the placeholder of the row's text field to that site's
+    /// example query (`placeholder`).
     fn choose_add_site(&mut self, site: &'static str, cx: &mut Context<Self>) {
         self.add_site = site;
         self.add_query.update(cx, |input, cx| {
@@ -814,8 +1071,17 @@ impl SubscriptionsScreen {
         cx.notify();
     }
 
-    /// `AddQueryBar`'s submit: the typed query is added to the open
-    /// subscription, and the field empties once it is.
+    /// Adds the query typed in the row that adds a source to the open
+    /// subscription, as a source of the chosen site (the submit of
+    /// production's `AddQueryBar`). The Add button and Enter in the text
+    /// field call it. It does nothing when the field is empty or holds only
+    /// spaces, when no site is chosen, when no subscription's page is
+    /// shown, or while `busy()` is true.
+    ///
+    /// Whether the new source groups the media of one post is taken from
+    /// the setting `subscription_default_group_posts`. The field is emptied
+    /// when the application has answered, also when the answer is an
+    /// error.
     fn submit_query(&mut self, cx: &mut Context<Self>) {
         let text = self.add_query.read(cx).value().trim().to_owned();
         let Some(id) = self.place_seen else {
@@ -836,15 +1102,21 @@ impl SubscriptionsScreen {
         });
     }
 
-    /// A source's own run (`runQuery`), which downloads.
+    /// Starts a run of the source `query` alone (production's `runQuery`,
+    /// `subscriptions.queries.run`). The run downloads files.
     fn run_query(&mut self, query: i64, cx: &mut Context<Self>) {
         self.act(vec![requests::run_query(query)], cx, |_, _, _| {});
     }
 
+    /// With `paused` true, puts the source `query` on hold, so that future
+    /// runs of its subscription leave it out. With `paused` false, lets the
+    /// source run again (`subscriptions.queries.pause`).
     fn pause_query(&mut self, query: i64, paused: bool, cx: &mut Context<Self>) {
         self.act(vec![requests::pause_query(query, paused)], cx, |_, _, _| {});
     }
 
+    /// Sets whether the media of one post from the source `query` become
+    /// one group in the library (`subscriptions.queries.grouping`).
     fn group_query(&mut self, query: i64, group_posts: bool, cx: &mut Context<Self>) {
         self.act(
             vec![requests::group_query(query, group_posts)],
@@ -855,7 +1127,11 @@ impl SubscriptionsScreen {
 
     // ── Deleting ────────────────────────────────────────────────
 
-    /// ⌘⌫ on the grid: the selected subscriptions, after asking.
+    /// Opens the dialog that asks whether to delete the selected
+    /// subscriptions. They are deleted when the user confirms. The Delete
+    /// shortcut (`file.delete` in the shortcut registry, Mod+Backspace by
+    /// default) calls it. It does nothing while a subscription's page is
+    /// shown or no tile is selected.
     fn delete_selected(&mut self, cx: &mut Context<Self>) {
         let chosen = self.chosen();
         if self.place_seen.is_some() || chosen.is_empty() {
@@ -865,7 +1141,10 @@ impl SubscriptionsScreen {
     }
 }
 
-/// `e.g. <the site's example>`, or `query` while there is no site.
+/// Returns the placeholder of the text field in the row that adds a source,
+/// for the site with the id `site`: "e.g. " followed by the site's example
+/// query. When there is no site with that id, which is the case when no
+/// site is offered at all, the placeholder is "query".
 fn placeholder(site: &str) -> SharedString {
     match format::site(site) {
         Some(site) => crate::tf!("e.g. {value0}", site.example_query).into(),
@@ -873,7 +1152,12 @@ fn placeholder(site: &str) -> SharedString {
     }
 }
 
-/// The sites of `auth.credentials.list` or `auth.health.list`.
+/// Reads the answer to `auth.credentials.list` or `auth.health.list`, which
+/// is an array with one record for each site. From each record it takes
+/// the site's id (`site_id`), the status of the last check of the site's
+/// login (`status`) and the error of that check (`last_error`). A record
+/// without a `site_id` is left out. An answer that is not an array gives
+/// an empty list.
 fn read_logins(answer: &Value) -> Vec<format::Login> {
     let text =
         |record: &Value, key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
@@ -894,16 +1178,37 @@ fn read_logins(answer: &Value) -> Vec<format::Login> {
 impl Render for SubscriptionsScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = crate::theme::theme(cx);
-        let place = self.place_seen;
-        let body = match (&self.list, place) {
-            // Nothing is drawn until the first read arrives.
-            (None, _) => div().into_any_element(),
-            (Some(_), None) => self.home(window, cx).into_any_element(),
-            (Some(_), Some(_)) => match self.opened().cloned() {
-                Some(subscription) => self.workspace(&subscription, window, cx).into_any_element(),
-                None => home::empty_state(cx).into_any_element(),
-            },
-        };
+        // The tiles' layout and the columns of a page's tables depend on
+        // the screen's width. The tiles or the page are therefore built
+        // for the width of their own area in the frame that lays that area
+        // out (`ui::sized_view`).
+        let body = ui::sized_view(cx.weak_entity(), |this, bounds, window, cx| {
+            this.width = f32::from(bounds.size.width);
+            let body = match (&this.list, this.place_seen) {
+                // Nothing is drawn until the list of subscriptions has
+                // been read for the first time.
+                (None, _) => div().into_any_element(),
+                (Some(_), None) => this.home(window, cx).into_any_element(),
+                (Some(_), Some(_)) => match this.opened().cloned() {
+                    Some(subscription) => {
+                        this.workspace(&subscription, window, cx).into_any_element()
+                    }
+                    // The open subscription is not in the list, which
+                    // happens when it has been deleted. The empty-state
+                    // panel is drawn where its page would be.
+                    None => home::empty_state(cx).into_any_element(),
+                },
+            };
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(body)
+                .into_any_element()
+        })
+        .flex_1()
+        .min_h_0()
+        .w_full();
         let menu = self.menu.layer(window, cx);
         let dialog = self.dialog_layer(window, cx);
         div()
@@ -915,7 +1220,10 @@ impl Render for SubscriptionsScreen {
             .text_color(theme.text())
             .track_focus(&self.focus)
             .key_context(t("Subscriptions"))
-            // A press takes the keyboard to the screen.
+            // A press of the left mouse button anywhere on the screen gives
+            // the screen's root element the keyboard focus, unless the root
+            // element or an element inside it already has the focus. The
+            // screen's key bindings work only while the focus is there.
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -924,6 +1232,10 @@ impl Render for SubscriptionsScreen {
                     }
                 }),
             )
+            // Enter opens the selected subscription when the tiles are
+            // shown and exactly one tile is selected. Otherwise the screen
+            // does not handle the key, and the action is passed on to the
+            // elements that contain the screen.
             .on_action(cx.listener(|this, _: &Open, _, cx| {
                 let chosen = this.chosen();
                 if this.place_seen.is_none()
@@ -935,6 +1247,9 @@ impl Render for SubscriptionsScreen {
                     cx.propagate();
                 }
             }))
+            // Escape clears the selection when the tiles are shown and at
+            // least one tile is selected. Otherwise the action is passed
+            // on.
             .on_action(cx.listener(|this, _: &Deselect, _, cx| {
                 if this.selected.is_empty() || this.place_seen.is_some() {
                     cx.propagate();
@@ -943,6 +1258,9 @@ impl Render for SubscriptionsScreen {
                     cx.notify();
                 }
             }))
+            // The Delete shortcut asks whether to delete the selected
+            // subscriptions when the tiles are shown and at least one tile
+            // is selected. Otherwise the action is passed on.
             .on_action(cx.listener(|this, _: &crate::keymap::DeleteItems, _, cx| {
                 if this.place_seen.is_none() && !this.selected.is_empty() {
                     this.delete_selected(cx);
@@ -958,30 +1276,11 @@ impl Render for SubscriptionsScreen {
     }
 }
 
-/// Keeps a measured width in `cell` and repaints `view` when it changes.
-/// The repaint is asked for with a frame, since a notification made while
-/// a frame is drawn schedules none.
-fn measure(cell: Rc<Cell<f32>>, window: &Window) -> impl IntoElement {
-    let view = window.current_view();
-    canvas(
-        move |bounds, window, cx| {
-            let width = f32::from(bounds.size.width);
-            if (cell.replace(width) - width).abs() > 0.5 {
-                cx.notify(view);
-                // A notification made while a frame is being drawn does not
-                // by itself bring another frame.
-                window.request_animation_frame();
-            }
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
-}
-
-/// Keeps where an element is in `cell`.
+/// Returns an element that draws nothing and records where its parent is.
+/// The element covers its parent, which must be positioned (`relative`).
+/// Each time a frame is drawn, the element stores its own position and
+/// size, in window coordinates, in `cell`. A click handler reads `cell`
+/// later, to open a menu or a picker next to the parent.
 fn place_of(cell: Rc<Cell<Bounds<Pixels>>>) -> impl IntoElement {
     canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {})
         .absolute()
@@ -1027,7 +1326,8 @@ mod tests {
             serde_json::json!({ "subscription_id": 4, "posts_per_run": 250 })
         );
         assert!(!Command::Schedule("daily").starts() && !Command::PostsPerRun(1).starts());
-        // Each reads as the application's own input.
+        // The arguments of each command can be read as the input type that
+        // the application reads for that command in `core/src/ipc.rs`.
         for command in [Command::Run, Command::Pause, Command::Resume, Command::Stop] {
             serde_json::from_value::<ipc::SubscriptionInput>(command.request(4).args).unwrap();
         }

@@ -171,6 +171,9 @@ pub struct GroupEditor {
     selected: BTreeSet<MediaId>,
     anchor: Option<MediaId>,
     scroll: ScrollHandle,
+    /// The editor's position and size in window coordinates in the frame
+    /// that was built last. `build` sets it at its start. The handlers of
+    /// pointer events read it between frames.
     bounds: Bounds<Pixels>,
     layout: Layout,
     /// The grid's width, the gap between tiles and the number of members
@@ -710,7 +713,26 @@ impl GroupEditor {
 }
 
 impl Render for GroupEditor {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The tiles' layout depends on the editor's width, so `render` returns
+    /// an element that fills the editor's area and builds the editor for
+    /// that element's bounds in the frame that lays it out
+    /// (`ui::sized_view`).
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::sized_view(cx.weak_entity(), Self::build).size_full()
+    }
+}
+
+impl GroupEditor {
+    /// Builds one frame of the editor for `bounds`, the editor's position
+    /// and size in window coordinates in this frame. It stores them in
+    /// `self.bounds` first, and everything it calls reads them from there.
+    fn build(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.bounds = bounds;
         let theme = theme::theme(cx);
         // While the pointer of a rubber band is near the top or the bottom
         // edge, the grid scrolls a little each frame. Another frame is
@@ -923,10 +945,6 @@ impl Render for GroupEditor {
             );
         }
 
-        let measure = pointer::measure(cx.entity().downgrade(), |this: &mut Self| &mut this.bounds)
-            .absolute()
-            .size_full();
-
         let body = div()
             .id("group-editor-grid")
             .role(Role::ListBox)
@@ -1016,7 +1034,6 @@ impl Render for GroupEditor {
                     cx.emit(QuickLookRequested(*member));
                 }
             }))
-            .child(measure)
             .child(body)
             .child(ui::scrollbar(
                 "group-editor-scrollbar",
@@ -1085,6 +1102,7 @@ impl Render for GroupEditor {
             root = root.child(drag::ghost(&dragging.ghost, &self.thumbnails, cx));
         }
         root.children(pointer::preview_overlay(&self.preview, window))
+            .into_any_element()
     }
 }
 

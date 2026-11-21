@@ -828,51 +828,39 @@ impl DuplicatesScreen {
     /// labelled buttons fit in the row. Only when the row is narrower than
     /// that (a very narrow window, or a large interface zoom) do all four
     /// show their icons alone, so that none is cut off.
-    fn decision_row(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        // The width of the four buttons with their labels depends on the
-        // language. It is measured here by laying the four buttons out once
-        // without drawing them.
-        let labelled = f32::from(
-            self.decisions(true, cx)
+    fn decision_row(&mut self, cx: &mut Context<Self>) -> Div {
+        // Whether the labels fit depends on the row's width, so the buttons
+        // are built for the row's bounds in the frame that lays the row
+        // out (`ui::sized_view`).
+        let buttons = ui::sized_view(cx.weak_entity(), |this, bounds, window, cx| {
+            // The width of the four buttons with their labels depends on
+            // the language. It is measured here by laying the four buttons
+            // out once without drawing them.
+            let labelled = f32::from(
+                this.decisions(true, cx)
+                    .into_any_element()
+                    .layout_as_root(
+                        size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
+                        window,
+                        cx,
+                    )
+                    .width,
+            );
+            let labels = labelled <= f32::from(bounds.size.width) - 2. * EDGE;
+            div()
+                .size_full()
+                .px(px(EDGE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .overflow_hidden()
+                .child(this.decisions(labels, cx))
                 .into_any_element()
-                .layout_as_root(
-                    size(AvailableSpace::MaxContent, AvailableSpace::MaxContent),
-                    window,
-                    cx,
-                )
-                .width,
-        );
-        // The row's width is read while the frame is laid out. When it has
-        // changed, the screen is drawn again before the frame is shown, so
-        // the labels are right for the new width in the same frame.
-        let entity = cx.weak_entity();
-        let measure = canvas(
-            move |bounds, _, cx| {
-                let width = f32::from(bounds.size.width);
-                let _ = entity.update(cx, |this, cx| {
-                    if this.decision_row_width != width {
-                        this.decision_row_width = width;
-                        cx.notify();
-                    }
-                });
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
-        let room = self.decision_row_width - 2. * EDGE;
-        let labels = self.decision_row_width <= 0. || labelled <= room;
+        });
         div()
-            .relative()
             .flex_none()
             .h(px(DECISION_ROW))
-            .px(px(EDGE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .overflow_hidden()
-            .child(measure)
-            .child(self.decisions(labels, cx))
+            .child(buttons.size_full())
     }
 
     /// The four buttons that make a decision on the pair or show the
@@ -1098,7 +1086,7 @@ impl Render for DuplicatesScreen {
             .child(self.side(0, &facts, window, cx))
             .child(self.side(1, &facts, window, cx));
         let menu = self.menu.layer(window, cx);
-        let decisions = self.decision_row(window, cx);
+        let decisions = self.decision_row(cx);
         let similarity = self.similarity_row(window, cx);
         root.child(decisions)
             .child(similarity)

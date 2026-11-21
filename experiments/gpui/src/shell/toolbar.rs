@@ -52,19 +52,14 @@ pub struct Toolbar {
     /// the view that draws the note. The Subscriptions screen's note is the
     /// number of subscriptions.
     screen_notes: Vec<(Screen, AnyView)>,
-    /// The toolbar's width in pixels the last time it was painted. The
-    /// scope title ends at the toolbar's middle, so this width decides
-    /// whether the path to a place open inside a screen fits in the title
-    /// or has to be shortened.
-    width: Rc<Cell<f32>>,
+    /// The toolbar's width in pixels in the frame that is being built.
+    /// `build` sets it at its start. The scope title ends at the toolbar's
+    /// middle, so this width decides whether the path to a place open
+    /// inside a screen fits in the title or has to be shortened.
+    width: f32,
     /// The bounds of the "View options" button the last time it was
     /// painted. The point the view menu opens at is taken from them.
     view_button: Rc<Cell<Bounds<Pixels>>>,
-    /// The width of the row that holds the grid's controls (zoom, view
-    /// options, filter, search) the last time it was painted. The zoom
-    /// control and the search field are hidden when this row is too narrow
-    /// for them.
-    controls_width: Rc<Cell<Pixels>>,
     /// The view menu, and the subscription that observes it, from the time
     /// the menu opens until it has finished fading out. While this is set,
     /// the "View options" button is drawn in its toggled state, as
@@ -145,9 +140,8 @@ impl Toolbar {
             zoom,
             screen_controls: Vec::new(),
             screen_notes: Vec::new(),
-            width: Rc::new(Cell::new(f32::MAX)),
+            width: 0.,
             view_button: Rc::new(Cell::new(Bounds::default())),
-            controls_width: Rc::new(Cell::new(px(f32::MAX))),
             view_menu: None,
             _subscriptions: subscriptions,
         }
@@ -272,7 +266,7 @@ impl Toolbar {
         // place's name are removed and the place's name is shown alone, cut
         // off with an ellipsis if it is still too wide. This shows as much
         // of the place's name as fits.
-        let room = (self.width.get() * 0.5 - (8. + 72.)).max(0.);
+        let room = (self.width * 0.5 - (8. + 72.)).max(0.);
         let shortened = place && crumbs.len() > 1 && {
             let width = |text: &str| {
                 f32::from(
@@ -392,9 +386,26 @@ fn search_results_label(total: u64) -> String {
 }
 
 impl Render for Toolbar {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The scope title is shortened when the toolbar is too narrow for it,
+    /// so `render` returns an element that fills the toolbar's area and
+    /// builds the toolbar for that element's bounds in the frame that lays
+    /// it out (`ui::sized_view`).
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::sized_view(cx.weak_entity(), Self::build).size_full()
+    }
+}
+
+impl Toolbar {
+    /// Builds one frame of the toolbar for `bounds`, the toolbar's position
+    /// and size in window coordinates in this frame.
+    fn build(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.width = f32::from(bounds.size.width);
         crate::stats::rendered(crate::stats::View::Toolbar);
-        let theme = theme::theme(cx);
         let (viewing, transition) = {
             let session = self.session.read(cx);
             (session.viewer, session.transition)
@@ -473,22 +484,6 @@ impl Render for Toolbar {
             .pr(px(16.))
             .flex()
             .items_center()
-            .child({
-                let painted = self.width.clone();
-                let view = window.current_view();
-                canvas(
-                    move |bounds, window, cx| {
-                        let width = f32::from(bounds.size.width);
-                        if (painted.replace(width) - width).abs() > 0.5 {
-                            cx.notify(view);
-                            window.request_animation_frame();
-                        }
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0()
-            })
             .child(self.title(opacity, window, cx))
             .child(history(
                 "history-back",
@@ -539,37 +534,51 @@ impl Render for Toolbar {
                 )
                 .into_any_element();
         }
-        // The grid's controls are hidden when there is too little room for
-        // them, as production's `.toolbar` container queries
-        // (`@container (max-width: …)`) do. `width` is the width of the row
-        // that holds the controls, to the right of the Back and Forward
-        // buttons. The zoom control is hidden when that row is 350 px wide
-        // or less, and the search field when it is 240 px wide or less. The
-        // width is the one measured when the row was last painted, because
-        // the width of the frame being built now is not known until it has
-        // been laid out.
-        let width = self.controls_width.get();
+        // The grid's controls take all of the row to the right of the Back
+        // and Forward buttons. Which of them are shown depends on that
+        // row's width, so the row is built for its own bounds in the frame
+        // that lays it out (`ui::sized_view`).
+        let controls = ui::sized_view(cx.weak_entity(), move |this, bounds, _, cx| {
+            this.grid_controls(
+                bounds.size.width,
+                view_menu_open,
+                bar_open,
+                filter_count,
+                cx,
+            )
+        })
+        .flex_1()
+        .min_w_0()
+        .h_full();
+        toolbar.child(controls).into_any_element()
+    }
+
+    /// Builds the row of the grid's controls: the zoom control, the "View
+    /// options" button, the "Filter library" button and the search field.
+    /// `width` is the row's width in this frame.
+    ///
+    /// The controls are hidden when there is too little room for them, as
+    /// production's `.toolbar` container queries (`@container (max-width:
+    /// …)`) do. The zoom control is hidden when the row is 350 px wide or
+    /// less, and the search field when it is 240 px wide or less.
+    ///
+    /// `view_menu_open` is true while the view menu is open, `bar_open`
+    /// while the filter bar is open, and `filter_count` is the number of
+    /// filters that are set.
+    fn grid_controls(
+        &mut self,
+        width: Pixels,
+        view_menu_open: bool,
+        bar_open: bool,
+        filter_count: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = theme::theme(cx);
         let mut controls = div()
             .relative()
-            .flex_1()
-            .min_w_0()
-            .h_full()
+            .size_full()
             .flex()
             .items_center()
-            .child({
-                let painted = self.controls_width.clone();
-                canvas(
-                    move |bounds, window, _| {
-                        if bounds.size.width != painted.get() {
-                            painted.set(bounds.size.width);
-                            window.request_animation_frame();
-                        }
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0()
-            })
             .child(
                 // The zoom control is centred in the space between the Back
                 // and Forward buttons and the "View options" button.
@@ -635,7 +644,7 @@ impl Render for Toolbar {
                 ),
             ));
         }
-        toolbar.child(controls).into_any_element()
+        controls.into_any_element()
     }
 }
 

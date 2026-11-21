@@ -1,4 +1,4 @@
-//! The steps that `GridView::render` (in `mod.rs`) runs before it builds the
+//! The steps that `GridView::build` (in `mod.rs`) runs before it builds the
 //! grid's elements for one frame:
 //!
 //! - `prepare` scrolls the grid while a rubber band is held near the top or
@@ -22,7 +22,7 @@ use super::{
 use gpui::*;
 use picto_library::query::ItemScope;
 
-/// What `GridView::snapshot` returns for `render` to draw one frame of the
+/// What `GridView::snapshot` returns for `build` to draw one frame of the
 /// grid. `fade` is the opacity, from 0 to 1, that the grid is drawn with
 /// while one destination fades out and the next one fades in, and
 /// `animating` is true while such a fade is running. `prefs` is a copy of
@@ -36,7 +36,7 @@ pub(super) struct Frame {
     pub prefs: ViewPrefs,
     pub surface: Surface,
     /// True when the destination has more items than the window of results
-    /// holds and no read of results is in progress. `render` asks for
+    /// holds and no read of results is in progress. `build` asks for
     /// another window of results only when this is true.
     pub windowed: bool,
     /// Whether the zoom's tile size changed since the last frame, with the

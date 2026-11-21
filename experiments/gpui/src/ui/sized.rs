@@ -35,6 +35,21 @@ pub fn sized(
     }
 }
 
+/// Makes an element whose contents `view` builds for the element's bounds.
+/// A view whose whole content depends on its size returns this element from
+/// `render` and builds the content in `build`, which runs on the view in the
+/// frame that lays the element out. The element draws nothing when the view
+/// no longer exists.
+pub fn sized_view<V: 'static>(
+    view: WeakEntity<V>,
+    build: impl FnOnce(&mut V, Bounds<Pixels>, &mut Window, &mut Context<V>) -> AnyElement + 'static,
+) -> Sized {
+    sized(move |bounds, window, cx| {
+        view.update(cx, |view, cx| build(view, bounds, window, cx))
+            .unwrap_or_else(|_| Empty.into_any_element())
+    })
+}
+
 impl Styled for Sized {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style

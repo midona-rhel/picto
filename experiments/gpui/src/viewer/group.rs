@@ -279,7 +279,8 @@ pub struct GroupReader {
     root: Option<RootId>,
     members: Vec<Member>,
     scroll: ScrollHandle,
-    /// The size of the scrolling area, as measured in the last frame drawn.
+    /// The size of the scrolling area in the frame that was built last.
+    /// `build` sets it at its start, through `resize_viewport`.
     viewport: Size<Pixels>,
     warm: Vec<usize>,
     /// The visible members that are still inside their 200 ms wait and have
@@ -305,8 +306,15 @@ impl GroupReader {
         self.root
     }
 
-    /// Shows `details`' members. The same collection read again keeps its
-    /// place and what is loaded; another starts at the top.
+    /// Shows the members of the collection in `details`.
+    ///
+    /// - When that collection is already shown and has the same members in
+    ///   the same order, nothing changes: the column stays scrolled where it
+    ///   is, and the members that are loaded stay loaded.
+    /// - When that collection is already shown and its members have
+    ///   changed, the members are read again and loaded again, and the
+    ///   column stays scrolled where it is.
+    /// - When it is another collection, the column is scrolled to its top.
     pub fn show(&mut self, details: &RootDetails, cx: &mut Context<Self>) {
         let root = details.root.root_id;
         let fresh = self.root != Some(root);
@@ -679,7 +687,28 @@ impl GroupReader {
 }
 
 impl Render for GroupReader {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Every member is as wide as the column, so `render` returns an
+    /// element that fills the reader's area and builds the column for that
+    /// element's bounds in the frame that lays it out (`ui::sized_view`).
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::sized_view(cx.weak_entity(), Self::build).size_full()
+    }
+}
+
+impl GroupReader {
+    /// Builds one frame of the reader for `bounds`, the position and size
+    /// of the scrolling area in this frame. It records the size first
+    /// (`resize_viewport`). When the width changed, that also sets the
+    /// scroll offset that keeps the member at the top edge in place, so the
+    /// members are drawn at their new heights and at that scroll offset in
+    /// this same frame.
+    fn build(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.resize_viewport(bounds.size);
         // Start fading out the thumbnail of each member whose media surface
         // has now drawn its first frame or page.
         for member in &mut self.members {
@@ -699,41 +728,19 @@ impl Render for GroupReader {
             window.request_animation_frame();
         }
         self.watch(cx);
-        // Before the first frame has measured this view, the column's width
-        // is unknown. Draw no members in that frame, because without a
-        // width each one would be laid out at the minimum height.
-        let measured = self.viewport.width > px(0.);
         let empty = self.root.is_some() && self.members.is_empty();
-        let places = if measured { self.places() } else { Vec::new() };
-        let frames: Vec<AnyElement> = places
+        let frames: Vec<AnyElement> = self
+            .places()
             .iter()
             .enumerate()
             .map(|(index, (_, height))| self.frame(index, *height, cx))
             .collect();
-        let entity = cx.entity().downgrade();
-        let measure = canvas(
-            move |bounds, window, cx| {
-                let _ = entity.update(cx, |this, cx| {
-                    if this.viewport != bounds.size {
-                        this.resize_viewport(bounds.size);
-                        cx.notify();
-                        // Ask for another frame as well, so that the members
-                        // are loaded for the size just measured.
-                        window.request_animation_frame();
-                    }
-                });
-            },
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .size_full();
         // The app's background colour fills the area behind the column.
         div()
             .relative()
             .size_full()
             .overflow_hidden()
             .bg(theme::theme(cx).background())
-            .child(measure)
             .child(
                 div()
                     .id("group-reader")
@@ -782,6 +789,7 @@ impl Render for GroupReader {
                 window,
                 cx,
             ))
+            .into_any_element()
     }
 }
 

@@ -1,5 +1,6 @@
-//! The top of the Subscriptions screen (production's
-//! `SubscriptionsGrid.tsx`), which shows one tile for each subscription.
+//! The top level of the Subscriptions screen (production's
+//! `SubscriptionsGrid.tsx`), which shows one tile for each subscription. It
+//! is what the screen shows while no subscription's page is open.
 //!
 //! The tiles are positioned by the grid's layout (`grid::layout`) and are
 //! drawn to look like the grid's tiles. A tile shows the subscription's
@@ -13,7 +14,7 @@
 //! The number of subscriptions and the buttons that add a subscription are
 //! in the titlebar. `toolbar.rs` in this folder draws them.
 use super::data::{self, Cover};
-use super::{SubscriptionsScreen, format, measure};
+use super::{SubscriptionsScreen, format};
 use crate::grid::layout::{self, Layout, Tile, ViewMode};
 use crate::grid::prefs::ViewPrefs;
 use crate::i18n::t;
@@ -37,9 +38,10 @@ const TEXT_ROWS: f32 = 2. * layout::TEXT_ROW_HEIGHT;
 /// default one, or the size of the source image is not known, the image is
 /// scaled to cover the inset square around its centre.
 ///
-/// If the subscription has no cover image, the square shows the
-/// "download-thin" icon at `glyph` pixels, centred on a gradient that goes
-/// from the theme's contrast colour at 5% opacity to fully transparent.
+/// If the subscription has no cover image, the square is filled with the
+/// theme's `surface_2` colour. Over that it has a gradient that goes from
+/// the theme's contrast colour at 5% opacity to fully transparent, and the
+/// "download-thin" icon at `glyph` pixels in the square's centre.
 pub(super) fn cover(
     id: impl Into<ElementId>,
     cover: Option<&Cover>,
@@ -201,10 +203,20 @@ impl SubscriptionsScreen {
         cards
     }
 
+    /// Returns the ids of the subscriptions that are shown as tiles, in the
+    /// order their tiles are shown (`cards`).
     pub(super) fn card_order(&self) -> Vec<i64> {
         self.cards().iter().map(|card| card.id).collect()
     }
 
+    /// Builds the screen's top level. From top to bottom it has the bar
+    /// that lists the gallery downloads, when there are any, and the area
+    /// that shows the tiles, which scrolls vertically and has a scrollbar.
+    /// When there is no subscription to show as a tile, that area shows one
+    /// sentence that says how to start.
+    ///
+    /// The tiles are laid out for `self.width`, the width of the screen's
+    /// area in the frame that is being built.
     pub(super) fn home(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let order = std::rc::Rc::new(self.card_order());
         let cards: Vec<data::Subscription> = self.cards().into_iter().cloned().collect();
@@ -218,7 +230,7 @@ impl SubscriptionsScreen {
             .iter()
             .map(|card| details_width(card, window))
             .fold(0., f32::max);
-        let width = self.home_width.get();
+        let width = self.width;
         let mut target = prefs.target_size;
         let layout = loop {
             let layout = Layout::compute(
@@ -242,7 +254,6 @@ impl SubscriptionsScreen {
             .relative()
             .w_full()
             .h(px(layout.total_height))
-            .child(measure(self.home_width.clone(), window))
             // A tile stops a click on it from reaching this handler. A
             // click that arrives here was therefore on the empty space
             // between tiles, and it clears the selection.

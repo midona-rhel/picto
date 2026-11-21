@@ -79,7 +79,7 @@ pub use scrollbar::scrollbar;
 pub use section_header::section_header;
 pub use select::{choice, select};
 pub use sidebar_row::sidebar_row;
-pub use sized::sized;
+pub use sized::{sized, sized_view};
 pub use slider::slider;
 pub use small_button::small_button;
 pub use status_badge::status_badge;

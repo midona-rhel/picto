@@ -9,8 +9,9 @@
 //!
 //! This file holds the view's state, its handlers for the pointer, the
 //! rubber band selection, the handing of dragged files to the operating
-//! system, the zoom with the mouse wheel, and `render`. `frame.rs` computes
-//! what a frame draws, and `body.rs` builds the elements.
+//! system, the zoom with the mouse wheel, and `GridView::build`, which builds
+//! one frame of the grid for the size the grid has in that frame. `frame.rs`
+//! computes what a frame draws, and `body.rs` builds the elements.
 pub mod art;
 mod body;
 pub mod drag;
@@ -126,12 +127,13 @@ pub struct GridView {
     window_timer: Option<Task<()>>,
     reveal: reveal::RevealTracker,
     /// The moment this grid was created. The grid measures time in
-    /// milliseconds since this moment (`now` in `render`). The fade-in of
+    /// milliseconds since this moment (`now` in `build`). The fade-in of
     /// thumbnails (`reveal`) and the zoom animation use that time.
     clock: std::time::Instant,
-    /// The grid's position and size in window coordinates, as GPUI last
-    /// laid it out. The element that `pointer::measure` returns, which
-    /// `render` adds to the grid, updates it.
+    /// The grid's position and size in window coordinates in the frame
+    /// that was built last. `build` sets it at its start, from the bounds
+    /// GPUI laid the grid out with in that frame. The handlers of pointer
+    /// and key events read it between frames.
     bounds: Bounds<Pixels>,
     /// The value the session's `results_epoch` had in the last frame the
     /// grid built. When the session's value is different, the results are a
@@ -307,7 +309,7 @@ impl GridView {
                 this.subfolders.stale = true;
                 this.subfolders.relist = true;
             }
-            // `Change::GridWidth` is emitted by this grid's own `render`,
+            // `Change::GridWidth` is emitted by this grid's own `build`,
             // which has already drawn with the new width.
             if !matches!(change, Change::Viewer | Change::GridWidth) {
                 cx.notify();
@@ -452,7 +454,7 @@ impl GridView {
     /// Starts a timer of `window::REQUEST_INTERVAL` (40 ms), unless one is
     /// already running. When the timer ends, `ask_for_window` asks the
     /// session for the window of results that the viewport needs at that
-    /// moment. `render` calls this after a scroll, after a change of zoom,
+    /// moment. `build` calls this after a scroll, after a change of zoom,
     /// and while the middle of the viewport is outside the window's tiles.
     fn schedule_window(&mut self, cx: &mut Context<Self>) {
         if self.window_timer.is_some() {
@@ -1015,7 +1017,28 @@ enum Surface {
 }
 
 impl Render for GridView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The tiles' layout depends on the grid's width and the tiles that are
+    /// drawn depend on its height, so `render` returns an element that
+    /// fills the grid's area and builds the grid for that element's bounds
+    /// in the frame that lays it out (`ui::sized_view`). Every frame is
+    /// therefore built for the size the grid has in that frame, also while
+    /// the window is resized or the sidebar and the inspector are hidden.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::sized_view(cx.weak_entity(), Self::build).size_full()
+    }
+}
+
+impl GridView {
+    /// Builds one frame of the grid for `bounds`, the grid's position and
+    /// size in window coordinates in this frame. It stores them in
+    /// `self.bounds` first, and everything it calls reads them from there.
+    fn build(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.bounds = bounds;
         crate::stats::rendered(crate::stats::View::Grid);
         let build_started = crate::stats::Started::now();
         let restored_top = self.prepare(window, cx);
@@ -1095,10 +1118,6 @@ impl Render for GridView {
             window.request_animation_frame();
         }
 
-        let measure = pointer::measure(cx.entity().downgrade(), |this: &mut Self| &mut this.bounds)
-            .absolute()
-            .size_full();
-
         // The scrollbar is drawn only when the grid shows tiles. The error
         // message, the loading state and the empty state do not scroll.
         // The scroll handle can still hold the scrollable height of the
@@ -1110,7 +1129,6 @@ impl Render for GridView {
         let root = div()
             .relative()
             .size_full()
-            .child(measure)
             .child(body)
             .when(scrolls, |root| {
                 root.child(ui::scrollbar("grid-scrollbar", &self.scroll, window, cx))
@@ -1123,7 +1141,7 @@ impl Render for GridView {
                 window,
                 cx,
             ));
-        self.overlays(root, scrolls, window, cx)
+        self.overlays(root, scrolls, window, cx).into_any_element()
     }
 }
 

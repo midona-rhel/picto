@@ -470,17 +470,6 @@ macOS and Wayland only.
 - `src/linux/x11.rs`, `src/linux.rs`, `src/gpui_linux.rs`: These files
   declare and export the new modules.
 
-`gpui-pre`, drawing once more before a frame is shown
-- `src/window.rs`: A view can be notified while a frame is being drawn.
-  This happens to a view that read its size from the layout of this frame
-  and has to lay out again for that size. Such a view used to wait for the
-  next frame. Every change of size, such as a window being resized or a
-  rail being hidden, therefore showed one frame that was laid out for the
-  previous size. `WindowInvalidator` now remembers that a view was notified
-  during the draw (`invalidated_in_draw`), and the frame callback draws
-  again, once, before it presents. What the second pass invalidates waits
-  for the next frame, as before.
-
 Whether the system blurs behind a window, and Acrylic on Windows. The app
 can show the system's frosted material behind the sidebar and the inspector
 of its main window (`src/ui/window_chrome.rs`, `show_rail_material`). It
@@ -1596,43 +1585,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -128,6 +128,9 @@
-     pub dirty: bool,
-     pub draw_phase: DrawPhase,
-     pub dirty_views: FxHashSet<EntityId>,
-+    /// A view was invalidated while a frame was being drawn: what it drew
-+    /// in that frame is already out of date.
-+    pub invalidated_in_draw: bool,
-     pub update_count: usize,
-     #[cfg(feature = "profiler")]
-     pub frame_dirty: FrameDirtyAccumulator,
-@@ -160,6 +163,7 @@
-                 dirty: true,
-                 draw_phase: DrawPhase::None,
-                 dirty_views: FxHashSet::default(),
-+                invalidated_in_draw: false,
-                 update_count: 0,
-                 #[cfg(feature = "profiler")]
-                 frame_dirty: FrameDirtyAccumulator::default(),
-@@ -191,10 +195,17 @@
-             }
-             true
-         } else {
-+            inner.invalidated_in_draw = true;
-             false
-         }
-     }
- 
-+    /// Whether a view was invalidated during a draw since this was last
-+    /// asked.
-+    pub fn take_invalidated_in_draw(&self) -> bool {
-+        mem::take(&mut self.inner.borrow_mut().invalidated_in_draw)
-+    }
-+
-     pub fn is_dirty(&self) -> bool {
-         self.inner.borrow().dirty
-     }
-@@ -1266,7 +1277,13 @@
+@@ -1266,7 +1266,13 @@
      mouse_hit_test: HitTest,
      modifiers: Modifiers,
      capslock: Capslock,
@@ -1646,7 +1599,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      pub(crate) bounds_observers: SingleSubscriberSet<AnyObserver>,
      appearance: WindowAppearance,
      pub(crate) appearance_observers: SingleSubscriberSet<AnyObserver>,
-@@ -1634,6 +1651,33 @@
+@@ -1634,6 +1640,33 @@
      window_bounds_ctor(Bounds::new(final_origin, base_size))
  }
  
@@ -1680,7 +1633,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
  impl Window {
      pub(crate) fn new(
          handle: AnyWindowHandle,
-@@ -1705,11 +1749,12 @@
+@@ -1705,11 +1738,12 @@
  
          let display_id = platform_window.display().map(|display| display.id());
          let sprite_atlas = platform_window.sprite_atlas();
@@ -1696,28 +1649,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          let appearance = platform_window.appearance();
          let text_system = Rc::new(WindowTextSystem::new(cx.text_system().clone()));
          let invalidator = WindowInvalidator::new(handle.window_id());
-@@ -2039,7 +2084,19 @@
-                                     // atlas tile references after a GPU device recovery.
-                                     window.refresh();
-                                 }
--                                let arena_clear_needed = window.draw(cx);
-+                                window.invalidator.take_invalidated_in_draw();
-+                                let mut arena_clear_needed = window.draw(cx);
-+                                // A view that learned its size from this
-+                                // frame's layout and asked to be drawn again
-+                                // is drawn again now, so that no frame is
-+                                // shown laid out for the size it had before
-+                                // (a window being resized, a rail hidden).
-+                                // Once: what the second pass invalidates
-+                                // waits for the next frame, as before.
-+                                if window.invalidator.take_invalidated_in_draw() {
-+                                    arena_clear_needed.clear(cx);
-+                                    arena_clear_needed = window.draw(cx);
-+                                }
-                                 window.present();
-                                 arena_clear_needed.clear(cx);
-                             })
-@@ -2242,7 +2299,9 @@
+@@ -2242,7 +2276,9 @@
              let mut cx = cx.to_async();
              Box::new(move |event| {
                  handle
@@ -1728,7 +1660,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                      .with_context(|| {
                          format!("dispatching input for window {:?}", handle.window_id())
                      })
-@@ -2390,6 +2449,7 @@
+@@ -2390,6 +2426,7 @@
              modifiers,
              capslock,
              scale_factor,
@@ -1736,7 +1668,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
              bounds_observers: SingleSubscriberSet::new(),
              appearance,
              appearance_observers: SingleSubscriberSet::new(),
-@@ -2731,7 +2791,14 @@
+@@ -2731,7 +2768,14 @@
      /// - `Some(&[])` is an empty region, so the window receives no pointer or touch input.
      /// - `None` resets the region to the default, so the whole window receives input again.
      pub fn set_input_region(&self, region: Option<&[Bounds<Pixels>]>) {
@@ -1752,7 +1684,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Return the `WindowBounds` to indicate that how a window should be opened
-@@ -2958,6 +3025,14 @@
+@@ -2958,6 +3002,14 @@
          count
      }
  
@@ -1767,7 +1699,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Spawn the future returned by the given closure on the application thread pool.
      /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
      /// use within your future.
-@@ -3001,9 +3076,9 @@
+@@ -3001,9 +3053,9 @@
      /// the platform window, then notifies observers. Normally called automatically
      /// by the platform's resize callback, but exposed publicly for test infrastructure.
      pub fn bounds_changed(&mut self, cx: &mut App) {
@@ -1780,7 +1712,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
  
          self.refresh();
  
-@@ -3166,7 +3241,11 @@
+@@ -3166,7 +3218,11 @@
      /// During drawing this is a consistent frame snapshot. Outside drawing it
      /// reflects the latest platform sample, not a synchronous geometry query.
      pub fn visual_viewport_bounds(&self) -> Bounds<Pixels> {
@@ -1793,7 +1725,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns a conservative rectangle avoiding platform-known obscured content.
-@@ -3227,7 +3306,8 @@
+@@ -3227,7 +3283,8 @@
  
      /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
      pub fn show_window_menu(&self, position: Point<Pixels>) {
@@ -1803,7 +1735,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Handle window movement for Linux and macOS.
-@@ -3241,12 +3321,14 @@
+@@ -3241,12 +3298,14 @@
      /// When using client side decorations, set this to the width of the invisible decorations (Wayland and X11)
      pub fn set_client_inset(&mut self, inset: Pixels) {
          self.client_inset = Some(inset);
@@ -1820,7 +1752,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      }
  
      /// Returns the client_inset value by [`Self::set_client_inset`].
-@@ -3297,6 +3379,22 @@
+@@ -3297,6 +3356,22 @@
              .set_background_appearance(background_appearance);
      }
  
@@ -1843,7 +1775,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Mark the window as dirty at the platform level.
      pub fn set_window_edited(&mut self, edited: bool) {
          self.platform_window.set_edited(edited);
-@@ -3331,10 +3429,32 @@
+@@ -3331,10 +3406,32 @@
      /// Overrides the display scale factor for tests.
      #[cfg(any(test, feature = "test-support"))]
      pub fn set_scale_factor(&mut self, scale_factor: f32) {
@@ -1877,7 +1809,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// The size of an em for the base font of the application. Adjusting this value allows the
      /// UI to scale, just like zooming a web page.
      pub fn rem_size(&self) -> Pixels {
-@@ -3672,6 +3792,7 @@
+@@ -3672,6 +3769,7 @@
          if self.platform_window.prepare_frame() {
              self.refresh();
          }
@@ -1885,7 +1817,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidate_entities();
          cx.entities.clear_accessed();
          debug_assert!(self.rendered_entity_stack.is_empty());
-@@ -3907,7 +4028,7 @@
+@@ -3907,7 +4005,7 @@
  
          self.a11y.sync_active_flag();
          if self.a11y.is_active() {
@@ -1894,7 +1826,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          }
  
          let _inspector_width: Pixels = rems(30.0).to_pixels(self.rem_size());
-@@ -4811,6 +4932,31 @@
+@@ -4811,6 +4909,31 @@
          corner_radii: Corners<Pixels>,
          shadows: &[BoxShadow],
      ) {
@@ -1926,7 +1858,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let scale_factor = self.scale_factor();
-@@ -4832,12 +4978,52 @@
+@@ -4832,12 +4955,52 @@
                  color: shadow.color.opacity(opacity),
                  element_bounds,
                  element_corner_radii,
@@ -1980,7 +1912,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
      /// be called after the element's background so the shadow layers on top of the fill.
      /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
-@@ -5215,7 +5401,7 @@
+@@ -5215,7 +5378,7 @@
  
              self.next_frame.scene.insert_primitive(PolychromeSprite {
                  order: 0,
@@ -1989,7 +1921,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  grayscale: false.into(),
                  bounds,
                  corner_radii: Default::default(),
-@@ -5309,6 +5495,31 @@
+@@ -5309,6 +5472,31 @@
          frame_index: usize,
          grayscale: bool,
      ) -> Result<()> {
@@ -2021,7 +1953,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
          self.invalidator.debug_assert_paint();
  
          let visible_bounds = bounds.intersect(&image_bounds);
-@@ -5387,7 +5598,7 @@
+@@ -5387,7 +5575,7 @@
  
          self.next_frame.scene.insert_primitive(PolychromeSprite {
              order: 0,
@@ -2030,7 +1962,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
              grayscale: grayscale.into(),
              bounds: visible_bounds_snapped,
              content_mask,
-@@ -5861,7 +6072,23 @@
+@@ -5861,7 +6049,23 @@
              .unwrap_or_else(|| action.name().to_string())
      }
  
@@ -2055,7 +1987,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      #[profiling::function]
      pub fn dispatch_event(&mut self, event: PlatformInput, cx: &mut App) -> DispatchEventResult {
          #[cfg(feature = "profiler")]
-@@ -6037,6 +6264,16 @@
+@@ -6037,6 +6241,16 @@
          }
      }
  
@@ -2072,7 +2004,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      fn promote_external_drag_to_platform(&mut self, event: &PlatformInput, cx: &mut App) {
          let PlatformInput::MouseMove(mouse_move) = event else {
              return;
-@@ -6946,7 +7183,9 @@
+@@ -6946,7 +7160,9 @@
          self.on_next_frame(|window, cx| {
              if let Some(mut input_handler) = window.platform_window.take_input_handler() {
                  if let Some(bounds) = input_handler.selected_bounds(window, cx) {
@@ -2083,7 +2015,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
                  }
                  window.platform_window.set_input_handler(input_handler);
              }
-@@ -7304,6 +7543,41 @@
+@@ -7304,6 +7520,41 @@
          self.a11y.debug_tree_json()
      }
  
@@ -2125,7 +2057,7 @@ diff --color -ruN gpui-pre-0.3.12/src/window.rs b/gpui-pre/src/window.rs
      /// Register a listener for an accessibility action on a specific node.
      /// The listener will be called when a screen reader requests the given
      /// action on the node identified by `node_id`.
-@@ -8160,6 +8434,104 @@
+@@ -8160,6 +8411,104 @@
          Ok(())
      } else {
          ELEMENT_ARENA.try_with(|arena| callback(&mut arena.borrow_mut()))

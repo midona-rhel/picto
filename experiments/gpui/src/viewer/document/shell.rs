@@ -1,32 +1,51 @@
-//! The chrome every document viewer shares (`DocumentViewerShell.tsx`): a
-//! scrolling viewport on the dark backdrop with the page centred in it, and
-//! a footer as tall as the titlebar with Previous page, "Page n of m" and
-//! Next page.
+//! The frame that the document viewers draw around a page (production's
+//! `DocumentViewerShell.tsx`). It has two parts. The upper part is a viewport
+//! with the dark document backdrop, which scrolls and shows the page in its
+//! centre. The lower part is a footer as tall as the titlebar, which holds
+//! the Previous page button, the text "Page n of m" and the Next page
+//! button.
 use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::{theme, ui};
 use gpui::*;
 
 type ClickHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
-type MeasureHandler = Box<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>;
 
-/// `.viewport`'s padding around the page.
+/// The padding in pixels between the viewport's edges and the page
+/// (the padding of `.viewport` in production's CSS).
 pub const VIEWPORT_PADDING: f32 = 24.;
+
+/// Returns the width and the height in pixels that a page has room for when
+/// the shell fills an area of `size`. That is the area's width and its
+/// height less the footer's height, each less the padding on both sides of
+/// the page. A viewer uses it to lay its page out for the size the shell has
+/// in the frame that is being built.
+pub fn page_room(size: Size<Pixels>) -> (f32, f32) {
+    (
+        (f32::from(size.width) - 2. * VIEWPORT_PADDING).max(0.),
+        (f32::from(size.height) - theme::TITLEBAR_HEIGHT - 2. * VIEWPORT_PADDING).max(0.),
+    )
+}
 
 #[derive(IntoElement)]
 pub struct DocumentShell {
-    /// 1-based, as the counter shows it.
+    /// The number of the page shown, counted from 1, as the footer shows
+    /// it.
     page: usize,
+    /// The number of pages, or 0 while it is not known.
     count: usize,
-    /// Shown in place of the page when it cannot be shown.
+    /// A message that is shown in place of the page when the page cannot be
+    /// shown.
     error: Option<SharedString>,
     content: Option<AnyElement>,
     scroll: ScrollHandle,
     on_previous: Option<ClickHandler>,
     on_next: Option<ClickHandler>,
-    on_measure: Option<MeasureHandler>,
 }
 
+/// Makes a shell whose viewport scrolls with `scroll` and whose footer shows
+/// "Page `page` of `count`". `page` is counted from 1, and `count` is 0 while
+/// the number of pages is not known.
 pub fn shell(scroll: &ScrollHandle, page: usize, count: usize) -> DocumentShell {
     DocumentShell {
         page,
@@ -36,41 +55,37 @@ pub fn shell(scroll: &ScrollHandle, page: usize, count: usize) -> DocumentShell 
         scroll: scroll.clone(),
         on_previous: None,
         on_next: None,
-        on_measure: None,
     }
 }
 
 impl DocumentShell {
-    /// The page, or nothing while none has been drawn.
+    /// Sets the page that is shown in the viewport. With `None` the
+    /// viewport shows only the backdrop, which is what a viewer passes while
+    /// it has no page to draw yet.
     pub fn content(mut self, content: Option<impl IntoElement>) -> Self {
         self.content = content.map(IntoElement::into_any_element);
         self
     }
 
-    /// Shows a message in place of the page (`.message`, `role="alert"`).
+    /// Shows `error` in the centre of the viewport in place of the page
+    /// (production's `.message`, which has `role="alert"`). With `None` the
+    /// page is shown.
     pub fn error(mut self, error: Option<SharedString>) -> Self {
         self.error = error;
         self
     }
 
+    /// Sets what a click on the Previous page button does. Without a
+    /// handler the button is disabled.
     pub fn on_previous(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_previous = Some(Box::new(handler));
         self
     }
 
+    /// Sets what a click on the Next page button does. Without a handler
+    /// the button is disabled.
     pub fn on_next(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_next = Some(Box::new(handler));
-        self
-    }
-
-    /// Reports the viewport's bounds, padding included, every frame, while
-    /// the frame is being drawn: a handler that changes what is drawn must
-    /// ask for another frame (`Window::request_animation_frame`).
-    pub fn on_measure(
-        mut self,
-        handler: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_measure = Some(Box::new(handler));
         self
     }
 }
@@ -81,16 +96,9 @@ impl RenderOnce for DocumentShell {
         let can_previous = self.page > 1 && self.on_previous.is_some();
         let can_next = self.count > 0 && self.page < self.count && self.on_next.is_some();
 
-        let measure = self.on_measure.map(|measure| {
-            canvas(
-                move |bounds, window, cx| measure(bounds, window, cx),
-                |_, _, _, _| {},
-            )
-            .absolute()
-            .size_full()
-        });
         let body: AnyElement = match self.error {
-            // `.message`: 12px on a 1.5 line, centred in the viewport.
+            // The message is drawn in the centre of the viewport, in 12 px
+            // text with a line height of 1.5 (production's `.message`).
             Some(error) => div()
                 .size_full()
                 .flex()
@@ -99,8 +107,9 @@ impl RenderOnce for DocumentShell {
                 .text_size(px(theme::TEXT_SM))
                 .line_height(px(theme::TEXT_SM * 1.5))
                 .text_color(theme.text_secondary())
-                // A message that is one of production's keys shows in the
-                // language; a decoder's own detail stays as it came.
+                // A message that is one of production's translation keys is
+                // shown in the app's language. Any other message, such as the
+                // detail a decoder reported, is shown as it is.
                 .child(crate::i18n::t_shared(error))
                 .into_any_element(),
             None => div()
@@ -110,10 +119,13 @@ impl RenderOnce for DocumentShell {
                 .size_full()
                 .flex()
                 .child(
-                    // `display: grid; place-items: center` with the padding
-                    // inside the scroller. A page larger than the viewport
-                    // starts at its top-left corner, so all of it scrolls
-                    // into view.
+                    // This box is at least as large as the viewport and
+                    // holds the padding, and the page is centred in it, as
+                    // production's `display: grid; place-items: center`
+                    // does. A page that is larger than the viewport makes
+                    // the box larger, and the box then starts at the
+                    // viewport's top-left corner, so every part of the page
+                    // can be scrolled into view.
                     div()
                         .flex_none()
                         .min_w_full()
@@ -133,7 +145,6 @@ impl RenderOnce for DocumentShell {
             .min_w_0()
             .overflow_hidden()
             .bg(rgb(theme::DOCUMENT_BACKDROP))
-            .children(measure)
             .child(body)
             .child(ui::scrollbar(
                 "document-scrollbar",
@@ -145,7 +156,8 @@ impl RenderOnce for DocumentShell {
         let previous = self.on_previous;
         let next = self.on_next;
         let footer = footer(cx).child(
-            // `TitlebarControlGroup`
+            // The two buttons with the page count between them, 4 px
+            // apart (production's `TitlebarControlGroup`).
             div()
                 .flex()
                 .items_center()
@@ -186,7 +198,10 @@ impl RenderOnce for DocumentShell {
     }
 }
 
-/// `.pageStatus`: "Page n of m" in the footer's secondary text.
+/// Returns the element that shows "Page n of m" in the footer (production's
+/// `.pageStatus`). The text is in the secondary text colour, at medium
+/// weight, with digits of equal width. The element is at least 92 px wide,
+/// so the buttons beside it do not move when the number of digits changes.
 pub fn page_status_label(page: usize, count: usize, cx: &App) -> Div {
     div()
         .min_w(px(92.))
@@ -200,8 +215,9 @@ pub fn page_status_label(page: usize, count: usize, cx: &App) -> Div {
         .child(page_status(page, count))
 }
 
-/// The footer under a document (`.footer`): as tall as the titlebar, a
-/// line above it, its content centred.
+/// Returns the footer that is drawn under a document (production's
+/// `.footer`), without content. It is as tall as the titlebar and has a 1 px
+/// line along its top edge. Content added to it is centred in it.
 pub fn footer(cx: &App) -> Div {
     let theme = theme::theme(cx);
     div()
@@ -217,9 +233,12 @@ pub fn footer(cx: &App) -> Div {
         .font_family(theme::FONT_UI)
 }
 
-/// "Page n of m", with a dash while the count is unknown.
+/// Returns the text "Page n of m" for page `page` of `count` pages. While
+/// the number of pages is not known (`count` is 0), a dash is written in its
+/// place: "Page 1 of —".
 pub fn page_status(page: usize, count: usize) -> String {
-    // `{t("Page ")}{pageNumber} {t("of ")}{pageCount || '—'}`
+    // Production builds the text from two translated parts, each with a
+    // trailing space: `{t("Page ")}{pageNumber} {t("of ")}{pageCount || '—'}`.
     let (word, of) = (crate::i18n::t("Page "), crate::i18n::t("of "));
     if count == 0 {
         format!("{word}{page} {of}—")

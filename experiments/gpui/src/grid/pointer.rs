@@ -1,14 +1,24 @@
-//! The pointer over a grid of tiles, as the grid and the collection editor
-//! both follow it: the tile under it, the hover preview of the tile whose
-//! magnifier it rests on, the rubber band and its scrolling at the edges,
-//! the view's measured bounds and the preview drawn over the window. Each
-//! view keeps what it selects and how it finds a tile's file.
+//! The handling of the pointer that the library grid (`GridView`) and the
+//! collection editor (`GroupEditor`) share. Both show tiles from a `Layout`
+//! and follow the pointer in the same way. The functions here find the tile
+//! under the pointer, start and stop the hover preview of the tile whose
+//! magnifier icon the pointer is on, update a rubber band selection, scroll
+//! the view while a rubber band is held near its top or bottom edge, and
+//! build the hover preview that is drawn over the window.
+//!
+//! Each view keeps its own state and passes the parts a function needs. The
+//! selection, and the way a tile's file is found, differ between the two
+//! views and stay in them.
 use super::layout::Layout;
 use super::marquee::{self, Marquee};
 use super::preview::{self, HoverPreview};
 use gpui::*;
 
-/// The tile under the pointer is now `hit`'s: whether that changed it.
+/// Records the tile whose image the pointer is over. `hit` is that tile's
+/// index in the layout with the pointer's position in the layout's
+/// coordinates, or `None` when the pointer is over no image. `hovered` is
+/// the view's record of the tile's index. Returns true when the index
+/// changed, so that the view asks to be drawn again.
 pub fn hover(hovered: &mut Option<usize>, hit: Option<(usize, f32, f32)>) -> bool {
     let index = hit.map(|(index, _, _)| index);
     if index == *hovered {
@@ -18,7 +28,9 @@ pub fn hover(hovered: &mut Option<usize>, hit: Option<(usize, f32, f32)>) -> boo
     true
 }
 
-/// The tile whose magnifier `hit` is on, if it is on one.
+/// Returns the index of the tile in `hit` when the pointer is on that tile's
+/// magnifier icon, and `None` otherwise. `text_height` is the height of the
+/// text rows under each image.
 pub fn magnifier(
     hit: Option<(usize, f32, f32)>,
     layout: &Layout,
@@ -28,8 +40,13 @@ pub fn magnifier(
         .map(|(index, _, _)| index)
 }
 
-/// The pointer left the view: it is forgotten, the hovered tile too unless
-/// a rubber band is out, and the preview closes. Whether to draw again.
+/// Called when the pointer leaves the view. It clears the pointer's
+/// position, cancels the timer that would open the hover preview and starts
+/// the timer that closes an open one. It also clears the hovered tile,
+/// unless a rubber band selection is in progress (`banding`). `of` returns
+/// the view's hover preview, which the preview's timers use. Returns true
+/// when the hovered tile was cleared, so that the view asks to be drawn
+/// again.
 pub fn left<V: 'static>(
     pointer: &mut Option<Point<Pixels>>,
     hovered: &mut Option<usize>,
@@ -44,10 +61,13 @@ pub fn left<V: 'static>(
     unhovered
 }
 
-/// A rubber band out follows the pointer at `local` (from the view's
-/// top-left corner), with the items scrolled `top` and the view
-/// `viewport` tall: its speed at the edges and what it covers. Whether one
-/// is out.
+/// Updates the rubber band selection in progress for a move of the pointer.
+/// `local` is the pointer's position in pixels from the view's top-left
+/// corner, `top` is how far the tiles are scrolled, and `viewport` is the
+/// view's height. The rubber band's rectangle and the tiles it covers are
+/// computed again, and so is the speed at which the view scrolls while the
+/// pointer is near the top or the bottom edge. Returns false when no rubber
+/// band selection is in progress, and true otherwise.
 pub fn band_moved(
     marquee: Option<&mut Marquee>,
     local: (f32, f32),
@@ -65,9 +85,13 @@ pub fn band_moved(
     true
 }
 
-/// A rubber band near the top or bottom edge scrolls the view, which is
-/// scrolled `current`, each frame until it can go no further: whether it
-/// moved, and so needs the next frame.
+/// Scrolls the view by the rubber band's speed. A view calls this once in
+/// each frame. The speed is not 0 while the pointer of a rubber band is near
+/// the view's top or bottom edge. `current` is how far the view's content is
+/// scrolled, in pixels. Returns true when the view scrolled, so that the
+/// view requests another frame. It returns false when there is no rubber
+/// band, when its speed is 0, and when the view is already scrolled as far
+/// as it goes in that direction.
 pub fn autoscroll(marquee: Option<&Marquee>, scroll: &ScrollHandle, current: f32) -> bool {
     let Some(speed) = marquee
         .map(|marquee| marquee.speed)
@@ -84,30 +108,10 @@ pub fn autoscroll(marquee: Option<&Marquee>, scroll: &ScrollHandle, current: f32
     true
 }
 
-/// Keeps the view's bounds (`bounds` of the view) as laid out, drawing
-/// again when they change.
-pub fn measure<V: 'static>(
-    entity: WeakEntity<V>,
-    bounds: fn(&mut V) -> &mut Bounds<Pixels>,
-) -> impl IntoElement + Styled {
-    canvas(
-        move |laid_out, window, cx| {
-            let _ = entity.update(cx, |this, cx| {
-                let kept = bounds(this);
-                if *kept != laid_out {
-                    *kept = laid_out;
-                    cx.notify();
-                    // A notification made while a frame is being drawn
-                    // does not by itself bring another frame.
-                    window.request_animation_frame();
-                }
-            });
-        },
-        |_, _, _, _| {},
-    )
-}
-
-/// The hover preview over the window, while one shows.
+/// Returns the element that draws the hover preview over the window, or
+/// `None` when no preview is open or the open one shows nothing yet.
+/// Another frame is requested while the decoded picture waits for the
+/// preview's minimum delay to pass, and while the preview fades in.
 pub fn preview_overlay(preview: &HoverPreview, window: &mut Window) -> Option<AnyElement> {
     let shown = preview.shown.as_ref()?;
     let (overlay, fading) = preview::overlay(shown, window);

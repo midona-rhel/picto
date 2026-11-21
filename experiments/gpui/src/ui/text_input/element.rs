@@ -1,6 +1,16 @@
 // Adapted from gpui 0.2.2 examples/input.rs (Apache-2.0).
-//! The element that lays out, wraps and paints a field's text, and hit
-//! testing against what it last drew.
+//! The element that draws the text of a text field (`TextInput`).
+//! `TextElement` measures the text, draws it on one line or wrapped over
+//! several rows, and draws the caret and the selection. In each frame it
+//! stores in the `TextInput` where it drew the text (`last_bounds`,
+//! `last_layout`, `last_lines`). `TextInput::hit` and
+//! `TextInput::character_under`, which are also in this file, use what was
+//! stored to find the place in the text that is under a point in the window.
+//!
+//! The code for wrapped text uses two words with a fixed meaning. A line
+//! (`lines`) is the text between two line breaks (`\n`). A row (`rows`) is
+//! one row of text as it is drawn. A line that is wider than the field is
+//! drawn as several rows.
 use std::ops::Range;
 
 use super::editing::hard_lines;
@@ -11,20 +21,40 @@ use gpui::{
     relative, size,
 };
 use unicode_segmentation::*;
-/// One row of wrapped text as drawn: its bytes in the whole text, its top
-/// edge, where it starts along its unwrapped line, which line that is, and
-/// whether the row ends that line (rather than at a wrap).
+/// One row of wrapped text as it is drawn. A line that is wrapped at n
+/// places is drawn as n + 1 rows.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Row {
+    /// The byte offset in the whole text of the row's first byte.
     pub(super) start: usize,
+    /// The byte offset in the whole text of the end of the row. When the
+    /// row ends at a wrap, it is the offset of the first byte of the next
+    /// row. When the row is the last row of its line, it is the offset of
+    /// the line break after the line, or the length of the text for the
+    /// last line.
     pub(super) end: usize,
+    /// The row's top edge, in pixels below the top of the text.
     pub(super) top: Pixels,
+    /// The distance in pixels from the start of the row's line to the start
+    /// of this row, in the layout of the line without wrapping. That layout
+    /// measures every position from the start of the line, so this value is
+    /// subtracted from such a position to get the distance from the row's
+    /// left edge.
     pub(super) x0: Pixels,
+    /// The index of the row's line in the list of lines that `wrap`
+    /// returns.
     pub(super) line: usize,
+    /// True when this is the last row of its line, so the row ends at a
+    /// line break or at the end of the text. False when the row ends at a
+    /// wrap.
     pub(super) last: bool,
 }
 
-/// The rows of wrapped lines, top to bottom.
+/// Returns the rows that `lines` are drawn as, from top to bottom. `lines`
+/// is the list that `wrap` returns: for each line, the byte offset of its
+/// first byte in the whole text, its layout, and its top edge in pixels
+/// below the top of the text. Each row of a line is `line_height` below the
+/// row before it.
 pub(super) fn rows_of(
     lines: &[(usize, gpui::WrappedLine, Pixels)],
     line_height: Pixels,
@@ -53,9 +83,11 @@ pub(super) fn rows_of(
     rows
 }
 
-/// The row a caret at `offset` is drawn on. At a wrap the offset is both
-/// the end of the upper row and the start of the lower; it is on the lower
-/// unless `upstream`.
+/// Returns the index in `rows` of the row that a caret at the byte offset
+/// `offset` is drawn on. Where a line wraps, the same offset is both the end
+/// of the upper row and the start of the lower row. The caret is then drawn
+/// on the upper row when `upstream` is true, and on the lower row when it
+/// is false. An offset that is on no row gives the index of the last row.
 pub(super) fn row_index(rows: &[Row], offset: usize, upstream: bool) -> usize {
     rows.iter()
         .position(|row| {
@@ -65,7 +97,9 @@ pub(super) fn row_index(rows: &[Row], offset: usize, upstream: bool) -> usize {
         .unwrap_or(rows.len().saturating_sub(1))
 }
 
-/// How far from the left of its row `offset` is drawn.
+/// Returns the distance in pixels from the left edge of `row` to the place
+/// where the byte offset `offset` of the whole text is drawn. `lines` is the
+/// list of lines that `row` was made from.
 pub(super) fn x_in(
     lines: &[(usize, gpui::WrappedLine, Pixels)],
     row: &Row,
@@ -77,8 +111,12 @@ pub(super) fn x_in(
         - row.x0
 }
 
-/// The caret position in a row nearest to `x` from its left, and whether
-/// it is the row's end at a wrap.
+/// Returns the caret position in `row` that is nearest to a point `x` pixels
+/// from the row's left edge, as a byte offset in the whole text. A negative
+/// `x` counts as 0. The second value is true when that position is the end
+/// of the row and the row ends at a wrap. The caller stores it as
+/// `TextInput::upstream`, so that the caret is drawn at the end of this row
+/// and not at the start of the next row.
 pub(super) fn hit_row(
     lines: &[(usize, gpui::WrappedLine, Pixels)],
     row: &Row,
@@ -93,7 +131,11 @@ pub(super) fn hit_row(
     (offset, offset == row.end && !row.last)
 }
 
-/// Where `offset` is drawn in wrapped lines, from the text's top left.
+/// Returns where a caret at the byte offset `offset` is drawn in wrapped
+/// text: its distance in pixels from the left edge of the text, and the top
+/// edge of its row in pixels below the top of the text. `upstream` chooses
+/// the row where a line wraps, as in `row_index`. Returns `None` when `rows`
+/// is empty.
 pub(super) fn caret_in(
     lines: &[(usize, gpui::WrappedLine, Pixels)],
     rows: &[Row],
@@ -105,8 +147,16 @@ pub(super) fn caret_in(
 }
 
 impl TextInput {
-    /// Where a press lands in the text: the nearest caret position, and
-    /// whether it is after the upper line at a wrap.
+    /// Returns the caret position that is nearest to `position`, a point in
+    /// window coordinates, as a byte offset in the text. It uses what the
+    /// element drew in the last frame. A press of the pointer puts the caret
+    /// at this position, and a drag moves the end of the selection to it.
+    /// The second value is true when the position is the end of a row that
+    /// ends at a wrap (see `hit_row`).
+    ///
+    /// The result is the start of the text when the text is empty, when the
+    /// field has not been drawn yet, and when the point is above the text.
+    /// It is the end of the text when the point is below the text.
     pub(super) fn hit(&self, position: Point<Pixels>) -> (usize, bool) {
         if self.content.is_empty() {
             return (0, false);
@@ -145,13 +195,23 @@ impl TextInput {
         )
     }
 
-    /// The character under a point, which a double-click selects the word
-    /// of: the one whose box holds the point, not the nearest edge.
+    /// Returns the byte offset of the character that is drawn at
+    /// `position`, a point in window coordinates. A double-click selects the
+    /// word that contains this character, and a triple-click selects its
+    /// line (`TextInput::unit_at` in `mouse.rs`).
+    ///
+    /// This is not the same as `hit`, which returns the nearest edge
+    /// between two characters. For a point on the right half of a
+    /// character, this function returns the offset of that character, and
+    /// `hit` returns the offset of the character after it. A point to the
+    /// right of the end of a row gives the end of that row.
     pub(super) fn character_under(&self, position: Point<Pixels>) -> usize {
         let Some(bounds) = self.last_bounds else {
             return 0;
         };
-        // Above or below the text, as a press there places the caret.
+        // A point above the text gives the start of the text and a point
+        // below the text gives its end. `hit` puts the caret at the same
+        // two places for a press at such a point.
         if position.y < bounds.top() {
             return 0;
         }
@@ -182,25 +242,45 @@ impl TextInput {
     }
 }
 
+/// The element that draws the text, the caret and the selection of `input`.
+/// `TextInput::render` puts one inside the field's root element.
 pub(super) struct TextElement {
     pub(super) input: Entity<TextInput>,
 }
 
+/// What `prepaint` computes in a frame for `paint` to draw.
 pub(super) enum PrepaintState {
-    /// One line, scrolled sideways to keep the caret in view.
+    /// The text is drawn on one line. `line` is the shaped line: the text,
+    /// the placeholder when the text is empty, or the start of the text
+    /// followed by an ellipsis. `cursor` is the caret's rectangle and
+    /// `selection` is the selection's rectangle. Both are `None` when the
+    /// field does not have the keyboard focus. When it has, one of the two
+    /// is set: the selection's rectangle when text is selected, and the
+    /// caret's rectangle otherwise. `scroll` is the number of pixels the
+    /// line is drawn to the left of the element's left edge. It is negative
+    /// when the line of a number field is moved to the right (see
+    /// `prepaint`).
     Single {
         line: Option<ShapedLine>,
         cursor: Option<PaintQuad>,
         selection: Option<PaintQuad>,
         scroll: Pixels,
     },
-    /// An expanded field's text, wrapped over as many lines as it needs.
+    /// The text is drawn wrapped, over as many rows as it needs. `lines` is
+    /// the list that `wrap` returns. `cursor` is the caret's rectangle, and
+    /// `selection` has one rectangle for each row on which a part of the
+    /// selection is drawn. When the field does not have the keyboard focus,
+    /// `cursor` is `None` and `selection` is empty.
     Wrapped {
         lines: Vec<(usize, gpui::WrappedLine, Pixels)>,
         cursor: Option<PaintQuad>,
         selection: Vec<PaintQuad>,
-        /// Where the selection's moving end is, which the expanded area
-        /// keeps in view.
+        /// A rectangle 1 px wide and one row tall at the caret, in window
+        /// coordinates. When text is selected, the caret is at the end of
+        /// the selection that moves when the selection is extended. The
+        /// value is `None` when the field does not have the keyboard focus.
+        /// `paint` scrolls the area of the expanded field so that this
+        /// rectangle is visible.
         focus: Option<Bounds<Pixels>>,
     },
 }
@@ -213,7 +293,11 @@ impl IntoElement for TextElement {
     }
 }
 
-/// The runs for `text`, with the input method's marked range underlined.
+/// Returns the text runs with which `text` is shaped in `font` and `color`.
+/// `marked_range` is the byte range of the text that an input method is
+/// composing. When it is given and ends inside `text`, the text in that
+/// range gets a 1 px underline in `color`. Otherwise the whole text is one
+/// run without an underline.
 fn runs_for(
     text: &str,
     font: gpui::Font,
@@ -255,8 +339,13 @@ fn runs_for(
     }
 }
 
-/// `text` wrapped to `width`: each line's first byte, its layout and its top
-/// edge, and the height of them all.
+/// Shapes `text` and wraps it at `width` pixels. When `width` is `None`, no
+/// line is wrapped. The first value is a list with one entry for each line
+/// of the text: the byte offset of the line's first byte in `text`, the
+/// line's layout, and the line's top edge in pixels below the top of the
+/// text. The second value is the height of all the lines together in
+/// pixels, and at least `line_height`. When the text system cannot shape
+/// the text, the list is empty.
 fn wrap(
     text: &SharedString,
     font: gpui::Font,
@@ -282,8 +371,39 @@ fn wrap(
     (lines, top.max(line_height))
 }
 
+/// Asks for `input` to be drawn again in the next frame. The text element
+/// calls this while a frame is being drawn. GPUI does not act on a
+/// notification that is made at that time, so the notification is made
+/// when GPUI has finished the frame (`App::defer`).
+fn draw_again_after_this_frame(input: gpui::WeakEntity<TextInput>, cx: &mut App) {
+    cx.defer(move |cx| {
+        let _ = input.update(cx, |_, cx| cx.notify());
+    });
+}
+
+/// Records in `input` whether its text needs more than one line
+/// (`overflowing`), which the text element finds out while it lays the text
+/// out. A field is drawn expanded only while it has the keyboard and its
+/// text needs more than one line (`TextInput::expanded`). A change therefore
+/// alters what is drawn only when the field has the keyboard (`focused`),
+/// and only then is the field drawn again, in the next frame.
+fn note_overflow(input: &Entity<TextInput>, overflowing: bool, focused: bool, cx: &mut App) {
+    let changed = input.update(cx, |input, _| {
+        std::mem::replace(&mut input.overflowing, overflowing) != overflowing
+    });
+    if changed && focused {
+        draw_again_after_this_frame(input.downgrade(), cx);
+    }
+}
+
 impl TextElement {
-    /// Whether the input is drawn wrapped this frame.
+    /// Returns true when the text is drawn wrapped in this frame, which is
+    /// over as many rows as it needs, and false when all of it is drawn on
+    /// one row. Only a field that takes line breaks (`multiline`) is drawn
+    /// wrapped. A dialog's text area (`Kind::Area`) is drawn wrapped
+    /// whenever it has text. Any other such field is drawn wrapped while it
+    /// has the keyboard focus and its text needs more than one row
+    /// (`overflowing`).
     fn wrapped(&self, window: &Window, cx: &App) -> bool {
         let input = self.input.read(cx);
         input.multiline
@@ -291,6 +411,12 @@ impl TextElement {
                 || (input.overflowing && input.focus_handle.is_focused(window)))
     }
 
+    /// Computes what `paint` draws when the text is wrapped. `bounds` is
+    /// the element's position and size in window coordinates. The text is
+    /// wrapped at the element's width. When the field has the keyboard
+    /// focus, the result has the caret's rectangle, or the selection's
+    /// rectangles when text is selected. The function also records whether
+    /// the text needs more than one row (`note_overflow`).
     fn prepaint_wrapped(
         &mut self,
         bounds: Bounds<Pixels>,
@@ -325,6 +451,8 @@ impl TextElement {
         let overflowing = rows.len() > 1;
         let focused = input.focus_handle.is_focused(window);
         let upstream = input.upstream;
+        // The height of the caret: 1.2 times the font size. The caret is
+        // 1 px wide and is centred in the height of its row.
         let glyphs = font_size * 1.2;
         let focus = caret_in(&lines, &rows, cursor, upstream)
             .filter(|_| focused)
@@ -351,9 +479,13 @@ impl TextElement {
             });
             (quad, Vec::new())
         } else {
-            // Chromium's selection: each row from where the selection
-            // starts in it to where it ends, and a space's width more where
-            // it runs on through a line break.
+            // The selection is drawn as Chromium draws it. Each row that
+            // has a part of the selection gets a rectangle from the place
+            // where the selection starts on that row to the place where it
+            // ends on that row, as tall as the row. When the selection
+            // goes on past the line break at the end of a row, the
+            // rectangle is wider by the width of one space, which shows
+            // that the line break is selected.
             let space = window
                 .text_system()
                 .shape_line(
@@ -387,19 +519,7 @@ impl TextElement {
                 .collect();
             (None, quads)
         };
-        // A notification made while a frame is drawn schedules no frame of
-        // its own, so the owner's expansion is asked for explicitly.
-        let changed = self.input.update(cx, |input, cx| {
-            let changed = input.overflowing != overflowing;
-            if changed {
-                input.overflowing = overflowing;
-                cx.notify();
-            }
-            changed
-        });
-        if changed {
-            window.request_animation_frame();
-        }
+        note_overflow(&self.input, overflowing, focused, cx);
         PrepaintState::Wrapped {
             lines,
             cursor,
@@ -428,13 +548,20 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        // The element is as wide as its parent. When the text is drawn on
+        // one line, the element is one line height tall.
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         if !self.wrapped(window, cx) {
             style.size.height = window.line_height().into();
             return (window.request_layout(style, [], cx), ());
         }
-        // Expanded: as tall as the text wraps at the width it is given.
+        // When the text is drawn wrapped, the element is as tall as the
+        // text is after it has been wrapped at the element's width, and at
+        // least one line height tall. GPUI calls the closure below while it
+        // lays the element out. The closure wraps the text at the width
+        // that is known for the element, or else at the width that is
+        // available to it, and returns the height of the wrapped text.
         let input = self.input.read(cx);
         let text = input.content.clone();
         let marked = input.marked_range.clone();
@@ -476,8 +603,14 @@ impl Element for TextElement {
             return self.prepaint_wrapped(bounds, window, cx);
         }
         let input = self.input.read(cx);
-        // A password field's bullets, with the caret and selection at
-        // their offsets.
+        // `drawn` returns the text as it is drawn. For a password field that
+        // is one bullet (•) for each character of the text, and
+        // `drawn_offset` converts a byte offset in the text to the byte
+        // offset of the same character in the bullets. For every other
+        // field, `drawn` returns the text and `drawn_offset` returns the
+        // offset it was given. The selection, the caret and the range that
+        // an input method is composing are converted, so that they are
+        // drawn at the right bullets.
         let content = input.drawn();
         let selected_range =
             input.drawn_offset(input.selected_range.start)..input.drawn_offset(input.selected_range.end);
@@ -487,8 +620,12 @@ impl Element for TextElement {
             .marked_range
             .clone()
             .map(|range| input.drawn_offset(range.start)..input.drawn_offset(range.end));
-        // Shown in the language of the moment, as production's
-        // `translateMessage` recovers a placeholder made in another one.
+        // The placeholder is translated here, each time the field is drawn,
+        // so it is always shown in the language the app is set to. A
+        // placeholder that was stored as its translation into another
+        // language is also shown in the present language: `t_shared` finds
+        // the English text that the translation belongs to and translates
+        // that, as production's `translateMessage` does.
         let placeholder = crate::i18n::t_shared(input.placeholder.clone());
         let kind = input.kind;
         let multiline = input.multiline;
@@ -507,9 +644,15 @@ impl Element for TextElement {
         let (display_text, text_color) = if content.is_empty() {
             (placeholder, kind.placeholder(theme))
         } else if content.contains(['\n', '\r']) {
-            // This element shapes one line, and a line break panics the shaper.
-            // A space is the same byte length, so cursor offsets stay valid and
-            // the stored value keeps its real line breaks.
+            // The text has a line break but is drawn on one line here, for
+            // example the text of an expanding field that does not have the
+            // keyboard focus. `shape_line` shapes one line, and in a debug
+            // build it panics when its text contains `\n`. Each `\n` and
+            // `\r` is therefore replaced by a space in the text that is
+            // drawn. A space is one byte long, as `\n` and `\r` are, so
+            // every byte offset in the text is the same offset in the text
+            // that is drawn. The field's text itself is not changed and
+            // keeps its line breaks.
             (
                 SharedString::from(content.replace(['\n', '\r'], " ")),
                 style.color,
@@ -518,22 +661,28 @@ impl Element for TextElement {
             (content.clone(), style.color)
         };
         let mut line = shape(display_text.clone(), text_color, window);
-        // An expanding field notes when its text needs more than one line
-        // (`measureOverflow`), so its owner can expand it while focused.
+        // The text needs more than one line when it has a line break or is
+        // wider than the element. A field that takes line breaks
+        // (`multiline`) records this in `TextInput::overflowing`
+        // (production's `measureOverflow`). While that is true and the
+        // field has the keyboard focus, the text is drawn wrapped, and
+        // `ui::field` draws an inspector field expanded over what is below
+        // it.
         let overflowing = !content.is_empty()
             && (content.contains(['\n', '\r']) || line.width > bounds.size.width);
-        if multiline && input.overflowing != overflowing {
-            self.input.update(cx, |input, cx| {
-                input.overflowing = overflowing;
-                cx.notify();
-            });
-            // Made while a frame is drawn: ask for the next one.
-            window.request_animation_frame();
+        if multiline {
+            note_overflow(&self.input, overflowing, focused, cx);
         }
 
-        // A field that is not being edited shows its start and an ellipsis,
-        // as `text-overflow: ellipsis` does; text edited in its own face
-        // (`contentEditable`) is cut off instead.
+        // A field without the keyboard focus whose text is wider than the
+        // element shows the start of the text followed by an ellipsis (…),
+        // as the CSS `text-overflow: ellipsis` does. The text is cut at the
+        // last boundary between two characters at which the text before
+        // the boundary and the ellipsis together fit in the element. A field
+        // that draws its text in a face of its own (`TextInput::set_face`,
+        // for text that production edits in a `contentEditable` element)
+        // gets no ellipsis. Its text is clipped at the element's right
+        // edge.
         if !focused && !caret_in_text_color && line.width > bounds.size.width && !content.is_empty()
         {
             let ellipsis = shape("…".into(), text_color, window).width;
@@ -547,13 +696,31 @@ impl Element for TextElement {
             line = shape(clipped, text_color, window);
         }
 
-        // While editing, the text scrolls just far enough to show the caret.
+        // `scroll` is the number of pixels the line is drawn to the left of
+        // the element's left edge. `caret_room` is the element's width less
+        // 1 px. That pixel is kept free at the right edge for a caret after
+        // the last character. `scroll` is 0 when the field does not have
+        // the keyboard focus, and when the line is not wider than
+        // `caret_room`. A number field whose line is not wider than
+        // `caret_room` is the exception, and is described below.
+        //
+        // When the field has the keyboard focus and the line is wider than
+        // `caret_room`, the line is scrolled. `scroll` keeps the value it
+        // had in the last frame, unless the caret would then be drawn to
+        // the left of the element's left edge, or more than `caret_room`
+        // to the right of it. In that case `scroll` changes by just as much
+        // as puts the caret on that limit. The line is never scrolled so
+        // far that its end is less than `caret_room` from the element's
+        // left edge.
         let cursor_x = line.x_for_index(cursor.min(line.len()));
         let caret_room = bounds.size.width - px(1.);
         let right_aligned = kind == Kind::Number;
         let scroll = if right_aligned && line.width <= caret_room {
-            // Text set against the right edge: a negative scroll moves it
-            // there, and the caret, selection and hit testing follow.
+            // A number field (`Kind::Number`) draws its text against the
+            // right edge. `scroll` is negative here, which moves the line
+            // to the right, so that the line ends 1 px before the element's
+            // right edge. The caret, the selection and `TextInput::hit` all
+            // use `scroll`, so they agree with where the text is drawn.
             line.width - caret_room
         } else if !focused || line.width <= caret_room {
             px(0.)
@@ -568,7 +735,12 @@ impl Element for TextElement {
             self.input.update(cx, |input, _| input.scroll = scroll);
         }
 
-        // Chromium's caret: one pixel wide and as tall as the glyphs.
+        // The caret is drawn as Chromium draws it: 1 px wide and as tall as
+        // the font's ascent plus its descent, centred in the element's
+        // height. It is drawn only when no text is selected. When text is
+        // selected, the selection is drawn as a rectangle from the start of
+        // the first selected character to the end of the last one, as tall
+        // as the element.
         let glyphs = line.ascent + line.descent;
         let caret_top = bounds.top() + (bounds.size.height - glyphs) / 2.;
         let left = bounds.left() - scroll;
@@ -616,6 +788,9 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // When the field has the keyboard focus, this makes the field the
+        // receiver of typed text and of the input method's requests, until
+        // the next frame is drawn.
         let focus_handle = self.input.read(cx).focus_handle.clone();
         window.handle_input(
             &focus_handle,
@@ -623,7 +798,10 @@ impl Element for TextElement {
             cx,
         );
         let line_height = window.line_height();
-        // The caret is on for the first half of each second since it moved.
+        // The caret blinks: it is drawn for 500 ms (`motion::CARET_BLINK`),
+        // then not drawn for 500 ms, and so on. The time is counted from
+        // the moment the caret last moved or the text last changed
+        // (`TextInput::blink`), so the caret is drawn right after either.
         let since_move = self.input.read(cx).blink.elapsed();
         let caret_on = (since_move.as_millis() / crate::motion::CARET_BLINK.as_millis()) % 2 == 0;
         let (single, wrapped) = match prepaint {
@@ -635,12 +813,16 @@ impl Element for TextElement {
             } => {
                 let line = line.take().unwrap();
                 let origin = point(bounds.left() - *scroll, bounds.top());
+                // Nothing is drawn outside the element's bounds, so the
+                // part of a scrolled line that is outside them is not
+                // visible.
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                     if let Some(selection) = selection.take() {
                         window.paint_quad(selection)
                     }
-                    // A line the text system cannot draw is left out of this
-                    // frame rather than ending the app.
+                    // When the text system returns an error for the line,
+                    // the line is not drawn in this frame and the error is
+                    // written to standard error. The app keeps running.
                     if let Err(error) =
                         line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
                     {
@@ -681,8 +863,15 @@ impl Element for TextElement {
             }
         };
 
-        // A press in the field goes on selecting wherever the pointer goes,
-        // in the window or past it, while the button is held.
+        // This listener is called for every move of the pointer until the
+        // next frame is drawn, also when the pointer is not over the field.
+        // It does nothing unless a press that started in the field is still
+        // held (`is_selecting`). While one is held, a move with the left
+        // button down extends the selection to the pointer
+        // (`TextInput::drag`). A move without the left button down ends the
+        // drag (`TextInput::end_drag`), so that the selection stops
+        // following the pointer when the field did not receive the release
+        // of the button.
         let input = self.input.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
             if phase != DispatchPhase::Bubble || !input.read(cx).is_selecting {
@@ -699,6 +888,13 @@ impl Element for TextElement {
 
         let focused = focus_handle.is_focused(window);
         self.input.update(cx, |input, cx| {
+            // The element's bounds and the layout of the text are stored in
+            // the `TextInput`. Code that runs between frames uses them, for
+            // example `hit`, `character_under`, the commands that move the
+            // caret up or down a row, and the answers to the input method.
+            // `last_layout` is set when the text was drawn on one line, and
+            // `last_lines` when it was drawn wrapped. The other one of the
+            // two is set to `None`.
             input.last_bounds = Some(bounds);
             match (single, wrapped) {
                 (Some(line), _) => {
@@ -708,7 +904,18 @@ impl Element for TextElement {
                 (_, Some((lines, caret))) => {
                     input.last_layout = None;
                     input.last_lines = Some(lines);
-                    // The expanded area scrolls to keep a moved caret in view.
+                    // `area` is the scrolling box that `ui::field` draws
+                    // around the text of an expanded field. The box has
+                    // 6 px of padding above and below the text. When the
+                    // field has the keyboard focus and the caret is at
+                    // another offset than the one the box was last scrolled
+                    // for (`revealed`), the box is scrolled so that the
+                    // caret's row and the 6 px above and below it are
+                    // visible. If the point 6 px below the row is below the
+                    // box's bottom edge, the box scrolls down by the
+                    // difference. Otherwise, if the point 6 px above the
+                    // row is above the box's top edge, the box scrolls up
+                    // by the difference.
                     let offset = input.cursor_offset();
                     if let Some(caret) = caret
                         && input.revealed != Some(offset)
@@ -724,18 +931,23 @@ impl Element for TextElement {
                             scroll.y += area.top() - top;
                         }
                         if scroll != input.area.offset() {
+                            // The area was laid out for this frame before
+                            // its text was, so this frame still shows the
+                            // old scroll position. The field is drawn again
+                            // in the next frame, with the caret in view.
                             input.area.set_offset(scroll);
-                            cx.notify();
-                            // Made while a frame is drawn: ask for the
-                            // next one, or the caret stays out of view
-                            // until something else redraws the field.
-                            window.request_animation_frame();
+                            draw_again_after_this_frame(cx.weak_entity(), cx);
                         }
                     }
                 }
                 _ => {}
             }
-            // Repaint at the caret's next change for as long as it shows.
+            // While the field has the keyboard focus, a timer makes the
+            // caret blink. The timer ends 1 ms after the moment at which the
+            // caret next changes between drawn and not drawn, and then asks
+            // for the field to be drawn again. Only one timer runs at a
+            // time (`blink_task`). The frame that a timer causes starts the
+            // next timer.
             if focused && input.blink_task.is_none() {
                 let wait = crate::motion::CARET_BLINK.as_millis()
                     - since_move.as_millis() % crate::motion::CARET_BLINK.as_millis();

@@ -6,7 +6,7 @@
 //! Hold and the menu of further commands are in the titlebar (`toolbar.rs`).
 use super::data::{self, Detail};
 use super::format::{self, Track};
-use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, measure, place_of};
+use super::{HISTORY, SOURCES, SubscriptionsScreen, TABS, home, place_of};
 use crate::i18n::t;
 use crate::theme::Text as _;
 use crate::ui::status_badge::Tone;
@@ -280,7 +280,6 @@ impl SubscriptionsScreen {
             .flex_col()
             .overflow_hidden()
             .font_family(theme::FONT_UI)
-            .child(measure(self.plane_width.clone(), window))
             .child(header)
             .child(
                 div()
@@ -753,9 +752,12 @@ impl SubscriptionsScreen {
         }
     }
 
-    /// The width available to the cells of a row.
+    /// Returns the width in pixels that the cells of a table row share. It
+    /// is the width of the screen's area in the frame that is being built
+    /// (`width`), less the padding at both sides of the table, the
+    /// scrollbar's gutter and the padding at both ends of a row.
     fn row_width(&self) -> f32 {
-        (self.plane_width.get() - 2. * (INSET - ROW_INSET) - ui::scrollbar::GUTTER - 2. * ROW_INSET)
+        (self.width - 2. * (INSET - ROW_INSET) - ui::scrollbar::GUTTER - 2. * ROW_INSET)
             .max(0.)
     }
 

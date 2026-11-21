@@ -586,9 +586,32 @@ file is set aside as `state.json.corrupt`.
 - **The selection is addressed, not listed.** An edit of the grid's selection
   takes `Session::selection_target`; the loaded items stand for it only
   where every selected item is loaded (names, batch rename).
-- **A view that changes state while a frame is drawn** and notifies also
-  calls `window.request_animation_frame()`, or it looks stuck until the
-  pointer moves; the off-screen tool's lazy mode catches this.
+- **A view whose content depends on its own size builds that content for
+  its bounds in the same frame.** It returns `ui::sized` or
+  `ui::sized_view` (`src/ui/sized.rs`) from `render`, or puts one where the
+  content goes. That element takes part in its parent's layout, and once
+  GPUI has computed its bounds it builds the content for exactly those
+  bounds, in the same frame. The grid, the toolbar, the media surface, the
+  collection reader and editor, the document viewers and the Tags,
+  Subscriptions and Duplicates screens are built this way. A view must not
+  store a size while one frame is drawn and build the next frame from it:
+  the frame in which the size changes (a window being resized, the sidebar
+  being hidden) would then be laid out for the size before. Bounds that are
+  recorded while a frame is drawn are read only by the handlers of later
+  events, for example to open a menu under a button.
+- **No view is notified while a frame is drawn.** GPUI does not act on
+  `cx.notify()` during a draw: the frame is shown as it was built, and no
+  further frame is scheduled. A notification is made in an event handler or
+  in a task. Code that runs during a draw and finds that the next frame
+  must differ, such as a step of an animation, calls
+  `window.request_animation_frame()`. If another view has to be drawn again
+  as well, it makes the notification after the frame with `cx.defer`, as
+  the text field does when its text starts to need a second line. A view
+  that waits for a frame that nothing schedules looks stuck until the
+  pointer moves; the off-screen tool's lazy mode catches this. A focus
+  listener is the one exception: GPUI calls it at the end of a draw, after
+  the frame was built. When what it changes has to be drawn, it also calls
+  `window.request_animation_frame()`.
 - **Pictures** leave the sprite atlas through `crate::atlas::release`.
 - **Layers by name** from `ui/layer.rs`; no literal priorities.
 - **Shortcuts** come from the registry through `keymap.rs`; a key outside
@@ -861,9 +884,10 @@ reading production's code, seen in this app).
   hidden, and when both are hidden, both are shown (production flips each
   one, so one can appear as the other disappears).
 - The sidebar and the inspector slide over the same 100 ms (production's
-  sidebar takes 50 ms), and what is between them is laid out for its new
-  width once: a frame in which a view learns its size is drawn again before
-  it is shown (a change to the vendored GPUI, `vendor/README.md`).
+  sidebar takes 50 ms). What is between them takes its new width in the
+  frame in which they start to slide, and that frame is already laid out
+  for the new width (`ui::sized`, section 5). While the sidebar and the
+  inspector slide, they are drawn over it.
 - A picture's original is read once it has been on screen for 200 ms, in
   the viewers and the grid alike (production: 100 ms and 250 ms). In the
   viewers the same 200 ms wait applies before a video or audio player, a
