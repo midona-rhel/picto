@@ -64,9 +64,9 @@ harness = false
 # GPUI makes no API stability promise between snapshots.
 gpui = { package = "gpui-pre", version = "=0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.12", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
-picto_library = { path = "../../picto-library" }
+picto_library = { path = "../picto-library" }
 # The application layer the Electron app talks to: commands, workers, events.
-picto_core = { path = "../../core" }
+picto_core = { path = "../core" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The library's auxiliary reads hand out its own SQLite connection; the same
 # version it builds, so no second copy is compiled.

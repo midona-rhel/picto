@@ -31,7 +31,7 @@
 #   `PICTO_REQUIRE_MAC_SIGNING=true` makes the script fail instead.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-repository="$(cd "$here/../.." && pwd)"
+repository="$(cd "$here/.." && pwd)"
 cd "$here"
 
 say() {

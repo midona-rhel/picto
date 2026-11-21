@@ -131,7 +131,7 @@ pub fn subscriptions(library: &Library, blobs: &Path) -> Result<Vec<Subscription
         let mut settings = settings(connection, projection, blobs)?;
         let counts = &projection.subscription_counts;
         let mut statement = connection.prepare(include_str!(
-            "../../../../../core/src/subscription_views.sql"
+            "../../../../core/src/subscription_views.sql"
         ))?;
         let rows = statement.query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -178,7 +178,7 @@ fn queries(
 ) -> Result<HashMap<i64, Vec<Query>>> {
     let counts = &projection.subscription_counts;
     let mut statement = connection.prepare(include_str!(
-        "../../../../../core/src/subscription_query_views.sql"
+        "../../../../core/src/subscription_query_views.sql"
     ))?;
     let rows = statement.query_map([], |row| {
         let id: i64 = row.get(1)?;

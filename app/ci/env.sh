@@ -1,5 +1,5 @@
 # Sourced by the steps of `.github/workflows/gpui-experiment.yml` that start
-# the built programs directly (`. ci/env.sh`, from `experiments/gpui`).
+# the built programs directly (`. ci/env.sh`, from `app`).
 #
 # It defines two functions that turn a path into the form a program on this
 # system expects, and it puts the folders that hold the ONNX Runtime

@@ -10,7 +10,7 @@
 # Set PICTO_GPUI_MILLION_ONLY=1 to make it, print its path and stop.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd -P)"
-root="$(cd "$here/../.." && pwd -P)"
+root="$(cd "$here/.." && pwd -P)"
 items="${1:-1000000}"
 scratch="$(mktemp -d /tmp/picto-gpui-synthetic.XXXXXX)"
 library="$scratch/Synthetic.library"

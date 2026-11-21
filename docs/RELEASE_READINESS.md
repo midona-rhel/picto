@@ -118,7 +118,7 @@ native addons, and downloaded native tools must not imply otherwise.
 
 ## GPUI packages
 
-The GPUI app (`experiments/gpui/`) is the next version of Picto. Its packages take the place of
+The GPUI app (`app/`) is the next version of Picto. Its packages take the place of
 the Electron app's packages: they have the same file names (`Picto-<version>-arm64.dmg`,
 `Picto-<version>-arm64-mac.zip`, `Picto-Setup-<version>.exe`, `Picto-<version>.AppImage`), the
 same update feeds (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`), and the app has the same
@@ -130,8 +130,8 @@ the facts in this section describe packages that are built for trying out.
 
 How they are built:
 
-- `experiments/gpui/package.sh` builds the release program and makes the package for the system it
-  runs on. `experiments/gpui/README.md`, section 3, says what each package holds and what the
+- `app/package.sh` builds the release program and makes the package for the system it
+  runs on. `app/README.md`, section 3, says what each package holds and what the
   script needs.
 - The workflow `.github/workflows/gpui-package.yml` runs the script on macOS 26, Ubuntu 24.04 and
   Windows, checks each package on that system, and uploads the packages as the artifacts

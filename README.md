@@ -35,7 +35,7 @@ SQLite stores library truth and Roaring bitmap projections keep common queries f
 - [`docs/user-guide/`](./docs/user-guide/) is the user guide.
 - [`docs/RELEASE_READINESS.md`](./docs/RELEASE_READINESS.md) is the release procedure and its
   gates.
-- [`experiments/gpui/README.md`](./experiments/gpui/README.md) describes the GPUI frontend, which
+- [`app/README.md`](./app/README.md) describes the GPUI frontend, which
   is being built to replace the Electron frontend.
 
 Work is tracked in [GitHub issues](https://github.com/midona-rhel/picto/issues). `main` holds
@@ -51,7 +51,7 @@ sources).
 - **The Electron app** is the app that is released. Its user interface is a React app in `src/`,
   its main process is in `electron/`, and it reaches the Rust crates through a napi-rs addon in
   `native/picto-node/`.
-- **The GPUI app** is in `experiments/gpui/`. It is written in Rust on GPUI, the user interface
+- **The GPUI app** is in `app/`. It is written in Rust on GPUI, the user interface
   framework of the Zed editor, and runs the Rust crates in its own process. It is not released
   and has no installer yet. It has been used on macOS; on Windows and Linux it is built, tested
   and photographed by CI, and nobody has used it there. Issue
@@ -119,16 +119,16 @@ shuts down, and the app exits with code `0`.
 
 ## Development of the GPUI app
 
-The GPUI app is a Cargo workspace of its own in `experiments/gpui/`, with its own `Cargo.lock`.
+The GPUI app is a Cargo workspace of its own in `app/`, with its own `Cargo.lock`.
 It needs the Rust toolchain that `rust-toolchain.toml` names and no Node.js.
 
 ```bash
-cd experiments/gpui
+cd app
 cargo build --locked
 cargo test --locked
 ```
 
-[`experiments/gpui/README.md`](./experiments/gpui/README.md) has the rest:
+[`app/README.md`](./app/README.md) has the rest:
 
 - Section 2 says how the app is run safely. It opens a throwaway copy of a library, and it opens
   a library the user keeps only under the rules written there.

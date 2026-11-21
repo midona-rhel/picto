@@ -2,7 +2,7 @@
 
 // Signs the macOS app bundle given as the first argument with the project's
 // own certificate, "Picto Code Signing", and checks the result. The package
-// script (`experiments/gpui/package.sh`) calls this before it makes the disk
+// script (`app/package.sh`) calls this before it makes the disk
 // image and the archive.
 //
 // The certificate comes only from the environment variables `MAC_CSC_LINK`

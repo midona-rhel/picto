@@ -1,5 +1,5 @@
 # The workspace of the crates below the user interface. The app has a
-# workspace of its own (`experiments/gpui/Cargo.toml`), which uses `core` and
+# workspace of its own (`app/Cargo.toml`), which uses `core` and
 # `picto-library` as path dependencies and has its own profiles.
 [workspace]
 members = [

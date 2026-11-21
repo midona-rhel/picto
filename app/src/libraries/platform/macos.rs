@@ -44,11 +44,11 @@ pub fn picto_process() -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Returns whether the executable at `path` is a Picto: the Electron app, or
-/// a packaged release build of this app, which is the Electron app's next
-/// version and has its name. The file name decides. The main program of both
-/// is named `Picto`, and the Electron app's helper programs have names that
-/// start with `Picto Helper`.
+/// Returns whether the executable at `path` is a Picto: a packaged release
+/// build of this app, or Picto 0.6.19 or earlier, which was built with
+/// Electron. The file name decides. The main program of both is named
+/// `Picto`, and the helper programs of the versions built with Electron have
+/// names that start with `Picto Helper`.
 ///
 /// The folder is not looked at, because the packaged app runs `ffmpeg` and
 /// `ffprobe` from inside its own `Picto.app`, and those are not a second
@@ -88,10 +88,10 @@ mod tests {
         // Debug builds: run from Cargo's build folder, and from the bundle
         // that `run.sh` makes.
         assert!(!is_picto(
-            "/home/me/Code/experiments/gpui/target/debug/picto-gpui-spike"
+            "/home/me/Code/picto/app/target/debug/picto-gpui-spike"
         ));
         assert!(!is_picto(
-            "/home/me/Code/experiments/gpui/target/Picto GPUI.app/Contents/MacOS/PictoGPUI"
+            "/home/me/Code/picto/app/target/Picto GPUI.app/Contents/MacOS/PictoGPUI"
         ));
         assert!(!is_picto("/usr/bin/pictor"));
         // The list of processes can be read. Whether a Picto is running on

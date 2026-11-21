@@ -221,7 +221,7 @@ it. `PICTO_GPUI_COPY_ONLY=1` makes the copy, prints its path and stops.
 On every platform:
 
 ```sh
-cd experiments/gpui
+cd app
 cargo run --locked -- --make-copy /path/to/Main.library   # prints the copy's path
 cargo run --locked -- <that path>
 ```
@@ -266,13 +266,13 @@ Electron app's data in `electron-data/`).
 
 ## 3. Building
 
-The app is a Cargo workspace of its own (`experiments/gpui/Cargo.toml` and
+The app is a Cargo workspace of its own (`app/Cargo.toml` and
 `Cargo.lock`). The toolchain is Rust 1.98.0, pinned by the repository's
 `rust-toolchain.toml`; without rustup, put that toolchain's `bin` first on
-`PATH` (`experiments/gpui/.toolchain/` is ignored by Git for that).
+`PATH` (`app/.toolchain/` is ignored by Git for that).
 
 ```sh
-cd experiments/gpui
+cd app
 cargo build --locked
 cargo test --locked
 ```
@@ -853,7 +853,7 @@ file is set aside as `state.json.corrupt`.
 ### Tests
 
 ```sh
-cd experiments/gpui
+cd app
 cargo test --locked
 ```
 
@@ -995,7 +995,7 @@ and logs are the run's artifacts (`gh run download <run> -n
 pictures-linux`). There is no macOS job.
 
 The workflow runs for every pull request into `dev` that changes
-`experiments/gpui/`, `core/`, `picto-library/` or `picto-sources/`, and it
+`app/`, `core/`, `picto-library/` or `picto-sources/`, and it
 can be started by hand for any branch from the Actions page. It also runs
 when such a change arrives on `dev`. That run saves the build cache that
 the runs of pull requests start from.

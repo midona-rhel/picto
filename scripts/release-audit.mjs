@@ -21,7 +21,7 @@ const assert = (condition, message) => { if (!condition) failures.push(message);
 const read = (relative) => readFileSync(path.join(root, relative), 'utf8');
 const packageManifest = JSON.parse(read('package.json'));
 
-// Checks the package in `experiments/gpui/target/package`. A release
+// Checks the package in `app/target/package`. A release
 // publishes these files under these names, and an installed Picto finds its
 // update through the feed. The folder must therefore hold exactly these
 // files, and the feed must give this version and each package's real size
@@ -37,9 +37,9 @@ function auditPackage() {
     failures.push(`there is no package for the system ${process.platform}`);
     return;
   }
-  const folder = path.join(root, 'experiments/gpui/target/package');
+  const folder = path.join(root, 'app/target/package');
   if (!existsSync(folder)) {
-    failures.push('experiments/gpui/target/package does not exist; run package.sh first');
+    failures.push('app/target/package does not exist; run package.sh first');
     return;
   }
   const found = readdirSync(folder, { withFileTypes: true })
@@ -134,7 +134,7 @@ function auditSource() {
     if (trackedMediaExtensions.has(extension)) {
       const approvedAsset = file.startsWith('resources/tutorial/')
         || file.startsWith('core/tests/fixtures/')
-        || file.startsWith('experiments/gpui/assets/fixtures/')
+        || file.startsWith('app/assets/fixtures/')
         || approvedReleaseIcons.has(file);
       assert(approvedAsset, `tracked media must be an approved product asset or test fixture: ${file}`);
     }

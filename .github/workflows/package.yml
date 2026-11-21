@@ -1,6 +1,6 @@
 name: Package
 
-# Builds the packages of Picto (`experiments/gpui/package.sh`) on the three
+# Builds the packages of Picto (`app/package.sh`) on the three
 # systems and proves on each that the packaged program starts. This is the
 # only workflow that builds packages.
 #
@@ -31,10 +31,10 @@ on:
     branches:
       - dev
     paths:
-      - "experiments/gpui/package.sh"
-      - "experiments/gpui/packaging/**"
-      - "experiments/gpui/build.rs"
-      - "experiments/gpui/Cargo.toml"
+      - "app/package.sh"
+      - "app/packaging/**"
+      - "app/build.rs"
+      - "app/Cargo.toml"
       - "scripts/mac-signing.mjs"
       - "scripts/sign-mac-app.mjs"
       - "scripts/generate-app-icons.mjs"
@@ -68,21 +68,21 @@ jobs:
             platform: macos
             artifact: macos-arm64
             package-artifacts: |
-              experiments/gpui/target/package/*.dmg
-              experiments/gpui/target/package/*.zip
-              experiments/gpui/target/package/latest-mac.yml
+              app/target/package/*.dmg
+              app/target/package/*.zip
+              app/target/package/latest-mac.yml
           - os: ubuntu-24.04
             platform: linux
             artifact: linux-x64
             package-artifacts: |
-              experiments/gpui/target/package/*.AppImage
-              experiments/gpui/target/package/latest-linux.yml
+              app/target/package/*.AppImage
+              app/target/package/latest-linux.yml
           - os: windows-latest
             platform: windows
             artifact: windows-x64
             package-artifacts: |
-              experiments/gpui/target/package/*.exe
-              experiments/gpui/target/package/latest.yml
+              app/target/package/*.exe
+              app/target/package/latest.yml
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -108,11 +108,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
-          workspaces: experiments/gpui -> target
+          workspaces: app -> target
           cache-on-failure: true
 
       # The libraries that the GPUI app and the application core are built
-      # against (the list in `experiments/gpui/README.md`, section 3).
+      # against (the list in `app/README.md`, section 3).
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -189,7 +189,7 @@ jobs:
             "-DOUTPUT=$(cygpath -w "$stand_in/setup.exe")" \
             "-DICON=$(cygpath -w "$PWD/build/icon.ico")" \
             "-DUNINSTALL_LIST=$(cygpath -w "$stand_in/uninstall-files.nsh")" \
-            "$(cygpath -w "$PWD/experiments/gpui/packaging/windows/installer.nsi")"
+            "$(cygpath -w "$PWD/app/packaging/windows/installer.nsi")"
 
       - name: Download FFmpeg binaries
         shell: bash
@@ -203,7 +203,7 @@ jobs:
       # signed and the script says so.
       - name: Package
         shell: bash
-        working-directory: experiments/gpui
+        working-directory: app
         env:
           MAC_CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
           MAC_CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
@@ -230,7 +230,7 @@ jobs:
       # unpacked.
       - name: Check the package (macOS)
         if: runner.os == 'macOS'
-        working-directory: experiments/gpui/target/package
+        working-directory: app/target/package
         run: |
           version="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
           check="$RUNNER_TEMP/unpacked"
@@ -265,7 +265,7 @@ jobs:
       # development packages.
       - name: Check the package (Linux)
         if: runner.os == 'Linux'
-        working-directory: experiments/gpui/target/package
+        working-directory: app/target/package
         run: |
           version="$(node -p "require('$GITHUB_WORKSPACE/package.json').version")"
           check="$RUNNER_TEMP/unpacked"
@@ -301,7 +301,7 @@ jobs:
       # one system only; it needs a debug build of the tests.
       - name: Check the update feed (Linux)
         if: runner.os == 'Linux'
-        working-directory: experiments/gpui
+        working-directory: app
         run: |
           cat target/package/latest-linux.yml
           PICTO_GPUI_TEST_FEED="$PWD/target/package/latest-linux.yml" \
@@ -321,8 +321,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $installer = Resolve-Path "experiments/gpui/target/package/Picto-Setup-$version.exe"
-          Get-Content experiments/gpui/target/package/latest.yml
+          $installer = Resolve-Path "app/target/package/Picto-Setup-$version.exe"
+          Get-Content app/target/package/latest.yml
           $folder = Join-Path $env:LOCALAPPDATA 'Programs\Picto'
           $guid = '7dbe711a-2259-5c88-af70-ded36653dd46'
           $installKey = "HKCU:\Software\$guid"
@@ -396,7 +396,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $installer = Resolve-Path "experiments/gpui/target/package/Picto-Setup-$version.exe"
+          $installer = Resolve-Path "app/target/package/Picto-Setup-$version.exe"
           $folder = Join-Path $env:LOCALAPPDATA 'Programs\Picto'
           $guid = '7dbe711a-2259-5c88-af70-ded36653dd46'
           $installKey = "HKCU:\Software\$guid"

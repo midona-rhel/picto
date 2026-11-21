@@ -1,6 +1,6 @@
 name: GPUI experiment
 
-# Builds and tests the GPUI app (experiments/gpui) on Windows and Linux, and
+# Builds and tests the GPUI app (app) on Windows and Linux, and
 # saves pictures of it drawn in an off-screen window on each system. The app
 # is developed on macOS, so this workflow is the only place where it is
 # compiled and run on the other two systems. The pictures are uploaded as the
@@ -20,7 +20,7 @@ on:
     branches:
       - dev
     paths:
-      - "experiments/gpui/**"
+      - "app/**"
       - "picto-library/**"
       - "picto-sources/**"
       - "core/**"
@@ -29,7 +29,7 @@ on:
     branches:
       - dev
     paths:
-      - "experiments/gpui/**"
+      - "app/**"
       - "picto-library/**"
       - "picto-sources/**"
       - "core/**"
@@ -64,7 +64,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: experiments/gpui
+        working-directory: app
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -78,7 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: |
-            experiments/gpui -> target
+            app -> target
             . -> target
           cache-on-failure: true
 

@@ -65,7 +65,7 @@ fn main() {
 /// the crate is a build dependency for Windows only.
 #[cfg(windows)]
 fn windows_resource(version: &str) {
-    let repository = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let repository = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
     let icon = repository.join("build/icon.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
     // The resource compiler reads a backslash in a quoted path as the start
@@ -123,10 +123,9 @@ END
 
 /// Sets `PICTO_VERSION` for the crate and writes `release-notes.md` to
 /// `out`. The file is empty when this version has no release notes, and the
-/// update check then reports that, as the Electron app does. Returns the
-/// version.
+/// app then shows no release notes for this version. Returns the version.
 fn release(out: &str) -> String {
-    let repository = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let repository = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
     let package = repository.join("package.json");
     println!("cargo:rerun-if-changed={}", package.display());
     let text = fs::read_to_string(&package).expect("read package.json");

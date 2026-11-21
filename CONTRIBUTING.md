@@ -49,13 +49,13 @@ only issue-owned changes.
 - Merge with **squash**: one commit per issue on `dev`, titled by the PR.
 - Merge commits are also enabled on `dev` for the post-release `main` sync.
 - Do not merge before review. Resolve every review thread first.
-- A change to the GPUI app (`experiments/gpui/`), or to a shared crate that
+- A change to the GPUI app (`app/`), or to a shared crate that
   it uses (`core`, `picto-library`, `picto-sources`), must also build and
   pass its tests on Windows and Linux. `verify` does not build the GPUI app.
   The `GPUI experiment` workflow does. It runs by itself for every pull
   request into `dev` that changes one of those folders. Wait for it before
   merging. Its pictures of the app on both systems are attached to the run.
-  [`experiments/gpui/README.md`](experiments/gpui/README.md), section 6,
+  [`app/README.md`](app/README.md), section 6,
   says how to check a change locally. Give the issue the `area: gpui` label.
 - The required `branch-policy` check is a guard for trusted maintainers, not
   tamper-proof enforcement: a same-repository PR can change its Actions job.

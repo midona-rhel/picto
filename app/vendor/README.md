@@ -105,7 +105,7 @@ out what this app does not need: lens, dispersion, tint and rim light.
     `Window::dispatch_platform_input`. It divides every position, and the
     distance of a precise scroll, by the zoom, and then calls
     `dispatch_event`. The platform's input callback calls it. The app's
-    playback of input (`src/pointer.rs` in the app, `experiments/gpui`)
+    playback of input (`app/src/pointer.rs`)
     calls it too.
   - What the window gives back to the platform is multiplied by the zoom.
     This applies to the rectangles for the input method
@@ -569,7 +569,7 @@ and in `gpui-pre-apple/src/shaders.metal`), so no generated type changes.
 
 Check the result in these ways:
 
-- For the blur, run `cargo test` in `experiments/gpui` (the blur arithmetic
+- For the blur, run `cargo test` in `app` (the blur arithmetic
   and batching tests are in `src/ui/glass.rs`), and take an off-screen
   picture of a menu over the grid.
 - For the interface zoom, run `zoom::tests`, which check that a press at

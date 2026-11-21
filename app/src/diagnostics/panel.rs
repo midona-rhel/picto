@@ -378,7 +378,7 @@ fn runtime() -> String {
 
 /// Picto's version, `app.getVersion()`: the repository's `package.json`.
 fn version() -> String {
-    serde_json::from_str::<serde_json::Value>(include_str!("../../../../package.json"))
+    serde_json::from_str::<serde_json::Value>(include_str!("../../../package.json"))
         .ok()
         .and_then(|package| package.get("version")?.as_str().map(str::to_owned))
         .unwrap_or_default()
