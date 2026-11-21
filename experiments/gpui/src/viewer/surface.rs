@@ -217,6 +217,10 @@ pub struct MediaSurface {
     /// player, the document or the Flash movie. Showing another item
     /// cancels it.
     full_wait: Option<Task<()>>,
+    /// True from the moment `open` starts that timer until the timer ends
+    /// and the player, the document or the Flash movie is made. It is false
+    /// again when the surface is stopped or shows another item.
+    starting: bool,
     /// The Flash movie that is open. It is `None` for any other item, and
     /// during the 200 ms before the movie is loaded.
     flash: Option<super::flash::Flash>,
@@ -434,6 +438,10 @@ impl MediaSurface {
         self.player = None;
         self.held = None;
         self.held_since = None;
+        // A start that is still waiting is cancelled, so that no player is
+        // made for a surface that has been stopped.
+        self.full_wait = None;
+        self.starting = false;
     }
 
     /// Does what `stop` does, and records that no item is on screen
@@ -462,20 +470,24 @@ impl MediaSurface {
     ///   frame has arrived, when the video cannot be played, or when
     ///   1,500 ms have passed since the player was made.
     ///
-    /// A document or a player that has not been made yet also counts as
-    /// ready. That is the case during the 200 ms that `open` waits before
-    /// it makes one.
+    /// During the 200 ms that `open` waits before it makes a document or a
+    /// player, none exists yet. The item is then ready when its thumbnail
+    /// has been decoded or has failed to decode, because the thumbnail is
+    /// what the surface draws during that wait. A video is also ready from
+    /// then on while its player has no frame yet, because the thumbnail
+    /// stays drawn under the player until the first frame arrives.
     fn ready(&self, cx: &App) -> bool {
+        let thumbnail_shown = self.shown == self.key;
         match self.mode {
-            Mode::Image | Mode::Flash => self.shown == self.key,
-            Mode::Document => self
-                .document
-                .as_ref()
-                .is_none_or(|document| document.presentable(cx)),
-            Mode::Media => self
-                .player
-                .as_ref()
-                .is_none_or(|player| player.read(cx).presentable()),
+            Mode::Image | Mode::Flash => thumbnail_shown,
+            Mode::Document => match &self.document {
+                Some(document) => document.presentable(cx),
+                None => thumbnail_shown,
+            },
+            Mode::Media => match &self.player {
+                Some(player) => thumbnail_shown || player.read(cx).presentable(),
+                None => thumbnail_shown,
+            },
         }
     }
 
@@ -495,9 +507,9 @@ impl MediaSurface {
     /// - For video or audio, it is true when the player has a video frame
     ///   or its `presentable` returns true.
     ///
-    /// For a document or a player that has not been made yet it is also
-    /// true. That is the case during the 200 ms that `open` waits before it
-    /// makes one.
+    /// During the 200 ms that `open` waits before it makes a document or a
+    /// player, it is false (`starting`). When no document or player exists
+    /// and none is about to be made, it is true.
     pub fn settled(&self, cx: &App) -> bool {
         if self.error.is_some() {
             return true;
@@ -505,14 +517,17 @@ impl MediaSurface {
         match self.mode {
             Mode::Image => self.full_key == self.key,
             Mode::Flash => self.full.is_some() && self.full_key == self.key,
-            Mode::Document => self
-                .document
-                .as_ref()
-                .is_none_or(|document| document.settled(cx)),
-            Mode::Media => self.player.as_ref().is_none_or(|player| {
-                let player = player.read(cx);
-                player.has_picture() || player.presentable()
-            }),
+            Mode::Document => match &self.document {
+                Some(document) => document.settled(cx),
+                None => !self.starting,
+            },
+            Mode::Media => match &self.player {
+                Some(player) => {
+                    let player = player.read(cx);
+                    player.has_picture() || player.presentable()
+                }
+                None => !self.starting,
+            },
         }
     }
 
@@ -1647,11 +1662,24 @@ impl MediaSurface {
             surface = surface.child(document.element());
         } else if let Some(player) = self.player.clone().filter(|_| self.mode == Mode::Media) {
             // A video's player draws nothing until its first frame has
-            // arrived. Until then the pane shows what is held from the item
-            // before, or the host's background when nothing is held. While
-            // the player is shown over its whole window, the host draws it
-            // there (`video::fullscreen_layer`), and the pane is filled
-            // with black in its place.
+            // arrived. Until then the item's thumbnail stays drawn under
+            // the player, fitted to the pane as it was during the wait, so
+            // the pane is never empty between the thumbnail and the first
+            // frame. While the player is shown over its whole window, the
+            // host draws it there (`video::fullscreen_layer`), and the pane
+            // is filled with black in its place.
+            if self.shown == self.key
+                && !player.read(cx).presentable()
+                && let Some(thumbnail) = &self.thumbnail
+            {
+                surface = surface.child(
+                    img(thumbnail.clone())
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .object_fit(ObjectFit::Contain),
+                );
+            }
             surface = surface.child(if super::video::is_fullscreen(&player, cx) {
                 div().absolute().inset_0().bg(rgba(theme::MEDIA_BACKGROUND))
             } else {

@@ -65,6 +65,7 @@ impl MediaSurface {
                 }
             });
         }));
+        self.starting = true;
     }
 
     /// Starts showing the item in full, after the wait in [`Self::open`]:
@@ -81,6 +82,7 @@ impl MediaSurface {
         cx: &mut Context<Self>,
     ) {
         let media = crate::viewer::video::kind_of(mime);
+        self.starting = false;
         match mode {
             Mode::Flash => {
                 self.flash = Some(crate::viewer::flash::Flash::open(path));

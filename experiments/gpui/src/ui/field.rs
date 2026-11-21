@@ -18,21 +18,21 @@ pub enum Look {
     TitlebarSearch,
     /// `GlassInput.module.css` `.input`: a text field in a dialog.
     Modal,
-    /// `.input` at the small control height, as a smart-folder rule's
-    /// value field is (`.rule input`).
+    /// `.input` at the small control height. The value field of a smart-folder
+    /// rule uses it (`.rule input`).
     ModalSmall,
-    /// `FolderRenameInput`: a grid subfolder tile's name in a `GlassInput`
-    /// 24px tall with 6px sides.
+    /// `FolderRenameInput`: the name of a subfolder tile in the grid, in a
+    /// `GlassInput` that is 24px tall with 6px of padding at each side.
     TileRename,
-    /// `GlassInput.module.css` `.searchWrap`: a dialog's search, an icon and
-    /// the text with no frame of their own.
+    /// `GlassInput.module.css` `.searchWrap`: the search field of a dialog. It
+    /// is an icon and the text, with no fill and no border.
     ModalSearch,
     /// `Settings.module.css` `.sidebarSearch`, with room for its glyph.
     SettingsSearch,
     /// `ShortcutsPanel.module.css` `.searchInput`.
     Form,
-    /// `GlassInput` as `CompactNumberInput` sizes it, with room on the
-    /// right for its stepper.
+    /// `GlassInput` at the size `CompactNumberInput` gives it, with space at
+    /// the right for the stepper.
     Number,
     /// `.rangeEditor input`: the filter bar's 26px number fields.
     Range,
@@ -41,11 +41,12 @@ pub enum Look {
     Hex,
     /// `.saveFilterEditor input`: the saved filter's name.
     SavedFilter,
-    /// `GlassInput.module.css` `.textarea`: three lines of text in a dialog,
-    /// from 8px below its top edge.
+    /// `GlassInput.module.css` `.textarea`: a dialog's field for several lines
+    /// of text. It is three lines tall unless `rows` says otherwise, and its
+    /// text starts 8px below its top edge.
     TextArea,
-    /// `NewSubscriptionDialog.module.css` `.textInput`: a field beside its
-    /// label in a dialog's form row, on a darker well.
+    /// `NewSubscriptionDialog.module.css` `.textInput`: a field next to its
+    /// label in a form row of a dialog. Its fill is darker than the dialog.
     FormRow,
 }
 
@@ -54,15 +55,16 @@ struct Frame {
     radius: f32,
     border: (Rgba, Rgba),
     fill: (Rgba, Rgba),
-    /// How long the border and fill take to change on focus, and on what
-    /// curve.
+    /// How long the border and the fill take to change when the field gets or
+    /// loses the keyboard focus, and the timing curve of the change.
     focus: Duration,
     curve: motion::CubicBezier,
-    /// Space left of the text, inside the border.
+    /// The space to the left of the text, inside the border.
     left: f32,
     right: f32,
-    /// How far below centre the text sits. The inspector field pads its
-    /// 20px line 6px from the top of a 32px box, a pixel low.
+    /// How far below the centre the text is drawn. The inspector's field has a
+    /// 20px line that starts 6px from the top of a 32px box, which is one
+    /// pixel below the centre.
     drop: f32,
 }
 
@@ -73,7 +75,8 @@ impl Look {
                 height: theme::ICON_BUTTON,
                 radius: theme::RADIUS_CONTROL,
                 border: (theme.border(), theme.border_focus()),
-                // `color-mix(control-surface 72%, transparent)` at rest.
+                // `color-mix(control-surface 72%, transparent)` while the
+                // field does not have the focus.
                 fill: (
                     theme::blend(
                         gpui::transparent_black().into(),
@@ -132,8 +135,9 @@ impl Look {
                 ..Look::Modal.frame(theme)
             },
             Look::TextArea => Frame {
-                // `min-height: 60px` is less than three 18.2px lines with
-                // `padding: 8px 10px` and the border, which the box takes.
+                // The CSS says `min-height: 60px`. Three lines of 18.2px with
+                // `padding: 8px 10px` and the border are taller than that, and
+                // the box takes that larger height.
                 height: 3. * super::text_input::AREA_LINE + 2. * AREA_PADDING + 2.,
                 ..Look::Modal.frame(theme)
             },
@@ -239,9 +243,10 @@ impl Look {
     }
 }
 
-/// An inspector field that cannot be edited (`.fieldControl.fieldDisabled`):
-/// the field's frame at rest with its value in the tertiary colour, ending in
-/// an ellipsis when it does not fit. It takes no pointer input.
+/// An inspector field that cannot be edited (`.fieldControl.fieldDisabled`).
+/// It has the field's normal frame and shows its value in the tertiary text
+/// colour, cut with an ellipsis when the value does not fit. It does not react
+/// to the pointer.
 pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
     let theme = theme::theme(cx);
     let frame = Look::Inspector.frame(theme);
@@ -265,12 +270,13 @@ pub fn read_only(value: impl Into<SharedString>, cx: &App) -> Div {
         .child(div().h(px(20.)).truncate().child(value.into()))
 }
 
-/// A dialog field that cannot be typed in (`GlassInput readOnly`): the
-/// dialog field's frame at 80% strength, showing a value that something
-/// else chose (a folder from a dialog) or the placeholder until it has one,
-/// ending in an ellipsis when it does not fit. It is still a stop for Tab,
-/// as a read-only `<input>` is, and with the keyboard its border turns
-/// `--color-primary-50` (`.input:focus`).
+/// A dialog field that cannot be typed in (`GlassInput readOnly`). It has the
+/// dialog field's frame at 80% strength. It shows a value that was chosen
+/// somewhere else (for example a folder chosen in a dialog), or the
+/// placeholder while there is no value, cut with an ellipsis when it does not
+/// fit. Tab still stops at it, as it does at a read-only `<input>`, and while
+/// it has the keyboard focus its border is `--color-primary-50`
+/// (`.input:focus`).
 pub fn read_only_modal(
     id: impl Into<ElementId>,
     value: Option<SharedString>,
@@ -306,7 +312,8 @@ pub fn read_only_modal(
         .text(theme::TEXT_MD)
         .text_color(color)
         .child(div().min_w_0().truncate().child(text));
-    // The focus colour drawn over the border, where the border would turn.
+    // The focus colour is drawn over the border, in the place where the CSS
+    // changes the border's colour.
     let ring = super::focus::Ring {
         width: 1.,
         offset: -1.,
@@ -315,20 +322,22 @@ pub fn read_only_modal(
     super::focus::stop(id, field, |_, _, _| {}).ring(ring, frame.radius, 1.)
 }
 
-/// The frame around a text input: its fill and border, how they change on
-/// focus, and the icon and clear button some fields carry. A press anywhere
-/// in the frame focuses the input.
+/// The frame around a text input: its fill and border, how they change when
+/// the input gets the focus, and the icon and the clear button that some
+/// fields have. A press anywhere in the frame gives the input the focus.
 #[derive(IntoElement)]
 pub struct Field {
     id: ElementId,
     input: Entity<TextInput>,
     look: Look,
-    /// Glyph, size, distance from the left edge, colour.
+    /// The icon's name, its size, its distance from the left edge, and its
+    /// colour.
     icon: Option<(&'static str, f32, f32, Rgba)>,
     clearable: bool,
     /// What assistive technology calls the clear button.
     clear_name: Option<SharedString>,
-    /// A text area this many lines tall (`rows`), rather than three.
+    /// The height of a text area in lines (`rows`). It is three lines when
+    /// this is not given.
     rows: Option<usize>,
 }
 
@@ -350,8 +359,9 @@ impl Field {
         self
     }
 
-    /// Names the clear button (production's `aria-label` for it, "Clear"
-    /// unless given).
+    /// Sets the name that assistive technology gives the clear button (its
+    /// `aria-label` in the Electron app). The name is "Clear" when none is
+    /// given.
     pub fn clear_name(mut self, name: impl Into<SharedString>) -> Self {
         self.clear_name = Some(name.into());
         self
@@ -363,8 +373,8 @@ impl Field {
         self
     }
 
-    /// A text area `rows` lines tall (`<textarea rows>`), inside its
-    /// padding and border.
+    /// Makes a text area `rows` lines tall (`<textarea rows>`), not counting
+    /// its padding and border.
     pub fn rows(mut self, rows: usize) -> Self {
         self.rows = Some(rows);
         self
@@ -394,8 +404,8 @@ impl RenderOnce for Field {
             .clear_name
             .clone()
             .unwrap_or_else(|| crate::i18n::t("Clear").into());
-        // The field's width, measured each frame, for the expanded overlay
-        // that is drawn outside the field's own layout.
+        // The field's width is measured in each frame. The expanded overlay,
+        // which is drawn outside the field's own layout, uses it.
         let width = window.use_keyed_state(
             ElementId::NamedChild(std::sync::Arc::new(self.id.clone()), "width".into()),
             cx,
@@ -409,8 +419,8 @@ impl RenderOnce for Field {
         );
         if opening.read(cx).on() != expanded {
             opening.update(cx, |fade, _| {
-                // `fieldExpand`: 100 ms from 92% opacity on the way in; no
-                // fade on the way back.
+                // `fieldExpand`: the overlay fades in from 92% opacity over
+                // 100 ms. It does not fade when it closes.
                 if expanded {
                     fade.set(true, motion::FIELD_EXPAND);
                 } else {
@@ -467,7 +477,8 @@ impl RenderOnce for Field {
             field = field.text_color(theme.text());
         }
         if self.look == Look::Search {
-            // `inset 0 1px 0` at 3% contrast: a lit top edge.
+            // `inset 0 1px 0` at 3% contrast: a slightly lighter line along
+            // the top edge.
             field = field.child(
                 div()
                     .absolute()
@@ -491,29 +502,42 @@ impl RenderOnce for Field {
                     .child(super::icon(name, size, color)),
             );
         }
-        field = field.child(
-            div()
-                .size_full()
-                .pl(px(frame.left))
-                .pr(px(
-                    if clear && !matches!(self.look, Look::TitlebarSearch | Look::SettingsSearch) {
-                        26.
-                    } else {
-                        frame.right
-                    },
-                ))
-                // The input centres its line, so twice the drop above it;
-                // a text area starts at its padding.
-                .pt(px(if self.look == Look::TextArea {
-                    AREA_PADDING
+        let inner = div()
+            .size_full()
+            .pl(px(frame.left))
+            .pr(px(
+                if clear && !matches!(self.look, Look::TitlebarSearch | Look::SettingsSearch) {
+                    26.
                 } else {
-                    2. * frame.drop
-                }))
-                .child(self.input.clone()),
-        );
+                    frame.right
+                },
+            ))
+            // A one-line input centres its line, so the space above it is
+            // twice the look's drop. A text area starts at its padding.
+            .pt(px(if self.look == Look::TextArea {
+                AREA_PADDING
+            } else {
+                2. * frame.drop
+            }));
+        field = field.child(if self.look == Look::TextArea {
+            // A text area can hold more rows than its box shows. The box
+            // scrolls, and it is the box that the text input scrolls to
+            // keep the row with the caret in view (`TextInput::area`).
+            let area = self.input.read(cx).area().clone();
+            inner
+                .id("area")
+                .pb(px(AREA_PADDING))
+                .overflow_y_scroll()
+                .track_scroll(&area)
+                .child(self.input.clone())
+                .into_any_element()
+        } else {
+            inner.child(self.input.clone()).into_any_element()
+        });
         if clear && self.look == Look::SettingsSearch {
-            // `type="search"`: Chromium's own cancel button, a bold cross
-            // 8.5px square centred 16.5px in from the right edge.
+            // `type="search"`: Chromium's own cancel button. It is a bold
+            // cross in an 8.5px square whose centre is 16.5px from the right
+            // edge.
             let input = self.input;
             field = field.child(
                 div()
@@ -533,8 +557,8 @@ impl RenderOnce for Field {
                     .on_click(move |_, _, cx| input.update(cx, |input, cx| input.clear(cx))),
             );
         } else if clear && self.look == Look::TitlebarSearch {
-            // `.titlebarSearch button`: 24px, 1px in from the right edge, with
-            // its own hover fill.
+            // `.titlebarSearch button`: 24px, 1px from the right edge, with
+            // its own hover background.
             let input = self.input;
             field = field.child(
                 div()
@@ -599,10 +623,11 @@ impl RenderOnce for Field {
 }
 
 impl Field {
-    /// `.fieldControlExpanded`: focused text that overflows its line is
-    /// drawn over what follows, as tall as it wraps up to 240px (then it
-    /// scrolls), on the rail colour with a lifted shadow. The field keeps its
-    /// 32px place in the column.
+    /// `.fieldControlExpanded`: when the field has the focus and its text
+    /// needs more than one line, the text is drawn in an overlay over whatever
+    /// follows the field. The overlay is as tall as the wrapped text, up to
+    /// 240px, and scrolls beyond that. It has the rail's colour and a shadow.
+    /// The field itself keeps its 32px place in the column.
     fn expanded(
         self,
         width: Entity<f32>,
@@ -629,8 +654,8 @@ impl Field {
             .rounded(px(frame.radius))
             .border_1()
             .border_color(frame.border.1)
-            // `.fieldExpansionBackdrop` on the rail colour, under the
-            // focused field's own fill.
+            // `.fieldExpansionBackdrop`: the rail's colour under the focused
+            // field's own fill.
             .bg({
                 let fill = frame.fill.1;
                 theme::blend(theme.rail(), Rgba { a: 1., ..fill }, fill.a)
@@ -665,7 +690,7 @@ impl Field {
     }
 }
 
-/// `.textarea`'s padding above and below its text.
+/// The padding above and below the text of a `.textarea`.
 const AREA_PADDING: f32 = 8.;
 
 /// `.fieldControlExpanded { max-height: 240px }`

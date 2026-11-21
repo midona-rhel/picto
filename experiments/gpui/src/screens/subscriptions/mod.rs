@@ -667,14 +667,17 @@ impl SubscriptionsScreen {
     /// the subscriptions in the order their tiles are shown, and
     /// `modifiers` holds the keys held during the click.
     ///
+    /// The key that adds to a selection is Command on macOS and Control on
+    /// Windows and Linux, the same key as in the grid
+    /// ([`crate::grid::selection::Press`]).
+    ///
     /// - With Shift, when there is an anchor: every tile from the anchor to
     ///   the clicked tile is selected. The tiles that were selected before
-    ///   are deselected first, unless the platform modifier is also held.
-    ///   The anchor does not change.
-    /// - With the platform modifier (`modifiers.platform`, which is Command
-    ///   on macOS), when the first case does not apply: the clicked tile is
-    ///   selected if it was not selected and deselected if it was, and it
-    ///   becomes the anchor.
+    ///   are deselected first, unless that key is also held. The anchor
+    ///   does not change.
+    /// - With that key, when the first case does not apply: the clicked
+    ///   tile is selected if it was not selected and deselected if it was,
+    ///   and it becomes the anchor.
     /// - In every other case the clicked tile becomes the only selected
     ///   tile and the anchor.
     fn click_card(
@@ -687,17 +690,22 @@ impl SubscriptionsScreen {
         let Some(&id) = order.get(index) else {
             return;
         };
+        let adds = if cfg!(target_os = "macos") {
+            modifiers.platform
+        } else {
+            modifiers.control
+        };
         if modifiers.shift
             && let Some(anchor) = self.anchor
         {
             let range = order[anchor.min(index)..=anchor.max(index).min(order.len() - 1)]
                 .iter()
                 .copied();
-            if !modifiers.platform {
+            if !adds {
                 self.selected.clear();
             }
             self.selected.extend(range);
-        } else if modifiers.platform {
+        } else if adds {
             if !self.selected.remove(&id) {
                 self.selected.insert(id);
             }
@@ -1080,8 +1088,9 @@ impl SubscriptionsScreen {
     ///
     /// Whether the new source groups the media of one post is taken from
     /// the setting `subscription_default_group_posts`. The field is emptied
-    /// when the application has answered, also when the answer is an
-    /// error.
+    /// when the source has been added. When the application answers with an
+    /// error, the field keeps its text, so that the user can correct it and
+    /// try again.
     fn submit_query(&mut self, cx: &mut Context<Self>) {
         let text = self.add_query.read(cx).value().trim().to_owned();
         let Some(id) = self.place_seen else {
@@ -1097,8 +1106,10 @@ impl SubscriptionsScreen {
             notes: None,
             group_posts: crate::settings::current(cx).subscription_default_group_posts,
         };
-        self.act(vec![requests::add_query(id, &source)], cx, |this, _, cx| {
-            this.add_query.update(cx, |input, cx| input.clear(cx));
+        self.act(vec![requests::add_query(id, &source)], cx, |this, answer, cx| {
+            if answer.is_ok() {
+                this.add_query.update(cx, |input, cx| input.clear(cx));
+            }
         });
     }
 
