@@ -140,6 +140,6 @@ cargo test --locked
   Electron app on purpose, and what is open.
 
 The `GPUI experiment` workflow builds and tests the app on Windows and Linux and saves pictures
-of it. It is the only place where the app runs on those two systems. It runs for a push to a
-branch whose name starts with `feature/163-`, when the push changes the app or one of the shared
-crates, and it can be started by hand for any branch from the Actions page.
+of it. It is the only place where the app runs on those two systems. It runs for every pull
+request into `dev` that changes the app or one of the shared crates, and it can be started by
+hand for any branch from the Actions page.

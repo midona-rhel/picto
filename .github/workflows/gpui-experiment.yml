@@ -1,23 +1,44 @@
 name: GPUI experiment
 
-# Builds and tests experiments/gpui on the platforms it is not developed on,
-# and photographs it there. macOS is built locally on every change; this
-# proves the same source compiles and its tests pass on Windows and Linux,
-# and uploads pictures of the app drawn off-screen on each (the `pictures-*`
-# artifacts), the only way to see it on those systems from a Mac.
+# Builds and tests the GPUI app (experiments/gpui) on Windows and Linux, and
+# saves pictures of it drawn in an off-screen window on each system. The app
+# is developed on macOS, so this workflow is the only place where it is
+# compiled and run on the other two systems. The pictures are uploaded as the
+# artifacts `pictures-linux` and `pictures-windows`.
+#
+# It runs for every pull request into `dev` that changes the app or one of
+# the shared crates the app is built from, and it can be started by hand for
+# any branch.
+#
+# It also runs when such a change arrives on `dev` itself. A run for a pull
+# request can read the build cache that a run on `dev` saved, but not the
+# cache of another pull request. Without the runs on `dev`, the first run of
+# every pull request would compile about 1,100 packages from nothing, which
+# takes close to an hour on Windows.
 on:
-  push:
+  pull_request:
     branches:
-      - "feature/163-**"
+      - dev
     paths:
       - "experiments/gpui/**"
       - "picto-library/**"
+      - "picto-sources/**"
+      - "core/**"
+      - ".github/workflows/gpui-experiment.yml"
+  push:
+    branches:
+      - dev
+    paths:
+      - "experiments/gpui/**"
+      - "picto-library/**"
+      - "picto-sources/**"
       - "core/**"
       - ".github/workflows/gpui-experiment.yml"
   workflow_dispatch:
 
+# A new push to a pull request stops the run of the push before it.
 concurrency:
-  group: gpui-experiment-${{ github.ref }}
+  group: gpui-experiment-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -42,6 +63,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
+        shell: bash
         working-directory: experiments/gpui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,6 +72,9 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      # Two build folders are kept between runs: the app's own, and the
+      # repository root's, where the program that generates the test library
+      # is built when that library is not in the cache (see "Test library").
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: |
@@ -57,10 +82,15 @@ jobs:
             . -> target
           cache-on-failure: true
 
-      # GPUI's Linux backends (Wayland, X11, Vulkan, fontconfig; lavapipe,
-      # the software Vulkan driver the pictures are drawn with), the audio
-      # output Ruffle links against, and what the application core needs
-      # (D-Bus for the keyring, libclang for its bindings).
+      # The packages that building and running the app on Linux needs:
+      # - for GPUI: Wayland, X11, Vulkan and fontconfig, and lavapipe
+      #   (`mesa-vulkan-drivers`), the software Vulkan driver that draws the
+      #   pictures on a machine without a graphics card;
+      # - for Ruffle, the Flash player: the ALSA audio library;
+      # - for the application core: D-Bus for the keyring and libclang for
+      #   its generated bindings;
+      # - for the sign-in window: GTK and WebKitGTK;
+      # - for the steps that open a real window: a virtual X display (`xvfb`).
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -90,44 +120,102 @@ jobs:
             xauth \
             dbus
 
+      # Builds everything the later steps run, once: the test program, and
+      # the app itself, which Cargo builds together with the tests because
+      # the crate has an integration test. Every later step starts one of
+      # these two programs and compiles nothing.
+      #
+      # Both are built with the features that the tests switch on in GPUI
+      # (`test-support`). A plain `cargo build` leaves those features off,
+      # and Cargo then compiles GPUI, the shared crates and the app a second
+      # time. The last step of this job checks that the app also compiles
+      # without them.
+      #
+      # The step writes the paths of the two programs for the later steps:
+      # `PICTO_APP` is the app and `PICTO_TESTS` is the test program. A step
+      # that starts one of them first reads `ci/env.sh`, which puts the
+      # folders of the ONNX Runtime libraries on the loader's search path.
       - name: Build
-        run: cargo build --locked
+        run: |
+          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          build="$(unix "$RUNNER_TEMP")/build.json"
+          cargo test --locked --no-run --message-format=json-render-diagnostics > "$build"
+          # Cargo writes one line of JSON for each thing it built. The test
+          # program and the app are both built from the target named
+          # `picto-gpui-spike`; the test program is the one built as a test.
+          tests="$(jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "picto-gpui-spike") | .executable' "$build" | tail -n 1)"
+          app="$(jq -r 'select(.reason == "compiler-artifact" and .profile.test == false and .target.name == "picto-gpui-spike" and (.target.kind | index("bin"))) | .executable' "$build" | tail -n 1)"
+          test -n "$tests" && test -n "$app"
+          echo "PICTO_TESTS=$(unix "$tests")" >> "$GITHUB_ENV"
+          echo "PICTO_APP=$(unix "$app")" >> "$GITHUB_ENV"
 
+      # Runs the tests by starting the test program that the step above
+      # built.
       - name: Test
-        run: cargo test --locked
+        run: |
+          . ci/env.sh
+          "$PICTO_TESTS"
 
-      # A drop of a file the drag offers to save (XDS, what browsers and
-      # archive managers drag on X11), received by the platform's own code
-      # from a source the test makes on a virtual X display. (Windows' drop
-      # of virtual files is checked by the tests above; it needs no display.)
+      # Checks that a file dragged from a program that offers to save it
+      # arrives whole. Browsers and archive managers drag files this way on
+      # X11 (the XDS protocol). The test makes such a drag source on a
+      # virtual X display, and the app's own X11 code receives the drop.
+      # Windows needs no step of this kind: its drop of virtual files is
+      # checked by a test in the step above, which needs no display.
       - name: Drop check (Linux)
         if: runner.os == 'Linux'
-        run: >-
-          xvfb-run -a -s "-screen 0 1024x768x24"
-          cargo test --locked -- --ignored --exact
-          imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
-
-      # A synthetic library of generated pictures (the application core's
-      # example), marked disposable and kept where the app's guard allows a
-      # copy: a `picto-gpui-…` folder directly in the system's temporary
-      # folder. Then the off-screen tool plays `ci/smoke.txt` into it with
-      # GPUI's wgpu renderer on the software adapter (lavapipe on Linux,
-      # WARP through Direct3D 12 on Windows).
-      - name: Pictures
-        shell: bash
         run: |
+          . ci/env.sh
+          xvfb-run -a -s "-screen 0 1024x768x24" \
+            "$PICTO_TESTS" --ignored --exact \
+            imports::drop::tests::an_x11_drop_of_a_file_offered_to_save_arrives_whole
+
+      # The library that the pictures are taken in holds 2,000 generated
+      # pictures. A program of the application core generates it
+      # (`core/examples/million_grid_demo.rs`). That program belongs to the
+      # repository root's Cargo workspace, so building it compiles the
+      # shared crates once more, which takes several minutes. The generated
+      # library depends only on the shared crates, so it is kept in the
+      # cache under a key made from their files, and it is generated again
+      # only when one of them changed.
+      #
+      # The library is always made in the same folder, because it stores the
+      # full paths of its files.
+      - name: Test library (from the cache)
+        id: library
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/picto-synthetic
+          key: picto-synthetic-2000-${{ runner.os }}-${{ hashFiles('core/**', 'picto-library/**', 'picto-sources/**', 'Cargo.lock') }}
+
+      - name: Test library (generate)
+        if: steps.library.outputs.cache-hit != 'true'
+        run: |
+          # This step calls Cargo, so it does not read `ci/env.sh`.
           native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
           unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
-          if [[ "$RUNNER_OS" == Windows ]]; then temp="$(unix "$TEMP")"; else temp=/tmp; fi
-          scratch="$(mktemp -d "$temp/picto-gpui-synthetic.XXXXXX")"
-          library="$scratch/Synthetic.library"
+          library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
+          rm -rf "$(dirname "$library")"
+          mkdir -p "$(dirname "$library")"
           (cd ../.. && PICTO_DEMO_ITEMS=2000 cargo run --locked -p picto_core --example million_grid_demo -- "$(native "$library")")
+          # The marker file says that the folder is a generated library and
+          # not one a person keeps. The app copies only a marked folder
+          # without asking.
           printf 'synthetic:million_grid_demo\n' > "$library/.gpui-disposable"
-          # The pictures are taken in a copy the app itself makes, as a user
-          # on this system would make one.
-          # Through cargo, which puts the libraries the core's ONNX Runtime
-          # links (libwebgpu_dawn.so on Linux) on the loader's path.
-          copy="$(cargo run --locked -q -- --make-copy "$(native "$library")" | tail -n 1)"
+
+      # Takes the pictures. The app first makes its own copy of the test
+      # library, as a user on this system would (`--make-copy`), in a
+      # `picto-gpui-…` folder in the system's temporary folder, which is the
+      # only place where the app opens a copy. Then the test program plays
+      # `ci/smoke.txt` into the app in an off-screen window and saves a
+      # picture at each `shot` line. The window is drawn by GPUI's wgpu
+      # renderer on the software adapter: lavapipe on Linux, and WARP
+      # through Direct3D 12 on Windows.
+      - name: Pictures
+        run: |
+          . ci/env.sh
+          library="$(unix "$RUNNER_TEMP")/picto-synthetic/Synthetic.library"
+          copy="$("$PICTO_APP" --make-copy "$(native "$library")" | tail -n 1)"
           echo "copy: $copy"
           echo "PICTO_CI_COPY=$copy" >> "$GITHUB_ENV"
           out="$(unix "$RUNNER_TEMP")/pictures"
@@ -136,7 +224,7 @@ jobs:
           PICTO_GPUI_COPY="$copy" \
           PICTO_GPUI_SCRIPT="$(native "$PWD/ci/smoke.txt")" \
           PICTO_GPUI_OUT="$(native "$out")" \
-            cargo test --locked -- --ignored --exact offscreen::plays_a_script --nocapture
+            "$PICTO_TESTS" --ignored --exact offscreen::plays_a_script --nocapture
 
       - name: Upload pictures
         if: always()
@@ -146,24 +234,28 @@ jobs:
           path: ${{ runner.temp }}/pictures
           if-no-files-found: warn
 
-      # Cloud sync end to end in the off-screen tool (`ci/cloud.txt`): a
-      # library made in a test folder syncs to a folder standing in for a
-      # Dropbox desktop folder, takes a snapshot, and is restored from it in
-      # Settings › Cloud, which closes the library, replaces its database and
-      # opens it again (on Windows this fails if the app still holds a
-      # connection to the database). No provider or account is contacted.
+      # Checks cloud sync from start to end, with the script `ci/cloud.txt`
+      # played in an off-screen window. The script creates a library in a
+      # test folder and connects it to a plain folder that stands in for the
+      # Dropbox desktop folder. It syncs, takes a snapshot, changes the
+      # library, and then restores the snapshot in Settings › Cloud. A
+      # restore closes the library, replaces its database and opens it
+      # again; on Windows that fails if the app still has the database open.
+      # The lines after the script check that the library is back in the
+      # state of the snapshot. No cloud provider and no account is
+      # contacted.
       - name: Cloud
-        shell: bash
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           if [[ "$RUNNER_OS" == Windows ]]; then temp="$(unix "$TEMP")"; else temp=/tmp; fi
           scratch="$(mktemp -d "$temp/picto-gpui-cloud.XXXXXX")"
           mkdir -p "$scratch/libraries" "$scratch/Dropbox" "$scratch/state" "$scratch/data"
           out="$(unix "$RUNNER_TEMP")/cloud"
           mkdir -p "$out"
           cloud="$(native "$scratch/Dropbox")"
-          # A backslash doubled: once for JSON, and again for sed.
+          # `twice` doubles every backslash of a Windows path. The script is
+          # JSON, where a backslash is written twice, and `sed` halves the
+          # backslashes of its replacement text once more.
           twice() { printf '%s' "$1" | sed 's/\\/\\\\/g'; }
           image() { twice "$(native "$(cd ../.. && pwd)/resources/tutorial/$1")"; }
           sed -e "s|__LIBRARIES__|$(twice "$(native "$scratch/libraries")")|" \
@@ -179,13 +271,14 @@ jobs:
           PICTO_GPUI_APP_DATA="$(native "$scratch/data")" \
           PICTO_GPUI_SCRIPT="$(native "$scratch/cloud.txt")" \
           PICTO_GPUI_OUT="$(native "$out")" \
-            cargo test --locked -- --ignored --exact offscreen::plays_a_script --nocapture 2>&1 | tee "$out/cloud.log"
+            "$PICTO_TESTS" --ignored --exact offscreen::plays_a_script --nocapture 2>&1 | tee "$out/cloud.log"
           answers="$(grep -E '^(navigation\.get|cloud\.)' "$out/cloud.log")"
           before="$(grep '^navigation.get' "$out/cloud.log" | head -n 1)"
           after="$(grep '^navigation.get' "$out/cloud.log" | tail -n 1)"
           echo "$answers" | cut -c1-200
-          # The folder made after the snapshot is there before the restore
-          # and gone after it; the one made before it stays.
+          # The script makes a folder named "Before", takes the snapshot,
+          # and then makes a folder named "After". Before the restore both
+          # folders exist. After the restore only "Before" exists.
           [[ "$before" == *'String("After")'* ]]
           [[ "$after" == *'String("Before")'* ]]
           [[ "$after" != *'String("After")'* ]]
@@ -201,9 +294,10 @@ jobs:
           path: ${{ runner.temp }}/cloud
           if-no-files-found: warn
 
-      # The sign-in window runs on the system's web view: WebView2 needs its
-      # runtime, which a Windows image may not have; the Evergreen
-      # bootstrapper installs it from Microsoft when it is missing.
+      # The sign-in window is drawn by the system's web view. On Windows
+      # that is WebView2, which needs its runtime installed, and a Windows
+      # image may not have it. This step installs the runtime from Microsoft
+      # with the Evergreen bootstrapper when it is missing.
       - name: WebView2 Runtime (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -230,19 +324,19 @@ jobs:
           if (-not $version) { throw 'The WebView2 Runtime is not installed.' }
           "WebView2 Runtime $version"
 
-      # The sign-in window opened for real in the app on the copy above, on
-      # the system's web view (WebKitGTK in a GTK window on a virtual X
-      # display on Linux, WebView2 on Windows), against a login the app
-      # serves itself on the loopback (`src/logins/check.rs`): a page that
-      # cannot load, Cancel, the window closed, and a sign-in whose cookie is
-      # saved through `auth.credentials.set`, read back and removed. No site
-      # is contacted, nothing runs or downloads, and logins stay in the
-      # process.
+      # Checks the window in which a user signs in to a subscription site.
+      # The app is started for real on the copy made above and opens its
+      # sign-in window on the system's web view: WebKitGTK in a GTK window
+      # on a virtual X display on Linux, and WebView2 on Windows. The page
+      # it shows is a login page that the app serves itself on this machine
+      # (`src/logins/check.rs`). The check goes through four cases: a page
+      # that cannot be loaded, Cancel, the window being closed, and a
+      # sign-in whose cookie is saved, read back and removed again. No real
+      # site is contacted, no subscription runs, nothing is downloaded, and
+      # the login is kept in memory only.
       - name: Sign-in window
-        shell: bash
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           out="$(unix "$RUNNER_TEMP")/login-check"
           mkdir -p "$out/state" "$out/data"
           export PICTO_GPUI_HOLD_RUNS=1 PICTO_GPUI_HOLD_DOWNLOADS=1 PICTO_GPUI_SILENT=1
@@ -250,42 +344,48 @@ jobs:
           export PICTO_GPUI_LOGIN_ORIGIN=http://127.0.0.1:47613
           export PICTO_GPUI_LOGIN_CHECK="$(native "$out")"
           if [[ "$RUNNER_OS" == Linux ]]; then
-            # A virtual display has no GPU buffers to share with WebKit's
-            # renderer.
+            # WebKit's renderer normally shares graphics buffers with the
+            # display. A virtual display has none, so that way of drawing
+            # is switched off.
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
             run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
           else
             run=()
           fi
           status=0
-          timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+          timeout 900 "${run[@]}" "$PICTO_APP" "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
           echo "app ended with $status"
           grep -i "login check\|panic\|sign-in window" "$out/app.log" || true
           test -f "$out/login-check.log"
           grep -qx 'result: pass' "$out/login-check.log"
 
-      # The network features in the app on the copy above, against fixtures
-      # the app serves itself on the loopback (`src/net_check.rs`): the
-      # services' icons fetched, kept and drawn or left as the globe; an
-      # update found, its installer (a stand-in the check builds, which only
-      # writes down how it was started) downloaded and verified against this
-      # system's feed (`latest.yml` on Windows, `latest-linux.yml` on Linux),
-      # a mismatching one refused and not kept and one changed after its
-      # verification never started; Search by Image on every engine in the
-      # hidden web view, each receiving exactly the file's bytes, name and
-      # type; then Restart and Install, after which the app must have quit
-      # and the stand-in run as electron-updater runs the installer: on
-      # Windows with `--updated --force-run`, on Linux moved over the
-      # AppImage `$APPIMAGE` names (a stand-in here) under its new name and
-      # run with `APPIMAGE_SILENT_INSTALL=true`. A second run quits with the
-      # update waiting instead, which installs it silently (`--updated /S`;
-      # on Linux run until it exits, with `APPIMAGE_EXIT_AFTER_INSTALL`).
-      # No real service is contacted and no real installer is started.
+      # Checks the features that use the network. The app is started for
+      # real on the copy made above, and everything it would fetch from the
+      # internet is served by the app itself on this machine
+      # (`src/net_check.rs`). No real service is contacted and no real
+      # installer is started. The check covers:
+      # - the icons of the subscription services: fetched, kept, and drawn,
+      #   or replaced by the globe icon when there is none;
+      # - an update: it is found, and its installer is downloaded and
+      #   compared with the checksum in this system's feed file (`latest.yml`
+      #   on Windows, `latest-linux.yml` on Linux). An installer that does
+      #   not match is refused and deleted, and one that is changed after it
+      #   was compared is never started. The installer here is a stand-in
+      #   that the check builds, which only writes down how it was started;
+      # - Search by Image on every engine, in the hidden web view. Each
+      #   engine must receive exactly the file's bytes, name and type;
+      # - Restart and Install: the app must quit, and the stand-in must be
+      #   started the way electron-updater starts an installer. On Windows
+      #   that is with `--updated --force-run`. On Linux the new AppImage is
+      #   moved over the file that `$APPIMAGE` names (a stand-in here) under
+      #   its new name and run with `APPIMAGE_SILENT_INSTALL=true`;
+      # - a second run of the app that is quit while the update waits. The
+      #   update must then be installed silently: with `--updated /S` on
+      #   Windows, and on Linux run until it exits, with
+      #   `APPIMAGE_EXIT_AFTER_INSTALL`.
       - name: Network features
-        shell: bash
         run: |
-          native() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
-          unix() { if [[ "$RUNNER_OS" == Windows ]]; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+          . ci/env.sh
           if [[ "$RUNNER_OS" == Linux ]]; then
             export WEBKIT_DISABLE_DMABUF_RENDERER=1
             run=(xvfb-run -a -s "-screen 0 1920x1080x24" dbus-run-session --)
@@ -305,10 +405,11 @@ jobs:
             export PICTO_GPUI_NET_ORIGIN=http://127.0.0.1:47614
             export PICTO_GPUI_NET_CHECK="$(native "$out")"
             status=0
-            timeout 900 "${run[@]}" cargo run --locked -q -- "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
+            timeout 900 "${run[@]}" "$PICTO_APP" "$PICTO_CI_COPY" > "$out/app.log" 2>&1 || status=$?
             echo "app ended with $status"
             grep -i "net check\|panic\|search by image\|web view\|install" "$out/app.log" || true
-            # Ended by itself, not by the timeout.
+            # Status 124 means that `timeout` stopped the app. The app must
+            # end by itself.
             test "$status" != 124
             test -f "$out/net-check.log"
             grep -qx 'result: pass' "$out/net-check.log"
@@ -366,3 +467,11 @@ jobs:
             ${{ runner.temp }}/login-check/*.log
             ${{ runner.temp }}/login-check/*.png
           if-no-files-found: warn
+
+      # Checks that the app compiles the way a release compiles it: without
+      # the GPUI features that only the tests switch on. Everything above
+      # was built with them. This step only type-checks and produces no
+      # program, so it takes much less time than a second build. It is the
+      # last step so that a failure in it does not hide the results above.
+      - name: Compiles without the test features
+        run: cargo check --locked
