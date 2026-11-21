@@ -6,14 +6,19 @@ A native frontend for Picto in Rust on GPUI (the UI framework of the Zed
 editor), built to behave and look like the Electron app's renderer (`src/` at
 the repository root). It runs Picto's own application layer (`core/`,
 `picto-library/`) inside the process, as the Electron app does through its
-native addon, so commands, background workers and events are production's.
-It covers most of what a user does day to day (browsing, selecting, the
-inspector, menus, the viewers, imports, exports, the Tags, Subscriptions and
-Duplicates screens, Settings), but it is not a replacement: section 7 says
-what is open. It opens a disposable copy of a library, and a library the user
-keeps only under the rules of section 2. It is developed and used on macOS;
-Windows and Linux are built, tested and photographed off-screen in CI and
-have never been used on a screen.
+native addon, so the commands, the background workers and the events are the
+same as the Electron app's. It covers most of what a user does day to day
+(browsing, selecting, the inspector, menus, the viewers, imports, exports,
+the Tags, Subscriptions and Duplicates screens, Settings). It is meant to
+replace the Electron app as the next version of Picto: a release build has
+the Electron app's name and id, and its packages have the names of the
+Electron app's packages and install over them (section 3). It has not
+replaced the Electron app yet. Section 7 says what is open, and the
+project's releases are still built from the Electron app. It opens a
+disposable copy of a library, and a library the user keeps only under the
+rules of section 2. It is developed and used on macOS; Windows and Linux are
+built, tested and photographed off-screen in CI and have never been used on
+a screen.
 Issue: https://github.com/midona-rhel/picto/issues/163
 
 ## 2. Running it safely
@@ -55,11 +60,11 @@ The core's application data outside a library (its AI models, in `models/`)
 is, in a debug build, `app-data/` beside the copy or the folder
 `PICTO_GPUI_APP_DATA` names, never the Electron app's folder
 (`application::application_data`). The core may write there whenever it
-opens, so to try the AI tagger with models production downloaded, point the
+opens, so to try the AI tagger with models the Electron app downloaded, point the
 variable at an APFS clone of them (`cp -Rc "$HOME/Library/Application
 Support/picto/models" <folder>/models`), never at the real folder. A release
-build uses production's location (`picto` in the per-user application data
-folder) and so shares production's models.
+build uses the Electron app's location (`picto` in the per-user application data
+folder) and so shares the Electron app's models.
 
 Files reach the rest of the desktop only through `src/desktop/` (open with
 the default application, Open With, reveal, copy files, Copy File Path, drag
@@ -81,7 +86,7 @@ the test that proves it.
 1. **It is a library, and not a copy out of place.** A folder that passes
    the guard opens as a copy. A marked folder that fails it is refused with
    the guard's words. Anything else must be a `.library` folder holding
-   `library.sqlite`; an empty `.library` folder is refused, where production
+   `library.sqlite`; an empty `.library` folder is refused, where the Electron app
    would create a library
    (`a_copy_opens_as_before_and_a_marked_folder_elsewhere_is_refused`,
    `what_is_not_a_library_is_refused`).
@@ -97,25 +102,40 @@ the test that proves it.
 4. **The user asked for it**: the Library Manager, Open Library…, Recent
    Libraries, the sidebar's switcher, the library last open (`lastLibrary`
    in this app's `state.json`), a library found with Locate…, or the command
-   line with the flag. A missing last library asks production's "Library
+   line with the flag. A missing last library asks the Electron app's "Library
    Not Found" question (Locate…, Remove from List, Cancel;
    `host::start_last`); a library Locate… finds takes the old one's place
    and is opened through every rule here
    (`locate_finds_the_library_chosen_or_the_one_inside_the_folder`). A file
    the system hands over never opens a library (`opening::accept`,
    `only_a_library_the_user_chose_is_opened`).
-5. **The Electron app is not running.** The installed Picto takes no lock
-   this app can see, so any process of it, or a failure to look, refuses the
-   open (`src/libraries/platform/`: process executables on macOS, `/proc` on
-   Linux, a Tool Help snapshot on Windows; `Picto.app`/`Picto`/`Picto
-   Helper…`, `picto` or a `Picto…AppImage`, `Picto.exe`). While a library
-   the user keeps is open the check runs again whenever the main window
-   becomes active, and a running Picto puts a notice over the window until
-   it quits (Check Again) or the library is closed
-   (`libraries::host::check_picto`;
+5. **No other Picto is running.** The Electron app takes no lock that this
+   app can see, so the app looks at the running processes
+   (`src/libraries/platform/`: the executable paths on macOS, `/proc` on
+   Linux, a Tool Help snapshot on Windows). A process is a Picto when its
+   program is named `Picto` or `Picto Helper…` on macOS, `Picto.exe` on
+   Windows, and `picto` on Linux, or when it was started from a
+   `Picto…AppImage`. Those are the names of the Electron app and of a
+   packaged release build of this app, which is the same program in its next
+   version. The process that looks is left out, and on Linux also the
+   AppImage runtime that serves its own files. A debug build has other names
+   (`picto-gpui-spike`, `PictoGPUI`) and is not counted.
+
+   A release build looks once when it starts, before it does anything else,
+   and does not start when it finds a Picto (`exit_if_another_picto_runs` in
+   `main.rs`). So only one Picto runs at a time, whether it is the Electron
+   app or this app. A debug build does not look at start, because several
+   debug builds run at once on purpose, each on its own disposable copy.
+
+   In every build, a library the user keeps is refused while another Picto
+   runs, and also when the processes could not be looked at. While such a
+   library is open the check runs again whenever the main window becomes
+   active, and a running Picto puts a notice over the window until it quits
+   (Check Again) or the library is closed (`libraries::host::check_picto`;
    `a_kept_library_is_refused_while_picto_runs_or_cannot_be_checked`). The
-   probe sees names and paths only: not Picto run from source, renamed, run
-   by another user, or on another machine over a network share.
+   check sees names only. It does not see a Picto that was run from source,
+   was renamed, is run by another user, or runs on another machine over a
+   network share.
 6. **The core finds its schema current**, read through SQLite's `immutable`
    flag, which writes nothing (`admission::compatibility`,
    `picto_library::schema::validate`). An older schema is refused with the
@@ -139,7 +159,7 @@ windows, whose commands would otherwise reach the next library
 
 The first run may list the Electron app's libraries (`libraries::seed`):
 when this app's list is empty and was never seeded, a process that may list
-libraries the user keeps reads production's `config.json` read-only and
+libraries the user keeps reads the Electron app's `config.json` read-only and
 copies its `libraryHistory` and `pinnedLibraries`, once. Seeding only lists:
 no consent, no last library, nothing opened
 (`seeding_happens_once_into_an_empty_list_and_only_lists`,
@@ -161,7 +181,7 @@ Thumbnail, and the library's cover.
 
 The Library Manager's Rename, Show in File Manager, Move… and Delete… on a
 library that is not open run `admission::admit` first (`host::permit`) and
-ask the consent question (production has no such question). Delete… is
+ask the consent question (the Electron app has no such question). Delete… is
 refused for the open library and removes only a real `.library` folder
 holding `library.sqlite` that no one else holds locked
 (`delete_removes_only_a_library_that_is_neither_open_nor_held`); Move…
@@ -170,7 +190,7 @@ original (`a_copy_across_volumes_is_verified_before_the_original_goes`).
 
 ### Cloud
 
-Production's cloud sync signs in to nothing: a library publishes verified
+The Electron app's cloud sync signs in to nothing: a library publishes verified
 snapshots of its database and originals into the folder of a Google Drive or
 Dropbox desktop app on the device, which carries them on. The core owns all
 of it (`core/src/cloud/`, commands `cloud.*`); this app sends the same
@@ -211,17 +231,27 @@ cargo run --locked -- <that path>
 database, copies the rest with the system's file copy (clones on APFS,
 btrfs, XFS and ReFS, a full copy elsewhere), refuses a library holding a
 symbolic link, writes the marker, detaches and guards the copy, and leaves
-nothing behind if it fails. On Linux run through `cargo run`, which puts the
-core's ONNX Runtime libraries on the loader's path.
+nothing behind if it fails. On Linux the program finds the application
+core's ONNX Runtime library (`libwebgpu_dawn.so`) in its own folder, where
+the build puts it (`build.rs` sets the program's run path to `$ORIGIN`), so
+it can be started through `cargo run` or directly.
 
 With no argument the app opens the library it had open last, if it may, and
-otherwise shows production's gate. `<copy> --detach` detaches and exits
-(`reference.sh` uses it). Files after the copy are opened as production opens
-files from the file manager (`src/opening/`): a `.picto-pack` goes to the
-pack import dialog; a `.library` other than the open one is refused. There
-is one instance per library: a second launch on it hands its files over and
-exits; a launch with files and no copy hands them to the instance active
-last. No file type is registered with the system.
+otherwise shows the gate that the Electron app shows. `<copy> --detach`
+detaches and exits (`reference.sh` uses it). `--version` as the only
+argument prints the app's name, its version and the folder it takes `ffmpeg`
+from, and exits before anything else of the app has run. Files after the
+copy are opened as the Electron app opens files from the file manager
+(`src/opening/`): a `.picto-pack` goes to the pack import dialog; a
+`.library` other than the open one is refused.
+
+A debug build has one instance per library: a second launch on the same
+library hands its files over and exits, and a launch with files and no copy
+hands them to the instance that was active last. A release build is the
+only Picto that runs (rule 5 above), so a launch with files and no copy
+starts the app as a launch without arguments does and opens the files
+itself. The packaged app registers the `.picto-pack` file type with the
+system (section 3); a build run from the build folder registers nothing.
 
 `million.sh [items]` generates a synthetic library (a million items by
 default, five smart folders) in `/tmp/picto-gpui-synthetic.XXXXXX/` with the
@@ -233,8 +263,8 @@ Electron app's data in `electron-data/`).
 
 ## 3. Building
 
-The experiment is a Cargo workspace of its own (`experiments/gpui/Cargo.toml`
-and `Cargo.lock`). The toolchain is Rust 1.98.0, pinned by the repository's
+The app is a Cargo workspace of its own (`experiments/gpui/Cargo.toml` and
+`Cargo.lock`). The toolchain is Rust 1.98.0, pinned by the repository's
 `rust-toolchain.toml`; without rustup, put that toolchain's `bin` first on
 `PATH` (`experiments/gpui/.toolchain/` is ignored by Git for that).
 
@@ -261,9 +291,18 @@ holds the diff against 0.3.12.
 
 The `dev` profile builds this crate at `opt-level = 1` and dependencies at
 `opt-level = 2`, with line tables only and incremental compilation off, to
-keep build output small; there is no tuned release profile, and `cargo build
---release` drops the test seams. Expect about 1,100 packages, a 156 MB debug
-binary and about 7 GB of `target/`.
+keep build output small. Expect about 1,100 packages, a 156 MB debug binary
+and about 7 GB of `target/`.
+
+The `release` profile (`cargo build --locked --release`) is the one the
+packages are built with. It optimizes fully, uses thin link-time
+optimization, strips the symbols and keeps debug assertions off; the
+comments in `Cargo.toml` say what each setting is for. Without debug
+assertions the program holds none of the test seams of `src/seams.rs`, keeps
+logins in the system keychain, uses the Electron app's application data
+folder (section 2), has the name Picto and the id `com.picto.desktop`
+(`APP_NAME` and `APP_ID` in `src/desktop/mod.rs`), and does not start while
+another Picto runs. On Windows a release build has no console window.
 
 Linux needs: `pkg-config clang cmake libasound2-dev libclang-dev
 libdbus-1-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1
@@ -271,10 +310,79 @@ libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libudev-dev
 libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev
 libjavascriptcoregtk-4.1-dev` (and `mesa-vulkan-drivers` for software
 drawing; WebKitGTK 2.38 or later at run time for the sign-in window). On
-Windows the sign-in window needs the WebView2 Runtime. Video beyond what
-AVFoundation plays needs the core's `ffmpeg` binary: `PICTO_FFMPEG_DIR`, then
-`vendor/ffmpeg/` in or above the working directory or the executable
-(`scripts/download-ffmpeg.sh`), then `PATH`.
+Windows the sign-in window needs the WebView2 Runtime, and a build needs the
+Windows SDK, whose resource compiler puts the icon and the version
+information into the program (`build.rs`, through the `embed-resource`
+crate that GPUI's build already uses).
+
+Video beyond what AVFoundation plays needs the application core's `ffmpeg`
+and `ffprobe` programs. The core and the source providers look for them in
+the folder `PICTO_FFMPEG_DIR` names first, then in `vendor/ffmpeg/` in or
+above the working directory (`scripts/download-ffmpeg.sh` puts them there),
+then on `PATH`. A program that has `ffmpeg` in its own folder, as the
+packaged app has, sets `PICTO_FFMPEG_DIR` to that folder when it starts,
+unless the variable is already set (`main.rs`).
+
+### Packages
+
+`./package.sh` builds the release program and makes the package for the
+system it runs on, in `target/package/`. `ffmpeg` and `ffprobe` must be in
+`vendor/ffmpeg/` at the repository's root first (`bash
+scripts/download-ffmpeg.sh` there). Arguments of the script go to `cargo
+build`. The packages take the place of the Electron app's packages: they
+have the same file names, and an installed Electron app is upgraded by
+them.
+
+| System | Files | What is in the package |
+| --- | --- | --- |
+| macOS, arm64 | `Picto-<version>-arm64.dmg`, `Picto-<version>-arm64-mac.zip`, `latest-mac.yml` | `Picto.app` with the program, `ffmpeg` and `ffprobe` in `Contents/MacOS`, `packaging/macos/Info.plist`, and the icons in `Contents/Resources`. The disk image also holds a link to the Applications folder. |
+| Windows, x64 | `Picto-Setup-<version>.exe`, `latest.yml` | An NSIS installer (`packaging/windows/installer.nsi`) with `Picto.exe`, the DLLs the build put beside it (the application core's ONNX Runtime and DirectML), `ffmpeg.exe`, `ffprobe.exe` and the icon of pack files. Needs NSIS 3 (`makensis`) and Git Bash. |
+| Linux, x64 | `Picto-<version>.AppImage`, `latest-linux.yml` | An AppImage with `usr/bin/picto`, `libwebgpu_dawn.so`, `ffmpeg` and `ffprobe` beside it, `packaging/linux/AppRun`, the desktop file and the icon. Needs `appimagetool`, on the `PATH` or named by `APPIMAGETOOL`. |
+
+The version is the one in the repository's `package.json`. The `.yml` files
+are update feeds in the format electron-builder writes: the version, each
+package with its SHA-512 and its size, and a release date. The app's updater
+(`src/updates/feed.rs`) and the Electron app's updater read them. The files
+`*.blockmap` that electron-builder also writes are not made; an updater that
+does not find one downloads the whole package.
+
+On macOS the app's icon is compiled from `build/Picto.icon` with `actool`
+when Xcode 26 or later is installed, with the arguments electron-builder
+uses, and is otherwise made from `build/icon-flat.png`. The app is signed
+with the project's certificate "Picto Code Signing" when `MAC_CSC_LINK` and
+`MAC_CSC_KEY_PASSWORD` are set (`scripts/sign-mac-app.mjs`, which shares
+`scripts/mac-signing.mjs` with the Electron package), and the script says so
+plainly when it is not. `Info.plist` declares `.picto-pack` as a file the
+app opens, and `.library` as a folder that the Finder shows as one file; it
+does not offer the app as the program that opens a `.library`, because the
+app does not open a library the system hands to it (section 2, rule 4).
+
+The Windows installer uses the registry keys, the folder, the shortcuts and
+the arguments of the installer electron-builder made for the Electron app,
+so it upgrades that installation in place: it runs the old version's own
+uninstaller, which removes the old files and keeps the user's data, and
+then installs into the same folder. It accepts `/S`, `--updated`,
+`--force-run`, `/currentuser`, `/allusers` and `/D=<folder>`. It registers
+`.picto-pack`, and its uninstaller removes only what the installer put
+there. Neither deletes application data. It differs from electron-builder's
+installer in three ways: its texts are in English only, an upgrade never
+asks for the folder or for whom to install, and the uninstaller has no
+option to delete application data.
+
+The AppImage does not hold the libraries of the system that the program is
+linked against (GTK 3, WebKitGTK 4.1, ALSA, fontconfig, xkbcommon, Wayland
+and Vulkan). The Electron app's AppImage needed none of them. On Ubuntu
+24.04 the packages are `libwebkit2gtk-4.1-0 libgtk-3-0t64 libasound2t64
+libfontconfig1 libxkbcommon-x11-0 libwayland-client0 libvulkan1`.
+
+The debug bundle that `run.sh` makes, `target/Picto GPUI.app`, is not a
+package. It has its own `Info.plist` inside `run.sh`, with another name and
+another id, so that it is never taken for the installed app.
+
+`.github/workflows/gpui-package.yml` builds the three packages and checks
+each one (section 6, "CI"). The packages are not part of a release yet: the
+project's releases are still built from the Electron app by
+`alpha-gate.yml`.
 
 ## 4. How it is put together
 
@@ -295,13 +403,13 @@ never touched from the thread that draws.
 list, the destination shown and its history, its results as a window over
 the destination, the selection, the viewer, and library edits. It emits a
 `Change` so each view repaints only for what it shows; `events.rs` turns the
-core's change events into reads, as production's settle stores do. A query-wide
+core's change events into reads, as the Electron app's settle stores do. A query-wide
 selection (Select All, a range) is addressed through the library
 (`Session::selection_target`), never through the loaded items. Rule: views
 change the session through its methods; no view owns another's state.
 
 **Shared UI** (`ui/`). One implementation of each control, as
-`src/shared/ui` is for production. The pieces every view relies on: layers
+`src/shared/ui` is for the Electron app. The pieces every view relies on: layers
 by name (`layer.rs`), floating panels (`popover.rs`), focus and tab scopes
 (`focus.rs`), the context menu (`menu.rs`, `menu/`; pop-up windows on macOS,
 drawn in the window elsewhere), dialogs (`modal.rs` with its `Host`, which
@@ -373,24 +481,24 @@ turns window points into screen points goes through `zoom`'s conversions.
 
 **Keys and the application menu** (`settings/registry.rs`, `keymap.rs`,
 `app_menu/`, `shell/menu_commands.rs`, `shell/shortcuts.rs`). The registry
-holds production's `shortcuts.ts` as data: the id, the label, the group and
+holds the Electron app's `shortcuts.ts` as data: the id, the label, the group and
 the default keys of every shortcut. `keymap.rs` makes the key bindings from
 the registry, the keyboard preset and the user's overrides, and binds each
-shortcut in the scope in which production handles it. The application menu
-is one model of production's `menu.mjs` (`app_menu/model.rs`). On macOS it
+shortcut in the scope in which the Electron app handles it. The application menu
+is one model of the Electron app's `menu.mjs` (`app_menu/model.rs`). On macOS it
 is shown as the menu bar. On Windows and Linux it is shown as a menu that a
 button in the titlebar opens (`app_menu/presentation.rs`).
 
 A command that the menu and the keys share is handled once, in
-`Shell::menu_actions`, under the rule that production's menu has for it. A
-menu row that has keys in production uses the keymap's action. A menu row
-that has no keys in production has an action of its own, which is handled
+`Shell::menu_actions`, under the rule that the Electron app's menu has for it. A
+menu row that has keys in the Electron app uses the keymap's action. A menu row
+that has no keys in the Electron app has an action of its own, which is handled
 under the same rule. Each action is handled only while its rule holds. A
 row of the menu bar is enabled exactly while something handles its action,
 so the row and the key follow one rule.
 
-Twelve shortcuts of production's registry are marked as deferred there,
-because production has no handler for them. This app implements two of
+Twelve shortcuts of the Electron app's registry are marked as deferred there,
+because the Electron app has no handler for them. This app implements two of
 them: `nav.commandPalette` and `nav.goToFolder` open the Quick Search panel
 (below). The other ten are not implemented, are bound to no key, and are
 not listed in Settings › Shortcuts. They are listed in `keymap::NOT_YET`:
@@ -621,7 +729,7 @@ classification of the grid's destination.
 `media.export` and `picto_pack.*`, the command line and opened files, one
 instance per library (a lock plus a Unix socket or named pipe).
 
-**Site logins** (`logins/`, `platform/login_window/`). Production's
+**Site logins** (`logins/`, `platform/login_window/`). The Electron app's
 `authSessions.mjs`: the service's own login page in a sign-in window on the
 system's web view (WKWebView, WebView2, WebKitGTK through `wry`), each on a
 private data store; per-service completion rules in `adapters/`; the session
@@ -645,16 +753,16 @@ through `host::rename`, `move_library` or `delete`.
 guarded file hand-offs; `mod.rs` is portable, `macos.rs`, `windows.rs` and
 `linux.rs` hold the platform calls.
 
-**Languages** (`i18n/`). Production's eight catalogs (included from the
+**Languages** (`i18n/`). The Electron app's eight catalogs (included from the
 repository root at build time) and its rules: `t("English text")`,
 `tf!("… {value0} …", a)`. The language is the one chosen in Settings, else
 the system's, else English, switched live in every window. Numbers and dates
-follow the system's language, as production's `toLocaleString()` does
+follow the system's language, as the Electron app's `toLocaleString()` does
 (`format.rs`, checked against ICU).
 
 **Settings and state** (`settings/`, `state.rs`). One settings model from the
-library's rows with production's fallbacks, edited as a draft. What
-production keeps per machine is kept in `state.json` under `Picto GPUI` in
+library's rows with the Electron app's fallbacks, edited as a draft. What
+the Electron app keeps per machine is kept in `state.json` under `Picto GPUI` in
 the platform's configuration folder, never in the Electron app's folder or
 a library; written 250 ms after the last change and on quit; an unreadable
 file is set aside as `state.json.corrupt`.
@@ -668,7 +776,7 @@ file is set aside as `state.json.corrupt`.
   `shell/item_menu/actions.rs`); fix it rather than adding a variant.
 - **Library edits** go through `session::edit_then` (`edit_then_in` when the
   follow-up needs the window) or `Session::edit_reporting`, with a `Report`
-  (the failure's title as production words it, a broad change announced
+  (the failure's title as the Electron app words it, a broad change announced
   with Undo) and a `Reread` (what to read again). **Reads** go through
   `session::read_then` (`read_then_in`), or `Session::run` when nothing
   follows on a view; core commands through `Session::dispatch` or
@@ -718,9 +826,9 @@ file is set aside as `state.json.corrupt`.
 - **Test seams are debug-build only**, read in `src/seams.rs` under
   `cfg(debug_assertions)`; the off-screen tool's variables, dialog answers
   and the record of desktop requests exist in test builds only.
-- **Every shown text goes through `t`**, written as production's English key
+- **Every shown text goes through `t`**, written as the Electron app's English key
   (`t("Move to Trash")`, `tf!("Delete {value0} items", count)`). Text
-  production has no key for is `en("…")` and listed in
+  the Electron app has no key for is `en("…")` and listed in
   `src/i18n/gpui_only.txt`; a key-like literal that is not shown carries
   `// i18n: <why>`. `i18n::guard::every_shown_text_goes_through_t` enforces
   it.
@@ -741,7 +849,7 @@ cargo test --locked
 ```
 
 Most tests are pure (layout geometry, the grid's window, the context menus
-against production's `gridContextMenu.test.tsx` cases, the filter model, the
+against the Electron app's `gridContextMenu.test.tsx` cases, the filter model, the
 keymap, the viewers' arithmetic, the safety guard and detach, the state
 file, the format matrix's fixtures, each shared control's accessibility
 tree). The ignored ones need something a plain run lacks; run them by name:
@@ -755,6 +863,7 @@ tree). The ignored ones need something a plain run lacks; run them by name:
 | `renders_a_real_file` | `PICTO_GPUI_MEDIA=<file>` (`PICTO_GPUI_MEDIA_MIME` for its type) |
 | `stop_reloads_the_movie_at_its_first_frame`, `real_swf_produces_frames_and_responds_to_mouse` | a native GPU adapter |
 | `real_webm_produces_frames` | `PICTO_GPUI_TEST_WEBM` and `ffmpeg` |
+| `a_feed_written_by_the_package_script_describes_its_packages` | `PICTO_GPUI_TEST_FEED` naming an update feed that `package.sh` wrote, with its packages beside it |
 | `decodes_and_seeks_a_real_audio_file`, `plays_through_the_output_device` | `PICTO_GPUI_TEST_AUDIO` (and a sound device) |
 
 `PICTO_GPUI_TEST_VIDEO=<file> cargo test --locked --test avfoundation_frames`
@@ -825,7 +934,7 @@ before a capture, and leave a frame (50 ms) between a move that reveals a
 control and a click on it. A capture of one window shows neither a pop-up
 menu's blur nor its pop-in scale.
 
-### The production reference
+### The Electron reference
 
 `reference.sh /path/to/Name.library [n]` starts the Electron app from this
 checkout on its own copy (detached by `--detach`) with its own data and a
@@ -844,7 +953,7 @@ same size, content, scroll, selection and focus.
 | --- | --- | --- |
 | `PICTO_GPUI_FPS` | every build | frame meter in the bottom-left corner (`meter.rs`) |
 | `PICTO_GPUI_STATS` | every build | per-second counters and timings on standard error (`stats.rs`) |
-| `PICTO_FFMPEG_DIR` | every build | where `ffmpeg` is |
+| `PICTO_FFMPEG_DIR` | every build | the folder that holds `ffmpeg` and `ffprobe`; a program with `ffmpeg` in its own folder sets it itself |
 | `PICTO_DROPBOX_ROOT`, `PICTO_GOOGLE_DRIVE_ROOT` | every build (the core's) | a folder standing in for that app's; the only cloud folders under a seam |
 | `PICTO_GPUI_POINTER` | debug | input lines from a FIFO |
 | `PICTO_GPUI_BACKGROUND` | debug | windows open without the keyboard and draw while covered |
@@ -878,15 +987,45 @@ no macOS job. The workflow starts by itself only for a push to a branch
 whose name starts with `feature/163-`. For any other branch it has to be
 started by hand from the Actions page (`workflow_dispatch`).
 
+`.github/workflows/gpui-package.yml` runs `package.sh` on macOS 26, Ubuntu
+24.04 and Windows and uploads the packages as the artifacts
+`picto-macos-arm64`, `picto-linux-x64` and `picto-windows-x64`, the names
+`alpha-gate.yml` uses for the Electron app's packages. Each job then proves
+that its package works on that system:
+
+- macOS: the archive is unpacked into a new folder and the disk image is
+  mounted, and the program in each is run with `--version`. With the signing
+  certificate, the unpacked app must also pass `codesign --verify --deep
+  --strict` and hold the compiled icon catalog.
+- Linux: the AppImage is unpacked into a new folder and the program is run
+  with `--version`. Then the AppImage itself is run with `--version` in a
+  container that holds only Ubuntu 24.04 and the libraries named in section
+  3. The app's own reader checks the update feed against the AppImage (the
+  ignored test above).
+- Windows: the installer is run silently as a first installation, the
+  folder, the registry values, the shortcuts and the file association are
+  checked, the installed program is run with `--version`, the installer is
+  run again as an upgrade, and the uninstaller must remove everything. Then
+  the Electron app's installer of a published release is run, this
+  installer upgrades that installation, and the folder must hold this app
+  and none of the Electron app's files.
+
+A program that starts has found the shared libraries it is linked against,
+so the `--version` runs also prove that the libraries are in the package.
+The workflow starts by itself only for a pull request into `dev` that
+changes the packaging (`package.sh`, `packaging/`, `build.rs`, `Cargo.toml`,
+the signing scripts or the workflow), because each job makes a release
+build. For any other change it is started by hand.
+
 ## 7. Status
 
 ### What works
 
 Established by: **pictures** (the same script photographed in this app and
-in the production reference and compared), **values** (asserted against
-production's tests or hand-computed geometry), **tests** (unit tests of the
+in the Electron reference and compared), **values** (asserted against
+the Electron app's tests or hand-computed geometry), **tests** (unit tests of the
 port), **checks** (the app's own end-to-end checks), **read** (ported by
-reading production's code, seen in this app).
+reading the Electron app's code, seen in this app).
 
 | Area | Established by |
 | --- | --- |
@@ -896,7 +1035,7 @@ reading production's code, seen in this app).
 | Grid zoom: one column per step, and the 150 ms animation of the tiles | values; pictures off-screen and of a real window on macOS, taken during the animation too |
 | Filter bar and view menu | pictures; read |
 | Inspector: destination, one item, several items, pickers and dialogs | pictures |
-| Item menus and application menu | pictures; values (production's menu cases); off-screen in CI |
+| Item menus and application menu | pictures; values (the Electron app's menu cases); off-screen in CI |
 | Quick Search panel | tests (the matching and the order of the rows); pictures off-screen on macOS in the dark and the light theme, and off-screen in CI on Windows and Linux |
 | Viewer: media view, Quick Look, detail windows, Inbox review, collections | pictures; values |
 | Documents and document thumbnails | tests (format matrix); pictures |
@@ -923,16 +1062,17 @@ reading production's code, seen in this app).
 | Frosted material behind the sidebar and inspector | Acrylic, off by default; never run | none | none |
 | Context menus | in the window | in the window | in the window |
 | Application menu | titlebar button | titlebar button | titlebar button |
-| Inbox badge | none (as production) | Unity launcher D-Bus signal | same |
+| Inbox badge | none (as the Electron app) | Unity launcher D-Bus signal | same |
 | System notification | toast | freedesktop | same |
 | Copy files | `CF_HDROP` | `text/uri-list` via `xclip` | via `wl-copy` |
-| Open With Other | the system's chooser | none (as production) | none |
+| Open With Other | the system's chooser | none (as the Electron app) | none |
 | Drag items out | OLE `CF_HDROP`; never run | XDND `text/uri-list`; never run | GPUI's native drag |
 | Promised files | virtual files; checked in CI on test data | XDS; checked in CI on Xvfb | none |
 | Single instance | named pipe | Unix socket | same |
 | Detail window always on top | yes | no (pin hidden) | no |
 | Detail window aspect lock | not built | not built | not built |
 | Video | `ffmpeg` binary | same | same |
+| Package | NSIS installer; installed, upgraded and removed in CI | AppImage; started in CI | the same AppImage |
 | Sign-in window | WebView2; CI check only | WebKitGTK; CI check on Xvfb | never run |
 
 ### Deliberate differences
@@ -943,18 +1083,18 @@ reading production's code, seen in this app).
   the last library live in this app's `state.json`.
 - In a debug or test build, logins are kept in memory and are lost when the
   app quits. A release build keeps them in the system keychain, as
-  production does.
+  the Electron app does.
 - A disposable copy may connect to a cloud folder under its own identity and
   is disconnected at its next launch.
 - Commands the application menu and the keys share follow the menu's rule:
   Restore and its key work wherever the selection is in the Trash, Accept
-  and Reject wherever it is in the Inbox (production's keys look at the
+  and Reject wherever it is in the Inbox (the Electron app's keys look at the
   destination only).
 - File › New Folder starts a rename; Organize › Tags opens the Tags screen;
   Copy in the application menu copies the selection's files.
-- This app has a Quick Search panel (section 4), which production does not
+- This app has a Quick Search panel (section 4), which the Electron app does not
   have. It adds a button to the titlebar and the row View › Quick Search… to
-  the application menu. Production registers the shortcuts
+  the application menu. The Electron app registers the shortcuts
   `nav.commandPalette` (⌘K, "Command Palette") and `nav.goToFolder` (⌘J) as
   deferred and binds them to nothing. In this app `nav.commandPalette` is
   called "Quick Search", has the keys ⌘T and ⌘K, and opens the panel, and
@@ -974,31 +1114,31 @@ reading production's code, seen in this app).
 - Keyboard moves, Home, End and the page keys go across the whole
   destination.
 - On macOS Close Window hides the main window; elsewhere closing it quits.
-- Failures production leaves silent are reported (Copy, Regenerate
+- Failures the Electron app leaves silent are reported (Copy, Regenerate
   Thumbnail, Set as Thumbnail, exports).
-- Production bugs not copied: live translation of shortcut labels, Tab
+- Bugs of the Electron app that are not copied: live translation of shortcut labels, Tab
   trapped in dialogs, the folder drag ghost on the pointer, no reorder
   marker where reordering cannot work, Export on a folder's inspector, a
   rendered cover crop shown.
-- Files promised by a drag are imported on macOS (production imports none).
+- Files promised by a drag are imported on macOS (the Electron app imports none).
 - The Export dialog's formats end with ZIP Archive: the original files in
   one archive, `Picto Export.zip`, in the chosen folder (`media.export`
-  with the `zip` format, which production's dialog does not list).
+  with the `zip` format, which the Electron app's dialog does not list).
 - Toggle Panels hides the sidebar and the inspector together or shows them
   together: when at least one is showing, every one that is showing is
-  hidden, and when both are hidden, both are shown (production flips each
+  hidden, and when both are hidden, both are shown (the Electron app flips each
   one, so one can appear as the other disappears).
-- The sidebar and the inspector slide over the same 100 ms (production's
+- The sidebar and the inspector slide over the same 100 ms (the Electron app's
   sidebar takes 50 ms). What is between them takes its new width in the
   frame in which they start to slide, and that frame is already laid out
   for the new width (`ui::sized`, section 5). While the sidebar and the
   inspector slide, they are drawn over it.
 - A picture's original is read once it has been on screen for 200 ms, in
-  the viewers and the grid alike (production: 100 ms and 250 ms). In the
+  the viewers and the grid alike (the Electron app: 100 ms and 250 ms). In the
   viewers the same 200 ms wait applies before a video or audio player, a
   document or a Flash movie is opened, so holding an arrow key down to go
   through items opens none of them until the key is released.
-- The Duplicates screen differs from production's in these ways. The
+- The Duplicates screen differs from the Electron app's in these ways. The
   four buttons Smart merge, Not duplicates, Keep both and Show Difference
   are in the titlebar and not in a footer, because every main screen of
   this app has its buttons in the titlebar. The pictures have no bordered
@@ -1006,18 +1146,18 @@ reading production's code, seen in this app).
   against the middle of the screen and not in the middle of its own half.
   There are no "Left candidate" and "Right candidate" headings. The facts
   use the inspector's labels and formats (for example "Type: PNG" where
-  production writes "Format: image/png"), the Group row is shown for both
+  the Electron app writes "Format: image/png"), the Group row is shown for both
   files when either file is in a collection, and rows that differ are drawn
   in a brighter colour than rows that are the same. Smart merge marks the
-  file it would keep with the grid's selection outline, where production
+  file it would keep with the grid's selection outline, where the Electron app
   draws a green ring around the file's card. The D key shows the pixel
   difference while it is held down, and the titlebar says what share of
-  the pixels differ; production has neither. Production stacks the two
+  the pixels differ; the Electron app has neither. The Electron app stacks the two
   files in one column when the screen is narrower than 620 px and hides the
   labels of the Keep buttons when it is narrower than 900 px; this app does
   neither.
-- The grid's zoom works differently from production's.
-  - Production rounds the saved tile size to a multiple of 50 px before it
+- The grid's zoom works differently from the Electron app's.
+  - The Electron app rounds the saved tile size to a multiple of 50 px before it
     counts columns. Because of that, some steps of its zoom control do not
     change the layout, and other steps skip a number of columns: in a grid
     2,500 px wide with wide spacing, 150 px gives 15 columns and 200 px
@@ -1025,28 +1165,28 @@ reading production's code, seen in this app).
     adds or removes exactly one column, from one column up to the number
     that 150 px tiles give, and the toolbar's zoom control has one knob
     position for each number of columns. A destination whose zoom was saved
-    by production can open with one column more or fewer than in
-    production.
-  - Production draws the new layout in one frame and keeps the topmost tile
+    by the Electron app can open with one column more or fewer than in
+    the Electron app.
+  - The Electron app draws the new layout in one frame and keeps the topmost tile
     in place. This app moves the tiles from their old positions and sizes
     to the new ones over 150 ms, and keeps the tile under the pointer, or
     else the tile nearest the centre of the viewport, at the same height on
     screen. The check box "Animate zoom in the grid" in Settings > Controls
-    turns the movement off. Production has no such setting. The setting is
+    turns the movement off. The Electron app has no such setting. The setting is
     saved in the library's application settings under the key
     `gridZoomAnimation`.
   - In the justified layout the row height can be any value from 150 to
-    900 px. Production rounds it to a multiple of 50 px.
+    900 px. The Electron app rounds it to a multiple of 50 px.
   - The "Thumbnail size" slider in Settings > Controls goes from 150 to
-    600 px in steps of 10 px. Production's goes from 100 to 600 px in steps
+    600 px in steps of 10 px. The Electron app's goes from 100 to 600 px in steps
     of 50 px. It sets a size and not a number of columns, because the
     Settings window has no grid whose width columns could be counted in.
   - When the mouse wheel is set to zoom, one notch of a mouse wheel is one
     zoom step, and a trackpad makes one zoom step for every 60 px it
-    scrolls. In production every wheel event changes the tile size by
+    scrolls. In the Electron app every wheel event changes the tile size by
     25 px.
 - The frosted material behind the sidebar and the inspector works
-  differently from production's. Production has four themes that make its
+  differently from the Electron app's. The Electron app has four themes that make its
   whole window translucent: `vibrancy` and `liquidglass` on macOS, and
   `mica` and `acrylic` on Windows. This app does not draw those themes, and
   a library that stores one of them opens in the Dark theme. Instead this
@@ -1055,18 +1195,18 @@ reading production's code, seen in this app).
   "Window chrome and the frosted material"). The switch is off by default
   and is not shown on Linux. Its choice is stored in the library's
   application settings under the keys `frostedGlassRails` and
-  `acrylicRails`, which production does not have.
-- Search by Image differs from production's in four ways
+  `acrylicRails`, which the Electron app does not have.
+- Search by Image differs from the Electron app's in four ways
   (`src/search_by_image.rs`). Sogou is not offered: its page answers every
   upload with "complete the security check and try again", and the search
   runs in a window that is never shown, so no search on Sogou gave a
   result. A file larger than 1 MiB, or of a type other
   than JPEG, PNG, GIF and WebP, is sent to the engine as a JPEG whose long
-  edge is at most 1,600 pixels; production sends every file as it is, and
+  edge is at most 1,600 pixels; the Electron app sends every file as it is, and
   SauceNAO does not accept a 19.9 MB PNG. Yandex's page is given the picture
   as soon as it is ready to take it, 100 to 200 ms after the app presses
-  Yandex's upload button; production waits one second. TinEye is given 90
-  seconds to answer where production gives 30, because in November 2026
+  Yandex's upload button; the Electron app waits one second. TinEye is given 90
+  seconds to answer where the Electron app gives 30, because in November 2026
   TinEye took 15 to 63 seconds to search for a picture it had not been sent
   before.
 - A subscription's status reads in sentence case and warns only when the
@@ -1074,7 +1214,7 @@ reading production's code, seen in this app).
   Retry, or a source whose last run failed for a lasting reason (the badge
   names it: Login required, Failed). A network error, a rate limit, a full
   inbox and single files that would not download are no warning; the
-  Problems tab still lists them. Production warns for every open issue
+  Problems tab still lists them. The Electron app warns for every open issue
   until the subscription is looked at.
 
 ### Open
@@ -1087,8 +1227,17 @@ app.
 Not done:
 
 - Opening another library from the file manager or a second launch is
-  refused (rule 4); on macOS a pack opened while no instance runs is
-  refused.
+  refused (rule 4). A pack that the system opens the app with is imported
+  only when a library is already open: a pack that starts the app is not
+  imported, on any system. A release build that is started while Picto runs
+  ends without handing its files to the running Picto (section 2, rule 5),
+  so on Windows and Linux a pack opened from the file manager while Picto
+  runs is not imported. The Electron app imports it in both cases.
+- The packages (section 3): the project's releases are not built from them
+  yet. No `*.blockmap` files are made. The installer's texts are in English
+  only. The AppImage needs libraries of the system. The windows of the app
+  carry no application id on Linux, so a desktop cannot match a window to
+  the app's launcher entry. `.library` folders get no icon on Windows.
 - Document viewers: PDF and page text selection, WOFF2 fonts, RTF character
   formatting, Markdown images and raw HTML, an EPUB chapter's stylesheet.
 - Detail windows: per-image zoom memory, a loading placeholder, a menu on a
@@ -1098,7 +1247,7 @@ Not done:
 - Reduced motion is not read; right-to-left text and spell-check are not
   supported; a radio group's arrows and a select's typeahead do not work.
 - GPUI cannot scale an element's contents, clip a zoomed image to rounded
-  corners, or draw radial gradients, masks or blend modes; where production
+  corners, or draw radial gradients, masks or blend modes; where the Electron app
   does, the drawing differs.
 - The DirectX renderer draws no blur.
 - On Linux the sidebar and the inspector never show the frosted material.
@@ -1135,13 +1284,24 @@ Not verified:
   and whether Windows replaces it with a solid colour while the window is
   not the active one are all unknown.
 - Performance: no frame-time or decode-latency benchmark has been completed.
+- The packaged app in use. On no system has a package been installed and
+  used with a library: the checks start the packaged program with
+  `--version` only, which ends before a window opens. Not seen: the first
+  start of the unsigned app under Gatekeeper and SmartScreen, the icons in
+  the Dock, the taskbar and the file manager, a pack opened from the file
+  manager, video thumbnails made by the bundled `ffmpeg`, an update
+  installed from a published feed, and logins read from a keychain entry
+  that the Electron app made.
 
 ### Waiting on the owner
 
 - Whether Picto adopts the core's `.picto-library.lock`; until it does only
   the process probe keeps the two apps apart.
-- AI model download, and this app's own update feed and packages (the feed
-  now names production Picto's installer).
+- AI model download.
+- Making the releases from these packages. Until then the update check of a
+  packaged build reads the project's releases as before, and the newest
+  release's feed names the Electron app's installer, which the app would
+  download and start.
 - Whether a disposable copy may connect to a cloud folder at all.
 
 ## 8. Attribution

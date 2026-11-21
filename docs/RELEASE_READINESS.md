@@ -116,6 +116,72 @@ native addons, and downloaded native tools must not imply otherwise.
   reference-product names, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.
 
+## GPUI packages
+
+The GPUI app (`experiments/gpui/`) is the next version of Picto. Its packages take the place of
+the Electron app's packages: they have the same file names (`Picto-<version>-arm64.dmg`,
+`Picto-<version>-arm64-mac.zip`, `Picto-Setup-<version>.exe`, `Picto-<version>.AppImage`), the
+same update feeds (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`), and the app has the same
+name and the same id (`com.picto.desktop`), so a package installs over an installed Electron app.
+
+They are not part of a release yet. Releases are still built from the Electron app by the Alpha
+Gate, as described below. Making the releases from the GPUI packages is a later change; until then
+the facts in this section describe packages that are built for trying out.
+
+How they are built:
+
+- `experiments/gpui/package.sh` builds the release program and makes the package for the system it
+  runs on. `experiments/gpui/README.md`, section 3, says what each package holds and what the
+  script needs.
+- The workflow `.github/workflows/gpui-package.yml` runs the script on macOS 26, Ubuntu 24.04 and
+  Windows, checks each package on that system, and uploads the packages as the artifacts
+  `picto-macos-arm64`, `picto-linux-x64` and `picto-windows-x64`. Those are the names the Alpha
+  Gate uses, so that a later change can make the release from these jobs without renaming
+  anything. The workflow starts by itself for a pull request into `dev` that changes the
+  packaging, and by hand for anything else.
+- The checks start the packaged program with `--version` only. They do not open a window or a
+  library. The Electron app's packaged smoke test (required gate 4) has no counterpart for the
+  GPUI packages yet, and the workflow uploads no smoke report.
+
+Signing follows the policy of the Electron packages, stated under "Publication gates":
+
+- macOS: the app is signed with the project's own self-signed certificate "Picto Code Signing"
+  when the secrets `MAC_CSC_LINK` and `MAC_CSC_KEY_PASSWORD` are present. The same code imports
+  the certificate and checks the signature for both apps (`scripts/mac-signing.mjs`). An ad-hoc
+  signature is never accepted in its place: without the secrets the app is left unsigned, and the
+  script prints that it is not signed with the project's certificate. Such a package must not be
+  published. The app is not notarized, because the project has no Apple Developer ID.
+- Windows and Linux: the installer and the AppImage are not signed. The project has no Windows
+  code-signing certificate.
+
+What a user sees when starting a package for the first time, and what to do, is written for users
+in [Getting Started](user-guide/getting-started.md). In short:
+
+- macOS: a downloaded Picto is not notarized, so macOS refuses to open it the first time and
+  offers no button to open it. The user allows it once under System Settings › Privacy &
+  Security with **Open Anyway**.
+- Windows: Microsoft Defender SmartScreen shows "Windows protected your PC" for the installer,
+  because it is not signed. The user chooses **More info** and then **Run anyway**. Where Smart
+  App Control is on, Windows blocks the installer and offers no way to run it.
+- Linux: the AppImage is a file the user makes executable. Nothing warns. It needs GTK 3 and
+  WebKitGTK 4.1 on the system, which the Electron app's AppImage did not.
+
+What a user who upgrades from the Electron app keeps and loses:
+
+- Kept: every library, and everything that is stored in a library, which includes the
+  application settings. The application data folder (`picto` in the per-user application data
+  folder), with the downloaded AI models. The site logins, which both apps keep in the system
+  keychain under the same names.
+- Listed again, opened by the user: the GPUI app copies the Electron app's list of libraries
+  once, on its first start. It does not open the library that the Electron app had open last. The
+  user picks a library from the list, and the app asks once per library whether it may open that
+  library directly.
+- Not carried over: what the Electron app kept per machine in its window's storage, which is the
+  window's place and size, the widths of the sidebar and the inspector, the saved filters, the
+  recent tags and folders, the keyboard preset and the changed shortcuts, the language and the
+  interface zoom. The GPUI app keeps these in its own file, `state.json` in the folder
+  `Picto GPUI` of the per-user configuration folder, and starts with the defaults.
+
 ## Release procedure
 
 ### Prepare locally, then review
