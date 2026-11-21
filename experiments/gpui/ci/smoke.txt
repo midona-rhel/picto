@@ -93,9 +93,9 @@ key escape
 wait 300
 key escape
 wait 400
-move 252 24
-down 252 24
-up 252 24
+move 226 24
+down 226 24
+up 226 24
 wait 1500
 window 1
 wait 600
