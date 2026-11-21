@@ -23,11 +23,16 @@
 # Settings window, which is still open and takes the same zoom.
 #
 # Pictures 13 to 16 show the Subscriptions screen with one subscription that
-# the script creates. The subscription has no sources, so it cannot run.
+# the script creates. The subscription has one source. The script never runs
+# it: nothing presses Run, and the pointer is only moved, never pressed, on
+# the source's row.
 # They show that the screen's buttons in the titlebar do not overlap the
 # window's own buttons:
 #   13 the list of subscriptions.
-#   14 the page of the subscription, with its rail.
+#   14 the page of the subscription, with its rail. The pointer is on the
+#      Edit button of the source's row. The picture shows that the row's
+#      buttons stay visible while the pointer is on one of them, and that
+#      they are drawn at full strength.
 #   15 the same page with the rail hidden.
 #   16 the same page at 150% interface zoom, where the titlebar buttons show
 #      only their icons.
@@ -133,7 +138,7 @@ shot 12-zoom-80-settings
 window 0
 key secondary-0
 wait 600
-invoke subscriptions.create {"name":"Example","schedule":"manual","initial_post_limit":100,"periodic_post_limit":100,"queries":[]}
+invoke subscriptions.create {"name":"Example","schedule":"manual","initial_post_limit":100,"periodic_post_limit":100,"queries":[{"site_id":"danbooru","query_text":"example","group_posts":false}]}
 wait 600
 move 81 309
 down 81 309
@@ -143,6 +148,8 @@ shot 13-subscriptions-home
 down 420 165 2
 up 420 165 2
 wait 1500
+move 678 215
+wait 600
 shot 14-subscription-page
 key secondary-alt-2
 wait 800
