@@ -111,7 +111,7 @@ jobs:
           workspaces: app -> target
           cache-on-failure: true
 
-      # The libraries that the GPUI app and the application core are built
+      # The libraries that the app and the application core are built
       # against (the list in `app/README.md`, section 3).
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
