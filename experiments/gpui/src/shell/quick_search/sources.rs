@@ -87,15 +87,19 @@ const OWN_SHORTCUTS: [&str; 2] = ["nav.commandPalette", "nav.goToFolder"];
 ///   row's action.
 /// - A command without a menu row is listed when one of the actions that its
 ///   keys are bound to (`keymap::targets`) would run: the key context of the
-///   binding's scope holds at the focused element, and a handler would run
-///   the action (`app_menu::handled`).
+///   binding's scope holds at the focused element or at an element around
+///   it, and a handler would run the action (`app_menu::handled`).
 pub fn actions(window: &Window, cx: &mut App) -> (Vec<Entry>, Vec<Box<dyn Action>>) {
     let menu_rows = app_menu::shortcut_rows(window, cx);
+    // The key contexts from the window's root down to the focused element.
+    // A binding runs when its predicate holds at the focused element or at
+    // one of the elements around it, which is what `depth_of` reports. The
+    // keymap decides in the same way whether a key press runs a binding.
     let contexts = window.context_stack();
     let scope_holds = |scope: keymap::Scope| match scope.predicate() {
         None => true,
         Some(source) => KeyBindingContextPredicate::parse(&source)
-            .is_ok_and(|predicate| predicate.eval(&contexts)),
+            .is_ok_and(|predicate| predicate.depth_of(&contexts).is_some()),
     };
     let mut entries = Vec::new();
     let mut actions: Vec<Box<dyn Action>> = Vec::new();
