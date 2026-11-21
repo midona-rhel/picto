@@ -7026,6 +7026,7 @@ dependencies = [
  "cosmic-text",
  "cpal",
  "djvu-rs",
+ "embed-resource",
  "flate2",
  "futures",
  "gpui-pre",

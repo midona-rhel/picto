@@ -1,14 +1,14 @@
-//! The open library and the main window's content, as production's
+//! The open library and the main window's content, as the Electron app's
 //! `libraryHostService.mjs` and `LibraryGate.tsx` share them: the gate
 //! (no library, or one opening) or the library's shell; opening, switching
 //! (`switchLibrary`) and closing; the user's consent; and the notice that
 //! blocks the window while the Electron app runs beside a library the user
 //! keeps.
 //!
-//! A switch closes the detail, Settings and log windows (production leaves
+//! A switch closes the detail, Settings and log windows (the Electron app leaves
 //! them open, where their commands would reach the library opened next),
 //! shows the gate's loading state, closes the library (`close_library`, on
-//! a thread of its own), and opens the next in a new shell, as production
+//! a thread of its own), and opens the next in a new shell, as the Electron app
 //! remounts its whole window under the new library's key.
 use super::admission::{self, Decision, Origin, Probes, Refusal};
 use super::{Kind, history};
@@ -376,8 +376,8 @@ pub fn request(path: &Path, origin: Origin, cx: &mut App) {
 
 /// At start, with no library named: the library this app had open last,
 /// if this process may open it at all (`listed`); when it is no longer
-/// there, production's "Library Not Found" question (`handleMissingLibrary`)
-/// with Locate…, Remove from List and Cancel. Production first falls back
+/// there, the Electron app's "Library Not Found" question (`handleMissingLibrary`)
+/// with Locate…, Remove from List and Cancel. The Electron app first falls back
 /// to the first library of its history that is still there; this app opens
 /// at start only the library it had open last, and otherwise asks.
 pub fn start_last(cx: &mut App) {
@@ -406,7 +406,7 @@ pub fn start_last(cx: &mut App) {
 /// found at a new place is asked about again.
 pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
     let basename = missing.file_name().unwrap_or_default().to_owned();
-    // Production's dialog says this as its message; the system's dialog
+    // The Electron app's dialog says this as its message; the system's dialog
     // here shows it as its button's prompt.
     let chosen = crate::prompt::folder(
         &format!(
@@ -423,7 +423,7 @@ pub fn locate(missing: PathBuf, open: bool, cx: &mut App) {
             let Some(found) = super::located(&folder, &basename) else {
                 return fail(
                     en("Library Not Found").to_owned(),
-                    // Production's main process writes it in English,
+                    // The Electron app's main process writes it in English,
                     // without a key.
                     format!(
                         "\"{}\" was not found in the selected folder.",
@@ -699,7 +699,7 @@ fn close_views(main: WindowHandle<Main>, gate: Gate, cx: &mut App) -> Option<Ope
         main.shell = None;
         main.gate = gate;
         main.blocked.close(cx);
-        window.set_window_title(en("Picto GPUI"));
+        window.set_window_title(crate::desktop::APP_NAME);
         // The keyboard goes back to the window itself.
         window.focus(&main.focus, cx);
         cx.notify();
@@ -728,14 +728,11 @@ async fn close_application(open: Open, cx: &mut AsyncApp) {
 /// The main window's title: what the window menu and the system's window
 /// lists show. A copy says so.
 pub fn title(root: &Path, kind: Kind) -> String {
+    let app = crate::desktop::APP_NAME;
     match kind {
-        // i18n: the window's title, as before for a copy
-        Kind::Copy => "Picto GPUI · Library copy".to_owned(),
-        Kind::Real => format!(
-            "{} · {}",
-            en("Picto GPUI"),
-            super::name(&root.to_string_lossy())
-        ),
+        // i18n: the window's title for a copy, which is not translated
+        Kind::Copy => format!("{app} · Library copy"),
+        Kind::Real => format!("{app} · {}", super::name(&root.to_string_lossy())),
     }
 }
 

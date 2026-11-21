@@ -701,9 +701,26 @@ mod platform;
 mod platform;
 
 /// The id by which the desktop knows the app. Windows groups the app's toasts
-/// under this id, and Linux uses it as the name of the notifications' sender.
-pub const APP_ID: &str = "dev.picto.gpui-experiment";
-pub const APP_NAME: &str = "Picto GPUI";
+/// under this id, Linux names the app's windows and its desktop file after
+/// it, and the packaged macOS app has it as its bundle identifier
+/// (`packaging/macos/Info.plist`).
+///
+/// A release build is Picto itself: it has the id and the name that the
+/// Electron app has, because it is installed over the Electron app as its
+/// next version. A debug build keeps an id and a name of its own, so that a
+/// developer's window is never taken for the installed app.
+pub const APP_ID: &str = if cfg!(debug_assertions) {
+    "dev.picto.gpui-experiment"
+} else {
+    "com.picto.desktop"
+};
+/// The app's name, as the system and the window titles show it.
+pub const APP_NAME: &str = if cfg!(debug_assertions) {
+    crate::i18n::en("Picto GPUI")
+} else {
+    // i18n: the app's name, which is the same in every language
+    "Picto"
+};
 
 /// The D-Bus object path from which the badge's signal to the Unity launcher
 /// is sent; libunity sends from the same kind of path. The signal also carries

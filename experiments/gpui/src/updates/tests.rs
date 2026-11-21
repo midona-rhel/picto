@@ -128,3 +128,42 @@ fn only_a_verified_installer_in_the_updates_folder_is_started() {
         assert!(ready_installer(&path, &folder, &file).is_err());
     }
 }
+
+/// Checks an update feed that `package.sh` wrote, as the update check uses
+/// it. The environment variable `PICTO_GPUI_TEST_FEED` names the feed
+/// (`latest.yml`, `latest-linux.yml` or `latest-mac.yml`), and the packages
+/// it names are in the same folder. The feed must be readable, must name
+/// this build's version, and every package must have the SHA-512 and the
+/// size that the feed gives for it. A Windows feed must name the installer
+/// the updater downloads on Windows, and a Linux feed the AppImage it
+/// downloads on Linux.
+#[test]
+#[ignore = "needs PICTO_GPUI_TEST_FEED, the path of a feed that package.sh wrote"]
+fn a_feed_written_by_the_package_script_describes_its_packages() {
+    let path = std::path::PathBuf::from(
+        std::env::var_os("PICTO_GPUI_TEST_FEED").expect("PICTO_GPUI_TEST_FEED is set"),
+    );
+    let text = std::fs::read_to_string(&path).expect("read the feed");
+    let feed = super::feed::parse_feed(&text).expect("the feed is readable");
+    assert_eq!(feed.version, super::VERSION);
+    assert!(!feed.files.is_empty(), "the feed names no package");
+    let folder = path.parent().expect("the feed is in a folder");
+    for file in &feed.files {
+        let name = file.name().expect("a package has a plain file name");
+        let bytes = std::fs::read(folder.join(&name)).expect("read the package");
+        assert!(file.size.is_some(), "the feed gives no size for {name}");
+        super::feed::verify(&sha2::Sha512::digest(&bytes), bytes.len() as u64, file)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+    let platform = match path.file_name().and_then(|name| name.to_str()) {
+        Some("latest.yml") => Some("win32"),
+        Some("latest-linux.yml") => Some("linux"),
+        _ => None,
+    };
+    if let Some(platform) = platform {
+        assert!(
+            super::feed::installer(&feed, platform).is_some(),
+            "the feed names no installer for {platform}"
+        );
+    }
+}

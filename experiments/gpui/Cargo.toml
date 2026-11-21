@@ -4,13 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Keep experimental dependencies and lockfile out of the production workspace.
-# The patched GPUI crates under `vendor/` are dependencies, not members.
+# This crate is a Cargo workspace of its own, so that its dependencies and its
+# lock file stay out of the repository's root workspace. The patched GPUI
+# crates under `vendor/` are dependencies of this workspace, not members.
 [workspace]
 exclude = ["vendor"]
 
-# This standalone workspace does not inherit Picto's optimized debug profile.
-# Keep symbols/checks while optimizing the rendering and decoding hot paths.
+# The root workspace's profiles do not apply here. A debug build optimizes
+# this crate a little (level 1), because drawing and decoding are too slow to
+# use without any optimization, and keeps debug assertions and overflow
+# checks.
 [profile.dev]
 opt-level = 1
 # Line numbers in backtraces are all the checks here need. Full debug
@@ -22,6 +25,32 @@ incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
+
+# The profile of the packaged app (`package.sh` builds with `--release`).
+[profile.release]
+# Full optimization of every crate. This is Cargo's default for a release
+# build and is written here so that the profile can be read in one place.
+opt-level = 3
+# Debug assertions stay off. `src/seams.rs` reads the environment variables
+# that drive, observe or redirect the app only under `debug_assertions`, the
+# keychain is used only without them (`logins::uses_keychain`), and the
+# checks in `net_check.rs` and `logins/check.rs` are compiled only with
+# them. Turning this on would put all of that into the packaged app.
+debug-assertions = false
+# Thin link-time optimization inlines across crates (the application core,
+# GPUI and this crate) at a fraction of the build time of full link-time
+# optimization, which a continuous-integration job cannot afford on about
+# 1,100 packages.
+lto = "thin"
+# The packaged program carries neither symbol names nor debug information,
+# which makes it several times smaller. The root workspace's release profile
+# strips the Electron app's native addon in the same way.
+strip = "symbols"
+# A panic unwinds, which is Cargo's default. A panic on a background thread
+# then ends that thread only: the app keeps running and shows the panic in
+# its log window (`diagnostics::crash`). With `abort`, any panic would end
+# the whole app at once.
+panic = "unwind"
 
 # The AVFoundation frame check needs the process's main thread, which the
 # standard test harness does not give a test.
@@ -69,7 +98,7 @@ ruffle_common = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5
 ruffle_render_wgpu = { git = "https://github.com/ruffle-rs/ruffle.git", rev = "a4f5b5256e245693bc9077ef6c6b6abc95490e7f" }
 wgpu = "27.0.1"
 # Document viewers, all pure Rust so they build on every platform. PDF pages
-# are rasterized by hayro, DjVu by djvu-rs (the crate production runs as
+# are rasterized by hayro, DjVu by djvu-rs (the crate the Electron app runs as
 # WebAssembly), JPEG XL by jxl-oxide (the decoder core/ thumbnails with).
 hayro = "0.9"
 djvu-rs = "0.45"
@@ -109,6 +138,13 @@ reqwest = { version = "0.12", default-features = false, features = ["charset", "
 # WebKitGTK on Linux (`src/platform/login_window/`). Pinned exactly, as its
 # platform crates are reached directly for the cookie stores.
 wry = { version = "=0.57.2", default-features = false, features = ["os-webview"] }
+
+# `build.rs` calls the Windows resource compiler through this crate, to put
+# the app's icon and its version information into the program. GPUI's build
+# script already uses the same crate to embed the program's manifest, so the
+# lock file gains no new package.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 [dev-dependencies]
 # The format matrix draws the viewers off-screen through GPUI's headless

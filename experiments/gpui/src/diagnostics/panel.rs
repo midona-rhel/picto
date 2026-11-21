@@ -6,7 +6,7 @@
 //! the visible lines, saves a support report where the user chooses, clears
 //! the lines, and shows the application's workers, read every 750 ms. Its
 //! top edge resizes it. Closed, it keeps nothing: it opens with every
-//! filter on and at its default height, as production's unmounted panel.
+//! filter on and at its default height, as the Electron app's unmounted panel.
 use super::report::{self, Worker};
 use super::{Entry, Level, Source};
 use crate::i18n::t;
@@ -40,7 +40,7 @@ const WORKERS_EVERY: Duration = Duration::from_millis(750);
 const LINES_EVERY: Duration = Duration::from_millis(100);
 /// `.workerDot[data-state='working']`.
 const WORKING: u32 = 0x47c976;
-/// `var(--color-warning, #e8a838)`: production defines no `--color-warning`.
+/// `var(--color-warning, #e8a838)`: the Electron app defines no `--color-warning`.
 const WARNING: u32 = 0xe8a838;
 
 /// The panel asks to be closed (its close button, Escape).
@@ -151,7 +151,7 @@ impl Panel {
                 }) else {
                     return;
                 };
-                // A failed read is left to the log lines, as in production.
+                // A failed read is left to the log lines, as in the Electron app.
                 if let Ok(Ok(snapshot)) = answer.await {
                     let workers = Worker::list(&snapshot);
                     if this
@@ -281,7 +281,7 @@ impl Panel {
                 let Ok(Some(path)) = chosen.await else {
                     return;
                 };
-                // An unhandled failure in production reaches the log as a
+                // An unhandled failure in the Electron app reaches the log as a
                 // renderer error; here it is logged as one.
                 if let Err(error) = report::write(&path, &text) {
                     super::add(super::Line {
@@ -363,12 +363,14 @@ fn body_line(size: f32) -> Pixels {
     px(size * theme::LINE_HEIGHT_BODY)
 }
 
-/// What the report gives for the user agent: the app, its version and the
-/// system it runs on.
+/// Returns the text that the report gives as the user agent: the app's name,
+/// the app's version (the version in the repository's `package.json`) and
+/// the system the app runs on.
 fn runtime() -> String {
     format!(
-        "Picto GPUI/{} ({}; {})",
-        env!("CARGO_PKG_VERSION"),
+        "{}/{} ({}; {})",
+        crate::desktop::APP_NAME,
+        crate::updates::VERSION,
         std::env::consts::OS,
         std::env::consts::ARCH
     )
@@ -496,7 +498,7 @@ impl Render for Panel {
         let mut sources = div().flex().gap(px(2.));
         let choices = std::iter::once(None).chain(Source::ALL.into_iter().map(Some));
         for (index, source) in choices.enumerate() {
-            // i18n: production's value, shown as it is
+            // i18n: the Electron app's value, shown as it is
             let name = source.map_or("all", Source::name);
             sources = sources.child(self.filter_button(
                 ("diagnostics-source", index),
