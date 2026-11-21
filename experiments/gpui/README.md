@@ -793,7 +793,7 @@ reading production's code, seen in this app).
 | Log window | pictures; tests; off-screen |
 | Site logins | tests; `PICTO_GPUI_LOGIN_CHECK` on macOS and in CI |
 | Software updates | `PICTO_GPUI_NET_CHECK` on macOS and in CI |
-| Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views |
+| Search by Image | `PICTO_GPUI_NET_CHECK` on all three systems' web views; real searches on macOS, where TinEye, SauceNAO, Yandex and Bing gave their results page and Sogou did not (see "Open") |
 | Accessibility | tests; off-screen tree dumps |
 | Libraries | tests (each rule); off-screen with generated libraries |
 | Cloud | off-screen against a stand-in folder on macOS and in CI |
@@ -927,6 +927,16 @@ reading production's code, seen in this app).
   and is not shown on Linux. Its choice is stored in the library's
   application settings under the keys `frostedGlassRails` and
   `acrylicRails`, which production does not have.
+- Search by Image differs from production's in three ways
+  (`src/search_by_image.rs`). A file larger than 1 MiB, or of a type other
+  than JPEG, PNG, GIF and WebP, is sent to the engine as a JPEG whose long
+  edge is at most 1,600 pixels; production sends every file as it is, and
+  SauceNAO does not accept a 19.9 MB PNG. Yandex's page is given the picture
+  as soon as it is ready to take it, 100 to 200 ms after the app presses
+  Yandex's upload button; production waits one second. TinEye is given 90
+  seconds to answer where production gives 30, because in November 2026
+  TinEye took 15 to 63 seconds to search for a picture it had not been sent
+  before.
 - A subscription's status reads in sentence case and warns only when the
   subscription will stay broken: a run stopped on a failure and waiting for
   Retry, or a source whose last run failed for a lasting reason (the badge
@@ -959,6 +969,11 @@ Not done:
   protocol, but the vendored GPUI does not yet tell the app whether the
   running compositor has one, and X11 has no blur at all.
 - Detail window always-on-top on Linux.
+- Search by Image on Sogou ends after 30 seconds with "sogou: timed out".
+  Sogou's page answers the upload with "complete the security check and
+  try again", and the search runs in a window that is never shown, so the
+  user cannot complete that check. Production's search runs in a hidden
+  window in the same way.
 - Logins: FANBOX keeps only the User-Agent as its headers; password fields
   do not turn on secure keyboard entry; the OnlyFans browser login has never
   run.
@@ -972,7 +987,7 @@ Not verified:
   window.
 - Cloud sync against a real provider or account; network work (a real
   subscription run, gallery or model download, update install, sign-in to a
-  real service, engine search).
+  real service). A search on a real engine has been run on macOS only.
 - A screen reader on any platform.
 - Promised files from Photos, Mail or a browser; files arriving through
   `application:openURLs:`; restoring a maximised window or on a second
