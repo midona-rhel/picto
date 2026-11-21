@@ -1300,6 +1300,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_appearance(&self) -> WindowBackgroundAppearance;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Whether [`WindowBackgroundAppearance::Blurred`] makes the system blur
+    /// what is behind this window, as the system is set up now. A platform
+    /// that does not implement this answers `false`.
+    fn is_background_blur_supported(&self) -> bool {
+        false
+    }
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);

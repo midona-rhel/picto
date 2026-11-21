@@ -909,6 +909,18 @@ impl PlatformWindow for WindowsWindow {
         true
     }
 
+    fn is_background_blur_supported(&self) -> bool {
+        // `Blurred` is Acrylic, which Windows has had since Windows 10 version
+        // 1809 (build 17763). Acrylic shows only where the window's pixels are
+        // transparent, and they can be transparent only in a window that
+        // DirectComposition draws. Such a window is created without a
+        // redirection bitmap. A window created while
+        // `GPUI_DISABLE_DIRECT_COMPOSITION` is set has one, and is opaque.
+        let ex_style = WINDOW_EX_STYLE(unsafe { get_window_long(self.0.hwnd, GWL_EXSTYLE) } as _);
+        ex_style.contains(WS_EX_NOREDIRECTIONBITMAP)
+            && windows_build_number() >= ACRYLIC_ACCENT_BUILD
+    }
+
     fn set_title(&mut self, title: &str) {
         unsafe { SetWindowTextW(self.0.hwnd, &HSTRING::from(title)) }
             .inspect_err(|e| log::error!("Set title failed: {e}"))
@@ -916,8 +928,21 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
-        self.state.background_appearance.set(background_appearance);
+        let previous = self
+            .state
+            .background_appearance
+            .replace(background_appearance);
         let hwnd = self.0.hwnd;
+
+        // On Windows 11 version 22H2 and later, `Blurred` sets a system
+        // backdrop (see below). The backdrop stays on the window until it is
+        // taken off, so take it off when the window stops being `Blurred`.
+        // DWMSBT_AUTO (0) is the value a new window has.
+        if previous == WindowBackgroundAppearance::Blurred
+            && background_appearance != WindowBackgroundAppearance::Blurred
+        {
+            dwm_set_window_composition_attribute(hwnd, 0);
+        }
 
         // using Dwm APIs for Mica and MicaAlt backdrops.
         // others follow the set_window_composition_attribute approach
@@ -929,7 +954,20 @@ impl PlatformWindow for WindowsWindow {
                 set_window_composition_attribute(hwnd, None, 2);
             }
             WindowBackgroundAppearance::Blurred => {
-                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+                if windows_build_number() >= SYSTEM_BACKDROP_BUILD {
+                    // Windows 11 version 22H2 and later: Acrylic through the
+                    // documented attribute `DWMWA_SYSTEMBACKDROP_TYPE`, as
+                    // DWMSBT_TRANSIENTWINDOW (3). The accent policy is turned
+                    // off, so the window shows only this backdrop.
+                    set_window_composition_attribute(hwnd, None, 0);
+                    dwm_set_window_composition_attribute(hwnd, 3);
+                } else {
+                    // Windows 10 version 1809 up to Windows 11 version 21H2
+                    // have no such attribute. There Acrylic is the accent
+                    // policy ACCENT_ENABLE_ACRYLICBLURBEHIND (4) of the
+                    // undocumented `SetWindowCompositionAttribute`.
+                    set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+                }
             }
             WindowBackgroundAppearance::MicaBackdrop => {
                 // DWMSBT_MAINWINDOW => MicaBase
@@ -1652,6 +1690,26 @@ fn retrieve_window_placement(
     let bounds = bounds.to_device_pixels(display.scale_factor());
     placement.rcNormalPosition = calculate_window_rect(bounds, border_offset);
     Ok(placement)
+}
+
+/// The first build of Windows that has the Acrylic accent policy of
+/// `SetWindowCompositionAttribute`: Windows 10 version 1809.
+const ACRYLIC_ACCENT_BUILD: u32 = 17763;
+
+/// The first build of Windows that has the window attribute
+/// `DWMWA_SYSTEMBACKDROP_TYPE`: Windows 11 version 22H2.
+const SYSTEM_BACKDROP_BUILD: u32 = 22621;
+
+/// The build number of the Windows that is running, or 0 when it cannot be
+/// read.
+fn windows_build_number() -> u32 {
+    let mut version = unsafe { std::mem::zeroed() };
+    let status = unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut version) };
+    if status.is_ok() {
+        version.dwBuildNumber
+    } else {
+        0
+    }
 }
 
 fn dwm_set_window_composition_attribute(hwnd: HWND, backdrop_type: u32) {

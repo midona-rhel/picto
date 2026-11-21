@@ -1,5 +1,9 @@
-//! The Settings window's sections and their rows, in production's order and
-//! wording (`Settings.tsx`, `AiTaggingPanel.tsx`).
+//! The sections of the Settings window. `SettingsWindow::panel` returns the
+//! rows of one section. The sections and their rows are in the same order
+//! and have the same wording as in production's `Settings.tsx` and
+//! `AiTaggingPanel.tsx`. The switch for the frosted material of the sidebar
+//! and the inspector, in the "Appearance" card of the General section, is
+//! not in production.
 use super::model;
 use super::model::NOTIFICATION_TONES;
 use super::pieces::{
@@ -24,7 +28,10 @@ mod controls;
 pub use catalog::{PANELS, matched_panels};
 pub use cloud::CloudPanel;
 
-/// `ZOOM_OPTIONS`
+/// The choices of the "Zoom Level" select in the General section. They are
+/// the choices of production's `ZOOM_OPTIONS`. Each pair is a percentage,
+/// which is the select's value for that choice, and the label that the
+/// select shows for it.
 const ZOOM: [(&str, &str); 7] = [
     ("75", "75%"),
     ("80", "80%"),
@@ -35,7 +42,11 @@ const ZOOM: [(&str, &str); 7] = [
     ("150", "150%"),
 ];
 
-/// `THEMES`: the name, stored value and swatch colour of each theme.
+/// The themes that the "Theme" row of the General section shows a swatch
+/// for. They are the themes of production's `THEMES`. Each entry is the
+/// theme's name, the value that the `color_scheme` setting stores for the
+/// theme, and the colour of its swatch. Auto has no colour: `pieces::swatch`
+/// draws its swatch as a light half and a dark half.
 const THEMES: [(&str, &str, Option<u32>); 7] = [
     (en("Auto"), "auto", None),
     (en("Light"), "light", Some(0xffffff)),
@@ -46,13 +57,17 @@ const THEMES: [(&str, &str, Option<u32>); 7] = [
     (en("Purple"), "purple", Some(0x463275)),
 ];
 
-/// The installed version (`crate::updates::VERSION`).
+/// Returns the version of this app that is installed, which is
+/// `crate::updates::VERSION`.
 fn version() -> String {
     crate::updates::VERSION.to_owned()
 }
 
 impl SettingsWindow {
-    /// The rows of the section with this id.
+    /// Returns the rows of the section with this id, for example `general`.
+    /// It returns no rows for an id that is not listed here. The Shortcuts
+    /// section is not listed, because the window draws that section with
+    /// `shortcuts_panel`.
     pub(super) fn panel(
         &self,
         id: &str,
@@ -93,10 +108,27 @@ impl SettingsWindow {
             draft.app.show_sidebar_counts,
             draft.app.show_tag_prefixes,
         );
+        // The switch for the system's frosted material behind the sidebar
+        // and the inspector. It is named after the material: frosted glass
+        // on macOS and Acrylic on Windows. The row is shown only where the
+        // system can blur what is behind the main window, so it is never
+        // shown on Linux. Like a theme, the choice shows in the main window
+        // at once, and closing the Settings window without saving puts the
+        // saved choice back (`SettingsWindow::close`).
+        let rail_material = draft.app.rail_material();
+        let rail_material_label = if cfg!(target_os = "macos") {
+            en("Frosted glass sidebar and inspector")
+        } else {
+            en("Acrylic sidebar and inspector")
+        };
+        let rail_material_supported = ui::window_chrome::rail_material_supported(cx);
+        let toggle_rail_material = edit(model, |draft| draft.app.toggle_rail_material());
         let mut swatches = div().flex().flex_wrap().justify_end().gap(px(8.));
         for (index, &(name, css, color)) in THEMES.iter().enumerate() {
-            // The choice shows in every window at once (`previewTheme`);
-            // closing without saving puts the saved theme back.
+            // Clicking a swatch shows its theme in every window at once, as
+            // production's `previewTheme` does. Closing the Settings window
+            // without saving shows the saved theme again
+            // (`SettingsWindow::close`).
             let choose = edit(model, move |draft| draft.app.color_scheme = css.into());
             swatches = swatches.child(swatch(
                 index,
@@ -121,10 +153,14 @@ impl SettingsWindow {
                         .child(row(
                             theme,
                             t("Zoom Level"),
-                            // TODO: production saves this factor without applying
-                            // it (its zoom is the separate ⌘+ and ⌘- renderer
-                            // zoom), so the window is not scaled here either;
-                            // scale the main window's content once it does.
+                            // TODO: This select only saves the chosen factor in
+                            // the `zoom_factor` setting. Nothing is scaled by
+                            // it, because production also saves the factor
+                            // without applying it. The zoom that production
+                            // applies is a separate one, the renderer zoom
+                            // that ⌘+ and ⌘- change. Scale the main window's
+                            // content by this factor once production applies
+                            // it.
                             ui::select(
                                 "zoom",
                                 zoom.to_string(),
@@ -136,7 +172,31 @@ impl SettingsWindow {
                                 draft.app.zoom_factor =
                                     value.parse::<f64>().ok().map(|percent| percent / 100.)
                             })),
-                        )),
+                        ))
+                        .children(rail_material_supported.then(|| separator(theme)))
+                        .children(rail_material_supported.then(|| {
+                            row(
+                                theme,
+                                rail_material_label,
+                                ui::toggle("rail-material", rail_material)
+                                    .name(rail_material_label)
+                                    .on_toggle(move |window, cx| {
+                                        toggle_rail_material(window, cx);
+                                        ui::window_chrome::want_rail_material(
+                                            !rail_material,
+                                            cx,
+                                        );
+                                    }),
+                            )
+                        }))
+                        .children(rail_material_supported.then(|| {
+                            hint(
+                                theme,
+                                en(
+                                    "The sidebar and the inspector show what is behind the window, blurred.",
+                                ),
+                            )
+                        })),
                 )
                 .into_any_element(),
             block()
@@ -195,14 +255,24 @@ impl SettingsWindow {
         ]
     }
 
-    /// `UpdatesPanel`: the installed version, what the last check found
-    /// and Check Now, with the step that follows a found update.
+    /// Returns the rows of the Updates section, which is production's
+    /// `UpdatesPanel`. Its one card, "Software Update", shows the installed
+    /// version. Under that is a row whose label says what the last check for
+    /// an update found, for example "Picto is up to date", or that a check
+    /// or a download is under way. The row holds the "Check Now" button.
+    /// When an update was found, the row also holds a button for the next
+    /// step. On macOS that button is "Open Download Page". On the other
+    /// systems it is "Restart and Install", and it is shown only once the
+    /// update has been downloaded. The last line of the card is a sentence
+    /// that says how updates are installed on this system.
     fn updates(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use crate::updates::Status;
         let theme = theme::theme(cx);
         let state = crate::updates::state(cx);
         let found = state.version.clone().unwrap_or_default();
-        // Production writes these in English.
+        // Production's `UpdatesPanel` writes these status texts in English
+        // and does not translate them, so they are in English here in every
+        // language (`en`).
         let status = match state.status {
             Status::Checking => en("Checking…").to_owned(),
             Status::Downloading => format!(
@@ -221,7 +291,10 @@ impl SettingsWindow {
                 .clone()
                 .unwrap_or_else(|| en("Check for a newer version of Picto.").to_owned()),
         };
-        // `automaticInstall`
+        // Production chooses between these two sentences with its
+        // `automaticInstall` flag, which is false only on macOS, so
+        // `state.mac()` makes the same choice here. The first sentence is
+        // the one production shows when the flag is false.
         let description = if state.mac() {
             t(
                 "On macOS, Picto opens the release download because this build is not signed for automatic installation.",
@@ -575,8 +648,12 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // The multiple-file prompt follows these settings (`imports`), and
-        // the application's watched-folder worker reads Auto-Import.
+        // Two places read the saved values of these settings. When the user
+        // imports more than one file at once, `crate::imports` reads the
+        // "Multiple files" setting to decide whether to ask if the files
+        // become one collection, to group them, or to keep them separate.
+        // The core's scan of the watched folders (`scan_watched_folders`)
+        // reads the "Auto-Import" switch and does nothing while it is off.
         vec![
             block()
                 .child(
@@ -680,7 +757,11 @@ impl SettingsWindow {
         let theme = theme::theme(cx);
         let model = &self.model;
         let app = &model.read(cx).draft.app;
-        // A new subscription starts from these defaults (`subscriptions`).
+        // The Subscriptions screen (`crate::screens::subscriptions`) reads
+        // the saved values of the three settings in the first card. It
+        // creates a new subscription with the "Schedule" and "Posts per
+        // run" chosen here, and it adds a query to a subscription with the
+        // "Group multi-media posts" choice made here.
         vec![
             block()
                 .child(
